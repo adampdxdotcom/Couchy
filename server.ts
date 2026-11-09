@@ -9,6 +9,7 @@ import { imagesRouter } from './src/server/routes/imagesRoutes.ts';
 import { charactersRouter } from './src/server/routes/charactersRoutes.ts';
 import { modelsAndWorkflowsRouter } from './src/server/routes/modelsAndWorkflowsRoutes.ts';
 import { systemRouter } from './src/server/routes/systemRoutes.ts';
+import { generationRouter } from './src/server/routes/generationRoutes.ts';
 
 async function startServer() {
   // 1. Run SQLite schema migrations
@@ -25,6 +26,7 @@ async function startServer() {
   // 3. Mount API routes
   app.use('/api/images', imagesRouter);
   app.use('/api/characters', charactersRouter);
+  app.use('/api/generation', generationRouter);
   app.use('/api', modelsAndWorkflowsRouter);
   app.use('/api', systemRouter);
 

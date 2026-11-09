@@ -10,6 +10,7 @@ import { GalleryFilterBar, type GalleryViewLayout } from './components/GalleryFi
 import { GalleryGridView } from './components/GalleryGridView.tsx';
 import { ImageInspectorDrawer } from './components/ImageInspectorDrawer.tsx';
 import { CharacterExplorerView } from './components/CharacterExplorerView.tsx';
+import { GenerationStudioView } from './components/GenerationStudioView.tsx';
 import { LoraAndModelManagerView } from './components/LoraAndModelManagerView.tsx';
 import { WorkflowLibraryView } from './components/WorkflowLibraryView.tsx';
 import { SystemAndBackupView } from './components/SystemAndBackupView.tsx';
@@ -245,6 +246,19 @@ export default function App() {
               setFilters({ ...INITIAL_FILTERS, characterIds: [charId] });
               setActiveTab('gallery');
             }}
+          />
+        )}
+
+        {activeTab === 'generation' && (
+          <GenerationStudioView
+            characters={characters}
+            loras={loras}
+            workflows={workflows}
+            checkpoints={checkpoints}
+            allImages={allImages}
+            onRefreshAll={refreshAll}
+            onOpenImage={(img) => setInspectedImageId(img.id)}
+            onOpenSystemSettings={() => setActiveTab('system')}
           />
         )}
 

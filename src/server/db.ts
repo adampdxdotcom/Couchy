@@ -341,6 +341,107 @@ export function runMigrations(): void {
         );
       `,
     },
+    {
+      version: 2,
+      name: 'generation_studio_schema',
+      sql: `
+        -- 23. Prompt Templates (stored in database with {character}, {lora}, {theme} placeholders)
+        CREATE TABLE IF NOT EXISTS prompt_templates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          positive_template TEXT NOT NULL,
+          negative_template TEXT NOT NULL DEFAULT '',
+          is_default INTEGER NOT NULL DEFAULT 0,
+          category TEXT NOT NULL DEFAULT 'character',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- 24. Workflow Node Mappings (auto-detected & user-overridable node slots)
+        CREATE TABLE IF NOT EXISTS workflow_mappings (
+          workflow_id INTEGER PRIMARY KEY REFERENCES workflows(id) ON DELETE CASCADE,
+          positive_prompt_node_id TEXT,
+          positive_prompt_field TEXT NOT NULL DEFAULT 'text',
+          negative_prompt_node_id TEXT,
+          negative_prompt_field TEXT NOT NULL DEFAULT 'text',
+          seed_node_id TEXT,
+          seed_field TEXT NOT NULL DEFAULT 'seed',
+          steps_node_id TEXT,
+          cfg_node_id TEXT,
+          sampler_node_id TEXT,
+          latent_node_id TEXT,
+          width_field TEXT NOT NULL DEFAULT 'width',
+          height_field TEXT NOT NULL DEFAULT 'height',
+          batch_size_field TEXT NOT NULL DEFAULT 'batch_size',
+          checkpoint_node_id TEXT,
+          lora_node_ids_json TEXT NOT NULL DEFAULT '[]',
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- 25. Generation Batches & Individual Prompt Items
+        CREATE TABLE IF NOT EXISTS generation_batches (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          character_id INTEGER REFERENCES characters(id) ON DELETE SET NULL,
+          workflow_id INTEGER REFERENCES workflows(id) ON DELETE SET NULL,
+          theme_title TEXT,
+          mode TEXT NOT NULL DEFAULT 'single',
+          total_count INTEGER NOT NULL DEFAULT 1,
+          aspect_ratio TEXT NOT NULL DEFAULT '1:1',
+          width INTEGER NOT NULL DEFAULT 1024,
+          height INTEGER NOT NULL DEFAULT 1024,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS generation_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          batch_id INTEGER NOT NULL REFERENCES generation_batches(id) ON DELETE CASCADE,
+          item_index INTEGER NOT NULL,
+          prompt TEXT NOT NULL,
+          negative_prompt TEXT NOT NULL DEFAULT '',
+          seed TEXT NOT NULL,
+          comfyui_prompt_id TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          error_message TEXT,
+          output_image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          completed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_gen_items_batch ON generation_items(batch_id);
+        CREATE INDEX IF NOT EXISTS idx_gen_items_prompt_id ON generation_items(comfyui_prompt_id);
+
+        -- 26. LM Studio Agent Settings
+        CREATE TABLE IF NOT EXISTS lm_studio_settings (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          base_url TEXT NOT NULL DEFAULT 'http://localhost:1234/v1',
+          selected_model TEXT NOT NULL DEFAULT '',
+          system_prompt TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `,
+    },
+    {
+      version: 3,
+      name: 'megapixel_resolution_and_lmstudio_guiding_templates',
+      sql: `
+        -- 27. Multiple saved LM Studio Guiding Prompt Templates
+        CREATE TABLE IF NOT EXISTS lm_studio_prompt_templates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          system_prompt TEXT NOT NULL,
+          user_prompt_template TEXT NOT NULL,
+          is_default INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- Add aspect_ratio_field and megapixels_field to workflow_mappings
+        ALTER TABLE workflow_mappings ADD COLUMN aspect_ratio_field TEXT NOT NULL DEFAULT 'aspect_ratio';
+        ALTER TABLE workflow_mappings ADD COLUMN megapixels_field TEXT NOT NULL DEFAULT 'megapixels';
+
+        -- Add megapixels to generation_batches
+        ALTER TABLE generation_batches ADD COLUMN megapixels REAL NOT NULL DEFAULT 1.0;
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');
@@ -362,4 +463,191 @@ export function runMigrations(): void {
       appConfig.comfyuiUrl
     );
   }
+
+  // Seed default Prompt Templates if none exist
+  const templateCount = (db.prepare('SELECT COUNT(*) as c FROM prompt_templates').get() as { c: number }).c;
+  if (templateCount === 0) {
+    const insertTemplate = db.prepare(`
+      INSERT INTO prompt_templates (name, positive_template, negative_template, is_default, category)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    insertTemplate.run(
+      'Default Character Portrait & Theme Set',
+      'masterpiece, best quality, ultra-detailed editorial photography of {character}, {lora}, {theme}, natural skin texture, sharp focus on eyes, cinematic rim lighting, shot on 85mm f/1.4 lens, shallow depth of field',
+      'worst quality, low quality, blurry, deformed, bad anatomy, extra limbs, mutated hands, watermark, text, signature, oversaturated',
+      1,
+      'character'
+    );
+    insertTemplate.run(
+      'Cinematic Environmental Full-Body',
+      'cinematic wide angle shot of {character}, {lora}, {theme}, dynamic posture, atmospheric volumetric lighting, detailed background environment, film grain, 35mm anamorphic lens, 8k resolution',
+      'worst quality, low quality, blurry, bad proportions, cropped feet, watermark, text, plastic skin',
+      0,
+      'cinematic'
+    );
+  }
+
+  // Seed default LM Studio settings if row 1 does not exist
+  const existingLm = db.prepare('SELECT id FROM lm_studio_settings WHERE id = 1').get();
+  if (!existingLm) {
+    db.prepare(`
+      INSERT INTO lm_studio_settings (id, base_url, selected_model, system_prompt)
+      VALUES (1, ?, '', ?)
+    `).run(
+      appConfig.lmStudioUrl,
+      `You are a creative photography director and Stable Diffusion / Flux prompt engineer.
+Given a Character Name, Character LoRA / appearance details, a base prompt style, and a Photo Set Theme, generate an array of distinct, cohesive image generation prompts for a full photo set.
+Vary the camera framing (close-up portrait, medium candid, wide environmental shot, over-the-shoulder, dynamic angle), poses, lighting nuances, and micro-actions within the theme while keeping the character identity consistent.
+Return ONLY a JSON array of prompt strings, or one complete prompt per line with no extra commentary.`
+    );
+  }
+
+  // Seed multiple saved LM Studio Guiding Prompt Templates if none exist
+  const guidingCount = (
+    db.prepare('SELECT COUNT(*) as c FROM lm_studio_prompt_templates').get() as { c: number }
+  ).c;
+  if (guidingCount === 0) {
+    const insertGuiding = db.prepare(`
+      INSERT INTO lm_studio_prompt_templates (name, system_prompt, user_prompt_template, is_default)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    insertGuiding.run(
+      'Editorial Photo Set Director (Default)',
+      `You are a creative photography director and ComfyUI prompt engineer.
+Your job is to take a Photo Set Theme, a Character identity, and a Base Prompt Style, and write {count} distinct, cohesive image generation prompts for a multi-photo set.
+Vary the camera framing across the set (e.g., intimate close-up portrait, medium three-quarter candid, wide full-body environmental shot, dramatic over-the-shoulder angle), vary poses and micro-expressions, and enrich the lighting and background details to match the theme.
+Return ONLY a valid JSON array of {count} prompt strings (e.g. ["prompt 1", "prompt 2"]) with no markdown formatting or extra commentary.`,
+      `Generate {count} distinct image prompts for a cohesive photo set:
+Character: {character}
+LoRA / Appearance Triggers: {lora}
+Photo Set Theme: {theme}
+Base Prompt Style to Incorporate: {base_prompt}
+
+Return ONLY a JSON array of {count} complete prompt strings.`,
+      1
+    );
+
+    insertGuiding.run(
+      'Cinematic Storyboard Sequence',
+      `You are a film director and cinematographer scripting a sequential {count}-shot storyboard for a character scene.
+Progress the scene chronologically across the {count} shots: start with an establishing atmospheric shot, move into medium action/interaction within the setting, then capture an emotional close-up and a dramatic climax angle.
+Keep the character ({character}) and LoRA triggers ({lora}) consistent in every prompt.
+Return ONLY a valid JSON array of {count} prompt strings.`,
+      `Create a {count}-shot sequential cinematic storyboard:
+Character: {character}
+LoRA Triggers: {lora}
+Scene / Theme: {theme}
+Visual Style Foundation: {base_prompt}
+
+Return ONLY a JSON array of {count} complete prompt strings.`,
+      0
+    );
+
+    insertGuiding.run(
+      'Pose, Angle & Lighting Lookbook Variations',
+      `You are a studio fashion & portrait photographer directing a {count}-image lookbook session.
+Keep the setting and theme ({theme}) consistent, but systematically vary the pose, camera lens (35mm, 50mm, 85mm, 135mm), camera angle (eye-level, low angle, profile, three-quarter), and lighting mood across all {count} prompts.
+Return ONLY a valid JSON array of {count} prompt strings.`,
+      `Generate {count} lookbook variation prompts:
+Character: {character}
+LoRA Triggers: {lora}
+Theme & Wardrobe Context: {theme}
+Base Prompt Template: {base_prompt}
+
+Return ONLY a JSON array of {count} complete prompt strings.`,
+      0
+    );
+  }
+
+  // Seed a default Standard Character + LoRA API Workflow if no workflows exist yet
+  const wfCount = (db.prepare('SELECT COUNT(*) as c FROM workflows').get() as { c: number }).c;
+  if (wfCount === 0) {
+    const defaultApiWorkflow = {
+      '1': {
+        class_type: 'CheckpointLoaderSimple',
+        _meta: { title: 'Load Checkpoint' },
+        inputs: { ckpt_name: 'sd_xl_base_1.0.safetensors' },
+      },
+      '2': {
+        class_type: 'LoraLoader',
+        _meta: { title: 'Primary Character LoRA Loader' },
+        inputs: {
+          lora_name: 'character_default.safetensors',
+          strength_model: 1.0,
+          strength_clip: 1.0,
+          model: ['1', 0],
+          clip: ['1', 1],
+        },
+      },
+      '3': {
+        class_type: 'CLIPTextEncode',
+        _meta: { title: 'Positive Prompt' },
+        inputs: {
+          text: 'masterpiece, best quality, portrait of character',
+          clip: ['2', 1],
+        },
+      },
+      '4': {
+        class_type: 'CLIPTextEncode',
+        _meta: { title: 'Negative Prompt' },
+        inputs: {
+          text: 'worst quality, low quality, blurry, deformed',
+          clip: ['2', 1],
+        },
+      },
+      '5': {
+        class_type: 'EmptyLatentImage',
+        _meta: { title: 'Resolution & Aspect Ratio (Megapixels)' },
+        inputs: {
+          aspect_ratio: '3:4',
+          megapixels: 1.0,
+          width: 896,
+          height: 1152,
+          batch_size: 1,
+        },
+      },
+      '6': {
+        class_type: 'KSampler',
+        _meta: { title: 'KSampler' },
+        inputs: {
+          seed: 123456789,
+          steps: 28,
+          cfg: 6.5,
+          sampler_name: 'dpmpp_2m',
+          scheduler: 'karras',
+          denoise: 1.0,
+          model: ['2', 0],
+          positive: ['3', 0],
+          negative: ['4', 0],
+          latent_image: ['5', 0],
+        },
+      },
+      '7': {
+        class_type: 'VAEDecode',
+        _meta: { title: 'VAE Decode' },
+        inputs: {
+          samples: ['6', 0],
+          vae: ['1', 2],
+        },
+      },
+      '8': {
+        class_type: 'SaveImage',
+        _meta: { title: 'Save Image' },
+        inputs: {
+          filename_prefix: 'Couchy_Gen',
+          images: ['7', 0],
+        },
+      },
+    };
+    db.prepare(`
+      INSERT INTO workflows (name, description, is_saved_library, api_workflow_json, workflow_hash)
+      VALUES (?, ?, 1, ?, 'default-couchy-character-lora-workflow')
+    `).run(
+      'Standard Character + LoRA Studio Workflow',
+      'Default adaptable ComfyUI API workflow with Checkpoint, LoRA Loader, Positive/Negative CLIP Text Encode, EmptyLatentImage aspect ratio control, and KSampler.',
+      JSON.stringify(defaultApiWorkflow, null, 2)
+    );
+  }
 }
+

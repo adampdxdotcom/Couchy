@@ -1,74 +1,111 @@
-# Couchy — Bulk Selection for Suggested Character Matches
+# Generation Studio Upgrade: Megapixel Resolution Node Mapping & LM Studio Guiding Prompt Templates
 
-This update adds multi-select, **Select All**, and one-click batch confirmation/rejection controls to the **Suggested Character Matches** view on the Character Profile page so users can add multiple or all LoRA-matched photos to a character at once instead of confirming them one at a time.
+Refines the Generation Studio so resolution is controlled via **Aspect Ratio + Megapixels (`0.1` to `10.0`)** mapped directly to ComfyUI's dedicated resolution node, clarifies and streamlines **Verbatim Single-Prompt** vs. **LM Studio Photo Set Theme** generation, and adds multi-template database storage for **LM Studio Guiding Prompts** with a full editor in the **System & Backup** tab.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> Confirmed scope based on your clarification:
-
-- **Keep Existing LoRA Selection Flow**: Uses the existing Character LoRA linking mechanism on the Character Profile page without adding redundant creation dialogs.
-- **Multi-Select & Select All on Suggested Photos**: When the system scans image metadata for a linked LoRA (or alias/workflow) and displays the matching photos in **Suggested Character Matches**, each photo card includes a selection checkbox alongside a top toolbar with **Select All / Deselect All**, **Confirm Selected (`N`)**, **Confirm All (`Total`)**, and **Reject Selected (`N`)**.
+> The following design decisions have been confirmed from your input:
+> - **Resolution via Aspect Ratio + Megapixels (`0.1`–`10.0`)**: The UI will replace pixel width/height inputs with an **Aspect Ratio** picker and a **Megapixels (`0.1` to `10.0`)** control. The workflow mapper will bind directly to your ComfyUI node's `aspect_ratio` and `megapixels` inputs.
+> - **Multiple Saved LM Studio Guiding Prompts (Managed in System & Backup)**: Multiple guiding prompt templates (System Instructions + User Payload template) will be persisted in SQLite (`lm_studio_prompt_templates`). A dedicated management section will be added to the **System & Backup** tab to create, edit, delete, and set default guiding prompts, and a selector dropdown will be available in the **Generation** tab.
+> - **Strict Separation of Verbatim vs. Agent Set Generation**:
+>   - **Single Prompt Mode**: Never touches LM Studio; sends your prompt **verbatim** $N$ times (with distinct seeds) simultaneously to ComfyUI.
+>   - **Photo Set Theme Mode**: Uses your chosen LM Studio Guiding Prompt template to generate $N$ varied prompts into the **Outgoing Batch Prompt Queue** for preview and inline editing before you click **Send All to ComfyUI**.
 
 ---
 
 ## 1. Overview & Core Concept
 
-- **What It Does**: Enhances the **Suggested Character Matches** queue on the Character Profile page with interactive multi-selection and batch actions backed by a single transactional SQLite update endpoint.
-- **Target Audience / Persona**: Users linking a LoRA to a character profile who have dozens or hundreds of matching historical generations and want to confirm all or a subset of those photos in seconds.
-- **Key Value**: Eliminates tedious one-by-one clicking when reviewing images discovered by the character LoRA metadata scan.
+### How Data Flows in Both Generation Modes
+1. **Mode 1: Single Prompt (Verbatim Multi-Take)**
+   - You write or select a prompt and pick $N$ generations.
+   - All $N$ copies of that exact prompt are queued in the **Outgoing Batch Prompt Queue**.
+   - Clicking **Send All to ComfyUI** dispatches all $N$ jobs at once to ComfyUI with unique seeds and your chosen `aspect_ratio` + `megapixels`.
+2. **Mode 2: Photo Set Theme (LM Studio Agent)**
+   - You enter a **Photo Set Theme** (e.g., *"Rainy neon street in Tokyo at night"*) and choose one of your saved **LM Studio Guiding Prompt Templates**.
+   - Clicking **Generate Set Prompts with LM Studio** sends:
+     - **System Prompt**: Your selected guiding prompt template from the database.
+     - **User Prompt**: Your character name, active LoRAs, base style prompt, theme, and requested shot count ($N$).
+   - LM Studio returns $N$ distinct prompts which populate the **Outgoing Batch Prompt Queue** on the right.
+   - You can inspect or tweak any individual shot prompt in the queue, then click **Send All to ComfyUI** to dispatch the entire set at once.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-### Key User Flow
+### A. Step 2 in Generation Tab: Aspect Ratio & Megapixels (`0.1` – `10.0`)
+- **Aspect Ratio Tiles**: Visual ratio buttons (`1:1`, `3:4`, `2:3`, `9:16`, `4:3`, `3:2`, `16:9`) plus an optional custom string override if your ComfyUI resolution node expects a specific label format.
+- **Megapixels Control**:
+  - Range slider and numeric input (`0.1` to `10.0`, step `0.1`).
+  - Quick preset buttons (`0.5 MP`, `1.0 MP`, `1.5 MP`, `2.0 MP`, `4.0 MP`).
+- **Node Mapper Modal Update**:
+  - The **Latent / Resolution Node** card in `NodeMapperModal` now maps:
+    - **Resolution Node ID**
+    - **Aspect Ratio Input Field** (auto-detects `aspect_ratio`, `ratio`, `dimensions`, etc.)
+    - **Megapixels Input Field** (auto-detects `megapixels`, `megapixel`, `mp`, `total_megapixels`, etc.)
 
-1. **Link LoRA & Scan**: The user selects a LoRA for a character on the Character Profile page, and the system scans indexed image metadata for matching generations, populating the **Suggested Character Matches** grid.
-2. **Multi-Select or Select All**:
-   - Users can click the checkbox overlay on individual suggested photo cards to toggle selection.
-   - Clicking **Select All (`N`)** in the Suggested Matches header bar selects every suggested photo (or **Deselect All** if all are currently selected).
-3. **One-Click Batch Confirmation or Rejection**:
-   - Clicking **Confirm Selected (`N`)** (or **Confirm All** when nothing is individually subsetted) promotes all target images to `confirmed` for that character in a single transaction and moves them immediately into the character's **All Confirmed Images** gallery.
-   - Clicking **Reject Selected (`N`)** marks the selected suggestions as `rejected` so they are dismissed and never re-suggested on future scans.
-
-### Visual Identity & Controls
-
-- **Selection Affordance**: Each suggested photo card displays a crisp top-left checkbox button (`CheckSquare` / `Square`) with an `indigo-500` border highlight when selected, matching the main gallery's multi-select visual language.
-- **Suggested Queue Action Bar**: A clean, single-row toolbar in the **Suggested Character Matches** header containing:
-  - `Select All` / `Deselect All` toggle button
-  - `Confirm Selected (N)` primary emerald button (and `Confirm All` quick action)
-  - `Reject Selected (N)` secondary rose button
+### B. System & Backup Tab: LM Studio Guiding Prompt Templates Manager
+- A new panel in **System & Backup** (`SystemAndBackupView.tsx`) dedicated to **LM Studio Connection & Guiding Prompt Templates**:
+  - Test and save the LM Studio Base URL (`http://localhost:1234/v1`) and active LLM model.
+  - Browse saved guiding prompt templates (seeded with *Editorial Photo Set Director*, *Cinematic Storyboard Sequence*, and *Fashion & Outfit Lookbook*).
+  - Edit the **System Prompt (LLM Role & Rules)** and **User Prompt Structure** (supporting `{character}`, `{lora}`, `{theme}`, `{count}`, `{base_prompt}` placeholders), save changes, or create new guiding templates in the database.
 
 ---
 
-## 3. Technical Architecture & Data Strategy *(Technical Reference)*
+## 3. Technical Architecture & Data Strategy
 
-### Component & Endpoint Flow
+### Architecture & Data Flow Diagram
 
 ```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                Character Profile — Suggested Character Matches             │
-│  ┌────────────────────┐  ┌───────────────────────┐  ┌───────────────────┐  │
-│  │ Card Checkboxes +  │─▶│ Select All / Deselect │─▶│ Confirm Selected  │  │
-│  │ Selected IDs State │  │ All Header Control    │  │ / Reject Selected │  │
-│  └────────────────────┘  └───────────────────────┘  └─────────┬─────────┘  │
-└───────────────────────────────────────────────────────────────┼────────────┘
-                                                                │
-                                 POST /api/characters/associations/bulk-status
-                                 { imageIds, characterId, status }
-                                                                │
-┌───────────────────────────────────────────────────────────────▼────────────┐
-│                     SQLite Transactional Batch Update                      │
-│  Upserts image_characters rows for all imageIds in a single transaction    │
-└────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         COUCHY WEB INTERFACE                            │
+│                                                                         │
+│  ┌────────────────────────────────┐  ┌────────────────────────────────┐ │
+│  │ GenerationStudioView.tsx       │  │ SystemAndBackupView.tsx        │ │
+│  │ - Character & LoRA Prefill     │  │ - ComfyUI & Path Settings      │ │
+│  │ - Aspect Ratio + Megapixels    │  │ - LM Studio Endpoint & Model   │ │
+│  │   (0.1 to 10.0 MP)             │  │ - LM Studio Guiding Prompt     │ │
+│  │ - Verbatim vs Theme Set Mode   │  │   Templates CRUD Editor        │ │
+│  │ - Preview & Edit Prompt Queue  │  └───────────────┬────────────────┘ │
+│  └───────────────┬────────────────┘                  │                  │
+└──────────────────┼───────────────────────────────────┼──────────────────┘
+                   │                                   │
+                   ▼                                   ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         EXPRESS + SQLITE BACKEND                        │
+│                                                                         │
+│  ┌─────────────────────────────────┐ ┌────────────────────────────────┐ │
+│  │ workflowMapperService.ts        │ │ lmStudioService.ts             │ │
+│  │ - Maps aspect_ratio & megapixels│ │ - Loads selected guiding       │ │
+│  │   node fields directly          │ │   template from SQLite         │ │
+│  │ - Injects LoRAs, seed & prompts │ │ - Calls LM Studio /v1/chat     │ │
+│  └───────────────┬─────────────────┘ └───────────────┬────────────────┘ │
+└──────────────────┼───────────────────────────────────┼──────────────────┘
+                   │                                   │
+                   ▼                                   ▼
+        ┌─────────────────────┐             ┌─────────────────────┐
+        │ ComfyUI /prompt     │             │ Local LM Studio     │
+        │ (Batch Dispatched)  │             │ (Port 1234)         │
+        └─────────────────────┘             └─────────────────────┘
 ```
 
-### Interactive State & Backend Handling
+### Database Schema Additions (Migration Version 3)
 
-- **Backend Batch Endpoint (`POST /api/characters/associations/bulk-status`)**:
-  - Accepts `{ imageIds: number[], characterId: number, status: 'confirmed' | 'rejected' | 'remove', appearanceLabel?: string }`.
-  - Executes inside a single `db.transaction(...)` over `imageIds`, updating `image_characters` keyed by `(image_content_hash, character_id)` so confirming or rejecting 100+ LoRA-matched images completes in a single round-trip.
-- **Frontend State (`selectedSuggestedIds: Set<number>`)**:
-  - Scoped to the active Character Profile's suggested images list; automatically clears or prunes IDs after batch confirmation/rejection or when switching character profiles.
-  - Preserves individual card `Confirm` and `Reject` buttons for single-item convenience alongside the new multi-select toolbar.
+```sql
+-- Multiple Saved LM Studio Guiding Prompt Templates
+CREATE TABLE IF NOT EXISTS lm_studio_prompt_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  system_prompt TEXT NOT NULL,
+  user_prompt_template TEXT NOT NULL,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Add megapixels and aspect_ratio field mapping columns to workflow_mappings
+-- and megapixels column to generation_batches
+ALTER TABLE workflow_mappings ADD COLUMN aspect_ratio_field TEXT NOT NULL DEFAULT 'aspect_ratio';
+ALTER TABLE workflow_mappings ADD COLUMN megapixels_field TEXT NOT NULL DEFAULT 'megapixels';
+ALTER TABLE generation_batches ADD COLUMN megapixels REAL NOT NULL DEFAULT 1.0;
+```

@@ -8,6 +8,7 @@ services:
     environment:
       PORT: "8080"
       COMFYUI_URL: "http://comfyui:8188"
+      LM_STUDIO_URL: "${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}"
       COMFYUI_OUTPUT_DIR: "/data/output"
       COMFYUI_MODELS_DIR: "/data/models"
       DATABASE_PATH: "/app/data/gallery.db"
@@ -16,6 +17,8 @@ services:
       DOWNLOADS_DIR: "/downloads"
       CIVITAI_API_KEY: "${CIVITAI_API_KEY:-}"
       HF_API_TOKEN: "${HF_API_TOKEN:-}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - /path/to/comfyui/output:/data/output:ro
       - /path/to/comfyui/models:/data/models:ro

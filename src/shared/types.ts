@@ -297,3 +297,108 @@ export interface GalleryFilterState {
   dateFrom: string;
   dateTo: string;
 }
+
+export type AspectRatioPreset = '1:1' | '3:4' | '4:3' | '16:9' | '9:16' | '2:3' | '3:2';
+
+export interface PromptTemplate {
+  id: number;
+  name: string;
+  positiveTemplate: string;
+  negativeTemplate: string;
+  isDefault: boolean;
+  category: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowNodeSlotInfo {
+  nodeId: string;
+  classType: string;
+  title: string;
+  inputFields: string[];
+  currentValues: Record<string, any>;
+}
+
+export interface WorkflowNodeMapping {
+  workflowId: number;
+  isCustomMapped: boolean;
+  positivePromptNodeId: string | null;
+  positivePromptField: string;
+  negativePromptNodeId: string | null;
+  negativePromptField: string;
+  seedNodeId: string | null;
+  seedField: string;
+  stepsNodeId: string | null;
+  cfgNodeId: string | null;
+  samplerNodeId: string | null;
+  latentNodeId: string | null;
+  aspectRatioField: string;
+  megapixelsField: string;
+  widthField: string;
+  heightField: string;
+  batchSizeField: string;
+  checkpointNodeId: string | null;
+  loraNodeIds: string[];
+  updatedAt?: string;
+}
+
+export interface GenerationLoraSelection {
+  loraName: string;
+  modelStrength: number;
+  clipStrength: number;
+  appearanceLabel?: string;
+}
+
+export interface GenerationItemRecord {
+  id: number;
+  batchId: number;
+  itemIndex: number;
+  prompt: string;
+  negativePrompt: string;
+  seed: string;
+  comfyuiPromptId: string | null;
+  status: 'pending' | 'submitted' | 'completed' | 'failed';
+  errorMessage: string | null;
+  outputImageId: number | null;
+  outputThumbnailUrl?: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface GenerationBatchRecord {
+  id: number;
+  characterId: number | null;
+  characterName: string | null;
+  workflowId: number | null;
+  workflowName: string | null;
+  themeTitle: string | null;
+  mode: 'single' | 'theme_set';
+  totalCount: number;
+  aspectRatio: string;
+  megapixels: number;
+  width: number;
+  height: number;
+  createdAt: string;
+  items: GenerationItemRecord[];
+}
+
+export interface LmStudioGuidingTemplate {
+  id: number;
+  name: string;
+  systemPrompt: string;
+  userPromptTemplate: string;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LmStudioStatus {
+  online: boolean;
+  baseUrl: string;
+  selectedModel: string;
+  systemPrompt: string;
+  availableModels: string[];
+  guidingTemplates: LmStudioGuidingTemplate[];
+  error: string | null;
+}
+

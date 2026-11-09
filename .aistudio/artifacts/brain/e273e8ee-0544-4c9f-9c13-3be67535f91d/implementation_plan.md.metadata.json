@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for adding Multi-Select, Select All, Confirm Selected, Confirm All, and Reject Selected bulk actions to the Suggested Character Matches section after scanning images for a character's linked LoRA.",
-  "updatedAt":  "2026-11-09T18:49:36.679472516Z",
+  "summary":  "Updated implementation plan incorporating Megapixel (0.1–10.0) + Aspect Ratio ComfyUI node mapping, multiple saved LM Studio guiding prompt templates in SQLite, a dedicated LM Studio Guiding Prompt manager in the System & Backup tab, and preview-then-send batch queue workflow.",
+  "updatedAt":  "2026-11-09T21:52:36.258982474Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

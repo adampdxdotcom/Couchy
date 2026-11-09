@@ -1,7 +1,13 @@
 import React from 'react';
 import { RefreshCw } from 'lucide-react';
 
-export type WorkspaceTab = 'gallery' | 'characters' | 'loras' | 'workflows' | 'system';
+export type WorkspaceTab =
+  | 'gallery'
+  | 'characters'
+  | 'generation'
+  | 'loras'
+  | 'workflows'
+  | 'system';
 
 interface TopNavHeaderProps {
   activeTab: WorkspaceTab;
@@ -13,7 +19,7 @@ interface TopNavHeaderProps {
 /**
  * Strict 3-Zone Top Bar Contract:
  * Zone 1: Single-line Brand Wordmark
- * Zone 2: 5 concise single-line workspace navigation links
+ * Zone 2: Concise single-line workspace navigation links
  * Zone 3: 1 primary action button (Scan Directory)
  */
 export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
@@ -25,6 +31,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   const navItems: { id: WorkspaceTab; label: string }[] = [
     { id: 'gallery', label: 'Gallery' },
     { id: 'characters', label: 'Characters' },
+    { id: 'generation', label: 'Generation' },
     { id: 'loras', label: 'LoRAs & Models' },
     { id: 'workflows', label: 'Workflows' },
     { id: 'system', label: 'System & Backup' },

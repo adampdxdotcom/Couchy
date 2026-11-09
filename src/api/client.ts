@@ -1,13 +1,21 @@
 import type {
+  AspectRatioPreset,
   CharacterProfile,
   GalleryFilterState,
+  GenerationBatchRecord,
+  GenerationLoraSelection,
   ImageRecord,
+  LmStudioGuidingTemplate,
+  LmStudioStatus,
   LoraCategory,
   LoraExplorerItem,
   ModelInventoryItem,
+  PromptTemplate,
   ReproductionValidationResult,
   SavedSearchPreset,
   WorkflowLibraryItem,
+  WorkflowNodeMapping,
+  WorkflowNodeSlotInfo,
 } from '../shared/types.ts';
 
 /**
@@ -342,6 +350,123 @@ export const api = {
   restoreAnnotationsJson: (payload: any) =>
     requestJson<{ ok: boolean; restoredCounts: Record<string, number> }>(
       '/api/backups/annotations-restore',
+      { method: 'POST', body: JSON.stringify(payload) }
+    ),
+
+  // Generation Studio
+  listPromptTemplates: () =>
+    requestJson<{ items: PromptTemplate[] }>('/api/generation/templates'),
+
+  savePromptTemplate: (payload: {
+    id?: number;
+    name: string;
+    positiveTemplate: string;
+    negativeTemplate?: string;
+    isDefault?: boolean;
+    category?: string;
+  }) =>
+    requestJson<{ template: PromptTemplate; items: PromptTemplate[] }>(
+      '/api/generation/templates',
+      { method: 'POST', body: JSON.stringify(payload) }
+    ),
+
+  deletePromptTemplate: (id: number) =>
+    requestJson<{ ok: boolean; items: PromptTemplate[] }>(
+      `/api/generation/templates/${id}`,
+      { method: 'DELETE' }
+    ),
+
+  getWorkflowMapping: (workflowId: number) =>
+    requestJson<{
+      mapping: WorkflowNodeMapping;
+      nodes: WorkflowNodeSlotInfo[];
+      hasValidApiGraph: boolean;
+    }>(`/api/generation/workflows/${workflowId}/mapping`),
+
+  saveWorkflowMapping: (workflowId: number, payload: Partial<WorkflowNodeMapping>) =>
+    requestJson<{ mapping: WorkflowNodeMapping }>(
+      `/api/generation/workflows/${workflowId}/mapping`,
+      { method: 'POST', body: JSON.stringify(payload) }
+    ),
+
+  getLmStudioStatus: (baseUrl?: string) =>
+    requestJson<LmStudioStatus>(
+      `/api/generation/lmstudio/status${baseUrl ? `?baseUrl=${encodeURIComponent(baseUrl)}` : ''}`
+    ),
+
+  updateLmStudioConfig: (payload: {
+    baseUrl?: string;
+    selectedModel?: string;
+    systemPrompt?: string;
+  }) =>
+    requestJson<LmStudioStatus>('/api/generation/lmstudio/config', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  listLmStudioGuidingTemplates: () =>
+    requestJson<{ items: LmStudioGuidingTemplate[] }>('/api/generation/lmstudio/templates'),
+
+  saveLmStudioGuidingTemplate: (payload: {
+    id?: number;
+    name: string;
+    systemPrompt: string;
+    userPromptTemplate: string;
+    isDefault?: boolean;
+  }) =>
+    requestJson<{ template: LmStudioGuidingTemplate; items: LmStudioGuidingTemplate[] }>(
+      '/api/generation/lmstudio/templates',
+      { method: 'POST', body: JSON.stringify(payload) }
+    ),
+
+  deleteLmStudioGuidingTemplate: (id: number) =>
+    requestJson<{ ok: boolean; items: LmStudioGuidingTemplate[] }>(
+      `/api/generation/lmstudio/templates/${id}`,
+      { method: 'DELETE' }
+    ),
+
+  generateSetPromptsWithAgent: (payload: {
+    characterName: string;
+    characterDescription?: string;
+    loraNames: string[];
+    theme: string;
+    count: number;
+    basePromptTemplate: string;
+    guidingTemplateId?: number;
+    modelOverride?: string;
+    baseUrlOverride?: string;
+  }) =>
+    requestJson<{
+      prompts: string[];
+      usedLmStudio: boolean;
+      modelUsed: string;
+      guidingTemplateName: string;
+      sentSystemPrompt: string;
+      sentUserPrompt: string;
+      warning?: string;
+    }>('/api/generation/lmstudio/generate-prompts', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  listGenerationBatches: () =>
+    requestJson<{ items: GenerationBatchRecord[] }>('/api/generation/batches'),
+
+  submitGenerationBatch: (payload: {
+    characterId?: number | null;
+    workflowId: number;
+    mode: 'single' | 'theme_set';
+    themeTitle?: string;
+    aspectRatio: string;
+    megapixels: number;
+    prompts: string[];
+    negativePrompt: string;
+    loras: GenerationLoraSelection[];
+    checkpointName?: string;
+    baseSeed?: number;
+  }) =>
+    requestJson<{ batch: GenerationBatchRecord; batches: GenerationBatchRecord[] }>(
+      '/api/generation/submit-batch',
       { method: 'POST', body: JSON.stringify(payload) }
     ),
 };
