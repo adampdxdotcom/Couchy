@@ -1,0 +1,28 @@
+services:
+  comfyui-gallery:
+    build: .
+    container_name: comfyui-gallery
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      COMFYUI_URL: "http://comfyui:8188"
+      COMFYUI_OUTPUT_DIR: "/data/output"
+      COMFYUI_MODELS_DIR: "/data/models"
+      DATABASE_PATH: "/app/data/gallery.db"
+      THUMBNAIL_PATH: "/app/data/thumbnails"
+      BACKUP_PATH: "/app/data/backups"
+      DOWNLOADS_DIR: "/downloads"
+      CIVITAI_API_KEY: "${CIVITAI_API_KEY:-}"
+      HF_API_TOKEN: "${HF_API_TOKEN:-}"
+    volumes:
+      - /path/to/comfyui/output:/data/output:ro
+      - /path/to/comfyui/models:/data/models:ro
+      - ./gallery-data:/app/data
+      - ./model-downloads:/downloads
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

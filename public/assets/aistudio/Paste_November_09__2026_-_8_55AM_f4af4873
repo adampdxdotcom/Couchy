@@ -1,0 +1,1010 @@
+# PROJECT: COMFYUI GALLERY
+## Master Development Prompt & Technical Specification
+
+You are acting as a senior full-stack software architect, Python backend engineer, React/TypeScript developer, database architect, UI/UX designer, and DevOps engineer.
+
+Your task is to design, build, test, and deliver a complete, production-quality application called **ComfyUI Gallery**.
+
+This is not a prototype, mockup, or proof of concept. The objective is to build a reliable, self-hosted application for managing, exploring, organizing, and reproducing AI-generated images from ComfyUI.
+
+You must follow this specification as the primary source of truth.
+
+Prioritize functional correctness, data integrity, maintainability, reliability, and performance over visual polish.
+
+---
+
+# PART 1 — PROJECT OVERVIEW
+
+## 1.1 Product definition
+
+ComfyUI Gallery is a local-first AI image library, metadata explorer, asset manager, and workflow reproduction platform.
+
+It should provide a centralized interface for managing large collections of AI-generated images while preserving the ability to inspect and reproduce the original ComfyUI generation workflows.
+
+Core architectural principles:
+
+- Local-first operation.
+- SQLite database.
+- Single-user deployment.
+- Self-hosted application.
+- Virtual image organization.
+- Original image files must never be modified or moved.
+- Support both visual ComfyUI workflows and API-format workflows.
+- Function independently when ComfyUI is offline.
+- Modular backend architecture.
+- Docker Compose deployment.
+
+## 1.2 Primary objectives
+
+Build an application that:
+
+1. Automatically indexes all images in a mounted ComfyUI output directory.
+2. Extracts and indexes generation metadata.
+3. Organizes images through virtual collections, ratings, favorites, and tags.
+4. Provides powerful filtering by individual and multiple LoRAs.
+5. Supports individual, multi-select, and bulk downloads.
+6. Preserves both visual and API-format workflow metadata.
+7. Connects to ComfyUI to inventory installed models.
+8. Identifies missing dependencies for historical generations.
+9. Locates and downloads missing models with user confirmation.
+10. Reproduces original workflows through ComfyUI.
+11. Maintains historical generation and reproduction records.
+12. Provides backup and restore functionality.
+
+The application must remain a useful and fully functional image library even when ComfyUI is unavailable.
+
+---
+
+# PART 2 — REQUIRED TECHNOLOGY STACK
+
+Use this stack unless a compelling technical reason justifies an alternative.
+
+| Component | Technology |
+|---|---|
+| Frontend | React + TypeScript |
+| UI framework | Tailwind CSS + shadcn/ui |
+| Backend | Python + FastAPI |
+| Database | SQLite |
+| ORM | SQLAlchemy |
+| Migrations | Alembic |
+| Image processing | Pillow |
+| Metadata extraction | Python PNG metadata parser |
+| Background processing | Python worker |
+| Thumbnail format | WebP |
+| Deployment | Docker Compose |
+
+Use a modular architecture.
+
+Separate the following backend responsibilities into independent services:
+
+- Image indexing and filesystem monitoring.
+- Metadata extraction and parsing.
+- Database management.
+- ComfyUI communication.
+- Model inventory.
+- Model search and downloads.
+- Workflow reproduction.
+- Background task processing.
+- Thumbnail generation.
+- Backup and restore.
+
+Avoid tightly coupling frontend components to backend implementation details.
+
+Use typed API contracts and consistent error responses.
+
+---
+
+# PART 3 — DOCKER DEPLOYMENT
+
+The application must be deployable using Docker Compose.
+
+Suggested configuration:
+
+```yaml
+services:
+  comfyui-gallery:
+    build: .
+    container_name: comfyui-gallery
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"
+
+    environment:
+      COMFYUI_URL: "http://comfyui:8188"
+      COMFYUI_OUTPUT_DIR: "/data/output"
+      COMFYUI_MODELS_DIR: "/data/models"
+      DATABASE_PATH: "/app/data/gallery.db"
+      THUMBNAIL_PATH: "/app/data/thumbnails"
+
+    volumes:
+      - /path/to/comfyui/output:/data/output:ro
+      - /path/to/comfyui/models:/data/models:ro
+      - ./gallery-data:/app/data
+      - ./model-downloads:/downloads
+```
+
+Deployment requirements:
+
+- The ComfyUI output directory must be mounted read-only.
+- The model directory should initially be mounted read-only.
+- Model downloads must use a configurable writable destination.
+- Database and thumbnails must persist across container restarts.
+- All paths and connection URLs must be configurable.
+- ComfyUI does not need to run in the same Docker Compose project.
+- Support connections to ComfyUI on another Docker host or LAN machine.
+- Include a connection test button.
+- Do not require access to the Docker socket.
+
+Document all environment variables, volume mounts, configuration options, and upgrade procedures.
+
+---
+
+# PART 4 — IMAGE LIBRARY
+
+## 4.1 Scanning and indexing
+
+Implement:
+
+- Recursive directory scanning.
+- Initial full scan.
+- Incremental filesystem monitoring.
+- Periodic reconciliation.
+- Detection of added, deleted, moved, and modified files.
+- PNG, JPEG, WebP, and other common image formats.
+- Generation metadata extraction where supported.
+- Asynchronous thumbnail generation.
+- Duplicate indexing prevention.
+- Image identity independent of filenames.
+
+The scanner must handle large image collections without blocking the UI.
+
+Use background jobs and appropriate database transactions.
+
+Do not load full-resolution images unnecessarily.
+
+## 4.2 Gallery interface
+
+Create a polished, modern dark-themed interface.
+
+Required views:
+
+- Masonry gallery.
+- Standard grid.
+- Compact grid.
+- Full-screen image viewer.
+- Image detail panel.
+
+Required sorting:
+
+- Newest first.
+- Oldest first.
+- Highest rated.
+- Lowest rated.
+- Filename.
+- File size.
+- Checkpoint.
+- Most-used LoRA.
+- Recently favorited.
+
+Additional interface requirements:
+
+- Keyboard navigation.
+- Pagination or virtual scrolling.
+- Configurable thumbnail sizes.
+- Responsive layouts.
+- Efficient image loading.
+- Loading and empty states.
+- Clear error states.
+
+The interface should remain responsive with thousands or tens of thousands of images.
+
+---
+
+# PART 5 — VIRTUAL IMAGE ORGANIZATION
+
+Original image files must never be modified, renamed, or moved during normal application operations.
+
+All organization must be stored in SQLite.
+
+Implement:
+
+- 1–5 star ratings.
+- Favorites.
+- Rejected images.
+- Custom tags.
+- Multiple collections per image.
+- Image notes.
+- Archived/hidden status.
+- Bulk tagging.
+- Bulk rating.
+- Bulk collection assignment.
+- Saved searches.
+
+Support database backup, export, and restoration.
+
+Keep user-created annotations independent of machine-derived metadata so rescanning does not destroy user organization.
+
+---
+
+# PART 6 — METADATA EXTRACTION
+
+This is one of the foundational components of the application.
+
+Extract as much information as possible from image metadata.
+
+## 6.1 Generation metadata
+
+Extract:
+
+- Positive prompt.
+- Negative prompt.
+- Seed.
+- Steps.
+- CFG.
+- Sampler.
+- Scheduler.
+- Width and height.
+- Denoise.
+- Batch information.
+- Generation date, if available.
+- Checkpoint.
+- VAE.
+- All LoRAs.
+- LoRA strengths.
+- CLIP strengths.
+- Other model dependencies.
+
+## 6.2 Workflow metadata
+
+Store these independently:
+
+1. Original embedded metadata.
+2. Visual ComfyUI workflow JSON.
+3. API-format workflow JSON.
+4. Parsed generation parameters.
+5. Extracted model dependencies.
+
+Never discard unknown metadata.
+
+Preserve original workflow JSON as an immutable historical record.
+
+Build an extensible parser architecture that can support additional metadata formats later.
+
+When metadata is incomplete, explicitly identify which fields could not be extracted.
+
+Do not invent missing metadata.
+
+## 6.3 LoRA extraction
+
+This functionality deserves special attention.
+
+Support:
+
+- Multiple LoRA loader nodes.
+- Multiple LoRAs per image.
+- Separate model and CLIP strengths.
+- Different loader node types.
+- LoRA names and paths.
+- Model hashes when available.
+
+Never assume that LoRAs can be identified exclusively through the positive prompt.
+
+The visual workflow is an important source of information.
+
+Use workflow node inspection and embedded metadata together, while preserving the provenance of extracted information.
+
+---
+
+# PART 7 — LoRA EXPLORER
+
+Create a dedicated LoRA section.
+
+Each LoRA must have a detail page containing:
+
+- Name.
+- File location.
+- Hash.
+- Installed/missing status.
+- File size.
+- Number of images using it.
+- Average image rating.
+- Highest-rated images.
+- All associated images.
+- Download source, if known.
+- Historical LoRA strengths.
+
+## 7.1 Multi-LoRA filtering
+
+Implement both filtering modes:
+
+- Match ANY selected LoRA.
+- Match ALL selected LoRAs.
+
+Additional filters:
+
+- Strength range.
+- Checkpoint.
+- Rating.
+- Date.
+- Collection.
+- Tags.
+
+Allow users to save frequently used filter combinations.
+
+## 7.2 Bulk downloads
+
+Users must be able to:
+
+- Download one image.
+- Multi-select images and download them.
+- Download every image associated with a LoRA.
+- Download every image matching a complex filter.
+- Export selections as ZIP files.
+
+Original image files must be exported unchanged.
+
+---
+
+# PART 8 — IMAGE DETAIL AND WORKFLOW REPRODUCTION
+
+Every image must have a comprehensive detail view.
+
+Display:
+
+- Full-resolution image.
+- Rating and favorite controls.
+- Tags and collections.
+- Positive and negative prompts.
+- Generation parameters.
+- LoRAs and their strengths.
+- Checkpoint and VAE.
+- File metadata.
+- Workflow availability.
+- Dependency availability.
+
+## 8.1 Reproduce button
+
+Every image with sufficient workflow metadata should have a Reproduce action.
+
+Implement the following process:
+
+1. Read the stored workflow.
+2. Determine whether it is visual or API format.
+3. If visual format, convert to API format where possible using ComfyUI-supported conversion mechanisms.
+4. Identify required models.
+5. Check model availability.
+6. Identify missing dependencies.
+7. Check required custom nodes where detectable.
+8. Display a reproduction summary.
+9. Allow the user to submit the workflow to ComfyUI.
+10. Track the resulting ComfyUI prompt ID and execution status.
+
+Important rules:
+
+- Never silently substitute missing models.
+- Never silently change workflow parameters.
+- Preserve original workflow data.
+- Explain why exact reproduction is impossible when dependencies or metadata are missing.
+- Never claim exact reproduction without verification.
+
+---
+
+# PART 9 — COMFYUI INTEGRATION
+
+Implement a dedicated ComfyUI service.
+
+Use supported ComfyUI API endpoints and its WebSocket interface where appropriate.
+
+Required capabilities:
+
+- Test connection.
+- Retrieve system information.
+- Retrieve available model lists.
+- Submit workflows.
+- Monitor execution.
+- Display execution errors.
+- Retrieve resulting image information.
+- Track generated outputs.
+- Associate new outputs with their originating workflow.
+
+Connection settings must be configurable through environment variables and application settings.
+
+The application must continue to function if ComfyUI is offline.
+
+## 9.1 Model inventory
+
+Inventory:
+
+- Checkpoints.
+- LoRAs.
+- VAEs.
+- ControlNet.
+- Upscalers.
+- Embeddings.
+- CLIP models.
+- Diffusion models.
+- Other recognized model types.
+
+Store:
+
+- Filename.
+- Model type.
+- File size.
+- File path.
+- Hash where feasible.
+
+Use both ComfyUI API information and filesystem inventory.
+
+Neither source should be assumed to provide a complete representation of installed models.
+
+---
+
+# PART 10 — REPRODUCIBILITY AND DEPENDENCY CHECKER
+
+Every image should receive a dependency status.
+
+Use these statuses:
+
+| Status | Meaning |
+|---|---|
+| Exact match | All verifiable model hashes match |
+| Available | Required models are present, but identity is not fully verified |
+| Incomplete | One or more dependencies are missing |
+| Unknown | Insufficient metadata |
+
+When a model is missing, display:
+
+- Model name.
+- Model type.
+- Historical file path.
+- Hash, if available.
+- Number of images depending on it.
+- Whether a download source is known.
+
+Create a Missing Dependencies dashboard.
+
+Allow users to select multiple missing dependencies and locate them together.
+
+Clearly distinguish between:
+
+- Missing models.
+- Models that exist but have unverified identities.
+- Models verified through hashes.
+- Dependencies that cannot be determined.
+
+---
+
+# PART 11 — MODEL MANAGER AND DOWNLOADS
+
+Integrate:
+
+- Civitai API.
+- Hugging Face API.
+
+Support:
+
+- Model search.
+- Model details.
+- Model downloads.
+- Download progress.
+- Download history.
+- Destination selection.
+- Duplicate detection.
+- Hash verification.
+- Missing dependency restoration.
+
+Initially support:
+
+- LoRAs.
+- Base models and checkpoints.
+
+Design the architecture to support additional model types later.
+
+Security requirements:
+
+- Downloads must be performed server-side.
+- Require explicit user confirmation before downloading.
+- Never automatically execute downloaded code.
+- Never overwrite existing models without explicit confirmation.
+- Keep API keys in backend configuration.
+- Never expose API keys to the browser.
+- Validate download destinations.
+- Provide clear error reporting.
+
+---
+
+# PART 12 — UNIVERSAL SEARCH AND FILTERING
+
+Implement a universal search interface.
+
+Search across:
+
+- Prompts.
+- Negative prompts.
+- Filenames.
+- LoRA names.
+- Checkpoints.
+- Tags.
+- Notes.
+- Collections.
+- Model hashes.
+
+Advanced search must support combined conditions.
+
+Example:
+
+`LoRA A AND LoRA B AND rating >= 4 AND checkpoint X`
+
+Support:
+
+- AND.
+- OR.
+- NOT.
+- Numeric ranges.
+- Date ranges.
+- Saved searches.
+
+Ensure multiple LoRA filtering works correctly with complex search conditions.
+
+---
+
+# PART 13 — DATABASE DESIGN
+
+Use SQLite with appropriate indexes and SQLAlchemy.
+
+Implement database migrations from the beginning.
+
+Suggested core tables:
+
+| Table | Purpose |
+|---|---|
+| images | Image records and file information |
+| image_metadata | Parsed generation metadata |
+| workflows | Original and API workflow JSON |
+| image_loras | Many-to-many image/LoRA relationship |
+| models | Known model inventory |
+| image_models | Image/model dependency relationships |
+| ratings | Ratings and favorites |
+| tags | User-created tags |
+| image_tags | Many-to-many tag relationship |
+| collections | User collections |
+| collection_images | Collection membership |
+| comfyui_instances | ComfyUI connection information |
+| scan_jobs | Scanner history |
+| download_jobs | Download tracking |
+| reproduction_jobs | Workflow execution history |
+
+Additional requirements:
+
+- Appropriate foreign keys.
+- Database indexes.
+- Transaction safety.
+- Migration support.
+- Database integrity checks.
+- Backup and restore.
+- Separation of machine-derived metadata and user annotations.
+
+The database should be rebuildable for machine-derived metadata while user annotations remain independently exportable and restorable.
+
+---
+
+# PART 14 — FUTURE EXTENSIBILITY
+
+Design the architecture so the following can be added without major restructuring:
+
+- Side-by-side image comparison.
+- Similar-image detection.
+- Perceptual hashing.
+- Generation batch grouping.
+- Statistics dashboard.
+- Local AI image tagging.
+- Duplicate detection.
+- Multiple ComfyUI instances.
+- Workflow library.
+- Image export with metadata.
+- Model usage analytics.
+
+These are future architectural considerations, not requirements to implement before the core application is complete.
+
+---
+
+# PART 15 — ADDITIONAL FEATURES TO INCLUDE
+
+These five features should be incorporated into the architecture and implemented as part of the appropriate development phases.
+
+## 15.1 Independent workflow library
+
+A workflow should be retainable independently of its generated images.
+
+Allow users to:
+
+- Save workflows separately.
+- Give workflows custom names.
+- Store original workflow JSON.
+- Associate multiple images with one workflow.
+- Browse and manage saved workflows.
+
+Deleting or moving an image must not automatically delete its associated saved workflow.
+
+## 15.2 Model usage impact report
+
+Before removing a LoRA or checkpoint, show:
+
+- Number of images that depend on it.
+- Number of workflows that depend on it.
+- Related historical generations.
+
+This will help users safely manage their model collection.
+
+## 15.3 Metadata confidence and provenance
+
+Distinguish between:
+
+- Information extracted directly from embedded metadata.
+- Information extracted from workflow nodes.
+- Information inferred from external model inventories.
+- Information that could not be verified.
+
+Avoid presenting inferred information as confirmed facts.
+
+## 15.4 Database backup and restore
+
+Provide an easy-to-use backup interface.
+
+Include:
+
+- Manual database backup.
+- Restore functionality.
+- Export of ratings, tags, collections, and annotations.
+- Scheduled backup capability.
+- Clear backup status and error reporting.
+
+## 15.5 Generation history
+
+Track reproductions launched from the gallery.
+
+Record:
+
+- Original image.
+- Workflow used.
+- Submission date.
+- ComfyUI prompt ID.
+- Success or failure status.
+- Execution errors.
+- Resulting images.
+
+This should create a useful feedback loop between the gallery and ComfyUI.
+
+---
+
+# PART 16 — ACCEPTANCE CRITERIA
+
+The application is not complete until the following scenarios work.
+
+### Image library
+- Mount an existing ComfyUI output folder.
+- Index its images.
+- Browse thousands of images smoothly.
+- Extract metadata from ComfyUI PNG files.
+- Display all associated LoRAs.
+- Filter by one LoRA.
+- Filter by multiple LoRAs using AND/OR.
+- Rate and favorite images.
+- Create collections without moving files.
+- Search generation prompts.
+
+### Downloads and organization
+- Download individual images.
+- Multi-select and download images.
+- Download all images associated with a LoRA.
+- Download all images matching complex filters.
+- Export original files unchanged.
+
+### Workflow handling
+- Recover visual workflow metadata.
+- Recover API-format workflow metadata.
+- Store workflows independently.
+- Associate multiple images with workflows.
+- Reproduce supported workflows through ComfyUI.
+- Monitor workflow execution.
+
+### Model management
+- Inventory installed ComfyUI models.
+- Identify missing models.
+- Locate missing LoRAs and checkpoints.
+- Download missing models with confirmation.
+- Verify downloaded model hashes.
+
+### Reliability
+- Survive container restarts without losing organization.
+- Rebuild machine-derived image metadata through rescanning.
+- Preserve user annotations.
+- Back up and restore the database.
+- Function when ComfyUI is offline.
+
+Do not mark an acceptance criterion as complete unless it has actually been implemented and tested.
+
+---
+
+# PART 17 — DEVELOPMENT EXECUTION INSTRUCTIONS
+
+This section is particularly important.
+
+You must build this application incrementally.
+
+Do not attempt to implement the entire application in one generation or one development pass.
+
+## 17.1 Development workflow
+
+Before writing substantial code:
+
+1. Inspect the existing project structure and development environment.
+2. Identify the capabilities and limitations of the current environment.
+3. Establish the proposed architecture.
+4. Identify dependencies and potential integration risks.
+5. Present a phased implementation plan.
+6. Identify which components can be developed and tested independently.
+
+Do not assume that a feature is supported by the development environment without checking.
+
+If an architectural decision has significant consequences, explain the trade-offs before proceeding.
+
+## 17.2 Suggested development phases
+
+### Phase 1 — Foundation
+- Project structure.
+- Docker configuration.
+- FastAPI backend.
+- React frontend.
+- SQLite database.
+- SQLAlchemy models.
+- Alembic migrations.
+- Health checks.
+- Configuration management.
+
+### Phase 2 — Image indexing
+- Recursive scanner.
+- Filesystem monitoring.
+- Image records.
+- File identity.
+- Thumbnail generation.
+- Initial gallery.
+- Incremental reconciliation.
+
+### Phase 3 — Metadata extraction
+- PNG metadata parser.
+- Generation parameters.
+- Visual workflows.
+- API workflows.
+- LoRA extraction.
+- Model dependency extraction.
+- Metadata provenance and confidence.
+
+### Phase 4 — Gallery and organization
+- Gallery views.
+- Image viewer.
+- Detail panel.
+- Ratings.
+- Favorites.
+- Tags.
+- Collections.
+- Notes.
+- Bulk operations.
+
+### Phase 5 — Search and LoRA explorer
+- Universal search.
+- Advanced filters.
+- Multi-LoRA filtering.
+- LoRA detail pages.
+- Saved searches.
+- Bulk exports.
+
+### Phase 6 — ComfyUI integration
+- Connection management.
+- API communication.
+- WebSocket monitoring.
+- Model inventory.
+- Workflow submission.
+- Execution history.
+
+### Phase 7 — Reproduction and dependencies
+- Dependency checker.
+- Missing dependencies dashboard.
+- Workflow validation.
+- Reproduction summaries.
+- Workflow execution.
+
+### Phase 8 — Model manager
+- Civitai integration.
+- Hugging Face integration.
+- Model search.
+- Downloads.
+- Hash verification.
+- Missing dependency restoration.
+
+### Phase 9 — Reliability and completion
+- Backup and restore.
+- Error handling.
+- Performance optimization.
+- Security review.
+- Docker deployment testing.
+- Acceptance testing.
+- Documentation.
+
+You may adjust the order if a technical dependency requires it, but explain why.
+
+## 17.3 Phase gates
+
+At the beginning of each phase:
+
+- Explain the objectives.
+- Identify the files and components to be created or changed.
+- Identify dependencies.
+- Explain how the phase will be tested.
+
+At the end of each phase:
+
+- Report what was implemented.
+- Report what actually works.
+- List the tests performed and their results.
+- Identify known limitations.
+- Identify unfinished functionality.
+- Confirm whether the phase acceptance criteria have been met.
+
+Do not proceed past a major architectural dependency until it has been validated.
+
+## 17.4 Code quality requirements
+
+- Use clear, maintainable code.
+- Use type hints in Python.
+- Use TypeScript types throughout the frontend.
+- Avoid unnecessary duplication.
+- Use modular services.
+- Implement meaningful error handling.
+- Validate API inputs.
+- Use appropriate database transactions.
+- Avoid blocking operations in request handlers.
+- Use background processing for expensive operations.
+- Include logging.
+- Include health checks.
+- Include database migrations.
+- Document configuration.
+
+Do not use mock data as a substitute for actual functionality in completed features.
+
+If mock data is needed during early frontend development, clearly label it and replace it before declaring the feature complete.
+
+## 17.5 Data integrity requirements
+
+These requirements are non-negotiable:
+
+1. Never modify original image files.
+2. Never move or rename original images during normal application operation.
+3. Preserve original embedded metadata.
+4. Preserve original workflow JSON.
+5. Do not discard unknown metadata.
+6. Keep user annotations separate from machine-derived metadata.
+7. Do not silently substitute models or workflow parameters.
+8. Do not claim exact reproducibility without verification.
+9. Never overwrite existing models without explicit user confirmation.
+10. Never automatically execute downloaded code.
+
+## 17.6 Error handling
+
+Implement meaningful error handling for:
+
+- Unavailable ComfyUI instances.
+- Malformed image metadata.
+- Unsupported metadata formats.
+- Missing models.
+- Missing custom nodes.
+- Failed downloads.
+- Filesystem errors.
+- Database errors.
+- Interrupted scans.
+- Interrupted workflow executions.
+- Invalid workflow formats.
+
+The application must fail gracefully and retain as much existing data as possible.
+
+## 17.7 Performance
+
+Optimize for large image libraries.
+
+In particular:
+
+- Use asynchronous thumbnail generation.
+- Use efficient database queries and indexes.
+- Use pagination or virtual scrolling.
+- Avoid loading original-resolution images until needed.
+- Avoid rescanning unchanged files unnecessarily.
+- Use incremental indexing.
+- Avoid blocking the main application thread.
+- Provide visible progress for long-running operations.
+
+## 17.8 Documentation
+
+Maintain documentation for:
+
+- Architecture.
+- Project structure.
+- Environment variables.
+- Docker deployment.
+- Volume mounts.
+- Database schema.
+- API endpoints.
+- ComfyUI configuration.
+- Model downloads.
+- Backup and restore.
+- Upgrade procedures.
+- Troubleshooting.
+
+---
+
+# PART 18 — HOW TO INTERACT WITH ME DURING DEVELOPMENT
+
+Treat me as the product owner.
+
+You are responsible for making sound technical decisions and explaining important trade-offs.
+
+Follow these rules:
+
+1. Do not overwhelm me with unnecessary questions.
+2. Make reasonable implementation decisions when requirements are sufficiently clear.
+3. Ask for clarification when a decision materially affects architecture, functionality, or data safety.
+4. Do not repeatedly ask me to approve routine implementation details.
+5. Clearly distinguish implemented functionality from planned functionality.
+6. Never claim something works unless it has been tested.
+7. Do not remove previously implemented functionality when adding new features.
+8. Avoid unnecessary rewrites of working components.
+9. Maintain consistency with the established architecture.
+10. Identify and resolve regressions when they occur.
+
+When you encounter a technical limitation, explain it and recommend a practical solution.
+
+When a feature cannot be implemented reliably, do not simulate it and pretend it is functional.
+
+---
+
+# PART 19 — INITIAL RESPONSE REQUIRED
+
+Before beginning implementation, provide the following:
+
+1. Your understanding of the ComfyUI Gallery project.
+2. A proposed system architecture.
+3. The proposed directory and file structure.
+4. The database architecture.
+5. The backend service architecture.
+6. The frontend architecture.
+7. The Docker deployment approach.
+8. Any important technical risks or integration limitations.
+9. A phased development roadmap.
+10. The recommended first implementation phase.
+
+Identify any assumptions that need confirmation.
+
+Do not generate the entire application in one response.
+
+After presenting this plan, begin Phase 1 only when the required development environment and implementation approach are established.
+
+---
+
+# FINAL DEVELOPMENT PRIORITY
+
+The priority order is:
+
+1. Data integrity and preservation.
+2. Reliable image indexing.
+3. Accurate metadata and workflow extraction.
+4. Functional image organization.
+5. Powerful search and LoRA exploration.
+6. Reliable ComfyUI integration.
+7. Accurate workflow reproduction.
+8. Model dependency management.
+9. Model downloads.
+10. Performance, usability, and additional features.
+
+**The ultimate goal is a dependable, local-first ComfyUI image management and workflow reproduction platform — not simply an attractive image gallery.**
+
+Build it accordingly.
