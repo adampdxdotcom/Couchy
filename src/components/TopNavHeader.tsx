@@ -38,7 +38,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
         onClick={() => onSelectTab('gallery')}
         className="text-lg font-display font-bold tracking-tight text-zinc-100 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
       >
-        ComfyUI Gallery
+        Couchy
       </button>
 
       {/* Zone 2: Navigation Links */}

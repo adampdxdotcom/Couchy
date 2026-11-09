@@ -181,7 +181,7 @@ export default function App() {
               onExportFilteredZip={() =>
                 api.exportImagesZip({
                   filters,
-                  archiveName: 'comfyui-filtered-export',
+                  archiveName: 'couchy-filtered-export',
                 })
               }
             />
@@ -220,7 +220,7 @@ export default function App() {
               onExportSelectedZip={() =>
                 api.exportImagesZip({
                   imageIds: Array.from(selectedIds),
-                  archiveName: 'comfyui-selected-export',
+                  archiveName: 'couchy-selected-export',
                 })
               }
               characters={characters}

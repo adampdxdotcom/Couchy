@@ -49,12 +49,12 @@ async function startServer() {
   }
 
   app.listen(appConfig.port, '0.0.0.0', () => {
-    console.log(`ComfyUI Gallery running on http://0.0.0.0:${appConfig.port}`);
+    console.log(`Couchy running on http://0.0.0.0:${appConfig.port}`);
     console.log(`Watching ComfyUI Output Directory: ${appConfig.comfyuiOutputDir}`);
   });
 }
 
 startServer().catch((err) => {
-  console.error('Failed to start ComfyUI Gallery server:', err);
+  console.error('Failed to start Couchy server:', err);
   process.exit(1);
 });

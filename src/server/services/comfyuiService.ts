@@ -456,7 +456,7 @@ export async function validateWorkflowReproduction(params: {
 
   if (hasMissingModels) {
     warnings.push(
-      'One or more required models are missing. ComfyUI Gallery will never silently substitute missing models.'
+      'One or more required models are missing. Couchy will never silently substitute missing models.'
     );
   }
   if (!conn.online) {
@@ -517,7 +517,7 @@ export async function submitWorkflowReproduction(params: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         prompt: validation.apiPromptPayload,
-        client_id: `comfyui-gallery-${jobId}`,
+        client_id: `couchy-${jobId}`,
       }),
     });
 

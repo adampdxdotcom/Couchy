@@ -284,7 +284,7 @@ systemRouter.get('/backups/annotations-export', (_req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="comfyui-gallery-annotations-${new Date().toISOString().slice(0, 10)}.json"`
+    `attachment; filename="couchy-annotations-${new Date().toISOString().slice(0, 10)}.json"`
   );
   res.send(JSON.stringify(payload, null, 2));
 });

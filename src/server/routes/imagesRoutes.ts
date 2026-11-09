@@ -327,7 +327,7 @@ imagesRouter.post('/export-zip', (req, res) => {
       return;
     }
 
-    const zipFilename = `${(archiveName || 'comfyui-gallery-export').replace(/[^a-zA-Z0-9_-]/g, '_')}.zip`;
+    const zipFilename = `${(archiveName || 'couchy-export').replace(/[^a-zA-Z0-9_-]/g, '_')}.zip`;
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
 

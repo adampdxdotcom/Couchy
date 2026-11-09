@@ -326,6 +326,55 @@ charactersRouter.post('/associations/status', (req, res) => {
 });
 
 /**
+ * POST /api/characters/associations/bulk-status
+ * Batch confirms, rejects, or removes multiple suggested/associated images for a character in one transaction.
+ */
+charactersRouter.post('/associations/bulk-status', (req, res) => {
+  try {
+    const { imageIds, characterId, status, appearanceLabel } = req.body || {};
+    if (!Array.isArray(imageIds) || imageIds.length === 0 || !characterId) {
+      res.status(400).json({ error: 'imageIds array and characterId are required' });
+      return;
+    }
+
+    const charIdNum = Number(characterId);
+    const getImg = db.prepare('SELECT id, content_hash FROM images WHERE id = ?');
+    const delStmt = db.prepare(
+      'DELETE FROM image_characters WHERE image_content_hash = ? AND character_id = ?'
+    );
+    const upsertStmt = db.prepare(
+      `INSERT INTO image_characters
+        (image_id, image_content_hash, character_id, status, source, confidence, appearance_label, updated_at)
+       VALUES (?, ?, ?, ?, 'bulk', 1.0, ?, datetime('now'))
+       ON CONFLICT(image_content_hash, character_id) DO UPDATE SET
+         status = excluded.status,
+         appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
+         updated_at = datetime('now')`
+    );
+
+    let updatedCount = 0;
+    const tx = db.transaction(() => {
+      for (const rawId of imageIds) {
+        const img = getImg.get(Number(rawId)) as { id: number; content_hash: string } | undefined;
+        if (!img) continue;
+
+        if (status === 'remove') {
+          delStmt.run(img.content_hash, charIdNum);
+        } else {
+          upsertStmt.run(img.id, img.content_hash, charIdNum, status, appearanceLabel || null);
+        }
+        updatedCount++;
+      }
+    });
+
+    tx();
+    res.json({ ok: true, count: updatedCount });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to bulk update character associations' });
+  }
+});
+
+/**
  * POST /api/characters/run-suggestions
  * Runs the Assisted Character Identification suggestion pass across all indexed images.
  */

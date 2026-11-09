@@ -122,7 +122,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
             No Indexed Images in Mounted Output Directory
           </h2>
           <p className="text-sm text-zinc-400 max-w-lg mx-auto leading-relaxed">
-            ComfyUI Gallery is actively monitoring your mounted ComfyUI output directory in read-only mode.
+            Couchy is actively monitoring your mounted ComfyUI output directory in read-only mode.
             Any PNG, JPEG, or WebP generations placed into the folder below are automatically indexed with full
             workflow and multi-LoRA extraction.
           </p>

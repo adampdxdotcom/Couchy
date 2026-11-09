@@ -1,10 +1,10 @@
-# ComfyUI Gallery
+# Couchy
 
 A local-first, self-hosted AI image library, metadata and workflow explorer, first-class character organization system, model dependency auditor, and ComfyUI workflow reproduction platform.
 
 ## 1. Architecture & Unified Stack
 
-ComfyUI Gallery runs on a **single unified Node.js/TypeScript + Express + SQLite (`better-sqlite3`)** backend paired with a **React 19 + TypeScript + Tailwind CSS** frontend for both interactive development and self-hosted Docker production:
+Couchy runs on a **single unified Node.js/TypeScript + Express + SQLite (`better-sqlite3`)** backend paired with a **React 19 + TypeScript + Tailwind CSS** frontend for both interactive development and self-hosted Docker production:
 
 - **Read-Only Immutability**: Original images in `COMFYUI_OUTPUT_DIR` are never modified, renamed, or moved.
 - **Content-Addressed Identity**: Every indexed image is identified by its SHA-256 `content_hash`. Moving or renaming files inside the mounted output directory preserves all ratings, favorites, tags, collections, notes, and character associations.

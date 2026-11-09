@@ -142,7 +142,7 @@ export const api = {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${params.archiveName || 'comfyui-gallery-export'}.zip`;
+    a.download = `${params.archiveName || 'couchy-export'}.zip`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -224,6 +224,17 @@ export const api = {
     appearanceLabel?: string;
   }) =>
     requestJson<{ ok: boolean }>('/api/characters/associations/status', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  bulkUpdateCharacterAssociationStatus: (payload: {
+    imageIds: number[];
+    characterId: number;
+    status: 'confirmed' | 'suggested' | 'rejected' | 'remove';
+    appearanceLabel?: string;
+  }) =>
+    requestJson<{ ok: boolean; count: number }>('/api/characters/associations/bulk-status', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
