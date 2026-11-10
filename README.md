@@ -35,6 +35,7 @@ services:
     volumes:
       - /path/to/comfyui/output:/data/output:ro
       - /path/to/comfyui/models:/data/models:ro
+      - /path/to/data/thumbnails:/data/thumbnails
       - ./gallery-data:/app/data
       - ./model-downloads:/downloads
 ```
@@ -49,7 +50,7 @@ services:
 | `COMFYUI_OUTPUT_DIR` | `/data/output` | Read-only mounted ComfyUI output directory |
 | `COMFYUI_MODELS_DIR` | `/data/models` | Read-only mounted ComfyUI models directory |
 | `DATABASE_PATH` | `/app/data/gallery.db` | Persistent SQLite database path |
-| `THUMBNAIL_PATH` | `/app/data/thumbnails` | Persistent WebP thumbnail cache directory |
+| `THUMBNAIL_PATH` | `/data/thumbnails` | Persistent WebP thumbnail cache directory |
 | `BACKUP_PATH` | `/app/data/backups` | Persistent SQLite binary & JSON backup directory |
 | `DOWNLOADS_DIR` | `/downloads` | Writable directory for confirmed model downloads |
 | `CIVITAI_API_KEY` | `""` | Optional server-side Civitai API key |

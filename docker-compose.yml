@@ -12,6 +12,7 @@ services:
     volumes:
       - /path/to/comfyui/output:/data/output:ro
       - /path/to/comfyui/models:/data/models:ro
+      - /path/to/data/thumbnails:/data/thumbnails
       - ./gallery-data:/app/data
       - ./model-downloads:/downloads
     healthcheck:

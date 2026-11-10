@@ -23,12 +23,12 @@ ENV COMFYUI_URL="http://comfyui:8188"
 ENV COMFYUI_OUTPUT_DIR="/data/output"
 ENV COMFYUI_MODELS_DIR="/data/models"
 ENV DATABASE_PATH="/app/data/gallery.db"
-ENV THUMBNAIL_PATH="/app/data/thumbnails"
+ENV THUMBNAIL_PATH="/data/thumbnails"
 ENV BACKUP_PATH="/app/data/backups"
 ENV DOWNLOADS_DIR="/downloads"
 
 # Create volume mount points
-RUN mkdir -p /data/output /data/models /app/data/thumbnails /app/data/backups /downloads
+RUN mkdir -p /data/output /data/models /data/thumbnails /app/data/backups /downloads
 
 COPY --from=builder /app /app
 
