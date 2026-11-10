@@ -426,4 +426,56 @@ export interface AppToastMessage {
   createdAt: string;
 }
 
+/**
+ * Authoritative ComfyUI ResolutionSelector (Node #49) aspect_ratio enum strings.
+ */
+export const RESOLUTION_SELECTOR_OPTIONS = [
+  { shortRatio: '1:1', value: '1:1 (Square)', label: 'Square' },
+  { shortRatio: '2:3', value: '2:3 (Portrait Photo)', label: 'Portrait Photo' },
+  { shortRatio: '3:2', value: '3:2 (Photo)', label: 'Photo' },
+  { shortRatio: '3:4', value: '3:4 (Portrait Standard)', label: 'Portrait Standard' },
+  { shortRatio: '4:3', value: '4:3 (Standard)', label: 'Standard' },
+  { shortRatio: '9:16', value: '9:16 (Portrait Widescreen)', label: 'Portrait Widescreen' },
+  { shortRatio: '16:9', value: '16:9 (Widescreen)', label: 'Widescreen' },
+  { shortRatio: '21:9', value: '21:9 (Ultrawide)', label: 'Ultrawide' },
+] as const;
+
+export type ResolutionSelectorRatio = (typeof RESOLUTION_SELECTOR_OPTIONS)[number]['value'];
+
+/**
+ * Normalizes any ratio string (shorthand, legacy label, or partial text) to the exact
+ * string expected by ComfyUI's ResolutionSelector node.
+ */
+export function normalizeResolutionSelectorRatio(raw: string | undefined | null): string {
+  const str = String(raw || '').trim();
+  if (!str) return '2:3 (Portrait Photo)';
+
+  // Exact match
+  const exact = RESOLUTION_SELECTOR_OPTIONS.find(
+    (o) => o.value.toLowerCase() === str.toLowerCase()
+  );
+  if (exact) return exact.value;
+
+  // Normalized digits e.g. "3:4", "3/4", "3x4"
+  const match = str.match(/(\d+(?:\.\d+)?)\s*[:\/x]\s*(\d+(?:\.\d+)?)/i);
+  if (match) {
+    const num = `${match[1]}:${match[2]}`;
+    const byShort = RESOLUTION_SELECTOR_OPTIONS.find((o) => o.shortRatio === num);
+    if (byShort) return byShort.value;
+  }
+
+  // Common descriptive aliases
+  const lower = str.toLowerCase();
+  if (lower.includes('square')) return '1:1 (Square)';
+  if (lower.includes('ultrawide') || lower.includes('21:9')) return '21:9 (Ultrawide)';
+  if (lower.includes('vertical') || lower.includes('9:16')) return '9:16 (Portrait Widescreen)';
+  if (lower.includes('widescreen') || lower.includes('16:9')) return '16:9 (Widescreen)';
+  if (lower.includes('golden') || (lower.includes('portrait') && lower.includes('3:4'))) return '3:4 (Portrait Standard)';
+  if (lower.includes('portrait')) return '2:3 (Portrait Photo)';
+  if (lower.includes('landscape') && lower.includes('3:2')) return '3:2 (Photo)';
+  if (lower.includes('classic') || lower.includes('tv') || lower.includes('4:3')) return '4:3 (Standard)';
+
+  return str;
+}
+
 

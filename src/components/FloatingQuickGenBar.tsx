@@ -27,13 +27,14 @@ interface FloatingQuickGenBarProps {
 }
 
 const ASPECT_RATIO_OPTIONS = [
-  { short: '2:3', value: '2:3 (Portrait Photo)' },
-  { short: '1:1', value: '1:1 (Square)' },
-  { short: '3:4', value: '3:4 (Portrait)' },
-  { short: '9:16', value: '9:16 (Vertical)' },
-  { short: '3:2', value: '3:2 (Landscape Photo)' },
-  { short: '4:3', value: '4:3 (Landscape)' },
-  { short: '16:9', value: '16:9 (Widescreen)' },
+  { short: '2:3', value: '2:3 (Portrait Photo)', label: 'Portrait Photo' },
+  { short: '1:1', value: '1:1 (Square)', label: 'Square' },
+  { short: '3:2', value: '3:2 (Photo)', label: 'Photo' },
+  { short: '3:4', value: '3:4 (Portrait Standard)', label: 'Portrait Standard' },
+  { short: '4:3', value: '4:3 (Standard)', label: 'Standard' },
+  { short: '9:16', value: '9:16 (Portrait Widescreen)', label: 'Portrait Widescreen' },
+  { short: '16:9', value: '16:9 (Widescreen)', label: 'Widescreen' },
+  { short: '21:9', value: '21:9 (Ultrawide)', label: 'Ultrawide' },
 ];
 
 const BATCH_COUNT_OPTIONS = [1, 2, 4, 6, 8];
@@ -480,6 +481,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                   key={opt.value}
                   type="button"
                   onClick={() => setAspectRatio(opt.value)}
+                  title={opt.label}
                   className={`px-2 py-1.5 rounded-lg font-mono text-[11px] border transition-colors cursor-pointer ${
                     aspectRatio === opt.value
                       ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200 font-semibold'

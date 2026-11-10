@@ -17,10 +17,11 @@ import {
 } from '../services/lmStudioService.ts';
 import { runDirectoryScan } from '../services/scannerService.ts';
 import { COUCHY_COMFY_CLIENT_ID } from '../services/comfyuiLiveMonitor.ts';
-import type {
-  GenerationBatchRecord,
-  GenerationLoraSelection,
-  PromptTemplate,
+import {
+  normalizeResolutionSelectorRatio,
+  type GenerationBatchRecord,
+  type GenerationLoraSelection,
+  type PromptTemplate,
 } from '../../shared/types.ts';
 
 export const generationRouter = Router();
@@ -303,7 +304,7 @@ function listGenerationBatches(limit = 20): GenerationBatchRecord[] {
       themeTitle: b.theme_title || null,
       mode: b.mode,
       totalCount: b.total_count,
-      aspectRatio: b.aspect_ratio || '3:4',
+      aspectRatio: b.aspect_ratio || '2:3 (Portrait Photo)',
       megapixels: Number(b.megapixels ?? 1.0),
       width: b.width,
       height: b.height,
@@ -425,7 +426,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
       return res.status(400).json({ error: 'At least one positive prompt is required.' });
     }
 
-    const resolvedAr = String(aspectRatio || '2:3 (Portrait Photo)').trim();
+    const resolvedAr = normalizeResolutionSelectorRatio(aspectRatio);
     const resolvedMp = Math.max(0.1, Math.min(10.0, Number(megapixels) || 3.0));
     const { width: computedWidth, height: computedHeight } = computeDimensionsFromMegapixels(
       resolvedAr,

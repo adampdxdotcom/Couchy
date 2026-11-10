@@ -14,6 +14,8 @@ import {
   ChevronLeft,
   ChevronRight,
   AlertTriangle,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
@@ -49,6 +51,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   onFilterByLora,
   onFilterByCharacter,
 }) => {
+  const [isFullScreen, setIsFullScreen] = useState(false);
   const [detailData, setDetailData] = useState<{
     image?: ImageRecord;
     rawMetadata: Record<string, string>;
@@ -93,13 +96,19 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) return;
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        if (isFullScreen) {
+          setIsFullScreen(false);
+        } else {
+          onClose();
+        }
+      }
       if (e.key === 'ArrowLeft' && onPrev) onPrev();
       if (e.key === 'ArrowRight' && onNext) onNext();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose, onPrev, onNext]);
+  }, [onClose, onPrev, onNext, isFullScreen]);
 
   const copyText = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -160,61 +169,139 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex flex-col lg:flex-row overflow-hidden">
-      {/* Left Pane: Full-Resolution Image Viewer */}
-      <div className="relative flex-1 bg-zinc-950 flex items-center justify-center p-4 select-none overflow-hidden">
-        {onPrev && (
+      {/* Left Pane: Full-Resolution Image Viewer / Lightbox */}
+      <div
+        onClick={() => {
+          if (isFullScreen) setIsFullScreen(false);
+        }}
+        className={`relative bg-zinc-950 flex items-center justify-center select-none overflow-hidden transition-all duration-200 ${
+          isFullScreen
+            ? 'fixed inset-0 z-50 p-2 sm:p-6 bg-black/95 cursor-zoom-out'
+            : 'flex-1 p-4'
+        }`}
+      >
+        {/* Full-Screen Toggle Button (Top Right) */}
+        {isFullScreen ? (
           <button
             type="button"
-            onClick={onPrev}
-            className="absolute left-4 top-1/2 -translate-y-1/2 p-2.5 rounded-full bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 border border-zinc-700/60 cursor-pointer z-10"
-            title="Previous Image (Left Arrow)"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsFullScreen(false);
+            }}
+            className="absolute top-4 right-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-100 border border-zinc-700/80 shadow-2xl backdrop-blur-md text-xs font-medium cursor-pointer"
+            title="Exit Full Screen (Esc)"
           >
-            <ChevronLeft className="w-5 h-5" />
+            <Minimize2 className="w-4 h-4 text-indigo-400" />
+            <span>Exit Full Screen</span>
+            <span className="text-zinc-500 text-[10px] hidden sm:inline ml-0.5 font-mono">ESC</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsFullScreen(true);
+            }}
+            className="absolute top-4 right-4 z-10 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700/60 text-xs font-medium cursor-pointer backdrop-blur-xs shadow-md"
+            title="Expand Full Screen"
+          >
+            <Maximize2 className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="hidden sm:inline">Full Screen</span>
           </button>
         )}
 
+        {/* Previous Image Arrow */}
+        {onPrev && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onPrev();
+            }}
+            className={`absolute left-3 sm:left-4 top-1/2 -translate-y-1/2 rounded-full bg-zinc-900/85 hover:bg-zinc-800 text-zinc-200 border border-zinc-700/60 cursor-pointer z-10 transition-colors shadow-lg ${
+              isFullScreen ? 'p-3 sm:p-3.5' : 'p-2.5'
+            }`}
+            title="Previous Image (Left Arrow)"
+          >
+            <ChevronLeft className={isFullScreen ? 'w-6 h-6' : 'w-5 h-5'} />
+          </button>
+        )}
+
+        {/* Centered Image */}
         <img
           src={image.originalUrl}
           alt={image.filename}
           referrerPolicy="no-referrer"
-          className="max-w-full max-h-full object-contain rounded"
+          onClick={(e) => {
+            e.stopPropagation();
+            setIsFullScreen((prev) => !prev);
+          }}
+          className={`max-w-full max-h-full object-contain rounded transition-all duration-200 ${
+            isFullScreen ? 'cursor-zoom-out' : 'cursor-zoom-in active:scale-[0.99]'
+          }`}
+          title={isFullScreen ? 'Tap or click to exit full screen' : 'Tap or click to expand full screen'}
         />
 
+        {/* Next Image Arrow */}
         {onNext && (
           <button
             type="button"
-            onClick={onNext}
-            className="absolute right-4 top-1/2 -translate-y-1/2 p-2.5 rounded-full bg-zinc-900/80 hover:bg-zinc-800 text-zinc-200 border border-zinc-700/60 cursor-pointer z-10"
+            onClick={(e) => {
+              e.stopPropagation();
+              onNext();
+            }}
+            className={`absolute right-3 sm:right-4 top-1/2 -translate-y-1/2 rounded-full bg-zinc-900/85 hover:bg-zinc-800 text-zinc-200 border border-zinc-700/60 cursor-pointer z-10 transition-colors shadow-lg ${
+              isFullScreen ? 'p-3 sm:p-3.5' : 'p-2.5'
+            }`}
             title="Next Image (Right Arrow)"
           >
-            <ChevronRight className="w-5 h-5" />
+            <ChevronRight className={isFullScreen ? 'w-6 h-6' : 'w-5 h-5'} />
           </button>
         )}
 
-        <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between text-xs text-zinc-400 bg-zinc-900/85 border border-zinc-800 px-4 py-2 rounded-lg">
+        {/* Bottom Metadata & Download Bar */}
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400 bg-zinc-900/90 border border-zinc-800 px-4 py-2 rounded-lg backdrop-blur-md z-10 shadow-lg"
+        >
           <div className="flex items-center gap-2 font-mono tabular-nums truncate">
-            <span className="text-zinc-200 font-sans font-medium">{image.filename}</span>
+            <span className="text-zinc-200 font-sans font-medium truncate max-w-[180px] sm:max-w-xs">
+              {image.filename}
+            </span>
             <span aria-hidden="true">·</span>
             <span>
               {image.width}×{image.height}
             </span>
             <span aria-hidden="true">·</span>
             <span>{formatBytes(image.fileSize)}</span>
-            <span aria-hidden="true">·</span>
-            <span>SHA256: {image.contentHash.slice(0, 12)}…</span>
+            <span aria-hidden="true" className="hidden sm:inline">
+              ·
+            </span>
+            <span className="hidden sm:inline">SHA256: {image.contentHash.slice(0, 12)}…</span>
           </div>
-          <a
-            href={`/api/images/${image.id}/file?download=1`}
-            className="inline-flex items-center gap-1.5 text-indigo-400 hover:text-indigo-300 font-medium shrink-0"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Download Original</span>
-          </a>
+          <div className="flex items-center gap-3">
+            {isFullScreen && (
+              <span className="text-[11px] text-zinc-500 hidden md:inline">
+                Tap image or press ESC to exit full screen
+              </span>
+            )}
+            <a
+              href={`/api/images/${image.id}/file?download=1`}
+              className="inline-flex items-center gap-1.5 text-indigo-400 hover:text-indigo-300 font-medium shrink-0"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Download Original</span>
+            </a>
+          </div>
         </div>
       </div>
 
       {/* Right Pane: Comprehensive Metadata, Character & Workflow Reproduction Inspector */}
-      <aside className="w-full lg:w-[500px] xl:w-[540px] bg-zinc-900 border-l border-zinc-800 flex flex-col h-[55vh] lg:h-full overflow-y-auto">
+      <aside
+        className={`w-full lg:w-[500px] xl:w-[540px] bg-zinc-900 border-l border-zinc-800 flex flex-col h-[55vh] lg:h-full overflow-y-auto ${
+          isFullScreen ? 'hidden' : ''
+        }`}
+      >
         {/* Inspector Header */}
         <div className="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-xs border-b border-zinc-800 px-5 py-3.5 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">

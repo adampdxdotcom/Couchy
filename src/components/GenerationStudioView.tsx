@@ -53,11 +53,12 @@ const ASPECT_RATIO_PRESETS: {
 }[] = [
   { value: '1:1 (Square)', shortRatio: '1:1', label: 'Square', boxW: 18, boxH: 18 },
   { value: '2:3 (Portrait Photo)', shortRatio: '2:3', label: 'Portrait Photo', boxW: 14, boxH: 21 },
-  { value: '3:4 (Golden Ratio)', shortRatio: '3:4', label: 'Golden Ratio', boxW: 15, boxH: 20 },
-  { value: '9:16 (Vertical Video)', shortRatio: '9:16', label: 'Vertical', boxW: 12, boxH: 22 },
-  { value: '3:2 (Landscape Photo)', shortRatio: '3:2', label: 'Landscape', boxW: 21, boxH: 14 },
-  { value: '4:3 (Classic TV)', shortRatio: '4:3', label: 'Classic TV', boxW: 20, boxH: 15 },
+  { value: '3:2 (Photo)', shortRatio: '3:2', label: 'Photo', boxW: 21, boxH: 14 },
+  { value: '3:4 (Portrait Standard)', shortRatio: '3:4', label: 'Portrait Std', boxW: 15, boxH: 20 },
+  { value: '4:3 (Standard)', shortRatio: '4:3', label: 'Standard', boxW: 20, boxH: 15 },
+  { value: '9:16 (Portrait Widescreen)', shortRatio: '9:16', label: 'Vertical Wide', boxW: 12, boxH: 22 },
   { value: '16:9 (Widescreen)', shortRatio: '16:9', label: 'Widescreen', boxW: 22, boxH: 12 },
+  { value: '21:9 (Ultrawide)', shortRatio: '21:9', label: 'Ultrawide', boxW: 24, boxH: 10 },
 ];
 
 const MEGAPIXEL_PRESETS = [0.5, 1.0, 2.0, 3.0, 4.0, 8.0];
@@ -661,7 +662,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
             </div>
 
             {/* Aspect Ratio Grid */}
-            <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
+            <div className="grid grid-cols-4 sm:grid-cols-8 gap-1.5">
               {ASPECT_RATIO_PRESETS.map((preset) => {
                 const isSelected =
                   aspectRatio === preset.value || aspectRatio === preset.shortRatio;

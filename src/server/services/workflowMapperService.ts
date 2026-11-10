@@ -1,8 +1,9 @@
 import { db } from '../db.ts';
-import type {
-  GenerationLoraSelection,
-  WorkflowNodeMapping,
-  WorkflowNodeSlotInfo,
+import {
+  normalizeResolutionSelectorRatio,
+  type GenerationLoraSelection,
+  type WorkflowNodeMapping,
+  type WorkflowNodeSlotInfo,
 } from '../../shared/types.ts';
 
 /**
@@ -650,13 +651,14 @@ export function compileWorkflowForGeneration(params: {
     const latentInputs = graph[mapping.latentNodeId].inputs;
     const arField = mapping.aspectRatioField || 'aspect_ratio';
     const mpField = mapping.megapixelsField || 'megapixels';
+    const normalizedAr = normalizeResolutionSelectorRatio(params.aspectRatio);
 
     if (
       arField in latentInputs ||
       mpField in latentInputs ||
       !('width' in latentInputs && 'height' in latentInputs)
     ) {
-      latentInputs[arField] = params.aspectRatio;
+      latentInputs[arField] = normalizedAr;
       latentInputs[mpField] = Number(params.megapixels.toFixed(2));
     }
 
