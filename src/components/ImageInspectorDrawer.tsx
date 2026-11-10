@@ -177,8 +177,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
         }}
         className={`relative bg-zinc-950 flex items-center justify-center select-none overflow-hidden transition-all duration-200 ${
           isFullScreen
-            ? 'fixed inset-0 z-50 p-2 sm:p-6 bg-black/95 cursor-zoom-out'
-            : 'flex-1 p-4'
+            ? 'fixed inset-0 z-50 p-2 sm:p-6 pb-14 sm:pb-14 bg-black/95 cursor-zoom-out'
+            : 'flex-1 p-4 pb-14 lg:pb-4'
         }`}
       >
         {/* Full-Screen Toggle Button (Top Right) */}
@@ -260,27 +260,25 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
           </button>
         )}
 
-        {/* Bottom Metadata & Download Bar */}
+        {/* Bottom Metadata & Download Bar (Docked to bottom edge to never overlap image) */}
         <div
           onClick={(e) => e.stopPropagation()}
-          className="absolute bottom-4 left-4 right-4 flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400 bg-zinc-900/90 border border-zinc-800 px-4 py-2 rounded-lg backdrop-blur-md z-10 shadow-lg"
+          className="fixed bottom-0 inset-x-0 h-11 bg-zinc-950/95 border-t border-zinc-800/80 px-3 sm:px-4 flex items-center justify-between gap-2 text-xs text-zinc-400 backdrop-blur-md z-30 shadow-lg select-none"
         >
-          <div className="flex items-center gap-2 font-mono tabular-nums truncate">
-            <span className="text-zinc-200 font-sans font-medium truncate max-w-[180px] sm:max-w-xs">
+          <div className="flex items-center gap-1.5 sm:gap-2 font-mono tabular-nums truncate text-xs">
+            <span className="text-zinc-200 font-sans font-medium truncate max-w-[130px] xs:max-w-[180px] sm:max-w-xs">
               {image.filename}
             </span>
-            <span aria-hidden="true">·</span>
-            <span>
-              {image.width}×{image.height}
+            <span aria-hidden="true" className="text-zinc-600">·</span>
+            <span className="shrink-0">{image.width}×{image.height}</span>
+            <span aria-hidden="true" className="text-zinc-600 hidden sm:inline">·</span>
+            <span className="hidden sm:inline shrink-0">{formatBytes(image.fileSize)}</span>
+            <span aria-hidden="true" className="text-zinc-600 hidden md:inline">·</span>
+            <span className="hidden md:inline text-zinc-500 font-mono shrink-0">
+              SHA256: {image.contentHash.slice(0, 10)}…
             </span>
-            <span aria-hidden="true">·</span>
-            <span>{formatBytes(image.fileSize)}</span>
-            <span aria-hidden="true" className="hidden sm:inline">
-              ·
-            </span>
-            <span className="hidden sm:inline">SHA256: {image.contentHash.slice(0, 12)}…</span>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             {isFullScreen && (
               <span className="text-[11px] text-zinc-500 hidden md:inline">
                 Tap image or press ESC to exit full screen
@@ -288,10 +286,11 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             )}
             <a
               href={`/api/images/${image.id}/file?download=1`}
-              className="inline-flex items-center gap-1.5 text-indigo-400 hover:text-indigo-300 font-medium shrink-0"
+              className="inline-flex items-center gap-1.5 text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 rounded hover:bg-zinc-800/80 transition-colors shrink-0"
+              title="Download original unchanged file"
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Download Original</span>
+              <span className="hidden xs:inline sm:inline">Download</span>
             </a>
           </div>
         </div>

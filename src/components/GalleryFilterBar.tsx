@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Search,
   SlidersHorizontal,
+  ChevronDown,
   Download,
   BookmarkPlus,
   RotateCcw,
@@ -63,9 +64,26 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
   onDeleteSavedSearch,
   onExportFilteredZip,
 }) => {
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
   const [showPresetInput, setShowPresetInput] = useState(false);
+
+  // Count active non-default filters
+  const activeFiltersCount = useMemo(() => {
+    let count = 0;
+    if (filters.favoritesOnly) count++;
+    if (filters.minRating > 0) count++;
+    if (filters.rejectedMode !== 'exclude') count++;
+    if (filters.archivedMode !== 'exclude') count++;
+    if (filters.sortBy !== 'newest') count++;
+    if (filters.loras.length > 0) count += filters.loras.length;
+    if (filters.characterIds.length > 0) count += filters.characterIds.length;
+    if (filters.tagIds.length > 0) count += filters.tagIds.length;
+    if (filters.collectionId) count++;
+    if (filters.checkpoint) count++;
+    if (filters.dependencyStatus) count++;
+    return count;
+  }, [filters]);
 
   const toggleLora = (loraFilename: string) => {
     const exists = filters.loras.includes(loraFilename);
@@ -92,17 +110,17 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
   };
 
   return (
-    <section className="bg-zinc-900/90 border-b border-zinc-800/80 px-6 py-3.5 space-y-3">
-      {/* Row 1: Universal Search Input + Sort + Layout Controls + Export */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="relative flex-1 min-w-[280px]">
+    <section className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur-md border-b border-zinc-800 px-4 sm:px-6 py-2.5 transition-all shadow-md space-y-3">
+      {/* Row 1: Locked Sticky Universal Search Header + Filter Toggle + Export */}
+      <div className="flex items-center justify-between gap-2.5 sm:gap-3">
+        <div className="relative flex-1 min-w-[200px]">
           <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={filters.query}
             onChange={(e) => onChange({ ...filters, query: e.target.value })}
-            placeholder='Search prompts, tags, loras, characters (e.g. blonde, "exact phrase", rating >= 4)'
-            className="w-full pl-10 pr-9 py-2 text-sm bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
+            placeholder='Search prompts, tags, loras, characters...'
+            className="w-full pl-10 pr-9 py-2 text-sm bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
           />
           {filters.query && (
             <button
@@ -116,150 +134,176 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Quick Favorite & Star Filter */}
+        {/* Results Counter (Desktop / Tablet) */}
+        <span className="text-xs text-zinc-400 font-mono hidden md:inline whitespace-nowrap shrink-0 tabular-nums">
+          {totalMatching} {totalMatching === 1 ? 'image' : 'images'}
+        </span>
+
+        {/* Action Controls: Filter Accordion Toggle, Reset & Export */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => onChange({ ...filters, favoritesOnly: !filters.favoritesOnly })}
-            className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              filters.favoritesOnly
-                ? 'bg-rose-500/15 border-rose-500/50 text-rose-300'
-                : 'bg-zinc-950 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+            onClick={() => setShowFilters((prev) => !prev)}
+            className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
+              showFilters || activeFiltersCount > 0
+                ? 'bg-indigo-600/20 border-indigo-500 text-indigo-200 font-semibold shadow-xs'
+                : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700'
             }`}
-          >
-            <Heart className={`w-3.5 h-3.5 ${filters.favoritesOnly ? 'fill-rose-400 text-rose-400' : ''}`} />
-            <span>Favorites</span>
-          </button>
-
-          <select
-            value={filters.minRating}
-            onChange={(e) => onChange({ ...filters, minRating: Number(e.target.value) })}
-            aria-label="Minimum Rating"
-            className="px-3 py-2 text-xs font-medium bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 focus:outline-none focus:border-indigo-500"
-          >
-            <option value={0}>Any Rating</option>
-            <option value={5}>5 Stars Only</option>
-            <option value={4}>4+ Stars</option>
-            <option value={3}>3+ Stars</option>
-            <option value={2}>2+ Stars</option>
-            <option value={1}>1+ Stars</option>
-          </select>
-
-          {/* 9 Required Sorting Modes */}
-          <select
-            value={filters.sortBy}
-            onChange={(e) => onChange({ ...filters, sortBy: e.target.value as any })}
-            aria-label="Sort Images By"
-            className="px-3 py-2 text-xs font-medium bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 focus:outline-none focus:border-indigo-500"
-          >
-            <option value="newest">Sort: Newest First</option>
-            <option value="oldest">Sort: Oldest First</option>
-            <option value="rating_desc">Sort: Highest Rated</option>
-            <option value="rating_asc">Sort: Lowest Rated</option>
-            <option value="filename">Sort: Filename</option>
-            <option value="filesize">Sort: File Size</option>
-            <option value="checkpoint">Sort: Checkpoint</option>
-            <option value="most_used_lora">Sort: Most-Used LoRA</option>
-            <option value="recently_favorited">Sort: Recently Favorited</option>
-          </select>
-
-          {/* View Mode Selector: Masonry / Standard Grid / Compact Grid */}
-          <div className="flex items-center p-0.5 bg-zinc-950 border border-zinc-800 rounded-lg">
-            <button
-              type="button"
-              onClick={() => onLayoutChange('masonry')}
-              title="Masonry Gallery"
-              className={`px-2.5 py-1.5 text-xs font-medium rounded-md inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                layout === 'masonry' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              <Columns className="w-3.5 h-3.5" />
-              <span>Masonry</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onLayoutChange('standard')}
-              title="Standard Grid"
-              className={`px-2.5 py-1.5 text-xs font-medium rounded-md inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                layout === 'standard' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              <LayoutGrid className="w-3.5 h-3.5" />
-              <span>Grid</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => onLayoutChange('compact')}
-              title="Compact Grid"
-              className={`px-2.5 py-1.5 text-xs font-medium rounded-md inline-flex items-center gap-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                layout === 'compact' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              <Grid className="w-3.5 h-3.5" />
-              <span>Compact</span>
-            </button>
-          </div>
-
-          {/* Thumbnail Size */}
-          <div className="flex items-center p-0.5 bg-zinc-950 border border-zinc-800 rounded-lg">
-            {(['sm', 'md', 'lg'] as const).map((sz) => (
-              <button
-                key={sz}
-                type="button"
-                onClick={() => onThumbScaleChange(sz)}
-                className={`px-2 py-1.5 text-xs font-mono uppercase rounded-md transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  thumbScale === sz ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                {sz}
-              </button>
-            ))}
-          </div>
-
-          {/* Toggle Advanced Filters */}
-          <button
-            type="button"
-            onClick={() => setShowAdvanced((v) => !v)}
-            className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-              showAdvanced ||
-              filters.loras.length > 0 ||
-              filters.characterIds.length > 0 ||
-              filters.checkpoint ||
-              filters.collectionId ||
-              filters.tagIds.length > 0
-                ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-200'
-                : 'bg-zinc-950 border-zinc-800 text-zinc-300 hover:border-zinc-700'
-            }`}
+            title={showFilters ? 'Hide filter options' : 'Show filter options'}
           >
             <SlidersHorizontal className="w-3.5 h-3.5" />
             <span>Filters</span>
+            {activeFiltersCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full bg-indigo-600 text-white font-mono text-[10px]">
+                {activeFiltersCount}
+              </span>
+            )}
+            <ChevronDown
+              className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                showFilters ? 'rotate-180' : ''
+              }`}
+            />
           </button>
 
-          <button
-            type="button"
-            onClick={onReset}
-            className="inline-flex items-center gap-1 px-2.5 py-2 text-xs font-medium bg-zinc-950 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            title="Reset Filters"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset</span>
-          </button>
+          {activeFiltersCount > 0 && (
+            <button
+              type="button"
+              onClick={onReset}
+              className="inline-flex items-center gap-1 px-2.5 py-2 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+              title="Reset all active filters"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Reset</span>
+            </button>
+          )}
 
           <button
             type="button"
             onClick={onExportFilteredZip}
             disabled={totalMatching === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-zinc-950 border border-zinc-800 hover:border-zinc-700 disabled:opacity-40 text-zinc-200 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 disabled:opacity-40 text-zinc-300 rounded-lg transition-colors whitespace-nowrap cursor-pointer"
+            title="Export matching images as ZIP archive"
           >
             <Download className="w-3.5 h-3.5" />
-            <span className="font-mono tabular-nums">Export ZIP ({totalMatching})</span>
+            <span className="font-mono tabular-nums hidden xs:inline sm:inline">
+              ZIP ({totalMatching})
+            </span>
           </button>
         </div>
       </div>
 
-      {/* Expandable Multi-Character, Multi-LoRA & Advanced Filter Drawer */}
-      {showAdvanced && (
-        <div className="pt-3 border-t border-zinc-800/80 grid grid-cols-1 lg:grid-cols-12 gap-4 text-xs">
+      {/* Expandable Sliding Filter Window (Hidden by default) */}
+      {showFilters && (
+        <div className="pt-3 border-t border-zinc-800/80 space-y-3 text-xs animate-in fade-in duration-200">
+          {/* Quick Filters, Sorting, and View Modes Row */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2 border-b border-zinc-800/60">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Favorites Button */}
+              <button
+                type="button"
+                onClick={() => onChange({ ...filters, favoritesOnly: !filters.favoritesOnly })}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
+                  filters.favoritesOnly
+                    ? 'bg-rose-500/15 border-rose-500/50 text-rose-300'
+                    : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+                }`}
+              >
+                <Heart className={`w-3.5 h-3.5 ${filters.favoritesOnly ? 'fill-rose-400 text-rose-400' : ''}`} />
+                <span>Favorites Only</span>
+              </button>
+
+              {/* Min Rating */}
+              <select
+                value={filters.minRating}
+                onChange={(e) => onChange({ ...filters, minRating: Number(e.target.value) })}
+                aria-label="Minimum Rating"
+                className="px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-200 focus:outline-none focus:border-indigo-500"
+              >
+                <option value={0}>Any Rating</option>
+                <option value={5}>5 Stars Only</option>
+                <option value={4}>4+ Stars</option>
+                <option value={3}>3+ Stars</option>
+                <option value={2}>2+ Stars</option>
+                <option value={1}>1+ Stars</option>
+              </select>
+
+              {/* Sorting Mode */}
+              <select
+                value={filters.sortBy}
+                onChange={(e) => onChange({ ...filters, sortBy: e.target.value as any })}
+                aria-label="Sort Images By"
+                className="px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-200 focus:outline-none focus:border-indigo-500"
+              >
+                <option value="newest">Sort: Newest First</option>
+                <option value="oldest">Sort: Oldest First</option>
+                <option value="rating_desc">Sort: Highest Rated</option>
+                <option value="rating_asc">Sort: Lowest Rated</option>
+                <option value="filename">Sort: Filename</option>
+                <option value="filesize">Sort: File Size</option>
+                <option value="checkpoint">Sort: Checkpoint</option>
+                <option value="most_used_lora">Sort: Most-Used LoRA</option>
+                <option value="recently_favorited">Sort: Recently Favorited</option>
+              </select>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* View Mode Selector */}
+              <div className="flex items-center p-0.5 bg-zinc-900 border border-zinc-800 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => onLayoutChange('masonry')}
+                  title="Masonry Gallery"
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md inline-flex items-center gap-1 transition-colors whitespace-nowrap cursor-pointer ${
+                    layout === 'masonry' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  <Columns className="w-3.5 h-3.5" />
+                  <span>Masonry</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onLayoutChange('standard')}
+                  title="Standard Grid"
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md inline-flex items-center gap-1 transition-colors whitespace-nowrap cursor-pointer ${
+                    layout === 'standard' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <span>Grid</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onLayoutChange('compact')}
+                  title="Compact Grid"
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md inline-flex items-center gap-1 transition-colors whitespace-nowrap cursor-pointer ${
+                    layout === 'compact' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  <Grid className="w-3.5 h-3.5" />
+                  <span>Compact</span>
+                </button>
+              </div>
+
+              {/* Thumb Size Scale */}
+              <div className="flex items-center p-0.5 bg-zinc-900 border border-zinc-800 rounded-lg">
+                {(['sm', 'md', 'lg'] as const).map((sz) => (
+                  <button
+                    key={sz}
+                    type="button"
+                    onClick={() => onThumbScaleChange(sz)}
+                    className={`px-2 py-1 text-xs font-mono uppercase rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                      thumbScale === sz ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    {sz}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Detailed Entity Filters (LoRA, Character, Checkpoint, Collection, Status) */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
           {/* Multi-Character Selector */}
           <div className="lg:col-span-4 bg-zinc-950/80 border border-zinc-800/80 rounded-lg p-3 space-y-2">
             <div className="flex items-center justify-between">
@@ -563,7 +607,8 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
             </div>
           </div>
         </div>
-      )}
-    </section>
-  );
+      </div>
+    )}
+  </section>
+);
 };

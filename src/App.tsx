@@ -324,7 +324,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className={`flex-1 ${showQuickGenBar ? 'pb-28' : ''}`}>
+      <main className={`flex-1 ${showQuickGenBar ? 'pb-36 md:pb-28' : ''}`}>
         {activeTab === 'gallery' && (
           <>
             <GalleryFilterBar

@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   Bot,
+  ChevronDown,
+  ChevronUp,
   Loader2,
   Plus,
   Search,
@@ -69,6 +71,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   const [batchCount, setBatchCount] = useState<number>(1);
   const [attachedCharacter, setAttachedCharacter] = useState<CharacterProfile | null>(null);
   const [isHighlighted, setIsHighlighted] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
 
   // Popover visibility states
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -102,6 +105,9 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   useEffect(() => {
     if (!prefillPayload) return;
 
+    // Ensure the dock is expanded when reusing a prompt
+    setIsMinimized(false);
+
     if (prefillPayload.prompt !== undefined) {
       setPrompt(prefillPayload.prompt);
     }
@@ -115,13 +121,10 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
       setBatchCount(prefillPayload.batchCount);
     }
 
-    // Smoothly ensure the quick gen box is in view
-    containerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-
-    // Focus prompt textarea and position cursor at end
+    // Focus prompt textarea and position cursor at end without forced page scrolling
     setTimeout(() => {
       if (inputRef.current) {
-        inputRef.current.focus();
+        inputRef.current.focus({ preventScroll: true });
         inputRef.current.setSelectionRange(
           inputRef.current.value.length,
           inputRef.current.value.length
@@ -389,11 +392,45 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   return (
     <div
       ref={containerRef}
-      className="fixed bottom-5 left-1/2 -translate-x-1/2 z-40 w-[94vw] max-w-2xl"
+      className="fixed bottom-0 left-0 right-0 z-40 w-full md:bottom-5 md:left-1/2 md:-translate-x-1/2 md:w-[94vw] md:max-w-2xl"
     >
+      {/* Minimize / Expand Toggle Tab */}
+      <div className="flex justify-center -mb-px">
+        <button
+          type="button"
+          onClick={() => {
+            setIsMinimized((prev) => !prev);
+            setMentionOpen(false);
+            setShowSettingsMenu(false);
+          }}
+          className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-t-xl bg-zinc-900/98 border-t border-x border-zinc-800 text-xs font-medium text-zinc-300 hover:text-white transition-colors shadow-lg cursor-pointer select-none"
+          title={isMinimized ? 'Expand Generation Dock' : 'Minimize Generation Dock'}
+        >
+          {isMinimized ? (
+            <>
+              <ChevronUp className="w-4 h-4 text-indigo-400" />
+              <span className="font-semibold text-zinc-200">Quick Gen</span>
+              {prompt.trim() ? (
+                <span className="text-[11px] text-zinc-400 truncate max-w-[140px] sm:max-w-[200px]">
+                  "{prompt.trim()}"
+                </span>
+              ) : (
+                <span className="text-[10px] text-zinc-500 hidden sm:inline">Tap to expand</span>
+              )}
+            </>
+          ) : (
+            <>
+              <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+              <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">Quick Gen</span>
+            </>
+          )}
+        </button>
+      </div>
 
-      {/* Two-Column @Character Mention Popover */}
-      {mentionOpen && (
+      {!isMinimized && (
+        <>
+          {/* Two-Column @Character Mention Popover */}
+          {mentionOpen && (
         <div className="mb-3 bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-3xl shadow-2xl overflow-hidden text-xs">
           {/* Top Search Header */}
           <div className="px-4 py-3 border-b border-zinc-800/80 flex items-center gap-3">
@@ -561,10 +598,10 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
       {/* Main Floating Quick Generation Box */}
       <div
-        className={`bg-zinc-900/95 backdrop-blur-2xl rounded-3xl px-4 py-3 transition-all duration-500 ${
+        className={`bg-zinc-900/98 backdrop-blur-2xl rounded-t-2xl md:rounded-3xl px-4 py-3 border-t border-x md:border border-zinc-800/90 shadow-2xl transition-all duration-300 ${
           isHighlighted
-            ? 'border-2 border-indigo-500 ring-4 ring-indigo-500/30 shadow-2xl shadow-indigo-500/25'
-            : 'border border-zinc-800/90 shadow-2xl'
+            ? 'border-t-indigo-500 md:border-indigo-500 ring-2 ring-indigo-500/40 shadow-indigo-500/20'
+            : ''
         }`}
       >
         {/* Attached Character Pill Badge */}
@@ -627,9 +664,9 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
         </div>
 
         {/* Bottom Control Bar */}
-        <div className="mt-2.5 flex items-center justify-between gap-2">
+        <div className="mt-2.5 flex items-center justify-between gap-1.5 sm:gap-2">
           {/* Left Controls: + (@character picker) & Agent Toggle */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
               onClick={() => {
@@ -637,7 +674,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                 setShowSettingsMenu(false);
                 setMentionTriggerRange(null);
               }}
-              className="w-8 h-8 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors cursor-pointer"
+              className="w-8 h-8 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors cursor-pointer shrink-0"
               title="Mention a character (@)"
             >
               {mentionOpen ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
@@ -646,7 +683,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             <button
               type="button"
               onClick={() => setAgentEnabled((prev) => !prev)}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer shrink-0 ${
                 agentEnabled
                   ? 'bg-indigo-600/25 border border-indigo-500/60 text-indigo-200'
                   : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-transparent'
@@ -654,37 +691,37 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               title="Toggle LM Studio Agent to expand your prompt into a themed photo set"
             >
               <Bot className="w-3.5 h-3.5" />
-              <span>Agent</span>
+              <span className="hidden sm:inline">Agent</span>
             </button>
           </div>
 
           {/* Right Controls: Workflow / Aspect Ratio / Count Pill + Submit Button */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
             <button
               type="button"
               onClick={() => {
                 setShowSettingsMenu((prev) => !prev);
                 setMentionOpen(false);
               }}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-800/90 hover:bg-zinc-700/90 text-zinc-200 text-xs font-medium transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-full bg-zinc-800/90 hover:bg-zinc-700/90 text-zinc-200 text-xs font-medium transition-colors cursor-pointer min-w-0 truncate"
               title="Configure Aspect Ratio & Number of Generations"
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-              <span className="truncate max-w-[110px]">
+              <span className="truncate max-w-[65px] xs:max-w-[85px] sm:max-w-[110px]">
                 {resolvedWorkflow?.name || 'Krea2_turbo'}
               </span>
-              <span className="inline-flex items-center gap-1 font-mono text-zinc-300">
-                <span className="inline-block w-2.5 h-3.5 border border-zinc-400 rounded-[2px]" />
+              <span className="inline-flex items-center gap-1 font-mono text-zinc-300 shrink-0">
+                <span className="inline-block w-2 h-3 border border-zinc-400 rounded-[2px]" />
                 <span>{resolvedShortRatio}</span>
               </span>
-              <span className="font-mono text-zinc-100">x{batchCount}</span>
+              <span className="font-mono text-zinc-100 shrink-0">x{batchCount}</span>
             </button>
 
             <button
               type="button"
               onClick={handleSubmit}
               disabled={!prompt.trim() || isSubmitting}
-              className="w-8 h-8 rounded-full bg-zinc-800 hover:bg-indigo-600 disabled:opacity-40 disabled:hover:bg-zinc-800 text-zinc-100 flex items-center justify-center transition-colors cursor-pointer"
+              className="w-8 h-8 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-zinc-800 disabled:bg-zinc-800 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0 shadow-sm"
               title="Submit quick generation"
             >
               {isSubmitting ? (
@@ -696,6 +733,8 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
           </div>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 };
