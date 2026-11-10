@@ -73,10 +73,29 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [inspectedImageId, setInspectedImageId] = useState<number | null>(null);
 
+  const isDefaultFilters = (f: GalleryFilterState): boolean =>
+    !f.query.trim() &&
+    f.sortBy === 'newest' &&
+    f.minRating === 0 &&
+    !f.favoritesOnly &&
+    f.rejectedMode === 'exclude' &&
+    f.archivedMode === 'exclude' &&
+    !f.checkpoint &&
+    f.collectionId === null &&
+    f.tagIds.length === 0 &&
+    f.loras.length === 0 &&
+    f.minLoraStrength === null &&
+    f.maxLoraStrength === null &&
+    f.characterIds.length === 0 &&
+    !f.includeSuggestedCharacters &&
+    !f.dependencyStatus &&
+    !f.dateFrom &&
+    !f.dateTo;
+
   const loadMetadataAndEntities = useCallback(async () => {
     try {
-      const [health, orgMeta, charRes, loraRes, modelRes, wfRes, unfilteredImgs] =
-        await Promise.all([
+      const [healthRes, orgMetaRes, charRes, loraRes, modelRes, wfRes, unfilteredRes] =
+        await Promise.allSettled([
           api.getHealth(),
           api.getOrganizationMeta(),
           api.listCharacters(),
@@ -86,41 +105,77 @@ export default function App() {
           api.queryImages({ rejectedMode: 'include', archivedMode: 'include' }),
         ]);
 
-      setHealthData(health);
-      setIsScanning(health?.activeScan?.status === 'running');
-      setTags(orgMeta.tags || []);
-      setCollections(orgMeta.collections || []);
-      setCheckpoints(orgMeta.checkpoints || []);
-      setSavedSearches(orgMeta.savedSearches || []);
-      setCharacters(charRes.items || []);
-      setLoras(loraRes.items || []);
-      setModels(modelRes.items || []);
-      setWorkflows(wfRes.items || []);
-      setAllImages(unfilteredImgs.items || []);
+      if (healthRes.status === 'fulfilled') {
+        setHealthData(healthRes.value);
+        setIsScanning(healthRes.value?.activeScan?.status === 'running');
+      }
+      if (orgMetaRes.status === 'fulfilled') {
+        setTags(orgMetaRes.value.tags || []);
+        setCollections(orgMetaRes.value.collections || []);
+        setCheckpoints(orgMetaRes.value.checkpoints || []);
+        setSavedSearches(orgMetaRes.value.savedSearches || []);
+      }
+      if (charRes.status === 'fulfilled') {
+        setCharacters(charRes.value.items || []);
+      }
+      if (loraRes.status === 'fulfilled') {
+        setLoras(loraRes.value.items || []);
+      }
+      if (modelRes.status === 'fulfilled') {
+        setModels(modelRes.value.items || []);
+      }
+      if (wfRes.status === 'fulfilled') {
+        setWorkflows(wfRes.value.items || []);
+      }
+      if (unfilteredRes.status === 'fulfilled') {
+        const allItems = unfilteredRes.value.items || [];
+        setAllImages(allItems);
+        // When default filters are active, derive gallery images directly in memory
+        // instead of firing a duplicate full-library /api/images/query request
+        setFilters((currFilters) => {
+          if (isDefaultFilters(currFilters)) {
+            setImages(allItems.filter((img) => !img.isRejected && !img.isArchived));
+          }
+          return currFilters;
+        });
+      }
     } catch (err) {
       console.error('Failed to load gallery metadata:', err);
     }
   }, []);
 
   const loadFilteredImages = useCallback(async () => {
+    // Skip duplicate network call on initial default filter state if allImages is already loaded
+    if (isDefaultFilters(filters) && allImages.length > 0) {
+      setImages(allImages.filter((img) => !img.isRejected && !img.isArchived));
+      return;
+    }
     try {
       const res = await api.queryImages(filters);
       setImages(res.items || []);
     } catch (err) {
       console.error('Failed to query filtered images:', err);
     }
-  }, [filters]);
+  }, [filters, allImages]);
 
   useEffect(() => {
     loadMetadataAndEntities();
   }, [loadMetadataAndEntities]);
 
   useEffect(() => {
-    loadFilteredImages();
-  }, [loadFilteredImages]);
+    // Only run separate filtered query when custom filters are applied
+    if (!isDefaultFilters(filters)) {
+      loadFilteredImages();
+    } else if (allImages.length > 0) {
+      setImages(allImages.filter((img) => !img.isRejected && !img.isArchived));
+    }
+  }, [filters, allImages, loadFilteredImages]);
 
   const refreshAll = async () => {
-    await Promise.all([loadMetadataAndEntities(), loadFilteredImages()]);
+    await loadMetadataAndEntities();
+    if (!isDefaultFilters(filters)) {
+      await loadFilteredImages();
+    }
   };
 
   const handleTriggerScan = async () => {
@@ -206,12 +261,23 @@ export default function App() {
               onClearSelection={() => setSelectedIds(new Set())}
               onOpenInspector={(img) => setInspectedImageId(img.id)}
               onQuickRate={async (id, rating) => {
+                // Optimistically update image rating in memory without full library reload
+                setImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
+                setAllImages((prev) =>
+                  prev.map((img) => (img.id === id ? { ...img, rating } : img))
+                );
                 await api.updateImageAnnotations(id, { rating });
-                await refreshAll();
               }}
               onQuickFavorite={async (id, isFavorite) => {
+                // Optimistically update image favorite state in memory without full library reload
+                const favoritedAt = isFavorite ? new Date().toISOString() : null;
+                setImages((prev) =>
+                  prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
+                );
+                setAllImages((prev) =>
+                  prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
+                );
                 await api.updateImageAnnotations(id, { isFavorite });
-                await refreshAll();
               }}
               onBulkAction={async (payload) => {
                 await api.bulkUpdateImages({

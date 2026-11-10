@@ -18,7 +18,15 @@ let fsWatcher: FSWatcher | null = null;
  * Backfills positive/negative prompts for any already-indexed images in SQLite whose
  * prompt was previously unextracted (e.g. Krea2_turbo PrimitiveStringMultiline #30_19).
  */
-export function backfillMissingImagePrompts(): number {
+export function backfillMissingImagePrompts(force = false): number {
+  if (!force) {
+    const alreadyDone = db
+      .prepare("SELECT value FROM app_settings WHERE key = 'prompt_backfill_v1_done'")
+      .get() as { value: string } | undefined;
+    if (alreadyDone?.value === '1') {
+      return 0;
+    }
+  }
   const rows = db
     .prepare(
       `SELECT
@@ -38,7 +46,14 @@ export function backfillMissingImagePrompts(): number {
     visual_workflow_json: string | null;
   }[];
 
-  if (rows.length === 0) return 0;
+  if (rows.length === 0) {
+    db.prepare(
+      `INSERT INTO app_settings (key, value, updated_at)
+       VALUES ('prompt_backfill_v1_done', '1', datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = datetime('now')`
+    ).run();
+    return 0;
+  }
 
   let updatedCount = 0;
   const updateStmt = db.prepare(
@@ -83,6 +98,12 @@ export function backfillMissingImagePrompts(): number {
       updatedCount++;
     }
   }
+
+  db.prepare(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES ('prompt_backfill_v1_done', '1', datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = datetime('now')`
+  ).run();
 
   return updatedCount;
 }
@@ -454,7 +475,9 @@ function walkDirectoryRecursive(dir: string): string[] {
 export async function runDirectoryScan(
   scanType: 'full' | 'incremental' | 'reconcile' | 'rebuild_metadata' = 'incremental'
 ): Promise<number> {
-  backfillMissingImagePrompts();
+  if (scanType === 'rebuild_metadata') {
+    backfillMissingImagePrompts(true);
+  }
   if (activeScanJobId !== null) {
     return activeScanJobId;
   }
@@ -471,7 +494,7 @@ export async function runDirectoryScan(
   const jobId = Number(info.lastInsertRowid);
   activeScanJobId = jobId;
 
-  // Run scan asynchronously without blocking HTTP responses
+  // Run scan asynchronously, yielding between files so HTTP requests are never starved
   setImmediate(async () => {
     let added = 0;
     let modified = 0;
@@ -494,12 +517,17 @@ export async function runDirectoryScan(
         else if (res === 'modified') modified++;
         else if (res === 'error') errors.push(`Failed to index ${rel}`);
 
-        if ((i + 1) % 10 === 0 || i === files.length - 1) {
+        if ((i + 1) % 25 === 0 || i === files.length - 1) {
           db.prepare(
             `UPDATE scan_jobs
              SET processed_files = ?, added_count = ?, modified_count = ?
              WHERE id = ?`
           ).run(i + 1, added, modified, jobId);
+        }
+
+        // Yield to the Node.js event loop so gallery/character API queries execute immediately
+        if (res !== 'unchanged' || i % 20 === 0) {
+          await new Promise((resolve) => setImmediate(resolve));
         }
       }
 

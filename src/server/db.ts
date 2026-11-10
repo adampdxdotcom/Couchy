@@ -457,6 +457,25 @@ export function runMigrations(): void {
         ALTER TABLE workflow_mappings ADD COLUMN checkpoint_field TEXT NOT NULL DEFAULT 'unet_name';
       `,
     },
+    {
+      version: 5,
+      name: 'app_settings_and_high_scale_indexes',
+      sql: `
+        -- Application key-value settings table (UI preferences & one-time backfill flags)
+        CREATE TABLE IF NOT EXISTS app_settings (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL,
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        -- High-scale indexes for 2,000+ image libraries
+        CREATE INDEX IF NOT EXISTS idx_models_filename_lower ON models(LOWER(filename));
+        CREATE INDEX IF NOT EXISTS idx_image_loras_name_lower ON image_loras(LOWER(lora_name));
+        CREATE INDEX IF NOT EXISTS idx_image_workflows_wf ON image_workflows(workflow_id);
+        CREATE INDEX IF NOT EXISTS idx_image_tags_hash ON image_tags(image_content_hash);
+        CREATE INDEX IF NOT EXISTS idx_collection_images_hash ON collection_images(image_content_hash);
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

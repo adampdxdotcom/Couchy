@@ -430,11 +430,200 @@ export function runAssistedCharacterIdentificationForImage(imageId: number): num
 }
 
 export function runAssistedCharacterIdentificationForAll(): number {
-  const allImages = db.prepare('SELECT id FROM images WHERE is_missing = 0').all() as { id: number }[];
+  const characters = db.prepare('SELECT id, name FROM characters').all() as {
+    id: number;
+    name: string;
+  }[];
+  if (characters.length === 0) return 0;
+
+  const allImages = db
+    .prepare(
+      `SELECT i.id, i.content_hash, m.positive_prompt
+       FROM images i
+       LEFT JOIN image_metadata m ON m.image_id = i.id
+       WHERE i.is_missing = 0`
+    )
+    .all() as { id: number; content_hash: string; positive_prompt: string | null }[];
+  if (allImages.length === 0) return 0;
+
+  // Bulk load character rules
+  const charLorasByChar = new Map<
+    number,
+    { lname: string; baseName: string; lora_hash: string | null; appearance_label: string }[]
+  >();
+  for (const cl of db
+    .prepare(
+      'SELECT character_id, LOWER(lora_name) AS lname, lora_hash, appearance_label FROM character_loras'
+    )
+    .all() as any[]) {
+    const arr = charLorasByChar.get(cl.character_id) || [];
+    arr.push({
+      lname: cl.lname,
+      baseName: cl.lname.replace(/\.(safetensors|pt|ckpt)$/i, ''),
+      lora_hash: cl.lora_hash,
+      appearance_label: cl.appearance_label || 'Default',
+    });
+    charLorasByChar.set(cl.character_id, arr);
+  }
+
+  const charRegexesByChar = new Map<number, { term: string; regex: RegExp }[]>();
+  const aliasesByChar = new Map<number, string[]>();
+  for (const al of db.prepare('SELECT character_id, alias FROM character_aliases').all() as {
+    character_id: number;
+    alias: string;
+  }[]) {
+    const arr = aliasesByChar.get(al.character_id) || [];
+    arr.push(al.alias);
+    aliasesByChar.set(al.character_id, arr);
+  }
+  for (const char of characters) {
+    const terms = [char.name, ...(aliasesByChar.get(char.id) || [])].filter(
+      (t) => t.trim().length >= 3
+    );
+    charRegexesByChar.set(
+      char.id,
+      terms.map((term) => {
+        const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return {
+          term,
+          regex: new RegExp(`(^|[^a-zA-Z0-9_])${escaped}([^a-zA-Z0-9_]|$)`, 'i'),
+        };
+      })
+    );
+  }
+
+  const charWfsByChar = new Map<number, Set<number>>();
+  for (const cw of db
+    .prepare('SELECT character_id, workflow_id FROM character_workflows')
+    .all() as { character_id: number; workflow_id: number }[]) {
+    let set = charWfsByChar.get(cw.character_id);
+    if (!set) {
+      set = new Set<number>();
+      charWfsByChar.set(cw.character_id, set);
+    }
+    set.add(cw.workflow_id);
+  }
+
+  // Bulk load existing associations and image relations
+  const existingAssocKeys = new Set<string>(
+    (
+      db
+        .prepare('SELECT image_content_hash, character_id FROM image_characters')
+        .all() as { image_content_hash: string; character_id: number }[]
+    ).map((r) => `${r.image_content_hash}:${r.character_id}`)
+  );
+
+  const lorasByImageId = new Map<
+    number,
+    { lname: string; baseName: string; lora_hash: string | null }[]
+  >();
+  for (const il of db
+    .prepare('SELECT image_id, LOWER(lora_name) AS lname, lora_hash FROM image_loras')
+    .all() as any[]) {
+    const arr = lorasByImageId.get(il.image_id) || [];
+    arr.push({
+      lname: il.lname,
+      baseName: il.lname.replace(/\.(safetensors|pt|ckpt)$/i, ''),
+      lora_hash: il.lora_hash,
+    });
+    lorasByImageId.set(il.image_id, arr);
+  }
+
+  const wfsByImageId = new Map<number, number[]>();
+  for (const iw of db
+    .prepare('SELECT image_id, workflow_id FROM image_workflows')
+    .all() as { image_id: number; workflow_id: number }[]) {
+    const arr = wfsByImageId.get(iw.image_id) || [];
+    arr.push(iw.workflow_id);
+    wfsByImageId.set(iw.image_id, arr);
+  }
+
+  const insertSuggestion = db.prepare(`
+    INSERT OR IGNORE INTO image_characters
+      (image_id, image_content_hash, character_id, status, source, confidence, match_reason, appearance_label)
+    VALUES (?, ?, ?, 'suggested', ?, ?, ?, ?)
+  `);
+
   let totalSuggested = 0;
   const tx = db.transaction(() => {
     for (const img of allImages) {
-      totalSuggested += runAssistedCharacterIdentificationForImage(img.id);
+      const imageLoras = lorasByImageId.get(img.id) || [];
+      const imageWorkflows = wfsByImageId.get(img.id) || [];
+
+      for (const char of characters) {
+        if (existingAssocKeys.has(`${img.content_hash}:${char.id}`)) continue;
+
+        // 1. Check Linked Character LoRAs (Confidence 0.90)
+        const charLoras = charLorasByChar.get(char.id) || [];
+        let matched = false;
+        for (const cl of charLoras) {
+          const hit = imageLoras.find(
+            (il) =>
+              il.lname === cl.lname ||
+              il.baseName === cl.baseName ||
+              (cl.lora_hash && il.lora_hash && cl.lora_hash === il.lora_hash)
+          );
+          if (hit) {
+            const info = insertSuggestion.run(
+              img.id,
+              img.content_hash,
+              char.id,
+              'lora_match',
+              0.9,
+              `Matched linked character LoRA: ${hit.lname}`,
+              cl.appearance_label
+            );
+            if (info.changes > 0) totalSuggested++;
+            matched = true;
+            break;
+          }
+        }
+        if (matched) continue;
+
+        // 2. Check Positive Prompt for Character Name or Aliases (Confidence 0.75)
+        if (img.positive_prompt && img.positive_prompt.trim().length > 0) {
+          const regexes = charRegexesByChar.get(char.id) || [];
+          for (const { term, regex } of regexes) {
+            if (regex.test(img.positive_prompt)) {
+              const info = insertSuggestion.run(
+                img.id,
+                img.content_hash,
+                char.id,
+                'prompt_alias',
+                0.75,
+                `Prompt text matched character name/alias: "${term}"`,
+                null
+              );
+              if (info.changes > 0) totalSuggested++;
+              matched = true;
+              break;
+            }
+          }
+        }
+        if (matched) continue;
+
+        // 3. Check Linked Character Workflows (Confidence 0.65)
+        if (imageWorkflows.length > 0) {
+          const charWfIds = charWfsByChar.get(char.id);
+          if (charWfIds) {
+            for (const wfId of imageWorkflows) {
+              if (charWfIds.has(wfId)) {
+                const info = insertSuggestion.run(
+                  img.id,
+                  img.content_hash,
+                  char.id,
+                  'workflow_match',
+                  0.65,
+                  'Generated using a workflow linked to this character',
+                  null
+                );
+                if (info.changes > 0) totalSuggested++;
+                break;
+              }
+            }
+          }
+        }
+      }
     }
   });
   tx();

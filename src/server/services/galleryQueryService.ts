@@ -6,88 +6,275 @@ import type {
 } from '../../shared/types.ts';
 
 /**
- * Hydrates full ImageRecord objects from database rows.
+ * Hydrates full ImageRecord objects from database rows using batched bulk queries
+ * (avoids N+1 per-image queries and avoids loading large workflow JSON blobs).
  */
 export function hydrateImageRecords(rows: any[]): ImageRecord[] {
   if (rows.length === 0) return [];
 
-  const getLoras = db.prepare(`
-    SELECT
-      il.id, il.image_id AS imageId, il.model_id AS modelId, il.lora_name AS loraName,
-      il.lora_path AS loraPath, il.lora_hash AS loraHash,
-      il.model_strength AS modelStrength, il.clip_strength AS clipStrength,
-      il.node_id AS nodeId, il.node_type AS nodeType, il.provenance,
-      COALESCE(m.lora_category, 'unclassified') AS loraCategory,
-      COALESCE(m.is_installed, 0) AS isInstalled
-    FROM image_loras il
-    LEFT JOIN models m ON m.id = il.model_id OR LOWER(m.filename) = LOWER(il.lora_name)
-    WHERE il.image_id = ?
-  `);
+  // Build fast lookup for installed models by id and lowercase filename
+  const modelRows = db
+    .prepare('SELECT id, LOWER(filename) AS lowerFilename, lora_category, is_installed FROM models')
+    .all() as {
+    id: number;
+    lowerFilename: string;
+    lora_category: string;
+    is_installed: number;
+  }[];
+  const modelById = new Map<number, (typeof modelRows)[0]>();
+  const modelByLowerName = new Map<string, (typeof modelRows)[0]>();
+  for (const m of modelRows) {
+    modelById.set(m.id, m);
+    modelByLowerName.set(m.lowerFilename, m);
+  }
 
-  const getModels = db.prepare(`
-    SELECT
-      id, image_id AS imageId, model_id AS modelId, model_name AS modelName,
-      model_type AS modelType, model_hash AS modelHash,
-      node_id AS nodeId, node_type AS nodeType, provenance, status
-    FROM image_models
-    WHERE image_id = ?
-  `);
+  const lorasByImageId = new Map<number, any[]>();
+  const modelsByImageId = new Map<number, any[]>();
+  const charsByHash = new Map<string, any[]>();
+  const tagsByHash = new Map<string, any[]>();
+  const colsByHash = new Map<string, any[]>();
+  const wfByImageId = new Map<
+    number,
+    { id: number; hasVisual: boolean; hasApi: boolean }
+  >();
 
-  const getChars = db.prepare(`
-    SELECT
-      ic.id, ic.character_id AS characterId, c.name AS characterName,
-      ic.status, ic.source, ic.confidence, ic.match_reason AS matchReason,
-      ic.appearance_label AS appearanceLabel
-    FROM image_characters ic
-    JOIN characters c ON c.id = ic.character_id
-    WHERE ic.image_content_hash = ? AND ic.status != 'rejected'
-    ORDER BY CASE WHEN ic.status = 'confirmed' THEN 0 ELSE 1 END, c.name ASC
-  `);
+  if (rows.length === 1) {
+    const single = rows[0];
+    const rawLoras = db
+      .prepare(
+        `SELECT
+           id, image_id AS imageId, model_id AS modelId, lora_name AS loraName,
+           lora_path AS loraPath, lora_hash AS loraHash,
+           model_strength AS modelStrength, clip_strength AS clipStrength,
+           node_id AS nodeId, node_type AS nodeType, provenance
+         FROM image_loras
+         WHERE image_id = ?`
+      )
+      .all(single.id) as any[];
+    lorasByImageId.set(
+      single.id,
+      rawLoras.map((l) => {
+        const m =
+          (l.modelId ? modelById.get(l.modelId) : undefined) ||
+          modelByLowerName.get(String(l.loraName || '').toLowerCase());
+        return {
+          ...l,
+          loraCategory: m?.lora_category || 'unclassified',
+          isInstalled: Boolean(m?.is_installed),
+        };
+      })
+    );
 
-  const getTags = db.prepare(`
-    SELECT t.id, t.name, t.color
-    FROM image_tags it
-    JOIN tags t ON t.id = it.tag_id
-    WHERE it.image_content_hash = ?
-    ORDER BY t.name ASC
-  `);
+    modelsByImageId.set(
+      single.id,
+      db
+        .prepare(
+          `SELECT
+             id, image_id AS imageId, model_id AS modelId, model_name AS modelName,
+             model_type AS modelType, model_hash AS modelHash,
+             node_id AS nodeId, node_type AS nodeType, provenance, status
+           FROM image_models
+           WHERE image_id = ?`
+        )
+        .all(single.id) as any[]
+    );
 
-  const getCols = db.prepare(`
-    SELECT col.id, col.name
-    FROM collection_images ci
-    JOIN collections col ON col.id = ci.collection_id
-    WHERE ci.image_content_hash = ?
-    ORDER BY col.name ASC
-  `);
+    charsByHash.set(
+      single.content_hash,
+      db
+        .prepare(
+          `SELECT
+             ic.id, ic.character_id AS characterId, c.name AS characterName,
+             ic.status, ic.source, ic.confidence, ic.match_reason AS matchReason,
+             ic.appearance_label AS appearanceLabel
+           FROM image_characters ic
+           JOIN characters c ON c.id = ic.character_id
+           WHERE ic.image_content_hash = ? AND ic.status != 'rejected'
+           ORDER BY CASE WHEN ic.status = 'confirmed' THEN 0 ELSE 1 END, c.name ASC`
+        )
+        .all(single.content_hash) as any[]
+    );
 
-  const getWf = db.prepare(`
-    SELECT w.id, w.visual_workflow_json, w.api_workflow_json
-    FROM image_workflows iw
-    JOIN workflows w ON w.id = iw.workflow_id
-    WHERE iw.image_id = ?
-    LIMIT 1
-  `);
+    tagsByHash.set(
+      single.content_hash,
+      db
+        .prepare(
+          `SELECT t.id, t.name, t.color
+           FROM image_tags it
+           JOIN tags t ON t.id = it.tag_id
+           WHERE it.image_content_hash = ?
+           ORDER BY t.name ASC`
+        )
+        .all(single.content_hash) as any[]
+    );
+
+    colsByHash.set(
+      single.content_hash,
+      db
+        .prepare(
+          `SELECT col.id, col.name
+           FROM collection_images ci
+           JOIN collections col ON col.id = ci.collection_id
+           WHERE ci.image_content_hash = ?
+           ORDER BY col.name ASC`
+        )
+        .all(single.content_hash) as any[]
+    );
+
+    const wfRow = db
+      .prepare(
+        `SELECT
+           w.id,
+           (w.visual_workflow_json IS NOT NULL AND w.visual_workflow_json != '') AS hasVisual,
+           (w.api_workflow_json IS NOT NULL AND w.api_workflow_json != '') AS hasApi
+         FROM image_workflows iw
+         JOIN workflows w ON w.id = iw.workflow_id
+         WHERE iw.image_id = ?
+         LIMIT 1`
+      )
+      .get(single.id) as any;
+    if (wfRow) {
+      wfByImageId.set(single.id, {
+        id: wfRow.id,
+        hasVisual: Boolean(wfRow.hasVisual),
+        hasApi: Boolean(wfRow.hasApi),
+      });
+    }
+  } else {
+    // Bulk fetch all image_loras in one query
+    const allLoras = db
+      .prepare(
+        `SELECT
+           id, image_id AS imageId, model_id AS modelId, lora_name AS loraName,
+           lora_path AS loraPath, lora_hash AS loraHash,
+           model_strength AS modelStrength, clip_strength AS clipStrength,
+           node_id AS nodeId, node_type AS nodeType, provenance
+         FROM image_loras`
+      )
+      .all() as any[];
+    for (const l of allLoras) {
+      const m =
+        (l.modelId ? modelById.get(l.modelId) : undefined) ||
+        modelByLowerName.get(String(l.loraName || '').toLowerCase());
+      const enriched = {
+        ...l,
+        loraCategory: m?.lora_category || 'unclassified',
+        isInstalled: Boolean(m?.is_installed),
+      };
+      const arr = lorasByImageId.get(l.imageId);
+      if (arr) arr.push(enriched);
+      else lorasByImageId.set(l.imageId, [enriched]);
+    }
+
+    // Bulk fetch all image_models in one query
+    const allModels = db
+      .prepare(
+        `SELECT
+           id, image_id AS imageId, model_id AS modelId, model_name AS modelName,
+           model_type AS modelType, model_hash AS modelHash,
+           node_id AS nodeId, node_type AS nodeType, provenance, status
+         FROM image_models`
+      )
+      .all() as any[];
+    for (const m of allModels) {
+      const arr = modelsByImageId.get(m.imageId);
+      if (arr) arr.push(m);
+      else modelsByImageId.set(m.imageId, [m]);
+    }
+
+    // Bulk fetch all non-rejected image_characters in one query
+    const allChars = db
+      .prepare(
+        `SELECT
+           ic.image_content_hash AS contentHash,
+           ic.id, ic.character_id AS characterId, c.name AS characterName,
+           ic.status, ic.source, ic.confidence, ic.match_reason AS matchReason,
+           ic.appearance_label AS appearanceLabel
+         FROM image_characters ic
+         JOIN characters c ON c.id = ic.character_id
+         WHERE ic.status != 'rejected'
+         ORDER BY CASE WHEN ic.status = 'confirmed' THEN 0 ELSE 1 END, c.name ASC`
+      )
+      .all() as any[];
+    for (const c of allChars) {
+      const { contentHash, ...rest } = c;
+      const arr = charsByHash.get(contentHash);
+      if (arr) arr.push(rest);
+      else charsByHash.set(contentHash, [rest]);
+    }
+
+    // Bulk fetch all image_tags in one query
+    const allTags = db
+      .prepare(
+        `SELECT it.image_content_hash AS contentHash, t.id, t.name, t.color
+         FROM image_tags it
+         JOIN tags t ON t.id = it.tag_id
+         ORDER BY t.name ASC`
+      )
+      .all() as any[];
+    for (const t of allTags) {
+      const { contentHash, ...rest } = t;
+      const arr = tagsByHash.get(contentHash);
+      if (arr) arr.push(rest);
+      else tagsByHash.set(contentHash, [rest]);
+    }
+
+    // Bulk fetch all collection_images in one query
+    const allCols = db
+      .prepare(
+        `SELECT ci.image_content_hash AS contentHash, col.id, col.name
+         FROM collection_images ci
+         JOIN collections col ON col.id = ci.collection_id
+         ORDER BY col.name ASC`
+      )
+      .all() as any[];
+    for (const col of allCols) {
+      const { contentHash, ...rest } = col;
+      const arr = colsByHash.get(contentHash);
+      if (arr) arr.push(rest);
+      else colsByHash.set(contentHash, [rest]);
+    }
+
+    // Bulk fetch workflow presence flags without reading multi-MB workflow JSON blobs
+    const allWfs = db
+      .prepare(
+        `SELECT
+           iw.image_id AS imageId,
+           w.id,
+           (w.visual_workflow_json IS NOT NULL AND w.visual_workflow_json != '') AS hasVisual,
+           (w.api_workflow_json IS NOT NULL AND w.api_workflow_json != '') AS hasApi
+         FROM image_workflows iw
+         JOIN workflows w ON w.id = iw.workflow_id`
+      )
+      .all() as any[];
+    for (const w of allWfs) {
+      if (!wfByImageId.has(w.imageId)) {
+        wfByImageId.set(w.imageId, {
+          id: w.id,
+          hasVisual: Boolean(w.hasVisual),
+          hasApi: Boolean(w.hasApi),
+        });
+      }
+    }
+  }
 
   return rows.map((r) => {
-    const loras = (getLoras.all(r.id) as any[]).map((l) => ({
-      ...l,
-      isInstalled: Boolean(l.isInstalled),
-    }));
-    const models = getModels.all(r.id) as any[];
-    const characters = getChars.all(r.content_hash) as any[];
-    const tags = getTags.all(r.content_hash) as any[];
-    const collections = getCols.all(r.content_hash) as any[];
-    const wf = getWf.get(r.id) as any;
+    const loras = lorasByImageId.get(r.id) || [];
+    const models = modelsByImageId.get(r.id) || [];
+    const characters = charsByHash.get(r.content_hash) || [];
+    const tags = tagsByHash.get(r.content_hash) || [];
+    const collections = colsByHash.get(r.content_hash) || [];
+    const wf = wfByImageId.get(r.id);
 
     let missingFields: string[] = [];
     let provenance: Record<string, any> = {};
     try {
-      missingFields = JSON.parse(r.missing_fields_json || '[]');
+      missingFields = r.missing_fields_json ? JSON.parse(r.missing_fields_json) : [];
     } catch {
       missingFields = [];
     }
     try {
-      provenance = JSON.parse(r.provenance_json || '{}');
+      provenance = r.provenance_json ? JSON.parse(r.provenance_json) : {};
     } catch {
       provenance = {};
     }
@@ -129,8 +316,8 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
       vaeName: r.vae_name ?? null,
       missingFields,
       provenance,
-      hasVisualWorkflow: Boolean(wf?.visual_workflow_json),
-      hasApiWorkflow: Boolean(wf?.api_workflow_json),
+      hasVisualWorkflow: Boolean(wf?.hasVisual),
+      hasApiWorkflow: Boolean(wf?.hasApi),
       workflowId: wf?.id ?? null,
       loras,
       models,

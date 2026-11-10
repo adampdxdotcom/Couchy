@@ -16,14 +16,12 @@ import { systemRouter } from './src/server/routes/systemRoutes.ts';
 import { generationRouter } from './src/server/routes/generationRoutes.ts';
 
 async function startServer() {
-  // 1. Run SQLite schema migrations & backfill any unextracted prompts
+  // 1. Run SQLite schema migrations & one-time prompt backfill
   runMigrations();
-  backfillMissingImagePrompts();
+  backfillMissingImagePrompts(false);
 
-  // 2. Start filesystem monitoring and trigger initial non-blocking scan of mounted output folder
+  // 2. Start filesystem monitoring
   startFilesystemWatcher();
-  await syncModelInventory();
-  await runDirectoryScan('incremental');
 
   const app = express();
   app.use(express.json({ limit: '25mb' }));
@@ -58,6 +56,16 @@ async function startServer() {
   app.listen(appConfig.port, '0.0.0.0', () => {
     console.log(`Couchy running on http://0.0.0.0:${appConfig.port}`);
     console.log(`Watching ComfyUI Output Directory: ${appConfig.comfyuiOutputDir}`);
+
+    // Trigger initial model inventory sync and incremental scan in the background
+    setImmediate(async () => {
+      try {
+        await syncModelInventory();
+        await runDirectoryScan('incremental');
+      } catch (err) {
+        console.error('Background startup scan error:', err);
+      }
+    });
   });
 }
 

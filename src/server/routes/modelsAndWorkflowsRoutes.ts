@@ -209,7 +209,15 @@ modelsAndWorkflowsRouter.get('/workflows', (_req, res) => {
       .prepare(
         `
         SELECT
-          w.*,
+          w.id,
+          w.name,
+          w.description,
+          w.is_saved_library,
+          (w.visual_workflow_json IS NOT NULL AND w.visual_workflow_json != '') AS has_visual,
+          (w.api_workflow_json IS NOT NULL AND w.api_workflow_json != '') AS has_api,
+          w.workflow_hash,
+          w.created_at,
+          w.updated_at,
           COUNT(DISTINCT iw.image_id) AS imageCount
         FROM workflows w
         LEFT JOIN image_workflows iw ON iw.workflow_id = w.id
@@ -219,23 +227,31 @@ modelsAndWorkflowsRouter.get('/workflows', (_req, res) => {
       )
       .all() as any[];
 
-    const getChars = db.prepare(`
-      SELECT c.id, c.name, cw.role_label AS roleLabel
-      FROM character_workflows cw
-      JOIN characters c ON c.id = cw.character_id
-      WHERE cw.workflow_id = ?
-    `);
+    const charRows = db
+      .prepare(
+        `SELECT cw.workflow_id AS workflowId, c.id, c.name, cw.role_label AS roleLabel
+         FROM character_workflows cw
+         JOIN characters c ON c.id = cw.character_id`
+      )
+      .all() as any[];
+    const charsByWf = new Map<number, any[]>();
+    for (const cr of charRows) {
+      const { workflowId, ...rest } = cr;
+      const arr = charsByWf.get(workflowId) || [];
+      arr.push(rest);
+      charsByWf.set(workflowId, arr);
+    }
 
     const items: WorkflowLibraryItem[] = rows.map((r) => ({
       id: r.id,
       name: r.name,
       description: r.description || '',
       isSavedLibrary: Boolean(r.is_saved_library),
-      hasVisualWorkflow: Boolean(r.visual_workflow_json),
-      hasApiWorkflow: Boolean(r.api_workflow_json),
+      hasVisualWorkflow: Boolean(r.has_visual),
+      hasApiWorkflow: Boolean(r.has_api),
       workflowHash: r.workflow_hash,
       imageCount: Number(r.imageCount || 0),
-      characters: getChars.all(r.id) as any[],
+      characters: charsByWf.get(r.id) || [],
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));
