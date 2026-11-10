@@ -20,6 +20,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
+import { formatMb } from '../shared/utils.ts';
 import type {
   LmStudioGuidingTemplate,
   LmStudioStatus,
@@ -314,8 +315,6 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       setIsUpdatingTagger(false);
     }
   };
-
-  const formatMb = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 
   const handleCreateBackup = async () => {
     const res = await api.createBackup('manual');

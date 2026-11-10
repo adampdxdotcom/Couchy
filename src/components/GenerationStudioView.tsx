@@ -28,6 +28,12 @@ import type {
   WorkflowLibraryItem,
   WorkflowNodeMapping,
 } from '../shared/types.ts';
+import {
+  ASPECT_RATIO_PRESETS,
+  MEGAPIXEL_PRESETS,
+  interpolatePrompt as interpolatePromptClient,
+  resolveDefaultWorkflow,
+} from '../shared/utils.ts';
 
 interface GenerationStudioViewProps {
   characters: CharacterProfile[];
@@ -39,55 +45,6 @@ interface GenerationStudioViewProps {
   onRefreshAll: () => Promise<void>;
   onOpenImage: (img: ImageRecord) => void;
   onOpenSystemSettings?: () => void;
-}
-
-/**
- * Standard ComfyUI ResolutionSelector (Node #49) aspect_ratio strings.
- */
-const ASPECT_RATIO_PRESETS: {
-  value: string;
-  shortRatio: string;
-  label: string;
-  boxW: number;
-  boxH: number;
-}[] = [
-  { value: '1:1 (Square)', shortRatio: '1:1', label: 'Square', boxW: 18, boxH: 18 },
-  { value: '2:3 (Portrait Photo)', shortRatio: '2:3', label: 'Portrait Photo', boxW: 14, boxH: 21 },
-  { value: '3:2 (Photo)', shortRatio: '3:2', label: 'Photo', boxW: 21, boxH: 14 },
-  { value: '3:4 (Portrait Standard)', shortRatio: '3:4', label: 'Portrait Std', boxW: 15, boxH: 20 },
-  { value: '4:3 (Standard)', shortRatio: '4:3', label: 'Standard', boxW: 20, boxH: 15 },
-  { value: '9:16 (Portrait Widescreen)', shortRatio: '9:16', label: 'Vertical Wide', boxW: 12, boxH: 22 },
-  { value: '16:9 (Widescreen)', shortRatio: '16:9', label: 'Widescreen', boxW: 22, boxH: 12 },
-  { value: '21:9 (Ultrawide)', shortRatio: '21:9', label: 'Ultrawide', boxW: 24, boxH: 10 },
-];
-
-const MEGAPIXEL_PRESETS = [0.5, 1.0, 2.0, 3.0, 4.0, 8.0];
-
-function interpolatePromptClient(
-  template: string,
-  vars: {
-    characterName: string;
-    loraSummary: string;
-    theme: string;
-    count?: number;
-    basePrompt?: string;
-  }
-): string {
-  let out = template
-    .replace(/\{character\}/gi, vars.characterName || 'subject')
-    .replace(/\{lora\}/gi, vars.loraSummary || '')
-    .replace(/\{theme\}/gi, vars.theme || '');
-  if (vars.count !== undefined) {
-    out = out.replace(/\{count\}/gi, String(vars.count));
-  }
-  if (vars.basePrompt !== undefined) {
-    out = out.replace(/\{base_prompt\}/gi, vars.basePrompt);
-  }
-  return out
-    .replace(/,\s*,/g, ',')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/^,\s*|\s*,\s*$/g, '')
-    .trim();
 }
 
 export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
@@ -116,12 +73,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
 
   // 3. Workflow & Diffusion Model (Node #30_10 UNETLoader unet_name)
   const defaultWorkflowId = useMemo(() => {
-    const found =
-      workflows.find((w) => w.isDefault && w.hasApiWorkflow) ||
-      workflows.find((w) => w.isDefault) ||
-      workflows.find((w) => w.hasApiWorkflow) ||
-      workflows[0];
-    return found?.id ?? null;
+    return resolveDefaultWorkflow(workflows)?.id ?? null;
   }, [workflows]);
 
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(defaultWorkflowId);

@@ -1,0 +1,237 @@
+/**
+ * Shared utility functions, formatting helpers, and UI constants.
+ */
+
+import type { ModelInventoryItem } from './types';
+
+// ==========================================
+// 1. Aspect Ratio Presets & Normalization
+// ==========================================
+
+export interface AspectRatioOption {
+  value: string;
+  shortRatio: string;
+  short: string;
+  label: string;
+  boxW: number;
+  boxH: number;
+}
+
+/**
+ * Authoritative ComfyUI ResolutionSelector (Node #49) aspect_ratio options with display boxes.
+ */
+export const ASPECT_RATIO_PRESETS: AspectRatioOption[] = [
+  { value: '1:1 (Square)', shortRatio: '1:1', short: '1:1', label: 'Square', boxW: 18, boxH: 18 },
+  { value: '2:3 (Portrait Photo)', shortRatio: '2:3', short: '2:3', label: 'Portrait Photo', boxW: 14, boxH: 21 },
+  { value: '3:2 (Photo)', shortRatio: '3:2', short: '3:2', label: 'Photo', boxW: 21, boxH: 14 },
+  { value: '3:4 (Portrait Standard)', shortRatio: '3:4', short: '3:4', label: 'Portrait Std', boxW: 15, boxH: 20 },
+  { value: '4:3 (Standard)', shortRatio: '4:3', short: '4:3', label: 'Standard', boxW: 20, boxH: 15 },
+  { value: '9:16 (Portrait Widescreen)', shortRatio: '9:16', short: '9:16', label: 'Vertical Wide', boxW: 12, boxH: 22 },
+  { value: '16:9 (Widescreen)', shortRatio: '16:9', short: '16:9', label: 'Widescreen', boxW: 22, boxH: 12 },
+  { value: '21:9 (Ultrawide)', shortRatio: '21:9', short: '21:9', label: 'Ultrawide', boxW: 24, boxH: 10 },
+];
+
+export const RESOLUTION_SELECTOR_OPTIONS = ASPECT_RATIO_PRESETS;
+export type ResolutionSelectorRatio = (typeof ASPECT_RATIO_PRESETS)[number]['value'];
+
+export const MEGAPIXEL_PRESETS = [0.5, 1.0, 2.0, 3.0, 4.0, 8.0] as const;
+
+/**
+ * Normalizes any ratio string (shorthand, legacy label, or partial text) to the exact
+ * string expected by ComfyUI's ResolutionSelector node.
+ */
+export function normalizeResolutionSelectorRatio(raw: string | undefined | null): string {
+  const str = String(raw || '').trim();
+  if (!str) return '2:3 (Portrait Photo)';
+
+  // Exact match
+  const exact = ASPECT_RATIO_PRESETS.find(
+    (o) => o.value.toLowerCase() === str.toLowerCase()
+  );
+  if (exact) return exact.value;
+
+  // Normalized digits e.g. "3:4", "3/4", "3x4"
+  const match = str.match(/(\d+(?:\.\d+)?)\s*[:\/x]\s*(\d+(?:\.\d+)?)/i);
+  if (match) {
+    const num = `${match[1]}:${match[2]}`;
+    const byShort = ASPECT_RATIO_PRESETS.find((o) => o.shortRatio === num);
+    if (byShort) return byShort.value;
+  }
+
+  // Common descriptive aliases
+  const lower = str.toLowerCase();
+  if (lower.includes('square')) return '1:1 (Square)';
+  if (lower.includes('ultrawide') || lower.includes('21:9')) return '21:9 (Ultrawide)';
+  if (lower.includes('vertical') || lower.includes('9:16')) return '9:16 (Portrait Widescreen)';
+  if (lower.includes('widescreen') || lower.includes('16:9')) return '16:9 (Widescreen)';
+  if (lower.includes('golden') || (lower.includes('portrait') && lower.includes('3:4'))) return '3:4 (Portrait Standard)';
+  if (lower.includes('portrait')) return '2:3 (Portrait Photo)';
+  if (lower.includes('landscape') && lower.includes('3:2')) return '3:2 (Photo)';
+  if (lower.includes('classic') || lower.includes('tv') || lower.includes('4:3')) return '4:3 (Standard)';
+
+  return str;
+}
+
+// ==========================================
+// 2. Byte & Data Size Formatting
+// ==========================================
+
+/**
+ * Formats a byte count into human-readable B, KB, MB, or GB strings.
+ */
+export function formatBytes(bytes: number | null | undefined, fallback = 'Unknown size'): string {
+  if (bytes === null || bytes === undefined || isNaN(bytes) || bytes < 0) {
+    return fallback;
+  }
+  if (bytes === 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+/**
+ * Formats bytes directly to Megabytes with 1 decimal place.
+ */
+export function formatMb(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined || isNaN(bytes) || bytes < 0) return '0.0 MB';
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ==========================================
+// 3. Prompt Interpolation
+// ==========================================
+
+export interface PromptInterpolationVars {
+  characterName?: string;
+  loraSummary?: string;
+  theme?: string;
+  count?: number;
+  basePrompt?: string;
+}
+
+/**
+ * Interpolates prompt template placeholders: {character}, {lora}, {theme}, {count}, {base_prompt}
+ * and cleans up dangling commas or duplicate whitespace.
+ */
+export function interpolatePrompt(template: string, vars: PromptInterpolationVars): string {
+  let result = template;
+  result = result.replace(/\{character\}/gi, vars.characterName || 'subject');
+  result = result.replace(/\{lora\}/gi, vars.loraSummary || '');
+  result = result.replace(/\{theme\}/gi, vars.theme || '');
+  if (vars.count !== undefined) {
+    result = result.replace(/\{count\}/gi, String(vars.count));
+  }
+  if (vars.basePrompt !== undefined) {
+    result = result.replace(/\{base_prompt\}/gi, vars.basePrompt);
+  }
+  return result
+    .replace(/,\s*,/g, ',')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^,\s*|\s*,\s*$/g, '')
+    .trim();
+}
+
+// ==========================================
+// 4. Model Inventory Filtering
+// ==========================================
+
+/**
+ * Filters diffusion checkpoints from model inventory and optional checkpoint list.
+ */
+export function filterDiffusionModels(
+  models: ModelInventoryItem[] = [],
+  checkpoints: string[] = []
+): string[] {
+  const set = new Set<string>(checkpoints);
+  for (const m of models) {
+    if (
+      m.modelType === 'checkpoint' ||
+      m.modelType === 'diffusion' ||
+      m.modelType === 'other'
+    ) {
+      if (m.filename) set.add(m.filename);
+    }
+  }
+  return Array.from(set).filter(Boolean).sort();
+}
+
+/**
+ * Filters LoRA model filenames from LoRA items and model inventory.
+ */
+export function filterLoraModels(
+  loras: Array<{ filename?: string; name?: string }> = [],
+  models: ModelInventoryItem[] = []
+): string[] {
+  const set = new Set<string>();
+  for (const l of loras) {
+    if (l.filename) set.add(l.filename);
+    else if (l.name) set.add(l.name);
+  }
+  for (const m of models) {
+    if (m.modelType === 'lora' && m.filename) {
+      set.add(m.filename);
+    }
+  }
+  return Array.from(set).filter(Boolean).sort();
+}
+
+/**
+ * Filters VAE model filenames.
+ */
+export function filterVaeModels(models: ModelInventoryItem[] = []): string[] {
+  const set = new Set<string>();
+  for (const m of models) {
+    if (
+      m.modelType === 'vae' ||
+      m.filename.toLowerCase().includes('vae') ||
+      m.modelType === 'other'
+    ) {
+      if (m.filename) set.add(m.filename);
+    }
+  }
+  return Array.from(set).filter(Boolean).sort();
+}
+
+/**
+ * Filters CLIP / text-encoder model filenames.
+ */
+export function filterClipModels(models: ModelInventoryItem[] = []): string[] {
+  const set = new Set<string>();
+  for (const m of models) {
+    if (
+      m.filename.toLowerCase().includes('clip') ||
+      m.filename.toLowerCase().includes('qwen') ||
+      m.filename.toLowerCase().includes('t5') ||
+      m.modelType === 'other' ||
+      m.modelType === 'embedding'
+    ) {
+      if (m.filename) set.add(m.filename);
+    }
+  }
+  return Array.from(set).filter(Boolean).sort();
+}
+
+// ==========================================
+// 5. Default Workflow Resolution
+// ==========================================
+
+/**
+ * Resolves the primary default workflow from a collection prioritizing:
+ * 1. isDefault && hasApiWorkflow
+ * 2. isDefault
+ * 3. hasApiWorkflow
+ * 4. First available workflow
+ */
+export function resolveDefaultWorkflow<
+  T extends { id: number; isDefault?: boolean; hasApiWorkflow?: boolean }
+>(workflows: T[] = []): T | null {
+  if (!workflows || workflows.length === 0) return null;
+  return (
+    workflows.find((w) => w.isDefault && w.hasApiWorkflow) ||
+    workflows.find((w) => w.isDefault) ||
+    workflows.find((w) => w.hasApiWorkflow) ||
+    workflows[0] ||
+    null
+  );
+}

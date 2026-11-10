@@ -1,6 +1,7 @@
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import type { LmStudioGuidingTemplate, LmStudioStatus } from '../../shared/types.ts';
+import { interpolatePrompt } from '../../shared/utils.ts';
 
 function mapGuidingRow(row: any): LmStudioGuidingTemplate {
   return {
@@ -211,32 +212,7 @@ export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStu
 /**
  * Interpolates {character}, {lora}, {theme}, {count}, {base_prompt} placeholders.
  */
-export function interpolatePromptTemplate(
-  template: string,
-  vars: {
-    characterName: string;
-    loraSummary: string;
-    theme: string;
-    count?: number;
-    basePrompt?: string;
-  }
-): string {
-  let result = template;
-  result = result.replace(/\{character\}/gi, vars.characterName || 'character');
-  result = result.replace(/\{lora\}/gi, vars.loraSummary || '');
-  result = result.replace(/\{theme\}/gi, vars.theme || '');
-  if (vars.count !== undefined) {
-    result = result.replace(/\{count\}/gi, String(vars.count));
-  }
-  if (vars.basePrompt !== undefined) {
-    result = result.replace(/\{base_prompt\}/gi, vars.basePrompt);
-  }
-  return result
-    .replace(/,\s*,/g, ',')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/^,\s*|\s*,\s*$/g, '')
-    .trim();
-}
+export const interpolatePromptTemplate = interpolatePrompt;
 
 /**
  * Connects to LM Studio's /v1/chat/completions endpoint using the chosen Guiding Prompt Template

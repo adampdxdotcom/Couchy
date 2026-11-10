@@ -11,6 +11,7 @@ import {
   FileWarning,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
+import { formatBytes } from '../shared/utils.ts';
 import type {
   ImageRecord,
   LoraCategory,
@@ -110,13 +111,6 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
     } catch (err: any) {
       setDlError(err.message || 'Download could not start');
     }
-  };
-
-  const formatBytes = (bytes: number | null) => {
-    if (!bytes) return 'Unknown size';
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   };
 
   // Dedicated LoRA Detail Page

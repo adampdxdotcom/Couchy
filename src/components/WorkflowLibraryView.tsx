@@ -27,6 +27,13 @@ import {
   type ReproductionValidationResult,
   type WorkflowLibraryItem,
 } from '../shared/types.ts';
+import {
+  filterDiffusionModels,
+  filterLoraModels,
+  filterVaeModels,
+  filterClipModels,
+  resolveDefaultWorkflow,
+} from '../shared/utils.ts';
 
 interface WorkflowLibraryViewProps {
   workflows: WorkflowLibraryItem[];
@@ -208,69 +215,31 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
   // Auto-select default or first workflow on initial load
   useEffect(() => {
     if (selectedWfId === null && workflows.length > 0) {
-      const def = workflows.find((w) => w.isDefault) || workflows[0];
-      setSelectedWfId(def.id);
+      const def = resolveDefaultWorkflow(workflows);
+      if (def) setSelectedWfId(def.id);
     }
   }, [workflows, selectedWfId]);
 
   // Build categorized model and LoRA option lists from app inventory
-  const diffusionModelOptions = useMemo(() => {
-    const set = new Set<string>(checkpoints);
-    for (const m of models) {
-      if (
-        m.modelType === 'checkpoint' ||
-        m.modelType === 'diffusion' ||
-        m.modelType === 'other'
-      ) {
-        set.add(m.filename);
-      }
-    }
-    return Array.from(set).filter(Boolean).sort();
-  }, [checkpoints, models]);
+  const diffusionModelOptions = useMemo(
+    () => filterDiffusionModels(models, checkpoints),
+    [checkpoints, models]
+  );
 
-  const loraOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const l of loras) {
-      if (l.filename) set.add(l.filename);
-      else if (l.name) set.add(l.name);
-    }
-    for (const m of models) {
-      if (m.modelType === 'lora' && m.filename) {
-        set.add(m.filename);
-      }
-    }
-    return Array.from(set).filter(Boolean).sort();
-  }, [loras, models]);
+  const loraOptions = useMemo(
+    () => filterLoraModels(loras, models),
+    [loras, models]
+  );
 
-  const vaeOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const m of models) {
-      if (
-        m.modelType === 'vae' ||
-        m.filename.toLowerCase().includes('vae') ||
-        m.modelType === 'other'
-      ) {
-        set.add(m.filename);
-      }
-    }
-    return Array.from(set).filter(Boolean).sort();
-  }, [models]);
+  const vaeOptions = useMemo(
+    () => filterVaeModels(models),
+    [models]
+  );
 
-  const clipOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const m of models) {
-      if (
-        m.filename.toLowerCase().includes('clip') ||
-        m.filename.toLowerCase().includes('qwen') ||
-        m.filename.toLowerCase().includes('t5') ||
-        m.modelType === 'other' ||
-        m.modelType === 'embedding'
-      ) {
-        set.add(m.filename);
-      }
-    }
-    return Array.from(set).filter(Boolean).sort();
-  }, [models]);
+  const clipOptions = useMemo(
+    () => filterClipModels(models),
+    [models]
+  );
 
   const loadJobs = async () => {
     try {

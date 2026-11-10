@@ -19,6 +19,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
+import { formatBytes } from '../shared/utils.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
 import type {
   CharacterProfile,
@@ -165,12 +166,6 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     });
     setWorkflowSavedMsg('Saved to independent Workflow Library');
     setTimeout(() => setWorkflowSavedMsg(null), 2500);
-  };
-
-  const formatBytes = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   };
 
   return (

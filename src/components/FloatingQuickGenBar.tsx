@@ -16,6 +16,10 @@ import type {
   ImageRecord,
   WorkflowLibraryItem,
 } from '../shared/types.ts';
+import {
+  ASPECT_RATIO_PRESETS as ASPECT_RATIO_OPTIONS,
+  resolveDefaultWorkflow,
+} from '../shared/utils.ts';
 
 interface FloatingQuickGenBarProps {
   characters: CharacterProfile[];
@@ -25,17 +29,6 @@ interface FloatingQuickGenBarProps {
   onOpenGenerationTab: () => void;
   onPushToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
-
-const ASPECT_RATIO_OPTIONS = [
-  { short: '2:3', value: '2:3 (Portrait Photo)', label: 'Portrait Photo' },
-  { short: '1:1', value: '1:1 (Square)', label: 'Square' },
-  { short: '3:2', value: '3:2 (Photo)', label: 'Photo' },
-  { short: '3:4', value: '3:4 (Portrait Standard)', label: 'Portrait Standard' },
-  { short: '4:3', value: '4:3 (Standard)', label: 'Standard' },
-  { short: '9:16', value: '9:16 (Portrait Widescreen)', label: 'Portrait Widescreen' },
-  { short: '16:9', value: '16:9 (Widescreen)', label: 'Widescreen' },
-  { short: '21:9', value: '21:9 (Ultrawide)', label: 'Ultrawide' },
-];
 
 const BATCH_COUNT_OPTIONS = [1, 2, 4, 6, 8];
 
@@ -221,13 +214,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
       const found = workflows.find((w) => w.id === charWfId && w.hasApiWorkflow);
       if (found) return found;
     }
-    return (
-      workflows.find((w) => w.isDefault && w.hasApiWorkflow) ||
-      workflows.find((w) => w.isDefault) ||
-      workflows.find((w) => w.hasApiWorkflow) ||
-      workflows[0] ||
-      null
-    );
+    return resolveDefaultWorkflow(workflows);
   }, [attachedCharacter, workflows]);
 
   const resolvedShortRatio = useMemo(() => {
