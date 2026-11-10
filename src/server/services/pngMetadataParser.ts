@@ -124,10 +124,9 @@ function cleanModelBasename(rawName: string): string {
 }
 
 /**
- * Extracts generation parameters, LoRAs, and model dependencies from PNG/image files.
+ * Extracts generation parameters, LoRAs, and model dependencies from pre-read PNG text chunks.
  */
-export function parseImageMetadata(filePath: string): ParsedImageMetadata {
-  const rawChunks = readPngTextChunks(filePath);
+export function parseImageMetadataFromChunks(rawChunks: Record<string, string>): ParsedImageMetadata {
   const result: ParsedImageMetadata = {
     rawChunks,
     visualWorkflowJson: null,
@@ -201,11 +200,21 @@ export function parseImageMetadata(filePath: string): ParsedImageMetadata {
   return result;
 }
 
+/**
+ * Extracts generation parameters, LoRAs, and model dependencies from PNG/image files.
+ */
+export function parseImageMetadata(filePath: string): ParsedImageMetadata {
+  const rawChunks = readPngTextChunks(filePath);
+  return parseImageMetadataFromChunks(rawChunks);
+}
+
 function addLoraIfUnique(result: ParsedImageMetadata, lora: ExtractedLora): void {
   if (!lora.loraName || lora.loraName === 'None') return;
   const basename = cleanModelBasename(lora.loraName);
   const exists = result.loras.some(
-    (l) => cleanModelBasename(l.loraName).toLowerCase() === basename.toLowerCase() && l.nodeId === lora.nodeId
+    (l) =>
+      cleanModelBasename(l.loraName).toLowerCase() === basename.toLowerCase() &&
+      l.nodeId === lora.nodeId
   );
   if (!exists) {
     result.loras.push({
@@ -228,7 +237,9 @@ function addModelIfUnique(result: ParsedImageMetadata, model: ExtractedModelDep)
   if (!model.modelName || model.modelName === 'None') return;
   const basename = cleanModelBasename(model.modelName);
   const exists = result.models.some(
-    (m) => cleanModelBasename(m.modelName).toLowerCase() === basename.toLowerCase() && m.modelType === model.modelType
+    (m) =>
+      cleanModelBasename(m.modelName).toLowerCase() === basename.toLowerCase() &&
+      m.modelType === model.modelType
   );
   if (!exists) {
     result.models.push({
@@ -236,6 +247,121 @@ function addModelIfUnique(result: ParsedImageMetadata, model: ExtractedModelDep)
       modelName: basename,
     });
   }
+}
+
+/**
+ * Recursively resolves prompt text upstream through ComfyUI conditioning, switches,
+ * previews, string concatenations, and primitive string nodes (e.g. Krea2_turbo #30_6 -> #30_19).
+ */
+function resolvePromptTextFromNode(
+  graph: Record<string, any>,
+  nodeId: string,
+  visited = new Set<string>()
+): string | null {
+  if (!nodeId || visited.has(nodeId)) return null;
+  visited.add(nodeId);
+
+  const node = graph[nodeId];
+  if (!node || typeof node !== 'object') return null;
+
+  const classType = String(node.class_type || '');
+  const title = String(node._meta?.title || '').toLowerCase();
+  const inputs = node.inputs || {};
+
+  // 1. Never extract text through ConditioningZeroOut (e.g. Node #30_13 negative zero-out)
+  if (/ConditioningZeroOut/i.test(classType)) {
+    return null;
+  }
+
+  // 2. Ignore LLM System Prompt instruction blocks (e.g. Node #30_18 "Text String (System Prompt)")
+  if (title.includes('system prompt')) {
+    return null;
+  }
+
+  // 3. Handle ComfySwitchNode / boolean router nodes (e.g. Node #30_28 & #30_21)
+  if (/Switch/i.test(classType) || ('on_true' in inputs && 'on_false' in inputs)) {
+    let switchVal: boolean | null = null;
+    if (typeof inputs.switch === 'boolean') {
+      switchVal = inputs.switch;
+    } else if (Array.isArray(inputs.switch) && inputs.switch.length > 0) {
+      const swNode = graph[String(inputs.switch[0])];
+      if (typeof swNode?.inputs?.value === 'boolean') {
+        switchVal = swNode.inputs.value;
+      }
+    }
+
+    const branches =
+      switchVal === false
+        ? [inputs.on_false, inputs.on_true]
+        : [inputs.on_true, inputs.on_false];
+
+    for (const branch of branches) {
+      if (typeof branch === 'string' && branch.trim()) {
+        return branch.trim();
+      }
+      if (Array.isArray(branch) && branch.length > 0) {
+        const resolved = resolvePromptTextFromNode(graph, String(branch[0]), new Set(visited));
+        if (resolved && resolved.trim()) return resolved.trim();
+      }
+    }
+    return null;
+  }
+
+  // 4. Handle StringConcatenate nodes (e.g. Node #30_27 LoRA Trigger Word or #30_17 System+User Prompt)
+  if (/StringConcatenate|Concatenate/i.test(classType) || ('string_a' in inputs && 'string_b' in inputs)) {
+    const resolveSide = (val: any): string | null => {
+      if (typeof val === 'string') return val.trim() || null;
+      if (Array.isArray(val) && val.length > 0) {
+        return resolvePromptTextFromNode(graph, String(val[0]), new Set(visited));
+      }
+      return null;
+    };
+
+    const partA = resolveSide(inputs.string_a);
+    const partB = resolveSide(inputs.string_b);
+
+    // If this concatenation node is specifically appending the LoRA trigger word (Node #30_27),
+    // return the primary user prompt (partA) so the user's original prompt is displayed cleanly.
+    if (title.includes('trigger word') || title.includes('lora')) {
+      return partA || partB || null;
+    }
+
+    const nonEmpty = [partA, partB].filter((p): p is string => Boolean(p && p.trim()));
+    if (nonEmpty.length === 0) return null;
+    if (nonEmpty.length === 1) return nonEmpty[0];
+    const delim = typeof inputs.delimiter === 'string' ? inputs.delimiter : ' ';
+    return nonEmpty.join(delim).trim();
+  }
+
+  // 5. Direct scalar string inputs (e.g. Node #30_19 PrimitiveStringMultiline inputs.value, or CLIPTextEncode inputs.text)
+  for (const field of ['value', 'text', 'text_g', 'text_l', 'prompt', 'positive', 'string']) {
+    if (typeof inputs[field] === 'string' && inputs[field].trim().length > 0) {
+      return inputs[field].trim();
+    }
+  }
+
+  // 6. Follow upstream node links (e.g. CLIPTextEncode.inputs.text -> #30_28, PreviewAny.inputs.source -> #30_21, TextGenerate.inputs.prompt -> #30_17)
+  for (const linkField of [
+    'text',
+    'source',
+    'prompt',
+    'positive',
+    'conditioning',
+    'conditioning_1',
+    'conditioning_to',
+    'clip_text',
+    'string',
+  ]) {
+    const val = inputs[linkField];
+    if (Array.isArray(val) && val.length > 0) {
+      const resolved = resolvePromptTextFromNode(graph, String(val[0]), new Set(visited));
+      if (resolved && resolved.trim()) {
+        return resolved.trim();
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -279,11 +405,11 @@ function extractFromApiGraph(graph: Record<string, any>, result: ParsedImageMeta
         result.denoise = inputs.denoise;
         result.provenance.denoise = 'embedded_api';
       }
-      if (Array.isArray(inputs.positive) && typeof inputs.positive[0] === 'string') {
-        positiveNodeIds.add(inputs.positive[0]);
+      if (Array.isArray(inputs.positive) && inputs.positive.length > 0) {
+        positiveNodeIds.add(String(inputs.positive[0]));
       }
-      if (Array.isArray(inputs.negative) && typeof inputs.negative[0] === 'string') {
-        negativeNodeIds.add(inputs.negative[0]);
+      if (Array.isArray(inputs.negative) && inputs.negative.length > 0) {
+        negativeNodeIds.add(String(inputs.negative[0]));
       }
     }
 
@@ -298,7 +424,7 @@ function extractFromApiGraph(graph: Record<string, any>, result: ParsedImageMeta
     // Checkpoint / Diffusion / UNET Loaders
     if (/CheckpointLoader|UNETLoader|Eff\. Loader/i.test(classType)) {
       const ckpt = inputs.ckpt_name || inputs.unet_name || inputs.model_name;
-      if (typeof ckpt === 'string' && ckpt !== 'None') {
+      if (typeof ckpt === 'string' && ckpt !== 'None' && ckpt.trim() !== '') {
         if (!result.checkpointName) {
           result.checkpointName = cleanModelBasename(ckpt);
           result.provenance.checkpoint = 'embedded_api';
@@ -317,7 +443,7 @@ function extractFromApiGraph(graph: Record<string, any>, result: ParsedImageMeta
     // VAE Loader
     if (/VAELoader/i.test(classType) || typeof inputs.vae_name === 'string') {
       const vae = inputs.vae_name;
-      if (typeof vae === 'string' && vae !== 'None' && vae !== 'Baked VAE') {
+      if (typeof vae === 'string' && vae !== 'None' && vae !== 'Baked VAE' && vae.trim() !== '') {
         if (!result.vaeName) {
           result.vaeName = cleanModelBasename(vae);
           result.provenance.vae = 'embedded_api';
@@ -356,7 +482,7 @@ function extractFromApiGraph(graph: Record<string, any>, result: ParsedImageMeta
     }
     if (/CLIPLoader|DualCLIPLoader/i.test(classType)) {
       for (const k of ['clip_name', 'clip_name1', 'clip_name2']) {
-        if (typeof inputs[k] === 'string') {
+        if (typeof inputs[k] === 'string' && inputs[k].trim()) {
           addModelIfUnique(result, {
             modelName: inputs[k],
             modelType: 'clip',
@@ -370,7 +496,7 @@ function extractFromApiGraph(graph: Record<string, any>, result: ParsedImageMeta
     }
 
     // Standard & Multi-LoRA Loaders (LoraLoader, LoraLoaderModelOnly, Power Lora Loader, CR LoRA Stack)
-    if (typeof inputs.lora_name === 'string' && inputs.lora_name !== 'None') {
+    if (typeof inputs.lora_name === 'string' && inputs.lora_name !== 'None' && inputs.lora_name.trim()) {
       const modelStr = typeof inputs.strength_model === 'number' ? inputs.strength_model : 1.0;
       const clipStr =
         typeof inputs.strength_clip === 'number' ? inputs.strength_clip : modelStr;
@@ -390,7 +516,7 @@ function extractFromApiGraph(graph: Record<string, any>, result: ParsedImageMeta
     for (const [inputKey, inputVal] of Object.entries(inputs)) {
       if (/^lora_\d+$/i.test(inputKey) && inputVal && typeof inputVal === 'object') {
         const slot = inputVal as Record<string, any>;
-        if (slot.on !== false && typeof slot.lora === 'string' && slot.lora !== 'None') {
+        if (slot.on !== false && typeof slot.lora === 'string' && slot.lora !== 'None' && slot.lora.trim()) {
           const mStr = typeof slot.strength === 'number' ? slot.strength : 1.0;
           const cStr = typeof slot.strengthTwo === 'number' ? slot.strengthTwo : mStr;
           addLoraIfUnique(result, {
@@ -406,7 +532,7 @@ function extractFromApiGraph(graph: Record<string, any>, result: ParsedImageMeta
         }
       }
       const matchIdx = inputKey.match(/^lora_name_(\d+)$/i);
-      if (matchIdx && typeof inputVal === 'string' && inputVal !== 'None') {
+      if (matchIdx && typeof inputVal === 'string' && inputVal !== 'None' && inputVal.trim()) {
         const idx = matchIdx[1];
         const sw = inputs[`switch_${idx}`];
         if (sw !== 'Off' && sw !== false) {
@@ -427,45 +553,54 @@ function extractFromApiGraph(graph: Record<string, any>, result: ParsedImageMeta
     }
   }
 
-  // Extract positive and negative prompts from linked CLIPTextEncode nodes
-  const resolveTextFromNode = (id: string): string | null => {
-    const n = graph[id];
-    if (!n || !n.inputs) return null;
-    if (typeof n.inputs.text === 'string') return n.inputs.text;
-    if (typeof n.inputs.positive === 'string') return n.inputs.positive;
-    return null;
-  };
-
+  // 1. Resolve positive and negative prompts by tracing upstream from KSampler's positive/negative inputs
   for (const id of positiveNodeIds) {
-    const txt = resolveTextFromNode(id);
+    const txt = resolvePromptTextFromNode(graph, id);
     if (txt && !result.positivePrompt) {
       result.positivePrompt = txt;
       result.provenance.positivePrompt = 'embedded_api';
     }
   }
   for (const id of negativeNodeIds) {
-    const txt = resolveTextFromNode(id);
+    const txt = resolvePromptTextFromNode(graph, id);
     if (txt && !result.negativePrompt) {
       result.negativePrompt = txt;
       result.provenance.negativePrompt = 'embedded_api';
     }
   }
 
-  // Fallback scan over CLIPTextEncode nodes if links were indirect
+  // 2. Fallback: look for explicit "User Prompt" primitive string nodes (e.g. Node #30_19 in Krea2_turbo)
   if (!result.positivePrompt) {
     for (const [, node] of Object.entries(graph)) {
-      if (
-        node &&
-        /CLIPTextEncode/i.test(String(node.class_type)) &&
-        typeof node.inputs?.text === 'string' &&
-        node.inputs.text.trim().length > 0
-      ) {
-        if (!result.positivePrompt) {
-          result.positivePrompt = node.inputs.text;
-          result.provenance.positivePrompt = 'embedded_api';
-        } else if (!result.negativePrompt && node.inputs.text !== result.positivePrompt) {
-          result.negativePrompt = node.inputs.text;
-          result.provenance.negativePrompt = 'embedded_api';
+      if (!node || typeof node !== 'object') continue;
+      const title = String(node._meta?.title || '').toLowerCase();
+      const val = node.inputs?.value ?? node.inputs?.text ?? node.inputs?.string;
+      if (title.includes('user prompt') && typeof val === 'string' && val.trim().length > 0) {
+        result.positivePrompt = val.trim();
+        result.provenance.positivePrompt = 'embedded_api';
+        break;
+      }
+    }
+  }
+
+  // 3. Fallback scan over CLIPTextEncode and non-system PrimitiveStringMultiline nodes
+  if (!result.positivePrompt) {
+    for (const [nodeId, node] of Object.entries(graph)) {
+      if (!node || typeof node !== 'object') continue;
+      const classType = String(node.class_type || '');
+      const title = String(node._meta?.title || '').toLowerCase();
+      if (title.includes('system prompt')) continue;
+
+      if (/CLIPTextEncode|PrimitiveString/i.test(classType)) {
+        const resolved = resolvePromptTextFromNode(graph, nodeId);
+        if (resolved && resolved.trim().length > 0) {
+          if (!result.positivePrompt && !title.includes('negative')) {
+            result.positivePrompt = resolved.trim();
+            result.provenance.positivePrompt = 'embedded_api';
+          } else if (!result.negativePrompt && resolved.trim() !== result.positivePrompt) {
+            result.negativePrompt = resolved.trim();
+            result.provenance.negativePrompt = 'embedded_api';
+          }
         }
       }
     }
@@ -481,16 +616,17 @@ function extractFromVisualWorkflow(workflow: Record<string, any>, result: Parsed
     if (!node || typeof node !== 'object') continue;
     const nodeId = String(node.id ?? '');
     const nodeType = String(node.type || '');
+    const title = String(node.title || '').toLowerCase();
     const widgets = Array.isArray(node.widgets_values) ? node.widgets_values : [];
 
-    if (/CheckpointLoaderSimple|CheckpointLoader/i.test(nodeType) && typeof widgets[0] === 'string') {
-      if (!result.checkpointName) {
+    if (/CheckpointLoaderSimple|CheckpointLoader|UNETLoader/i.test(nodeType) && typeof widgets[0] === 'string') {
+      if (!result.checkpointName && widgets[0].trim()) {
         result.checkpointName = cleanModelBasename(widgets[0]);
         result.provenance.checkpoint = 'visual_workflow';
       }
       addModelIfUnique(result, {
         modelName: widgets[0],
-        modelType: 'checkpoint',
+        modelType: /UNET/i.test(nodeType) ? 'diffusion' : 'checkpoint',
         modelHash: null,
         nodeId,
         nodeType,
@@ -548,7 +684,6 @@ function extractFromVisualWorkflow(workflow: Record<string, any>, result: Parsed
     }
 
     if (/KSampler/i.test(nodeType) && widgets.length >= 6) {
-      // Standard KSampler widgets: [seed, control_after_generate, steps, cfg, sampler_name, scheduler, denoise]
       if (result.seed === null && (typeof widgets[0] === 'number' || typeof widgets[0] === 'string')) {
         result.seed = String(widgets[0]);
         result.provenance.seed = 'visual_workflow';
@@ -575,8 +710,14 @@ function extractFromVisualWorkflow(workflow: Record<string, any>, result: Parsed
       }
     }
 
+    if (/PrimitiveString/i.test(nodeType) && typeof widgets[0] === 'string' && widgets[0].trim()) {
+      if (title.includes('user prompt') && !result.positivePrompt) {
+        result.positivePrompt = widgets[0].trim();
+        result.provenance.positivePrompt = 'visual_workflow';
+      }
+    }
+
     if (/CLIPTextEncode/i.test(nodeType) && typeof widgets[0] === 'string' && widgets[0].trim()) {
-      const title = String(node.title || '').toLowerCase();
       if (title.includes('neg') && !result.negativePrompt) {
         result.negativePrompt = widgets[0];
         result.provenance.negativePrompt = 'visual_workflow';

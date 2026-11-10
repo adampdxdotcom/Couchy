@@ -13,6 +13,13 @@ Couchy runs on a **single unified Node.js/TypeScript + Express + SQLite (`better
 
 ## 2. Docker Compose Deployment
 
+Copy `example.env` to `.env` and adjust any paths or URLs as needed:
+
+```bash
+cp example.env .env
+docker compose up -d --build
+```
+
 ```yaml
 services:
   comfyui-gallery:
@@ -21,17 +28,10 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
-    environment:
-      PORT: "8080"
-      COMFYUI_URL: "http://comfyui:8188"
-      COMFYUI_OUTPUT_DIR: "/data/output"
-      COMFYUI_MODELS_DIR: "/data/models"
-      DATABASE_PATH: "/app/data/gallery.db"
-      THUMBNAIL_PATH: "/app/data/thumbnails"
-      BACKUP_PATH: "/app/data/backups"
-      DOWNLOADS_DIR: "/downloads"
-      CIVITAI_API_KEY: "${CIVITAI_API_KEY:-}"
-      HF_API_TOKEN: "${HF_API_TOKEN:-}"
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - /path/to/comfyui/output:/data/output:ro
       - /path/to/comfyui/models:/data/models:ro
@@ -39,12 +39,13 @@ services:
       - ./model-downloads:/downloads
 ```
 
-## 3. Environment Variables
+## 3. Environment Variables (`example.env` -> `.env`)
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PORT` | `3000` (dev) / `8080` (Docker) | HTTP server listen port |
+| `PORT` | `8080` (Docker) / `3000` (dev) | HTTP server listen port |
 | `COMFYUI_URL` | `http://comfyui:8188` | ComfyUI HTTP/WebSocket endpoint (LAN or Docker host) |
+| `LM_STUDIO_URL` | `http://host.docker.internal:1234/v1` | LM Studio OpenAI-compatible endpoint for Photo Set Agent |
 | `COMFYUI_OUTPUT_DIR` | `/data/output` | Read-only mounted ComfyUI output directory |
 | `COMFYUI_MODELS_DIR` | `/data/models` | Read-only mounted ComfyUI models directory |
 | `DATABASE_PATH` | `/app/data/gallery.db` | Persistent SQLite database path |

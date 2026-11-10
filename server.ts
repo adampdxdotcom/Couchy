@@ -3,7 +3,11 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { appConfig } from './src/server/config.ts';
 import { runMigrations } from './src/server/db.ts';
-import { runDirectoryScan, startFilesystemWatcher } from './src/server/services/scannerService.ts';
+import {
+  backfillMissingImagePrompts,
+  runDirectoryScan,
+  startFilesystemWatcher,
+} from './src/server/services/scannerService.ts';
 import { syncModelInventory } from './src/server/services/comfyuiService.ts';
 import { imagesRouter } from './src/server/routes/imagesRoutes.ts';
 import { charactersRouter } from './src/server/routes/charactersRoutes.ts';
@@ -12,8 +16,9 @@ import { systemRouter } from './src/server/routes/systemRoutes.ts';
 import { generationRouter } from './src/server/routes/generationRoutes.ts';
 
 async function startServer() {
-  // 1. Run SQLite schema migrations
+  // 1. Run SQLite schema migrations & backfill any unextracted prompts
   runMigrations();
+  backfillMissingImagePrompts();
 
   // 2. Start filesystem monitoring and trigger initial non-blocking scan of mounted output folder
   startFilesystemWatcher();

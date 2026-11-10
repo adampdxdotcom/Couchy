@@ -117,11 +117,23 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
   };
 
   const getFieldsForNode = (nodeId: string | null): string[] => {
-    if (!nodeId) return ['text', 'seed', 'noise_seed', 'aspect_ratio', 'megapixels', 'width', 'height'];
+    if (!nodeId) {
+      return [
+        'value',
+        'string_b',
+        'text',
+        'seed',
+        'noise_seed',
+        'aspect_ratio',
+        'megapixels',
+        'unet_name',
+        'ckpt_name',
+      ];
+    }
     const found = nodes.find((n) => n.nodeId === nodeId);
     return found && found.inputFields.length > 0
       ? found.inputFields
-      : ['text', 'aspect_ratio', 'megapixels'];
+      : ['value', 'string_b', 'text', 'aspect_ratio', 'megapixels'];
   };
 
   const toggleLoraNode = (nodeId: string) => {
@@ -144,7 +156,7 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                 ComfyUI Workflow Node Adaptation & Mapping
               </h2>
               <p className="text-xs text-zinc-400">
-                Auto-detect or manually bind prompt, seed, aspect ratio, and LoRA slots for any workflow
+                Auto-detect or manually bind User Prompt (#30_19), Trigger Word (#30_27), Power Lora Loader (#50), Resolution (#49), and KSampler (#30_3)
               </p>
             </div>
           </div>
@@ -216,7 +228,7 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                     type="text"
                     value={newWfName}
                     onChange={(e) => setNewWfName(e.target.value)}
-                    placeholder="e.g., My Preferred SDXL / Flux Character Workflow"
+                    placeholder="e.g., Krea2_turbo Character Studio Workflow"
                     className="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-100 focus:outline-none focus:border-indigo-500"
                   />
                 </div>
@@ -228,7 +240,7 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                     type="text"
                     value={newWfDesc}
                     onChange={(e) => setNewWfDesc(e.target.value)}
-                    placeholder="Notes on checkpoint, sampler, or LoRA setup"
+                    placeholder="Notes on diffusion model, sampler, or LoRA setup"
                     className="w-full px-3 py-2 text-sm bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-100 focus:outline-none focus:border-indigo-500"
                   />
                 </div>
@@ -267,7 +279,7 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                   rows={12}
                   value={newWfJson}
                   onChange={(e) => setNewWfJson(e.target.value)}
-                  placeholder='{"1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "..."}}, ...}'
+                  placeholder='{"49": {"class_type": "ResolutionSelector", ...}, "50": {"class_type": "Power Lora Loader (rgthree)", ...}}'
                   className="w-full px-3 py-2 text-xs font-mono bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-100 focus:outline-none focus:border-indigo-500"
                 />
               </div>
@@ -337,11 +349,11 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
 
                   {/* Core Parameter Node Mapping Grid */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Positive Prompt */}
+                    {/* Positive / User Prompt (e.g. Node #30_19) */}
                     <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-lg space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-semibold text-zinc-200">
-                          Positive Prompt Node
+                          User Prompt Node (e.g. #30_19)
                         </span>
                         <span className="text-xs text-zinc-400 font-mono">
                           {mapping.positivePromptNodeId
@@ -354,12 +366,20 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                           <label className="block text-[11px] text-zinc-400 mb-1">Node</label>
                           <select
                             value={mapping.positivePromptNodeId || ''}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const nextId = e.target.value || null;
+                              const fields = getFieldsForNode(nextId);
+                              const nextField = fields.includes('value')
+                                ? 'value'
+                                : fields.includes('text')
+                                ? 'text'
+                                : fields[0] || 'value';
                               setMapping({
                                 ...mapping,
-                                positivePromptNodeId: e.target.value || null,
-                              })
-                            }
+                                positivePromptNodeId: nextId,
+                                positivePromptField: nextField,
+                              });
+                            }}
                             className="w-full px-2.5 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded text-zinc-100"
                           >
                             <option value="">-- None --</option>
@@ -389,15 +409,15 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Negative Prompt */}
+                    {/* LoRA Trigger Word Node (e.g. Node #30_27 string_b) */}
                     <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-lg space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-semibold text-zinc-200">
-                          Negative Prompt Node
+                          LoRA Trigger Word Node (e.g. #30_27)
                         </span>
                         <span className="text-xs text-zinc-400 font-mono">
-                          {mapping.negativePromptNodeId
-                            ? `Node #${mapping.negativePromptNodeId}`
+                          {mapping.triggerWordNodeId
+                            ? `Node #${mapping.triggerWordNodeId}`
                             : 'Unmapped'}
                         </span>
                       </div>
@@ -405,13 +425,21 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                         <div className="col-span-2">
                           <label className="block text-[11px] text-zinc-400 mb-1">Node</label>
                           <select
-                            value={mapping.negativePromptNodeId || ''}
-                            onChange={(e) =>
+                            value={mapping.triggerWordNodeId || ''}
+                            onChange={(e) => {
+                              const nextId = e.target.value || null;
+                              const fields = getFieldsForNode(nextId);
+                              const nextField = fields.includes('string_b')
+                                ? 'string_b'
+                                : fields.includes('value')
+                                ? 'value'
+                                : fields[0] || 'string_b';
                               setMapping({
                                 ...mapping,
-                                negativePromptNodeId: e.target.value || null,
-                              })
-                            }
+                                triggerWordNodeId: nextId,
+                                triggerWordField: nextField,
+                              });
+                            }}
                             className="w-full px-2.5 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded text-zinc-100"
                           >
                             <option value="">-- None --</option>
@@ -425,13 +453,20 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                         <div>
                           <label className="block text-[11px] text-zinc-400 mb-1">Input Field</label>
                           <select
-                            value={mapping.negativePromptField}
+                            value={mapping.triggerWordField || 'string_b'}
                             onChange={(e) =>
-                              setMapping({ ...mapping, negativePromptField: e.target.value })
+                              setMapping({ ...mapping, triggerWordField: e.target.value })
                             }
                             className="w-full px-2.5 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded text-zinc-100 font-mono"
                           >
-                            {getFieldsForNode(mapping.negativePromptNodeId).map((f) => (
+                            {Array.from(
+                              new Set([
+                                ...getFieldsForNode(mapping.triggerWordNodeId),
+                                'string_b',
+                                'string_a',
+                                'value',
+                              ])
+                            ).map((f) => (
                               <option key={f} value={f}>
                                 {f}
                               </option>
@@ -441,11 +476,11 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Seed & KSampler Node */}
+                    {/* Seed & KSampler Node (e.g. Node #30_3) */}
                     <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-lg space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-semibold text-zinc-200">
-                          Seed / Sampler Node
+                          Seed / KSampler Node (e.g. #30_3)
                         </span>
                         <span className="text-xs text-zinc-400 font-mono">
                           {mapping.seedNodeId ? `Node #${mapping.seedNodeId}` : 'Unmapped'}
@@ -486,11 +521,11 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Resolution Node: Aspect Ratio & Megapixels */}
+                    {/* Resolution Node: Aspect Ratio & Megapixels (e.g. Node #49) */}
                     <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-lg space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-semibold text-zinc-200">
-                          Resolution Node (Aspect Ratio & Megapixels)
+                          Resolution Selector Node (e.g. #49)
                         </span>
                         <span className="text-xs text-zinc-400 font-mono">
                           {mapping.latentNodeId ? `Node #${mapping.latentNodeId}` : 'Unmapped'}
@@ -590,41 +625,112 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Checkpoint & LoRA Loader Mapping */}
+                  {/* Diffusion Model (#30_10), Enable LoRA Switch (#30_23), and Power Lora Loader (#50) */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-lg space-y-2">
-                      <label className="block text-xs font-semibold text-zinc-200">
-                        Checkpoint / Base Model Node
-                      </label>
-                      <select
-                        value={mapping.checkpointNodeId || ''}
-                        onChange={(e) =>
-                          setMapping({ ...mapping, checkpointNodeId: e.target.value || null })
-                        }
-                        className="w-full px-2.5 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded text-zinc-100"
-                      >
-                        <option value="">-- Auto / Keep Workflow Default --</option>
-                        {nodes.map((n) => (
-                          <option key={n.nodeId} value={n.nodeId}>
-                            #{n.nodeId} · {n.title} ({n.classType})
-                          </option>
-                        ))}
-                      </select>
-                      <p className="text-[11px] text-zinc-400">
-                        Used when overriding checkpoint or chaining extra character LoRAs dynamically.
-                      </p>
+                    <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-lg space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-zinc-200">
+                          Diffusion Model / Checkpoint Node (e.g. #30_10)
+                        </span>
+                        <span className="text-xs text-zinc-400 font-mono">
+                          {mapping.checkpointNodeId ? `Node #${mapping.checkpointNodeId}` : 'Default'}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="col-span-2">
+                          <label className="block text-[11px] text-zinc-400 mb-1">Node</label>
+                          <select
+                            value={mapping.checkpointNodeId || ''}
+                            onChange={(e) => {
+                              const nextId = e.target.value || null;
+                              const fields = getFieldsForNode(nextId);
+                              const nextField = fields.includes('unet_name')
+                                ? 'unet_name'
+                                : fields.includes('ckpt_name')
+                                ? 'ckpt_name'
+                                : mapping.checkpointField || 'unet_name';
+                              setMapping({
+                                ...mapping,
+                                checkpointNodeId: nextId,
+                                checkpointField: nextField,
+                              });
+                            }}
+                            className="w-full px-2.5 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded text-zinc-100"
+                          >
+                            <option value="">-- Auto / Keep Workflow Default --</option>
+                            {nodes.map((n) => (
+                              <option key={n.nodeId} value={n.nodeId}>
+                                #{n.nodeId} · {n.title} ({n.classType})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-zinc-400 mb-1">Model Field</label>
+                          <select
+                            value={mapping.checkpointField || 'unet_name'}
+                            onChange={(e) =>
+                              setMapping({ ...mapping, checkpointField: e.target.value })
+                            }
+                            className="w-full px-2.5 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded text-zinc-100 font-mono"
+                          >
+                            {Array.from(
+                              new Set([
+                                ...getFieldsForNode(mapping.checkpointNodeId),
+                                'unet_name',
+                                'ckpt_name',
+                              ])
+                            ).map((f) => (
+                              <option key={f} value={f}>
+                                {f}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Enable LoRA Boolean Node (e.g. #30_23) */}
+                      <div className="pt-2 border-t border-zinc-800/80 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-medium text-zinc-300">
+                            Enable LoRA Switch Node (e.g. #30_23 Boolean)
+                          </label>
+                          <span className="text-[11px] text-zinc-400 font-mono">
+                            {mapping.enableLoraNodeId ? `#${mapping.enableLoraNodeId}` : 'None'}
+                          </span>
+                        </div>
+                        <select
+                          value={mapping.enableLoraNodeId || ''}
+                          onChange={(e) =>
+                            setMapping({
+                              ...mapping,
+                              enableLoraNodeId: e.target.value || null,
+                              enableLoraField: 'value',
+                            })
+                          }
+                          className="w-full px-2.5 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded text-zinc-100"
+                        >
+                          <option value="">-- None --</option>
+                          {nodes.map((n) => (
+                            <option key={n.nodeId} value={n.nodeId}>
+                              #{n.nodeId} · {n.title} ({n.classType})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
 
                     <div className="p-4 bg-zinc-900/50 border border-zinc-800 rounded-lg space-y-2">
                       <label className="block text-xs font-semibold text-zinc-200">
-                        LoRA Loader Nodes ({mapping.loraNodeIds.length} mapped)
+                        LoRA Loader Nodes (e.g. #50 Power Lora Loader · {mapping.loraNodeIds.length} mapped)
                       </label>
-                      <div className="max-h-28 overflow-y-auto space-y-1 pr-1">
+                      <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
                         {nodes.map((n) => {
                           const isChecked = mapping.loraNodeIds.includes(n.nodeId);
                           const isLikelyLora =
                             n.classType.toLowerCase().includes('lora') ||
-                            n.inputFields.includes('lora_name');
+                            n.inputFields.includes('lora_name') ||
+                            n.inputFields.includes('PowerLoraLoaderHeaderWidget');
                           if (!isLikelyLora && !isChecked) return null;
                           return (
                             <label
@@ -643,16 +749,13 @@ export const NodeMapperModal: React.FC<NodeMapperModalProps> = ({
                             </label>
                           );
                         })}
-                        {nodes.filter(
-                          (n) =>
-                            n.classType.toLowerCase().includes('lora') ||
-                            n.inputFields.includes('lora_name')
-                        ).length === 0 && (
-                          <p className="text-xs text-zinc-400">
-                            No explicit LoRA node in graph. Couchy will automatically inject a chained LoraLoader node after your Checkpoint node when a character LoRA is selected.
-                          </p>
-                        )}
                       </div>
+                      <p className="text-[11px] text-zinc-400">
+                        When mapped to <strong>Power Lora Loader (rgthree)</strong> (#50), Couchy injects{' '}
+                        <code className="text-indigo-300">lora_1</code>,{' '}
+                        <code className="text-indigo-300">lora_2</code>, ... with{' '}
+                        <code className="text-indigo-300">{`{ on: true, lora, strength }`}</code>.
+                      </p>
                     </div>
                   </div>
                 </>

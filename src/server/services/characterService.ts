@@ -56,6 +56,7 @@ function buildCharacterProfile(row: any): CharacterProfile {
         cl.lora_hash AS loraHash,
         cl.lora_category AS loraCategory,
         cl.appearance_label AS appearanceLabel,
+        COALESCE(cl.trigger_word, '') AS triggerWord,
         cl.notes,
         COALESCE(m.is_installed, 0) AS isInstalled
       FROM character_loras cl
@@ -204,8 +205,8 @@ export function mergeCharacters(targetCharacterId: number, sourceCharacterId: nu
     for (const l of sourceLoras) {
       db.prepare(
         `INSERT OR IGNORE INTO character_loras
-          (character_id, model_id, lora_name, lora_hash, lora_category, appearance_label, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+          (character_id, model_id, lora_name, lora_hash, lora_category, appearance_label, trigger_word, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(
         targetCharacterId,
         l.model_id,
@@ -213,6 +214,7 @@ export function mergeCharacters(targetCharacterId: number, sourceCharacterId: nu
         l.lora_hash,
         l.lora_category,
         l.appearance_label,
+        l.trigger_word || '',
         l.notes
       );
     }

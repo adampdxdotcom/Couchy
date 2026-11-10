@@ -67,6 +67,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   // Detail Edit & Link State
   const [linkLoraName, setLinkLoraName] = useState('');
   const [linkLoraAppearance, setLinkLoraAppearance] = useState('Default');
+  const [linkLoraTriggerWord, setLinkLoraTriggerWord] = useState('');
   const [linkLoraCategory, setLinkLoraCategory] = useState<LoraCategory>('character');
   const [linkWorkflowId, setLinkWorkflowId] = useState('');
   const [linkWorkflowRole, setLinkWorkflowRole] = useState('Canonical Portrait');
@@ -326,37 +327,64 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                 {selectedCharacter.loras.map((l) => (
                   <div
                     key={l.id}
-                    className="flex items-center justify-between bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2"
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 space-y-2"
                   >
-                    <div>
-                      <div className="font-medium text-zinc-200">{l.loraName}</div>
-                      <div className="text-[11px] text-zinc-400">
-                        Role: {l.appearanceLabel} · Type: {l.loraCategory} ·{' '}
-                        {l.isInstalled ? 'Installed' : 'Missing'}
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="font-medium text-zinc-200">{l.loraName}</div>
+                        <div className="text-[11px] text-zinc-400">
+                          Role: {l.appearanceLabel} · Type: {l.loraCategory} ·{' '}
+                          {l.isInstalled ? 'Installed' : 'Missing'}
+                        </div>
                       </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await api.unlinkLoraFromCharacter(selectedCharacter.id, l.id);
+                          await onRefresh();
+                        }}
+                        className="text-zinc-500 hover:text-rose-400 cursor-pointer"
+                      >
+                        Unlink
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await api.unlinkLoraFromCharacter(selectedCharacter.id, l.id);
-                        await onRefresh();
-                      }}
-                      className="text-zinc-500 hover:text-rose-400 cursor-pointer"
-                    >
-                      Unlink
-                    </button>
+
+                    {/* Editable Trigger Word for Node #30_27 */}
+                    <div className="flex items-center gap-2 pt-1 border-t border-zinc-900">
+                      <span className="text-[11px] text-zinc-400 whitespace-nowrap">
+                        Trigger Word:
+                      </span>
+                      <input
+                        type="text"
+                        defaultValue={l.triggerWord || ''}
+                        placeholder="e.g. xmelx (injected into Node #30_27)"
+                        onBlur={async (e) => {
+                          const nextTrig = e.target.value.trim();
+                          if (nextTrig === (l.triggerWord || '')) return;
+                          await api.linkLoraToCharacter(selectedCharacter.id, {
+                            loraName: l.loraName,
+                            appearanceLabel: l.appearanceLabel,
+                            triggerWord: nextTrig,
+                            loraCategory: l.loraCategory,
+                            notes: l.notes,
+                          });
+                          await onRefresh();
+                        }}
+                        className="flex-1 px-2 py-1 text-xs font-mono bg-zinc-900 border border-zinc-800 rounded text-indigo-200 focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
               <input
                 type="text"
                 list="known-loras-datalist"
                 value={linkLoraName}
                 onChange={(e) => setLinkLoraName(e.target.value)}
-                placeholder="LoRA filename..."
+                placeholder="LoRA filename (e.g. char_v1.safetensors)..."
                 className="px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
               />
               <datalist id="known-loras-datalist">
@@ -364,6 +392,13 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                   <option key={l.filename} value={l.filename} />
                 ))}
               </datalist>
+              <input
+                type="text"
+                value={linkLoraTriggerWord}
+                onChange={(e) => setLinkLoraTriggerWord(e.target.value)}
+                placeholder="Trigger Word (e.g. xmelx for Node #30_27)"
+                className="px-2.5 py-1.5 font-mono bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+              />
               <input
                 type="text"
                 value={linkLoraAppearance}
@@ -390,9 +425,11 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                     await api.linkLoraToCharacter(selectedCharacter.id, {
                       loraName: linkLoraName.trim(),
                       appearanceLabel: linkLoraAppearance.trim() || 'Default',
+                      triggerWord: linkLoraTriggerWord.trim(),
                       loraCategory: linkLoraCategory,
                     });
                     setLinkLoraName('');
+                    setLinkLoraTriggerWord('');
                     await onRefresh();
                   }}
                   className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded cursor-pointer"

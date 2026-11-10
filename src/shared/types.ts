@@ -158,6 +158,7 @@ export interface CharacterProfile {
     loraHash: string | null;
     loraCategory: LoraCategory;
     appearanceLabel: string;
+    triggerWord: string;
     notes: string;
     isInstalled: boolean;
   }[];
@@ -326,6 +327,8 @@ export interface WorkflowNodeMapping {
   positivePromptField: string;
   negativePromptNodeId: string | null;
   negativePromptField: string;
+  triggerWordNodeId: string | null;
+  triggerWordField: string;
   seedNodeId: string | null;
   seedField: string;
   stepsNodeId: string | null;
@@ -338,6 +341,9 @@ export interface WorkflowNodeMapping {
   heightField: string;
   batchSizeField: string;
   checkpointNodeId: string | null;
+  checkpointField: string;
+  enableLoraNodeId: string | null;
+  enableLoraField: string;
   loraNodeIds: string[];
   updatedAt?: string;
 }
@@ -346,6 +352,7 @@ export interface GenerationLoraSelection {
   loraName: string;
   modelStrength: number;
   clipStrength: number;
+  triggerWord?: string;
   appearanceLabel?: string;
 }
 

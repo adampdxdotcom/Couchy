@@ -6,7 +6,7 @@ import type {
 } from '../../shared/types.ts';
 
 /**
- * Computes pixel width & height (multiples of 64) from an aspect ratio string (e.g. "3:4") and megapixels (0.1 - 10.0).
+ * Computes pixel width & height (multiples of 64) from an aspect ratio string (e.g. "2:3 (Portrait Photo)") and megapixels (0.1 - 10.0).
  */
 export function computeDimensionsFromMegapixels(
   aspectRatio: string,
@@ -93,7 +93,7 @@ export function extractWorkflowNodeSlots(apiGraph: Record<string, any>): Workflo
 }
 
 /**
- * Traces an upstream link [nodeId, slotIdx] to find a text-encoding node if connected via conditioning utilities.
+ * Traces an upstream link [nodeId, slotIdx] to find a text-encoding or primitive string node.
  */
 function tracePromptNode(
   apiGraph: Record<string, any>,
@@ -107,7 +107,17 @@ function tracePromptNode(
 
   const node = apiGraph[targetId];
   if (!node || typeof node !== 'object') return null;
+  const classType = String(node.class_type || '');
+  const title = String(node._meta?.title || '').toLowerCase();
   const inputs = node.inputs || {};
+
+  // Check if this is an explicit user prompt primitive string
+  if (
+    (classType.includes('PrimitiveString') || typeof inputs.value === 'string') &&
+    (title.includes('user prompt') || (!title.includes('system') && typeof inputs.value === 'string'))
+  ) {
+    return { nodeId: targetId, field: 'value' };
+  }
 
   for (const candidateField of ['text', 'text_g', 'text_l', 'prompt', 'positive', 'string']) {
     if (typeof inputs[candidateField] === 'string') {
@@ -115,7 +125,18 @@ function tracePromptNode(
     }
   }
 
-  for (const upstreamKey of ['conditioning', 'conditioning_1', 'conditioning_to', 'clip_text']) {
+  // Traverse upstream through switches, previews, concatenations, and conditioning nodes
+  for (const upstreamKey of [
+    'text',
+    'on_false',
+    'on_true',
+    'source',
+    'string_a',
+    'conditioning',
+    'conditioning_1',
+    'conditioning_to',
+    'clip_text',
+  ]) {
     if (Array.isArray(inputs[upstreamKey])) {
       const found = tracePromptNode(apiGraph, inputs[upstreamKey], visited);
       if (found) return found;
@@ -126,15 +147,16 @@ function tracePromptNode(
 }
 
 /**
- * Automatically detects node mappings for any standard or custom ComfyUI API workflow,
- * prioritizing dedicated aspect_ratio + megapixels resolution nodes.
+ * Automatically detects node mappings for Krea2_turbo and any standard or custom ComfyUI API workflow.
  */
 export function autoDetectWorkflowMapping(
   workflowId: number,
   apiGraph: Record<string, any>
 ): WorkflowNodeMapping {
   let positivePromptNodeId: string | null = null;
-  let positivePromptField = 'text';
+  let positivePromptField = 'value';
+  let triggerWordNodeId: string | null = null;
+  let triggerWordField = 'string_b';
   let negativePromptNodeId: string | null = null;
   let negativePromptField = 'text';
   let seedNodeId: string | null = null;
@@ -149,11 +171,15 @@ export function autoDetectWorkflowMapping(
   let heightField = 'height';
   let batchSizeField = 'batch_size';
   let checkpointNodeId: string | null = null;
+  let checkpointField = 'unet_name';
   const loraNodeIds: string[] = [];
+  let enableLoraNodeId: string | null = null;
+  let enableLoraField = 'value';
 
-  // 1. Scan for dedicated Resolution / Megapixel + Aspect Ratio nodes first
+  // 1. Scan for dedicated ResolutionSelector / Megapixel + Aspect Ratio nodes first (e.g. Node #49)
   for (const [nodeId, node] of Object.entries(apiGraph)) {
     if (!node || typeof node !== 'object') continue;
+    const classType = String(node.class_type || '');
     const inputs = node.inputs || {};
     const inputKeys = Object.keys(inputs);
 
@@ -166,7 +192,7 @@ export function autoDetectWorkflowMapping(
       )
     );
 
-    if (detectedArField || detectedMpField) {
+    if (classType === 'ResolutionSelector' || detectedArField || detectedMpField) {
       latentNodeId = nodeId;
       if (detectedArField) aspectRatioField = detectedArField;
       if (detectedMpField) megapixelsField = detectedMpField;
@@ -174,7 +200,45 @@ export function autoDetectWorkflowMapping(
     }
   }
 
-  // 2. Scan for KSampler / Sampler / RandomNoise nodes
+  // 2. Scan for explicit Krea2_turbo / PrimitiveString / Trigger Word / Enable LoRA nodes
+  for (const [nodeId, node] of Object.entries(apiGraph)) {
+    if (!node || typeof node !== 'object') continue;
+    const classType = String(node.class_type || '');
+    const title = String(node._meta?.title || classType).toLowerCase();
+    const inputs = node.inputs || {};
+
+    // User Prompt node (e.g. Node "30_19" PrimitiveStringMultiline)
+    if (
+      !positivePromptNodeId &&
+      (classType.includes('PrimitiveString') || typeof inputs.value === 'string') &&
+      title.includes('user prompt')
+    ) {
+      positivePromptNodeId = nodeId;
+      positivePromptField = 'value';
+    }
+
+    // Trigger Word node (e.g. Node "30_27" StringConcatenate with title "Concatenate Text (LoRA Trigger Word)")
+    if (
+      !triggerWordNodeId &&
+      (classType === 'StringConcatenate' || 'string_b' in inputs) &&
+      (title.includes('trigger') || title.includes('lora'))
+    ) {
+      triggerWordNodeId = nodeId;
+      triggerWordField = 'string_b' in inputs ? 'string_b' : 'value';
+    }
+
+    // Enable LoRA boolean switch (e.g. Node "30_23" PrimitiveBoolean with title "Boolean (Enable LoRA?)")
+    if (
+      !enableLoraNodeId &&
+      (classType === 'PrimitiveBoolean' || typeof inputs.value === 'boolean') &&
+      title.includes('lora')
+    ) {
+      enableLoraNodeId = nodeId;
+      enableLoraField = 'value';
+    }
+  }
+
+  // 3. Scan for KSampler / Sampler / RandomNoise nodes (e.g. Node "30_3")
   for (const [nodeId, node] of Object.entries(apiGraph)) {
     if (!node || typeof node !== 'object') continue;
     const classType = String(node.class_type || '');
@@ -186,7 +250,7 @@ export function autoDetectWorkflowMapping(
       typeof inputs.seed === 'number' ||
       typeof inputs.noise_seed === 'number'
     ) {
-      if (!seedNodeId) {
+      if (!seedNodeId && (classType.includes('KSampler') || typeof inputs.seed === 'number')) {
         seedNodeId = nodeId;
         seedField = typeof inputs.noise_seed === 'number' ? 'noise_seed' : 'seed';
       }
@@ -218,7 +282,7 @@ export function autoDetectWorkflowMapping(
     }
   }
 
-  // 3. Scan all nodes for fallbacks, checkpoints, LoRAs, and latent dimensions
+  // 4. Scan all nodes for Checkpoints/UNETs, Power Lora Loader / LoraLoaders, and fallbacks
   const clipEncodeCandidates: { nodeId: string; title: string; field: string; text: string }[] = [];
 
   for (const [nodeId, node] of Object.entries(apiGraph)) {
@@ -229,14 +293,20 @@ export function autoDetectWorkflowMapping(
 
     if (
       !checkpointNodeId &&
-      (classType.includes('CheckpointLoader') ||
-        classType.includes('UNETLoader') ||
+      (classType.includes('UNETLoader') ||
+        classType.includes('CheckpointLoader') ||
+        typeof inputs.unet_name === 'string' ||
         typeof inputs.ckpt_name === 'string')
     ) {
       checkpointNodeId = nodeId;
+      checkpointField = 'unet_name' in inputs ? 'unet_name' : 'ckpt_name';
     }
 
-    if (classType.toLowerCase().includes('lora') && typeof inputs.lora_name === 'string') {
+    if (
+      classType.toLowerCase().includes('power lora loader') ||
+      'PowerLoraLoaderHeaderWidget' in inputs ||
+      (classType.toLowerCase().includes('lora') && typeof inputs.lora_name === 'string')
+    ) {
       loraNodeIds.push(nodeId);
     }
 
@@ -300,6 +370,8 @@ export function autoDetectWorkflowMapping(
     isCustomMapped: false,
     positivePromptNodeId,
     positivePromptField,
+    triggerWordNodeId,
+    triggerWordField,
     negativePromptNodeId,
     negativePromptField,
     seedNodeId,
@@ -314,7 +386,10 @@ export function autoDetectWorkflowMapping(
     heightField,
     batchSizeField,
     checkpointNodeId,
+    checkpointField,
     loraNodeIds,
+    enableLoraNodeId,
+    enableLoraField,
   };
 }
 
@@ -334,7 +409,9 @@ export function getWorkflowMapping(workflowId: number): {
         workflowId,
         isCustomMapped: false,
         positivePromptNodeId: null,
-        positivePromptField: 'text',
+        positivePromptField: 'value',
+        triggerWordNodeId: null,
+        triggerWordField: 'string_b',
         negativePromptNodeId: null,
         negativePromptField: 'text',
         seedNodeId: null,
@@ -349,7 +426,10 @@ export function getWorkflowMapping(workflowId: number): {
         heightField: 'height',
         batchSizeField: 'batch_size',
         checkpointNodeId: null,
+        checkpointField: 'unet_name',
         loraNodeIds: [],
+        enableLoraNodeId: null,
+        enableLoraField: 'value',
       },
       nodes: [],
       hasValidApiGraph: false,
@@ -370,7 +450,7 @@ export function getWorkflowMapping(workflowId: number): {
   let parsedLoraIds: string[] = autoMapping.loraNodeIds;
   try {
     const arr = JSON.parse(savedRow.lora_node_ids_json || '[]');
-    if (Array.isArray(arr)) parsedLoraIds = arr.map(String);
+    if (Array.isArray(arr) && arr.length > 0) parsedLoraIds = arr.map(String);
   } catch {
     // ignore
   }
@@ -381,6 +461,8 @@ export function getWorkflowMapping(workflowId: number): {
       isCustomMapped: true,
       positivePromptNodeId: savedRow.positive_prompt_node_id ?? autoMapping.positivePromptNodeId,
       positivePromptField: savedRow.positive_prompt_field || autoMapping.positivePromptField,
+      triggerWordNodeId: savedRow.trigger_word_node_id ?? autoMapping.triggerWordNodeId,
+      triggerWordField: savedRow.trigger_word_field || autoMapping.triggerWordField,
       negativePromptNodeId: savedRow.negative_prompt_node_id ?? autoMapping.negativePromptNodeId,
       negativePromptField: savedRow.negative_prompt_field || autoMapping.negativePromptField,
       seedNodeId: savedRow.seed_node_id ?? autoMapping.seedNodeId,
@@ -395,7 +477,10 @@ export function getWorkflowMapping(workflowId: number): {
       heightField: savedRow.height_field || autoMapping.heightField,
       batchSizeField: savedRow.batch_size_field || autoMapping.batchSizeField,
       checkpointNodeId: savedRow.checkpoint_node_id ?? autoMapping.checkpointNodeId,
+      checkpointField: savedRow.checkpoint_field || autoMapping.checkpointField,
       loraNodeIds: parsedLoraIds,
+      enableLoraNodeId: savedRow.enable_lora_node_id ?? autoMapping.enableLoraNodeId,
+      enableLoraField: savedRow.enable_lora_field || autoMapping.enableLoraField,
       updatedAt: savedRow.updated_at,
     },
     nodes,
@@ -422,15 +507,19 @@ export function saveWorkflowMapping(
     `INSERT INTO workflow_mappings (
       workflow_id,
       positive_prompt_node_id, positive_prompt_field,
+      trigger_word_node_id, trigger_word_field,
       negative_prompt_node_id, negative_prompt_field,
       seed_node_id, seed_field,
       steps_node_id, cfg_node_id, sampler_node_id,
       latent_node_id, aspect_ratio_field, megapixels_field, width_field, height_field, batch_size_field,
-      checkpoint_node_id, lora_node_ids_json, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      checkpoint_node_id, checkpoint_field, lora_node_ids_json,
+      enable_lora_node_id, enable_lora_field, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     ON CONFLICT(workflow_id) DO UPDATE SET
       positive_prompt_node_id = excluded.positive_prompt_node_id,
       positive_prompt_field = excluded.positive_prompt_field,
+      trigger_word_node_id = excluded.trigger_word_node_id,
+      trigger_word_field = excluded.trigger_word_field,
       negative_prompt_node_id = excluded.negative_prompt_node_id,
       negative_prompt_field = excluded.negative_prompt_field,
       seed_node_id = excluded.seed_node_id,
@@ -445,16 +534,21 @@ export function saveWorkflowMapping(
       height_field = excluded.height_field,
       batch_size_field = excluded.batch_size_field,
       checkpoint_node_id = excluded.checkpoint_node_id,
+      checkpoint_field = excluded.checkpoint_field,
       lora_node_ids_json = excluded.lora_node_ids_json,
+      enable_lora_node_id = excluded.enable_lora_node_id,
+      enable_lora_field = excluded.enable_lora_field,
       updated_at = datetime('now')`
   ).run(
     workflowId,
     merged.positivePromptNodeId,
-    merged.positivePromptField,
+    merged.positivePromptField || 'value',
+    merged.triggerWordNodeId,
+    merged.triggerWordField || 'string_b',
     merged.negativePromptNodeId,
-    merged.negativePromptField,
+    merged.negativePromptField || 'text',
     merged.seedNodeId,
-    merged.seedField,
+    merged.seedField || 'seed',
     merged.stepsNodeId,
     merged.cfgNodeId,
     merged.samplerNodeId,
@@ -465,19 +559,28 @@ export function saveWorkflowMapping(
     merged.heightField || 'height',
     merged.batchSizeField || 'batch_size',
     merged.checkpointNodeId,
-    JSON.stringify(merged.loraNodeIds || [])
+    merged.checkpointField || 'unet_name',
+    JSON.stringify(merged.loraNodeIds || []),
+    merged.enableLoraNodeId,
+    merged.enableLoraField || 'value'
   );
 
   return getWorkflowMapping(workflowId).mapping;
 }
 
 /**
- * Compiles an executable ComfyUI API prompt payload by injecting prompt, negative prompt,
- * seed, aspect_ratio + megapixels, checkpoint, and 0..N character LoRAs into the mapped workflow graph.
+ * Compiles an executable ComfyUI API prompt payload by injecting:
+ * - Node #30_19 (User Prompt value)
+ * - Node #30_27 (LoRA Trigger Word string_b)
+ * - Node #50 (Power Lora Loader (rgthree) lora_1, lora_2, ...) & Node #30_23 (Enable LoRA boolean)
+ * - Node #49 (ResolutionSelector aspect_ratio & megapixels)
+ * - Node #30_3 (KSampler random 64-bit integer seed 1..10^15)
+ * - Node #30_10 (UNETLoader unet_name / CheckpointLoader ckpt_name)
  */
 export function compileWorkflowForGeneration(params: {
   workflowId: number;
   positivePrompt: string;
+  triggerWord?: string;
   negativePrompt: string;
   seed: string | number;
   aspectRatio: string;
@@ -496,31 +599,58 @@ export function compileWorkflowForGeneration(params: {
   const graph: Record<string, any> = JSON.parse(JSON.stringify(baseGraph));
   const { mapping } = getWorkflowMapping(params.workflowId);
 
-  // 1. Positive Prompt
+  // 1. Positive Prompt (e.g. Node #30_19 inputs["value"])
   if (mapping.positivePromptNodeId && graph[mapping.positivePromptNodeId]?.inputs) {
-    graph[mapping.positivePromptNodeId].inputs[mapping.positivePromptField || 'text'] =
-      params.positivePrompt;
+    const posNodeInputs = graph[mapping.positivePromptNodeId].inputs;
+    const posField =
+      mapping.positivePromptField && mapping.positivePromptField in posNodeInputs
+        ? mapping.positivePromptField
+        : 'value' in posNodeInputs
+        ? 'value'
+        : 'text';
+    posNodeInputs[posField] = params.positivePrompt;
   }
 
-  // 2. Negative Prompt
+  // 2. Character / LoRA Trigger Word (e.g. Node #30_27 inputs["string_b"])
+  const activeLoras = (params.loras || []).filter((l) => Boolean(l.loraName?.trim()));
+  const resolvedTriggerWord =
+    params.triggerWord !== undefined
+      ? String(params.triggerWord).trim()
+      : activeLoras
+          .map((l) => (l.triggerWord || '').trim())
+          .filter(Boolean)
+          .join(', ');
+
+  if (mapping.triggerWordNodeId && graph[mapping.triggerWordNodeId]?.inputs) {
+    const trigInputs = graph[mapping.triggerWordNodeId].inputs;
+    const trigField = mapping.triggerWordField || 'string_b';
+    trigInputs[trigField] = resolvedTriggerWord;
+  }
+
+  // 3. Negative Prompt (if mapped)
   if (mapping.negativePromptNodeId && graph[mapping.negativePromptNodeId]?.inputs) {
-    graph[mapping.negativePromptNodeId].inputs[mapping.negativePromptField || 'text'] =
-      params.negativePrompt;
+    const negInputs = graph[mapping.negativePromptNodeId].inputs;
+    const negField = mapping.negativePromptField || 'text';
+    if (typeof negInputs[negField] === 'string') {
+      negInputs[negField] = params.negativePrompt;
+    }
   }
 
-  // 3. Seed
-  const numericSeed = Number(params.seed) || Math.floor(Math.random() * 900000000000) + 100000;
+  // 4. Seed (Node #30_3 KSampler inputs["seed"] -> 64-bit safe integer 1..10^15)
+  const numericSeed =
+    Number(params.seed) > 0
+      ? Math.floor(Number(params.seed))
+      : Math.floor(Math.random() * 1e15) + 1;
   if (mapping.seedNodeId && graph[mapping.seedNodeId]?.inputs) {
     graph[mapping.seedNodeId].inputs[mapping.seedField || 'seed'] = numericSeed;
   }
 
-  // 4. Resolution Node: Aspect Ratio & Megapixels (0.1 - 10.0)
+  // 5. Resolution Selector Node (e.g. Node #49 inputs["aspect_ratio"] and inputs["megapixels"])
   if (mapping.latentNodeId && graph[mapping.latentNodeId]?.inputs) {
     const latentInputs = graph[mapping.latentNodeId].inputs;
     const arField = mapping.aspectRatioField || 'aspect_ratio';
     const mpField = mapping.megapixelsField || 'megapixels';
 
-    // Always set the mapped aspect_ratio and megapixels fields if present or if no width/height exist
     if (
       arField in latentInputs ||
       mpField in latentInputs ||
@@ -530,7 +660,6 @@ export function compileWorkflowForGeneration(params: {
       latentInputs[mpField] = Number(params.megapixels.toFixed(2));
     }
 
-    // Also update width/height if the node also exposes them (e.g. hybrid or standard EmptyLatentImage)
     const wField = mapping.widthField || 'width';
     const hField = mapping.heightField || 'height';
     if (wField in latentInputs && typeof latentInputs[wField] === 'number') {
@@ -539,27 +668,55 @@ export function compileWorkflowForGeneration(params: {
     if (hField in latentInputs && typeof latentInputs[hField] === 'number') {
       latentInputs[hField] = params.height;
     }
-    if (mapping.batchSizeField && latentInputs[mapping.batchSizeField] !== undefined) {
+    if (mapping.batchSizeField && typeof latentInputs[mapping.batchSizeField] === 'number') {
       latentInputs[mapping.batchSizeField] = 1;
     }
   }
 
-  // 5. Optional Checkpoint Override
+  // 6. Diffusion Model / Checkpoint Override (e.g. Node #30_10 UNETLoader inputs["unet_name"])
   if (
     params.checkpointName &&
     mapping.checkpointNodeId &&
     graph[mapping.checkpointNodeId]?.inputs
   ) {
     const ckptInputs = graph[mapping.checkpointNodeId].inputs;
-    if ('ckpt_name' in ckptInputs) ckptInputs.ckpt_name = params.checkpointName;
-    else if ('unet_name' in ckptInputs) ckptInputs.unet_name = params.checkpointName;
+    const ckptField = mapping.checkpointField || ('unet_name' in ckptInputs ? 'unet_name' : 'ckpt_name');
+    ckptInputs[ckptField] = params.checkpointName;
   }
 
-  // 6. LoRA Injection & Dynamic Multi-LoRA Chaining
-  const mappedLoraNodes = (mapping.loraNodeIds || []).filter((id) => Boolean(graph[id]?.inputs));
-  const activeLoras = (params.loras || []).filter((l) => Boolean(l.loraName?.trim()));
+  // 7. Enable LoRA Boolean Node (e.g. Node #30_23 inputs["value"] = activeLoras.length > 0)
+  if (mapping.enableLoraNodeId && graph[mapping.enableLoraNodeId]?.inputs) {
+    const enableField = mapping.enableLoraField || 'value';
+    graph[mapping.enableLoraNodeId].inputs[enableField] = activeLoras.length > 0;
+  }
 
-  if (activeLoras.length === 0) {
+  // 8. LoRA Injection (Supports Power Lora Loader (rgthree) Node #50 AND standard LoraLoader chaining)
+  const mappedLoraNodes = (mapping.loraNodeIds || []).filter((id) => Boolean(graph[id]?.inputs));
+
+  // Check if any mapped LoRA node is a Power Lora Loader (rgthree)
+  const powerLoraNodeId = mappedLoraNodes.find((id) => {
+    const n = graph[id];
+    const ct = String(n?.class_type || '').toLowerCase();
+    return ct.includes('power lora loader') || Boolean(n?.inputs?.PowerLoraLoaderHeaderWidget);
+  });
+
+  if (powerLoraNodeId) {
+    const powerInputs = graph[powerLoraNodeId].inputs;
+    // Remove any pre-existing lora_1, lora_2, ... entries first
+    for (const key of Object.keys(powerInputs)) {
+      if (/^lora_\d+$/i.test(key)) {
+        delete powerInputs[key];
+      }
+    }
+    // Inject active LoRAs as lora_1, lora_2, ...
+    activeLoras.forEach((lora, idx) => {
+      powerInputs[`lora_${idx + 1}`] = {
+        on: true,
+        lora: lora.loraName,
+        strength: Number(lora.modelStrength ?? 1.0),
+      };
+    });
+  } else if (activeLoras.length === 0) {
     for (const nodeId of mappedLoraNodes) {
       const inputs = graph[nodeId].inputs;
       if ('strength_model' in inputs) inputs.strength_model = 0;
@@ -606,36 +763,6 @@ export function compileWorkflowForGeneration(params: {
         }
         prevLoraNodeId = newNodeId;
       }
-    }
-  } else if (mapping.checkpointNodeId && graph[mapping.checkpointNodeId]) {
-    let prevSourceId = mapping.checkpointNodeId;
-    for (let i = 0; i < activeLoras.length; i++) {
-      const lora = activeLoras[i];
-      const newNodeId = `couchy_lora_${i + 1}`;
-      graph[newNodeId] = {
-        class_type: 'LoraLoader',
-        _meta: { title: `Injected LoRA (${lora.appearanceLabel || lora.loraName})` },
-        inputs: {
-          lora_name: lora.loraName,
-          strength_model: lora.modelStrength,
-          strength_clip: lora.clipStrength,
-          model: [prevSourceId, 0],
-          clip: [prevSourceId, 1],
-        },
-      };
-      for (const [id, nodeObj] of Object.entries(graph)) {
-        if (id === newNodeId || !nodeObj?.inputs) continue;
-        for (const [k, v] of Object.entries(nodeObj.inputs)) {
-          if (
-            Array.isArray(v) &&
-            String(v[0]) === String(prevSourceId) &&
-            (v[1] === 0 || v[1] === 1)
-          ) {
-            nodeObj.inputs[k] = [newNodeId, v[1]];
-          }
-        }
-      }
-      prevSourceId = newNodeId;
     }
   }
 

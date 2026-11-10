@@ -47,6 +47,15 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   const [scheduledHours, setScheduledHours] = useState<number>(
     healthData?.config?.scheduledBackupHours || 0
   );
+  const [quickGenBoxEnabled, setQuickGenBoxEnabled] = useState<boolean>(
+    healthData?.config?.quickGenBoxEnabled !== false
+  );
+
+  useEffect(() => {
+    if (healthData?.config?.quickGenBoxEnabled !== undefined) {
+      setQuickGenBoxEnabled(healthData.config.quickGenBoxEnabled !== false);
+    }
+  }, [healthData?.config?.quickGenBoxEnabled]);
 
   const [connTestResult, setConnTestResult] = useState<any | null>(null);
   const [isTestingConn, setIsTestingConn] = useState(false);
@@ -202,9 +211,22 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       comfyuiModelsDir: modelsDir,
       downloadsDir,
       scheduledBackupHours: scheduledHours,
+      quickGenBoxEnabled,
     });
     await onRefreshAll();
     setBackupMsg('Configuration updated and filesystem watcher rebound.');
+    setTimeout(() => setBackupMsg(null), 3000);
+  };
+
+  const handleToggleQuickGenBox = async (nextVal: boolean) => {
+    setQuickGenBoxEnabled(nextVal);
+    await api.updateConfig({ quickGenBoxEnabled: nextVal });
+    await onRefreshAll();
+    setBackupMsg(
+      nextVal
+        ? 'Floating Quick Generation Box enabled across all tabs.'
+        : 'Floating Quick Generation Box disabled.'
+    );
     setTimeout(() => setBackupMsg(null), 3000);
   };
 
@@ -238,6 +260,31 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
           {backupMsg}
         </div>
       )}
+
+      {/* Workspace UI Preferences: Floating Quick Generation Box */}
+      <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
+        <div className="space-y-1">
+          <h2 className="text-sm font-display font-semibold text-zinc-100">
+            Floating Quick Generation Box
+          </h2>
+          <p className="text-zinc-400">
+            Show a floating prompt bar across all tabs with <code className="text-zinc-200">@character</code> mentions, aspect ratio & batch count controls, and LM Studio Agent support.
+          </p>
+        </div>
+
+        <label className="inline-flex items-center gap-3 cursor-pointer select-none">
+          <span className="text-zinc-300 font-medium">
+            {quickGenBoxEnabled ? 'Enabled' : 'Disabled'}
+          </span>
+          <input
+            type="checkbox"
+            checked={quickGenBoxEnabled}
+            onChange={(e) => handleToggleQuickGenBox(e.target.checked)}
+            className="sr-only peer"
+          />
+          <div className="w-10 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all relative peer-checked:bg-indigo-600" />
+        </label>
+      </section>
 
       {/* LM Studio Agent & Guiding Prompt Templates Manager */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-5">

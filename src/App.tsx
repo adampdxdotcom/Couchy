@@ -14,6 +14,7 @@ import { GenerationStudioView } from './components/GenerationStudioView.tsx';
 import { LoraAndModelManagerView } from './components/LoraAndModelManagerView.tsx';
 import { WorkflowLibraryView } from './components/WorkflowLibraryView.tsx';
 import { SystemAndBackupView } from './components/SystemAndBackupView.tsx';
+import { FloatingQuickGenBar } from './components/FloatingQuickGenBar.tsx';
 import type {
   CharacterProfile,
   GalleryFilterState,
@@ -141,6 +142,7 @@ export default function App() {
     null;
 
   const inspectedIdx = images.findIndex((i) => i.id === inspectedImageId);
+  const showQuickGenBar = healthData?.config?.quickGenBoxEnabled !== false;
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
@@ -153,7 +155,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1">
+      <main className={`flex-1 ${showQuickGenBar ? 'pb-28' : ''}`}>
         {activeTab === 'gallery' && (
           <>
             <GalleryFilterBar
@@ -253,6 +255,7 @@ export default function App() {
           <GenerationStudioView
             characters={characters}
             loras={loras}
+            models={models}
             workflows={workflows}
             checkpoints={checkpoints}
             allImages={allImages}
@@ -293,6 +296,17 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* Floating Quick Generation Bar (Visible across all tabs when enabled) */}
+      {showQuickGenBar && (
+        <FloatingQuickGenBar
+          characters={characters}
+          allImages={allImages}
+          workflows={workflows}
+          onRefreshAll={refreshAll}
+          onOpenGenerationTab={() => setActiveTab('generation')}
+        />
+      )}
 
       {/* Full-Resolution Lightbox & Inspector Drawer */}
       {inspectedImage && (

@@ -31,6 +31,10 @@ systemRouter.get('/health', (_req, res) => {
   ).c;
   const wfCount = (db.prepare('SELECT COUNT(*) AS c FROM workflows').get() as { c: number }).c;
   const comfyRow = db.prepare('SELECT * FROM comfyui_instances WHERE is_default = 1').get() as any;
+  const quickGenRow = db
+    .prepare("SELECT value FROM app_settings WHERE key = 'quick_gen_box_enabled'")
+    .get() as { value: string } | undefined;
+  const quickGenBoxEnabled = quickGenRow ? quickGenRow.value === '1' : true;
 
   res.json({
     status: 'ok',
@@ -50,6 +54,7 @@ systemRouter.get('/health', (_req, res) => {
       hasCivitaiKey: Boolean(appConfig.civitaiApiKey),
       hasHfToken: Boolean(appConfig.hfApiToken),
       scheduledBackupHours: appConfig.scheduledBackupHours,
+      quickGenBoxEnabled,
     },
     comfyuiInstance: comfyRow || null,
     activeScan: getActiveScanStatus(),
@@ -57,8 +62,8 @@ systemRouter.get('/health', (_req, res) => {
 });
 
 /**
- * PATCH /api/system/config
- * Updates runtime configurable paths or ComfyUI connection URL.
+ * PATCH /api/config
+ * Updates runtime configurable paths, ComfyUI connection URL, or UI preferences.
  */
 systemRouter.patch('/config', (req, res) => {
   try {
@@ -68,6 +73,7 @@ systemRouter.patch('/config', (req, res) => {
       comfyuiModelsDir,
       downloadsDir,
       scheduledBackupHours,
+      quickGenBoxEnabled,
     } = req.body || {};
 
     if (comfyuiUrl && String(comfyuiUrl).trim()) {
@@ -94,6 +100,13 @@ systemRouter.patch('/config', (req, res) => {
     }
     if (scheduledBackupHours !== undefined) {
       configureScheduledBackups(Number(scheduledBackupHours));
+    }
+    if (quickGenBoxEnabled !== undefined) {
+      db.prepare(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('quick_gen_box_enabled', ?, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+      ).run(quickGenBoxEnabled ? '1' : '0');
     }
 
     res.json({ ok: true, config: appConfig });

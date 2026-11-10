@@ -1,6 +1,6 @@
 {
-  "summary":  "Updated implementation plan incorporating Megapixel (0.1–10.0) + Aspect Ratio ComfyUI node mapping, multiple saved LM Studio guiding prompt templates in SQLite, a dedicated LM Studio Guiding Prompt manager in the System & Backup tab, and preview-then-send batch queue workflow.",
-  "updatedAt":  "2026-11-09T21:52:36.258982474Z",
+  "summary":  "Implementation plan for the Floating Quick Generation Bar with @character mention two-column popover, Agent mode toggle for LM Studio photo sets, aspect ratio and generation count selectors, automatic Krea2_turbo workflow defaults, and System & Backup enable/disable setting.",
+  "updatedAt":  "2026-11-09T23:49:24.320486831Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

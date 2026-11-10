@@ -5,7 +5,7 @@ import sharp from 'sharp';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
-import { parseImageMetadata } from './pngMetadataParser.ts';
+import { parseImageMetadata, parseImageMetadataFromChunks } from './pngMetadataParser.ts';
 import { runAssistedCharacterIdentificationForImage } from './characterService.ts';
 import type { DependencyStatus } from '../../shared/types.ts';
 
@@ -13,6 +13,79 @@ const SUPPORTED_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
 let activeScanJobId: number | null = null;
 let fsWatcher: FSWatcher | null = null;
+
+/**
+ * Backfills positive/negative prompts for any already-indexed images in SQLite whose
+ * prompt was previously unextracted (e.g. Krea2_turbo PrimitiveStringMultiline #30_19).
+ */
+export function backfillMissingImagePrompts(): number {
+  const rows = db
+    .prepare(
+      `SELECT
+         m.image_id,
+         m.raw_metadata_json,
+         w.api_workflow_json,
+         w.visual_workflow_json
+       FROM image_metadata m
+       LEFT JOIN image_workflows iw ON iw.image_id = m.image_id
+       LEFT JOIN workflows w ON w.id = iw.workflow_id
+       WHERE m.positive_prompt IS NULL OR TRIM(m.positive_prompt) = ''`
+    )
+    .all() as {
+    image_id: number;
+    raw_metadata_json: string | null;
+    api_workflow_json: string | null;
+    visual_workflow_json: string | null;
+  }[];
+
+  if (rows.length === 0) return 0;
+
+  let updatedCount = 0;
+  const updateStmt = db.prepare(
+    `UPDATE image_metadata
+     SET positive_prompt = COALESCE(?, positive_prompt),
+         negative_prompt = COALESCE(?, negative_prompt),
+         missing_fields_json = ?,
+         provenance_json = ?
+     WHERE image_id = ?`
+  );
+
+  for (const row of rows) {
+    let chunks: Record<string, string> = {};
+    if (row.raw_metadata_json) {
+      try {
+        const parsedRaw = JSON.parse(row.raw_metadata_json);
+        if (parsedRaw && typeof parsedRaw === 'object') {
+          chunks = { ...parsedRaw };
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (!chunks.prompt && row.api_workflow_json) {
+      chunks.prompt = row.api_workflow_json;
+    }
+    if (!chunks.workflow && row.visual_workflow_json) {
+      chunks.workflow = row.visual_workflow_json;
+    }
+    if (Object.keys(chunks).length === 0) continue;
+
+    const reparsed = parseImageMetadataFromChunks(chunks);
+    if (reparsed.positivePrompt) {
+      updateStmt.run(
+        reparsed.positivePrompt,
+        reparsed.negativePrompt,
+        JSON.stringify(reparsed.missingFields),
+        JSON.stringify(reparsed.provenance),
+        row.image_id
+      );
+      runAssistedCharacterIdentificationForImage(row.image_id);
+      updatedCount++;
+    }
+  }
+
+  return updatedCount;
+}
 
 export function getActiveScanStatus() {
   if (activeScanJobId) {
@@ -381,6 +454,7 @@ function walkDirectoryRecursive(dir: string): string[] {
 export async function runDirectoryScan(
   scanType: 'full' | 'incremental' | 'reconcile' | 'rebuild_metadata' = 'incremental'
 ): Promise<number> {
+  backfillMissingImagePrompts();
   if (activeScanJobId !== null) {
     return activeScanJobId;
   }

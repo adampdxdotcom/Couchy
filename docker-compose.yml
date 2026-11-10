@@ -5,18 +5,8 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
-    environment:
-      PORT: "8080"
-      COMFYUI_URL: "http://comfyui:8188"
-      LM_STUDIO_URL: "${LM_STUDIO_URL:-http://host.docker.internal:1234/v1}"
-      COMFYUI_OUTPUT_DIR: "/data/output"
-      COMFYUI_MODELS_DIR: "/data/models"
-      DATABASE_PATH: "/app/data/gallery.db"
-      THUMBNAIL_PATH: "/app/data/thumbnails"
-      BACKUP_PATH: "/app/data/backups"
-      DOWNLOADS_DIR: "/downloads"
-      CIVITAI_API_KEY: "${CIVITAI_API_KEY:-}"
-      HF_API_TOKEN: "${HF_API_TOKEN:-}"
+    env_file:
+      - .env
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

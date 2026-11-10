@@ -204,12 +204,12 @@ charactersRouter.post('/:id/merge', (req, res) => {
 
 /**
  * POST /api/characters/:id/loras
- * Associates a LoRA with a character (with optional appearanceLabel and loraCategory).
+ * Associates a LoRA with a character (with optional appearanceLabel, triggerWord, and loraCategory).
  */
 charactersRouter.post('/:id/loras', (req, res) => {
   try {
     const charId = Number(req.params.id);
-    const { loraName, appearanceLabel, loraCategory, notes } = req.body || {};
+    const { loraName, appearanceLabel, triggerWord, loraCategory, notes } = req.body || {};
     if (!loraName || !String(loraName).trim()) {
       res.status(400).json({ error: 'loraName is required' });
       return;
@@ -222,11 +222,12 @@ charactersRouter.post('/:id/loras', (req, res) => {
 
     db.prepare(
       `INSERT INTO character_loras
-        (character_id, model_id, lora_name, lora_hash, lora_category, appearance_label, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+        (character_id, model_id, lora_name, lora_hash, lora_category, appearance_label, trigger_word, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(character_id, lora_name) DO UPDATE SET
          lora_category = excluded.lora_category,
          appearance_label = excluded.appearance_label,
+         trigger_word = excluded.trigger_word,
          notes = excluded.notes`
     ).run(
       charId,
@@ -235,6 +236,7 @@ charactersRouter.post('/:id/loras', (req, res) => {
       modelRow?.sha256_hash ?? null,
       loraCategory || 'character',
       appearanceLabel || 'Default',
+      triggerWord !== undefined ? String(triggerWord).trim() : '',
       notes || ''
     );
 

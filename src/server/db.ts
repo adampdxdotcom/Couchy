@@ -442,6 +442,21 @@ export function runMigrations(): void {
         ALTER TABLE generation_batches ADD COLUMN megapixels REAL NOT NULL DEFAULT 1.0;
       `,
     },
+    {
+      version: 4,
+      name: 'krea2_turbo_base_workflow_and_trigger_words',
+      sql: `
+        -- Add trigger_word to character_loras
+        ALTER TABLE character_loras ADD COLUMN trigger_word TEXT NOT NULL DEFAULT '';
+
+        -- Add trigger_word, enable_lora, and checkpoint_field mappings to workflow_mappings
+        ALTER TABLE workflow_mappings ADD COLUMN trigger_word_node_id TEXT;
+        ALTER TABLE workflow_mappings ADD COLUMN trigger_word_field TEXT NOT NULL DEFAULT 'string_b';
+        ALTER TABLE workflow_mappings ADD COLUMN enable_lora_node_id TEXT;
+        ALTER TABLE workflow_mappings ADD COLUMN enable_lora_field TEXT NOT NULL DEFAULT 'value';
+        ALTER TABLE workflow_mappings ADD COLUMN checkpoint_field TEXT NOT NULL DEFAULT 'unet_name';
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');
@@ -560,94 +575,355 @@ Return ONLY a JSON array of {count} complete prompt strings.`,
     );
   }
 
-  // Seed a default Standard Character + LoRA API Workflow if no workflows exist yet
-  const wfCount = (db.prepare('SELECT COUNT(*) as c FROM workflows').get() as { c: number }).c;
-  if (wfCount === 0) {
-    const defaultApiWorkflow = {
-      '1': {
-        class_type: 'CheckpointLoaderSimple',
-        _meta: { title: 'Load Checkpoint' },
-        inputs: { ckpt_name: 'sd_xl_base_1.0.safetensors' },
+  // Ensure the Krea2_turbo Base Default Workflow exists and is mapped
+  const krea2TurboApiWorkflow = {
+    '29': {
+      inputs: {
+        filename_prefix: 'Krea2_turbo',
+        images: ['30_8', 0],
       },
-      '2': {
-        class_type: 'LoraLoader',
-        _meta: { title: 'Primary Character LoRA Loader' },
-        inputs: {
-          lora_name: 'character_default.safetensors',
-          strength_model: 1.0,
-          strength_clip: 1.0,
-          model: ['1', 0],
-          clip: ['1', 1],
+      class_type: 'SaveImage',
+      _meta: {
+        title: 'Save Image',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '49': {
+      inputs: {
+        aspect_ratio: '2:3 (Portrait Photo)',
+        megapixels: 3,
+        multiple: 8,
+      },
+      class_type: 'ResolutionSelector',
+      _meta: {
+        title: 'Resolution Selector',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '50': {
+      inputs: {
+        PowerLoraLoaderHeaderWidget: {
+          type: 'PowerLoraLoaderHeaderWidget',
         },
+        '➕ Add Lora': '',
+        model: ['30_10', 0],
+        clip: ['30_11', 0],
       },
-      '3': {
-        class_type: 'CLIPTextEncode',
-        _meta: { title: 'Positive Prompt' },
-        inputs: {
-          text: 'masterpiece, best quality, portrait of character',
-          clip: ['2', 1],
-        },
+      class_type: 'Power Lora Loader (rgthree)',
+      _meta: {
+        title: 'Power Lora Loader (rgthree)',
+        cnr_id: 'rgthree-comfy',
+        ver: '1.0.0',
       },
-      '4': {
-        class_type: 'CLIPTextEncode',
-        _meta: { title: 'Negative Prompt' },
-        inputs: {
-          text: 'worst quality, low quality, blurry, deformed',
-          clip: ['2', 1],
-        },
+    },
+    '30_11': {
+      inputs: {
+        clip_name: 'qwen3vl_4b_fp8_scaled.safetensors',
+        type: 'krea2',
+        device: 'default',
       },
-      '5': {
-        class_type: 'EmptyLatentImage',
-        _meta: { title: 'Resolution & Aspect Ratio (Megapixels)' },
-        inputs: {
-          aspect_ratio: '3:4',
-          megapixels: 1.0,
-          width: 896,
-          height: 1152,
-          batch_size: 1,
-        },
+      class_type: 'CLIPLoader',
+      _meta: {
+        title: 'Load CLIP',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
       },
-      '6': {
-        class_type: 'KSampler',
-        _meta: { title: 'KSampler' },
-        inputs: {
-          seed: 123456789,
-          steps: 28,
-          cfg: 6.5,
-          sampler_name: 'dpmpp_2m',
-          scheduler: 'karras',
-          denoise: 1.0,
-          model: ['2', 0],
-          positive: ['3', 0],
-          negative: ['4', 0],
-          latent_image: ['5', 0],
-        },
+    },
+    '30_12': {
+      inputs: {
+        vae_name: 'qwen_image_vae.safetensors',
       },
-      '7': {
-        class_type: 'VAEDecode',
-        _meta: { title: 'VAE Decode' },
-        inputs: {
-          samples: ['6', 0],
-          vae: ['1', 2],
-        },
+      class_type: 'VAELoader',
+      _meta: {
+        title: 'Load VAE',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
       },
-      '8': {
-        class_type: 'SaveImage',
-        _meta: { title: 'Save Image' },
-        inputs: {
-          filename_prefix: 'Couchy_Gen',
-          images: ['7', 0],
-        },
+    },
+    '30_18': {
+      inputs: {
+        value:
+          'You are an expert prompt engineer for text-to-image models. Your task is to expand the user\'s prompt into a highly effective image-generation prompt.\n\nThink step by step about the request before writing the answer:\n- What is the subject and mood?\n- What visual styles, mediums, and lighting options would fit? Consider two or three alternatives and pick the one that best serves the caption.\n- What composition, framing, and grounded details will help the text-to-image model?\n\nThen output a single expanded prompt paragraph.\n\nFollow these rules strictly:\n1. **Faithfulness First:** Preserve all original subjects, actions, colors, and spatial relationships. Do not add new objects, props, characters, or animals unless the user clearly implies them.\n2. **Practical T2I Structure:** Write a prompt that a text-to-image model can parse cleanly. Group subjects with their own attributes and actions. Use grounded phrasing for poses, interactions, and spatial layout.\n3. **Style Planning Stays Internal:** Use your internal reasoning to choose style, medium, framing, and lighting. Do not emit planning tags or wrappers in the visible answer body.\n4. **Text Rendering:** If the user requests visible text, quotes, labels, or typography, specify the exact text clearly and wrap requested words in quotes.\n5. **Avoid Over-Specification:** Do not invent highly specific clothing, colors, materials, or scene details unless the input supports them.\n6. **Structure:** Write one cohesive paragraph after the thinking block. No bullets, JSON, or markdown.\n7. **Respect Existing Detail:** If the user\'s prompt is already detailed, lightly polish and finalize rather than heavily expanding — preserve their phrasing and direction.\n8. **Respect the Human Form:** Treat depictions of people with dignity. Assume clothing covers genitals and intimate anatomy.\n9. **Preserve User Medium:** When the user explicitly requests a medium (e.g. "photo of", "photograph of", "illustration of", "painting of", "sketch of", "3D render of"), honor it. Do not pivot to a different medium to avoid difficulty — match the user\'s stated intent.\n\nUser\'s Input:\n\n',
       },
-    };
+      class_type: 'PrimitiveStringMultiline',
+      _meta: {
+        title: 'Text String (System Prompt)',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_19': {
+      inputs: {
+        value: 'Your example prompt.',
+      },
+      class_type: 'PrimitiveStringMultiline',
+      _meta: {
+        title: 'Text String (User Prompt)',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_23': {
+      inputs: {
+        value: true,
+      },
+      class_type: 'PrimitiveBoolean',
+      _meta: {
+        title: 'Boolean (Enable LoRA?)',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_24': {
+      inputs: {
+        value: false,
+      },
+      class_type: 'PrimitiveBoolean',
+      _meta: {
+        title: 'Boolean (Refine Prompt?)',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_10': {
+      inputs: {
+        unet_name: '',
+        weight_dtype: 'default',
+      },
+      class_type: 'UNETLoader',
+      _meta: {
+        title: 'Load Diffusion Model',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_5': {
+      inputs: {
+        width: ['49', 0],
+        height: ['49', 1],
+        batch_size: 1,
+      },
+      class_type: 'EmptyLatentImage',
+      _meta: {
+        title: 'Empty Latent Image',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_17': {
+      inputs: {
+        string_a: ['30_18', 0],
+        string_b: ['30_19', 0],
+        delimiter: '',
+      },
+      class_type: 'StringConcatenate',
+      _meta: {
+        title: 'Concatenate Text',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_16': {
+      inputs: {
+        prompt: ['30_17', 0],
+        max_length: 512,
+        sampling_mode: 'on',
+        'sampling_mode.temperature': 0.7,
+        'sampling_mode.top_k': 64,
+        'sampling_mode.top_p': 0.95,
+        'sampling_mode.min_p': 0.05,
+        'sampling_mode.repetition_penalty': 1.05,
+        'sampling_mode.seed': 0,
+        'sampling_mode.presence_penalty': 0,
+        thinking: false,
+        use_default_template: true,
+        mtp: 'auto',
+        clip: ['30_11', 0],
+      },
+      class_type: 'TextGenerate',
+      _meta: {
+        title: 'Generate Text',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_22': {
+      inputs: {
+        switch: ['30_23', 0],
+        on_false: ['30_10', 0],
+        on_true: ['50', 0],
+      },
+      class_type: 'ComfySwitchNode',
+      _meta: {
+        title: 'Switch (Model)',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_21': {
+      inputs: {
+        switch: ['30_24', 0],
+        on_false: ['30_19', 0],
+        on_true: ['30_16', 0],
+      },
+      class_type: 'ComfySwitchNode',
+      _meta: {
+        title: 'If/Else Switch',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_20': {
+      inputs: {
+        source: ['30_21', 0],
+      },
+      class_type: 'PreviewAny',
+      _meta: {
+        title: 'Preview as Text',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_27': {
+      inputs: {
+        string_a: ['30_20', 0],
+        string_b: 'xmelx',
+        delimiter: ', ',
+      },
+      class_type: 'StringConcatenate',
+      _meta: {
+        title: 'Concatenate Text (LoRA Trigger Word)',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_28': {
+      inputs: {
+        switch: ['30_23', 0],
+        on_false: ['30_20', 0],
+        on_true: ['30_27', 0],
+      },
+      class_type: 'ComfySwitchNode',
+      _meta: {
+        title: 'If/Else Switch',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_6': {
+      inputs: {
+        text: ['30_28', 0],
+        clip: ['50', 1],
+      },
+      class_type: 'CLIPTextEncode',
+      _meta: {
+        title: 'CLIP Text Encode (Prompt)',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_13': {
+      inputs: {
+        conditioning: ['30_6', 0],
+      },
+      class_type: 'ConditioningZeroOut',
+      _meta: {
+        title: 'Conditioning Zero Out',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_3': {
+      inputs: {
+        seed: 316273020560949,
+        steps: 8,
+        cfg: 1,
+        sampler_name: 'euler',
+        scheduler: 'simple',
+        denoise: 1,
+        model: ['30_22', 0],
+        positive: ['30_6', 0],
+        negative: ['30_13', 0],
+        latent_image: ['30_5', 0],
+      },
+      class_type: 'KSampler',
+      _meta: {
+        title: 'KSampler',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+    '30_8': {
+      inputs: {
+        samples: ['30_3', 0],
+        vae: ['30_12', 0],
+      },
+      class_type: 'VAEDecode',
+      _meta: {
+        title: 'VAE Decode',
+        cnr_id: 'comfy-core',
+        ver: '0.43.0',
+      },
+    },
+  };
+
+  // Replace old placeholder default workflow if present or insert Krea2_turbo as primary default workflow
+  const legacyDefault = db
+    .prepare("SELECT id FROM workflows WHERE workflow_hash = 'default-couchy-character-lora-workflow'")
+    .get() as { id: number } | undefined;
+  const kreaDefault = db
+    .prepare("SELECT id FROM workflows WHERE workflow_hash = 'default-krea2-turbo-workflow'")
+    .get() as { id: number } | undefined;
+
+  let kreaWorkflowId: number | null = kreaDefault?.id ?? null;
+
+  if (legacyDefault && !kreaDefault) {
     db.prepare(`
-      INSERT INTO workflows (name, description, is_saved_library, api_workflow_json, workflow_hash)
-      VALUES (?, ?, 1, ?, 'default-couchy-character-lora-workflow')
+      UPDATE workflows
+      SET name = ?, description = ?, api_workflow_json = ?, workflow_hash = 'default-krea2-turbo-workflow', updated_at = datetime('now')
+      WHERE id = ?
     `).run(
-      'Standard Character + LoRA Studio Workflow',
-      'Default adaptable ComfyUI API workflow with Checkpoint, LoRA Loader, Positive/Negative CLIP Text Encode, EmptyLatentImage aspect ratio control, and KSampler.',
-      JSON.stringify(defaultApiWorkflow, null, 2)
+      'Krea2_turbo Studio Workflow (Default)',
+      'Base default Krea2_turbo workflow with Power Lora Loader (rgthree), Trigger Word StringConcatenate (#30_27), PrimitiveStringMultiline Prompt (#30_19), ResolutionSelector (#49), UNETLoader (#30_10), and KSampler (#30_3).',
+      JSON.stringify(krea2TurboApiWorkflow, null, 2),
+      legacyDefault.id
     );
+    kreaWorkflowId = legacyDefault.id;
+  } else if (!kreaDefault) {
+    const info = db.prepare(`
+      INSERT INTO workflows (name, description, is_saved_library, api_workflow_json, workflow_hash)
+      VALUES (?, ?, 1, ?, 'default-krea2-turbo-workflow')
+    `).run(
+      'Krea2_turbo Studio Workflow (Default)',
+      'Base default Krea2_turbo workflow with Power Lora Loader (rgthree), Trigger Word StringConcatenate (#30_27), PrimitiveStringMultiline Prompt (#30_19), ResolutionSelector (#49), UNETLoader (#30_10), and KSampler (#30_3).',
+      JSON.stringify(krea2TurboApiWorkflow, null, 2)
+    );
+    kreaWorkflowId = Number(info.lastInsertRowid);
+  }
+
+  if (kreaWorkflowId) {
+    const existingMap = db
+      .prepare('SELECT workflow_id FROM workflow_mappings WHERE workflow_id = ?')
+      .get(kreaWorkflowId);
+    if (!existingMap) {
+      db.prepare(`
+        INSERT INTO workflow_mappings (
+          workflow_id,
+          positive_prompt_node_id, positive_prompt_field,
+          negative_prompt_node_id, negative_prompt_field,
+          trigger_word_node_id, trigger_word_field,
+          seed_node_id, seed_field,
+          steps_node_id, cfg_node_id, sampler_node_id,
+          latent_node_id, aspect_ratio_field, megapixels_field,
+          checkpoint_node_id, checkpoint_field,
+          enable_lora_node_id, enable_lora_field,
+          lora_node_ids_json
+        ) VALUES (?, '30_19', 'value', NULL, 'text', '30_27', 'string_b', '30_3', 'seed', '30_3', '30_3', '30_3', '49', 'aspect_ratio', 'megapixels', '30_10', 'unet_name', '30_23', 'value', '["50"]')
+      `).run(kreaWorkflowId);
+    }
   }
 }
+
 

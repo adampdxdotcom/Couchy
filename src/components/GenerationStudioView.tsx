@@ -16,7 +16,6 @@ import {
 import { api } from '../api/client.ts';
 import { NodeMapperModal } from './NodeMapperModal.tsx';
 import type {
-  AspectRatioPreset,
   CharacterProfile,
   GenerationBatchRecord,
   GenerationLoraSelection,
@@ -24,6 +23,7 @@ import type {
   LmStudioGuidingTemplate,
   LmStudioStatus,
   LoraExplorerItem,
+  ModelInventoryItem,
   PromptTemplate,
   WorkflowLibraryItem,
   WorkflowNodeMapping,
@@ -32,6 +32,7 @@ import type {
 interface GenerationStudioViewProps {
   characters: CharacterProfile[];
   loras: LoraExplorerItem[];
+  models?: ModelInventoryItem[];
   workflows: WorkflowLibraryItem[];
   checkpoints: string[];
   allImages: ImageRecord[];
@@ -40,26 +41,36 @@ interface GenerationStudioViewProps {
   onOpenSystemSettings?: () => void;
 }
 
+/**
+ * Standard ComfyUI ResolutionSelector (Node #49) aspect_ratio strings.
+ */
 const ASPECT_RATIO_PRESETS: {
-  ratio: AspectRatioPreset;
+  value: string;
+  shortRatio: string;
   label: string;
   boxW: number;
   boxH: number;
 }[] = [
-  { ratio: '1:1', label: 'Square', boxW: 18, boxH: 18 },
-  { ratio: '3:4', label: 'Portrait', boxW: 15, boxH: 20 },
-  { ratio: '2:3', label: 'Classic Tall', boxW: 14, boxH: 21 },
-  { ratio: '9:16', label: 'Vertical', boxW: 12, boxH: 22 },
-  { ratio: '4:3', label: 'Landscape', boxW: 20, boxH: 15 },
-  { ratio: '3:2', label: 'Wide Photo', boxW: 21, boxH: 14 },
-  { ratio: '16:9', label: 'Cinema', boxW: 22, boxH: 12 },
+  { value: '1:1 (Square)', shortRatio: '1:1', label: 'Square', boxW: 18, boxH: 18 },
+  { value: '2:3 (Portrait Photo)', shortRatio: '2:3', label: 'Portrait Photo', boxW: 14, boxH: 21 },
+  { value: '3:4 (Golden Ratio)', shortRatio: '3:4', label: 'Golden Ratio', boxW: 15, boxH: 20 },
+  { value: '9:16 (Vertical Video)', shortRatio: '9:16', label: 'Vertical', boxW: 12, boxH: 22 },
+  { value: '3:2 (Landscape Photo)', shortRatio: '3:2', label: 'Landscape', boxW: 21, boxH: 14 },
+  { value: '4:3 (Classic TV)', shortRatio: '4:3', label: 'Classic TV', boxW: 20, boxH: 15 },
+  { value: '16:9 (Widescreen)', shortRatio: '16:9', label: 'Widescreen', boxW: 22, boxH: 12 },
 ];
 
-const MEGAPIXEL_PRESETS = [0.5, 1.0, 1.5, 2.0, 4.0, 8.0];
+const MEGAPIXEL_PRESETS = [0.5, 1.0, 2.0, 3.0, 4.0, 8.0];
 
 function interpolatePromptClient(
   template: string,
-  vars: { characterName: string; loraSummary: string; theme: string; count?: number; basePrompt?: string }
+  vars: {
+    characterName: string;
+    loraSummary: string;
+    theme: string;
+    count?: number;
+    basePrompt?: string;
+  }
 ): string {
   let out = template
     .replace(/\{character\}/gi, vars.characterName || 'subject')
@@ -81,6 +92,7 @@ function interpolatePromptClient(
 export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
   characters,
   loras,
+  models = [],
   workflows,
   checkpoints,
   allImages,
@@ -88,19 +100,20 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
   onOpenImage,
   onOpenSystemSettings,
 }) => {
-  // 1. Character & LoRA Selection
+  // 1. Character, LoRA Stack (Node #50 Power Lora Loader), and Trigger Word (Node #30_27 string_b)
   const [selectedCharacterId, setSelectedCharacterId] = useState<number | null>(
     characters[0]?.id ?? null
   );
   const [activeLoras, setActiveLoras] = useState<GenerationLoraSelection[]>([]);
+  const [triggerWord, setTriggerWord] = useState<string>('');
   const [extraLoraToAdd, setExtraLoraToAdd] = useState<string>('');
 
-  // 2. Aspect Ratio & Megapixels (0.1 to 10.0) + Batch Count
-  const [aspectRatio, setAspectRatio] = useState<string>('3:4');
-  const [megapixels, setMegapixels] = useState<number>(1.0);
+  // 2. ResolutionSelector (Node #49): Aspect Ratio & Megapixels (0.1 to 10.0) + Batch Count
+  const [aspectRatio, setAspectRatio] = useState<string>('2:3 (Portrait Photo)');
+  const [megapixels, setMegapixels] = useState<number>(3.0);
   const [generationCount, setGenerationCount] = useState<number>(4);
 
-  // 3. Workflow & Node Mapping
+  // 3. Workflow & Diffusion Model (Node #30_10 UNETLoader unet_name)
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(
     workflows[0]?.id ?? null
   );
@@ -152,10 +165,22 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
     [characters, selectedCharacterId]
   );
 
-  // Prefill LoRAs whenever character changes
+  // Combine available diffusion/UNET/checkpoint models from inventory and metadata
+  const availableDiffusionModels = useMemo(() => {
+    const set = new Set<string>(checkpoints);
+    for (const m of models) {
+      if (m.modelType === 'checkpoint' || m.modelType === 'other') {
+        set.add(m.filename);
+      }
+    }
+    return Array.from(set).sort();
+  }, [checkpoints, models]);
+
+  // Prefill LoRAs and Trigger Word (Node #30_27 string_b) whenever character changes
   useEffect(() => {
     if (!selectedCharacter) {
       setActiveLoras([]);
+      setTriggerWord('');
       return;
     }
     const prefilled: GenerationLoraSelection[] = selectedCharacter.loras.map((l) => ({
@@ -163,8 +188,15 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
       modelStrength: 1.0,
       clipStrength: 1.0,
       appearanceLabel: l.appearanceLabel,
+      triggerWord: l.triggerWord || '',
     }));
     setActiveLoras(prefilled);
+
+    const combinedTrigger = prefilled
+      .map((l) => (l.triggerWord || '').trim())
+      .filter(Boolean)
+      .join(', ');
+    setTriggerWord(combinedTrigger);
 
     if (selectedCharacter.workflows.length > 0) {
       setSelectedWorkflowId(selectedCharacter.workflows[0].workflowId);
@@ -260,7 +292,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
     [guidingTemplates, selectedGuidingTemplateId]
   );
 
-  // Compute resolved prompts that will be sent to ComfyUI
+  // Compute resolved prompts that will be sent to ComfyUI Node #30_19
   const previewPrompts = useMemo(() => {
     const charName = selectedCharacter?.name || 'character';
     if (generationMode === 'single') {
@@ -390,6 +422,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
         aspectRatio,
         megapixels,
         prompts: previewPrompts,
+        triggerWord,
         negativePrompt,
         loras: activeLoras,
         checkpointName: selectedCheckpoint || undefined,
@@ -415,20 +448,21 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* LEFT COLUMN: Generation Studio Control Deck (5 cols on desktop) */}
         <div className="lg:col-span-5 space-y-5">
-          {/* STEP 1: Character & Prefilled LoRAs */}
+          {/* STEP 1: Character, Power Lora Loader (#50), and Trigger Word (#30_27) */}
           <section className="p-5 bg-zinc-900/60 border border-zinc-800/90 rounded-xl space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-display font-semibold text-zinc-100">
-                01. Character & LoRA Stack
+                01. Character, LoRA Stack & Trigger Word
               </h2>
-              <span className="text-xs text-zinc-400 tabular-nums">
-                {activeLoras.length} active LoRA{activeLoras.length === 1 ? '' : 's'}
+              <span className="text-xs text-zinc-400 font-mono tabular-nums">
+                {activeLoras.length} LoRA{activeLoras.length === 1 ? '' : 's'} · Enable LoRA:{' '}
+                {activeLoras.length > 0 ? 'ON' : 'OFF'}
               </span>
             </div>
 
             <div>
               <label className="block text-xs font-medium text-zinc-400 mb-1.5">
-                Select Character (Auto-Prefills Character LoRAs)
+                Select Character (Auto-Prefills Character LoRAs & Trigger Word)
               </label>
               <select
                 value={selectedCharacterId ?? ''}
@@ -447,11 +481,32 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
               </select>
             </div>
 
-            {/* Active LoRAs list with strength controls */}
+            {/* Editable Trigger Word for Node #30_27 string_b */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-medium text-zinc-300">
+                  Character / LoRA Trigger Word (Injected into Node #30_27{' '}
+                  <code className="text-indigo-300">string_b</code>)
+                </label>
+                <span className="text-[11px] font-mono text-zinc-500">
+                  {triggerWord.trim() ? `"${triggerWord.trim()}"` : 'Empty'}
+                </span>
+              </div>
+              <input
+                type="text"
+                value={triggerWord}
+                onChange={(e) => setTriggerWord(e.target.value)}
+                placeholder="e.g. xmelx (auto-filled from Character LoRA, editable per run)"
+                className="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border border-zinc-800 rounded-lg text-indigo-200 focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            {/* Active LoRAs list (Node #50 Power Lora Loader: lora_1, lora_2, ...) */}
             <div className="space-y-2">
               {activeLoras.length === 0 ? (
                 <div className="p-3 bg-zinc-950/60 border border-zinc-800/80 rounded-lg text-xs text-zinc-400">
-                  No LoRAs currently active. Choose a character with linked LoRAs or add a LoRA below.
+                  No LoRAs active. Node #30_23 (Enable LoRA) will be set to{' '}
+                  <code className="text-zinc-300">false</code>. Choose a character or add a LoRA below.
                 </div>
               ) : (
                 activeLoras.map((item, idx) => (
@@ -461,14 +516,18 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0">
-                        <p className="text-xs font-medium text-zinc-100 truncate">
-                          {item.loraName}
-                        </p>
-                        {item.appearanceLabel && (
-                          <p className="text-[11px] text-zinc-400">
-                            Appearance: {item.appearanceLabel}
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-mono text-indigo-400">
+                            lora_{idx + 1}
+                          </span>
+                          <p className="text-xs font-medium text-zinc-100 truncate">
+                            {item.loraName}
                           </p>
-                        )}
+                        </div>
+                        <p className="text-[11px] text-zinc-400">
+                          {item.appearanceLabel || 'LoRA'}
+                          {item.triggerWord ? ` · Trigger: ${item.triggerWord}` : ''}
+                        </p>
                       </div>
                       <button
                         type="button"
@@ -485,7 +544,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                     <div className="grid grid-cols-2 gap-3 pt-1">
                       <div>
                         <div className="flex justify-between text-[11px] text-zinc-400 mb-1">
-                          <span>Model Strength</span>
+                          <span>Strength (Power Lora)</span>
                           <span className="font-mono tabular-nums">
                             {item.modelStrength.toFixed(2)}
                           </span>
@@ -499,7 +558,9 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                           onChange={(e) => {
                             const val = parseFloat(e.target.value);
                             setActiveLoras((prev) =>
-                              prev.map((l, i) => (i === idx ? { ...l, modelStrength: val } : l))
+                              prev.map((l, i) =>
+                                i === idx ? { ...l, modelStrength: val, clipStrength: val } : l
+                              )
                             );
                           }}
                           className="w-full accent-indigo-500"
@@ -539,7 +600,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                   onChange={(e) => setExtraLoraToAdd(e.target.value)}
                   className="flex-1 px-2.5 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-300"
                 >
-                  <option value="">+ Add another LoRA (style, outfit, pose)...</option>
+                  <option value="">+ Add another LoRA to Power Lora Loader (#50)...</option>
                   {loras.map((l) => (
                     <option key={l.filename} value={l.filename}>
                       {l.name} ({l.loraCategory})
@@ -551,15 +612,32 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                   disabled={!extraLoraToAdd}
                   onClick={() => {
                     if (!extraLoraToAdd) return;
+                    // Check if any character has a saved triggerWord for this LoRA
+                    let knownTrigger = '';
+                    for (const c of characters) {
+                      const found = c.loras.find(
+                        (cl) => cl.loraName.toLowerCase() === extraLoraToAdd.toLowerCase()
+                      );
+                      if (found?.triggerWord) {
+                        knownTrigger = found.triggerWord;
+                        break;
+                      }
+                    }
                     setActiveLoras((prev) => [
                       ...prev,
                       {
                         loraName: extraLoraToAdd,
-                        modelStrength: 0.85,
-                        clipStrength: 0.85,
+                        modelStrength: 1.0,
+                        clipStrength: 1.0,
                         appearanceLabel: 'Additional LoRA',
+                        triggerWord: knownTrigger,
                       },
                     ]);
+                    if (knownTrigger && !triggerWord.includes(knownTrigger)) {
+                      setTriggerWord((prev) =>
+                        prev.trim() ? `${prev.trim()}, ${knownTrigger}` : knownTrigger
+                      );
+                    }
                     setExtraLoraToAdd('');
                   }}
                   className="px-3 py-1.5 text-xs font-medium text-zinc-100 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 rounded-lg whitespace-nowrap shrink-0 cursor-pointer"
@@ -570,14 +648,14 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
             </div>
           </section>
 
-          {/* STEP 2: Aspect Ratio, Megapixels (0.1 - 10.0) & Number of Generations */}
+          {/* STEP 2: ResolutionSelector (Node #49): Aspect Ratio & Megapixels (0.1 - 10.0) */}
           <section className="p-5 bg-zinc-900/60 border border-zinc-800/90 rounded-xl space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-display font-semibold text-zinc-100">
-                02. Aspect Ratio, Megapixels & Batch Size
+                02. Resolution Selector (Node #49) & Batch Size
               </h2>
               <span className="text-xs font-mono text-zinc-400 tabular-nums">
-                {aspectRatio} · {megapixels.toFixed(1)} MP · {generationCount} image
+                {megapixels.toFixed(1)} MP · {generationCount} shot
                 {generationCount === 1 ? '' : 's'}
               </span>
             </div>
@@ -585,12 +663,13 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
             {/* Aspect Ratio Grid */}
             <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
               {ASPECT_RATIO_PRESETS.map((preset) => {
-                const isSelected = aspectRatio === preset.ratio;
+                const isSelected =
+                  aspectRatio === preset.value || aspectRatio === preset.shortRatio;
                 return (
                   <button
-                    key={preset.ratio}
+                    key={preset.value}
                     type="button"
-                    onClick={() => setAspectRatio(preset.ratio)}
+                    onClick={() => setAspectRatio(preset.value)}
                     className={`flex flex-col items-center justify-center py-2.5 px-1.5 rounded-lg border transition-colors cursor-pointer ${
                       isSelected
                         ? 'bg-indigo-600/15 border-indigo-500 text-zinc-100'
@@ -605,7 +684,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                         }`}
                       />
                     </div>
-                    <span className="text-xs font-mono font-semibold">{preset.ratio}</span>
+                    <span className="text-xs font-mono font-semibold">{preset.shortRatio}</span>
                     <span className="text-[10px] text-zinc-400 truncate max-w-full">
                       {preset.label}
                     </span>
@@ -614,13 +693,13 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
               })}
             </div>
 
-            {/* Megapixels (0.1 to 10.0) & Aspect Ratio Value Controls */}
+            {/* Megapixels (0.1 to 10.0) Controls */}
             <div className="p-3.5 bg-zinc-950 border border-zinc-800 rounded-lg space-y-3">
               <div className="flex items-center justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-center justify-between text-xs mb-1">
                     <span className="font-medium text-zinc-300">
-                      Resolution Size (Megapixels: 0.1 – 10.0)
+                      Megapixels (Node #49 <code className="text-indigo-300">megapixels</code>: 0.1 – 10.0)
                     </span>
                     <span className="font-mono font-semibold text-indigo-400 tabular-nums">
                       {megapixels.toFixed(1)} MP
@@ -634,7 +713,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                     value={megapixels}
                     onChange={(e) =>
                       setMegapixels(
-                        Math.max(0.1, Math.min(10.0, parseFloat(e.target.value) || 1.0))
+                        Math.max(0.1, Math.min(10.0, parseFloat(e.target.value) || 3.0))
                       )
                     }
                     className="w-full accent-indigo-500"
@@ -651,7 +730,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                     value={megapixels}
                     onChange={(e) =>
                       setMegapixels(
-                        Math.max(0.1, Math.min(10.0, parseFloat(e.target.value) || 1.0))
+                        Math.max(0.1, Math.min(10.0, parseFloat(e.target.value) || 3.0))
                       )
                     }
                     className="w-full px-2.5 py-1.5 text-xs font-mono tabular-nums bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-100"
@@ -685,13 +764,13 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
             <div className="grid grid-cols-2 gap-3 pt-1">
               <div>
                 <label className="block text-[11px] text-zinc-400 mb-1">
-                  Aspect Ratio Sent to ComfyUI Node
+                  Exact <code className="text-indigo-300">aspect_ratio</code> Sent to Node #49
                 </label>
                 <input
                   type="text"
                   value={aspectRatio}
                   onChange={(e) => setAspectRatio(e.target.value)}
-                  placeholder="e.g. 3:4"
+                  placeholder="e.g. 2:3 (Portrait Photo)"
                   className="w-full px-2.5 py-1.5 text-xs font-mono bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
                 />
               </div>
@@ -734,11 +813,11 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
             </div>
           </section>
 
-          {/* STEP 3: Workflow & Adaptive Node Mapping */}
+          {/* STEP 3: Workflow, Diffusion Model (#30_10 UNETLoader) & Node Mapping */}
           <section className="p-5 bg-zinc-900/60 border border-zinc-800/90 rounded-xl space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-display font-semibold text-zinc-100">
-                03. Workflow & Node Mapping
+                03. Workflow & Diffusion Model (Node #30_10)
               </h2>
               <div className="flex items-center gap-2">
                 <button
@@ -781,27 +860,40 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
 
               <div>
                 <label className="block text-xs font-medium text-zinc-400 mb-1">
-                  Checkpoint Override (Optional)
+                  Diffusion Model (Node #30_10 <code className="text-indigo-300">unet_name</code>)
                 </label>
-                <select
+                <input
+                  type="text"
+                  list="diffusion-models-datalist"
                   value={selectedCheckpoint}
                   onChange={(e) => setSelectedCheckpoint(e.target.value)}
-                  className="w-full px-3 py-2 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-                >
-                  <option value="">Keep Workflow Default</option>
-                  {checkpoints.map((ckpt) => (
-                    <option key={ckpt} value={ckpt}>
-                      {ckpt}
-                    </option>
+                  placeholder="Keep workflow default or select model..."
+                  className="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
+                />
+                <datalist id="diffusion-models-datalist">
+                  {availableDiffusionModels.map((m) => (
+                    <option key={m} value={m} />
                   ))}
-                </select>
+                </datalist>
               </div>
             </div>
 
             {workflowMapping && (
               <div className="p-2.5 bg-zinc-950 border border-zinc-800/80 rounded-lg text-[11px] text-zinc-400 font-mono flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span>
-                  Prompt: {workflowMapping.positivePromptNodeId ? `#${workflowMapping.positivePromptNodeId}` : 'None'}
+                  Prompt: {workflowMapping.positivePromptNodeId ? `#${workflowMapping.positivePromptNodeId} (${workflowMapping.positivePromptField})` : 'None'}
+                </span>
+                <span>·</span>
+                <span>
+                  Trigger: {workflowMapping.triggerWordNodeId ? `#${workflowMapping.triggerWordNodeId} (${workflowMapping.triggerWordField || 'string_b'})` : 'None'}
+                </span>
+                <span>·</span>
+                <span>
+                  LoRA: {workflowMapping.loraNodeIds.length > 0 ? workflowMapping.loraNodeIds.map((id) => `#${id}`).join(', ') : 'Auto'}
+                </span>
+                <span>·</span>
+                <span>
+                  Resolution: {workflowMapping.latentNodeId ? `#${workflowMapping.latentNodeId}` : 'None'}
                 </span>
                 <span>·</span>
                 <span>
@@ -809,11 +901,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                 </span>
                 <span>·</span>
                 <span>
-                  Resolution: {workflowMapping.latentNodeId ? `#${workflowMapping.latentNodeId} (${workflowMapping.aspectRatioField}, ${workflowMapping.megapixelsField})` : 'None'}
-                </span>
-                <span>·</span>
-                <span>
-                  LoRA: {workflowMapping.loraNodeIds.length > 0 ? workflowMapping.loraNodeIds.map((id) => `#${id}`).join(', ') : 'Auto-Chain'}
+                  Model: {workflowMapping.checkpointNodeId ? `#${workflowMapping.checkpointNodeId}` : 'Default'}
                 </span>
               </div>
             )}
@@ -853,7 +941,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
 
             {generationMode === 'single' ? (
               <div className="p-2.5 bg-zinc-950 border border-zinc-800/80 rounded-lg text-xs text-zinc-400">
-                <strong>Verbatim Mode:</strong> LM Studio is bypassed. Your prompt below is sent verbatim {generationCount} time{generationCount === 1 ? '' : 's'} to ComfyUI with unique seeds.
+                <strong>Verbatim Mode:</strong> LM Studio is bypassed. Your prompt below is injected verbatim into Node #30_19 {generationCount} time{generationCount === 1 ? '' : 's'} with unique 64-bit seeds in Node #30_3.
               </div>
             ) : (
               <div className="p-2.5 bg-indigo-950/30 border border-indigo-800/50 rounded-lg text-xs text-indigo-200">
@@ -919,7 +1007,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
               <div>
                 <label className="block text-xs font-medium text-zinc-300 mb-1">
                   {generationMode === 'single'
-                    ? 'Positive Prompt (Sent Verbatim to ComfyUI)'
+                    ? 'User Prompt (Sent Verbatim to Node #30_19 value)'
                     : 'Base Positive Style Prompt (Passed to LM Studio)'}
                 </label>
                 <textarea
@@ -932,7 +1020,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
 
               <div>
                 <label className="block text-xs font-medium text-zinc-400 mb-1">
-                  Negative Prompt
+                  Negative Prompt (Used if workflow maps a negative conditioning node)
                 </label>
                 <textarea
                   rows={2}
@@ -972,7 +1060,9 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                         className="inline-flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-200 cursor-pointer"
                       >
                         <Eye className="w-3 h-3" />
-                        <span>{showGuidingPreview ? 'Hide Guiding Prompt' : 'Inspect Guiding Prompt'}</span>
+                        <span>
+                          {showGuidingPreview ? 'Hide Guiding Prompt' : 'Inspect Guiding Prompt'}
+                        </span>
                       </button>
                       {onOpenSystemSettings && (
                         <>
@@ -1075,9 +1165,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                     </div>
 
                     <div>
-                      <label className="block text-[11px] text-zinc-400 mb-1">
-                        LLM Model
-                      </label>
+                      <label className="block text-[11px] text-zinc-400 mb-1">LLM Model</label>
                       {lmStatus && lmStatus.availableModels.length > 0 ? (
                         <select
                           value={lmModelInput}
@@ -1167,7 +1255,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                 </h2>
                 <p className="text-xs text-zinc-400">
                   {generationMode === 'single'
-                    ? 'Verbatim Mode: All shots use your exact prompt below with unique seeds dispatched simultaneously.'
+                    ? 'Verbatim Mode: All shots use your exact prompt below with unique 64-bit seeds dispatched simultaneously.'
                     : agentPrompts.length > 0
                     ? 'LM Studio Set Prompts: Review or edit any individual shot prompt below before clicking Send All to ComfyUI.'
                     : 'Theme Set Mode: Click "Generate Photo Set Prompts with LM Studio" on the left to populate distinct shots, or edit directly below.'}
@@ -1188,9 +1276,10 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                     <span className="font-mono font-medium text-zinc-300">
                       Shot #{idx + 1} of {previewPrompts.length}
                     </span>
-                    <span>
+                    <span className="font-mono">
                       {selectedCharacter ? selectedCharacter.name : 'Custom Subject'} ·{' '}
                       {activeLoras.length} LoRA{activeLoras.length === 1 ? '' : 's'}
+                      {triggerWord.trim() ? ` · Trigger: "${triggerWord.trim()}"` : ''}
                     </span>
                   </div>
                   <textarea
@@ -1261,16 +1350,14 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-zinc-800/80">
                         <div className="flex flex-wrap items-center gap-2 text-xs">
-                          <span className="font-semibold text-zinc-100">
-                            Batch #{batch.id}
-                          </span>
+                          <span className="font-semibold text-zinc-100">Batch #{batch.id}</span>
                           <span className="text-zinc-600">·</span>
                           <span className="text-zinc-300">
                             {batch.characterName || 'Unassigned Subject'}
                           </span>
                           <span className="text-zinc-600">·</span>
                           <span className="font-mono text-zinc-400 tabular-nums">
-                            {batch.aspectRatio} · {Number(batch.megapixels || 1.0).toFixed(1)} MP
+                            {batch.aspectRatio} · {Number(batch.megapixels || 3.0).toFixed(1)} MP
                           </span>
                           {batch.themeTitle && (
                             <>
@@ -1284,14 +1371,10 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
 
                         <div className="flex items-center gap-2 text-xs font-mono tabular-nums">
                           {completedCount > 0 && (
-                            <span className="text-emerald-400">
-                              {completedCount} completed
-                            </span>
+                            <span className="text-emerald-400">{completedCount} completed</span>
                           )}
                           {submittedCount > 0 && (
-                            <span className="text-amber-400">
-                              {submittedCount} queued
-                            </span>
+                            <span className="text-amber-400">{submittedCount} queued</span>
                           )}
                           {failedCount > 0 && (
                             <span className="text-red-400">{failedCount} failed</span>
@@ -1353,9 +1436,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                                       : 'Sent to ComfyUI'}
                                   </span>
                                 </div>
-                                <p className="text-xs text-zinc-300 line-clamp-2">
-                                  {item.prompt}
-                                </p>
+                                <p className="text-xs text-zinc-300 line-clamp-2">{item.prompt}</p>
                                 {item.errorMessage && (
                                   <p className="text-[11px] text-red-400 truncate">
                                     {item.errorMessage}

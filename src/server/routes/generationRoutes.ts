@@ -407,6 +407,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
       aspectRatio,
       megapixels,
       prompts,
+      triggerWord,
       negativePrompt,
       loras,
       checkpointName,
@@ -423,8 +424,8 @@ generationRouter.post('/submit-batch', async (req, res) => {
       return res.status(400).json({ error: 'At least one positive prompt is required.' });
     }
 
-    const resolvedAr = String(aspectRatio || '3:4').trim();
-    const resolvedMp = Math.max(0.1, Math.min(10.0, Number(megapixels) || 1.0));
+    const resolvedAr = String(aspectRatio || '2:3 (Portrait Photo)').trim();
+    const resolvedMp = Math.max(0.1, Math.min(10.0, Number(megapixels) || 3.0));
     const { width: computedWidth, height: computedHeight } = computeDimensionsFromMegapixels(
       resolvedAr,
       resolvedMp
@@ -458,13 +459,16 @@ generationRouter.post('/submit-batch', async (req, res) => {
     );
 
     const createdItems: { itemId: number; index: number; prompt: string; seed: string }[] = [];
-    const startingSeed =
-      baseSeed && Number(baseSeed) > 0
-        ? Number(baseSeed)
-        : Math.floor(Math.random() * 900000000000) + 100000;
+    const hasFixedBaseSeed = Boolean(baseSeed && Number(baseSeed) > 0);
+    const startingSeed = hasFixedBaseSeed
+      ? Math.floor(Number(baseSeed))
+      : Math.floor(Math.random() * 1e15) + 1;
 
     for (let i = 0; i < promptList.length; i++) {
-      const itemSeed = String(startingSeed + i * 9973);
+      // Generate an independent random 64-bit integer (1..10^15) per shot unless a fixed baseSeed was given
+      const itemSeed = hasFixedBaseSeed
+        ? String(startingSeed + i)
+        : String(Math.floor(Math.random() * 1e15) + 1);
       const info = insertItem.run(
         batchId,
         i + 1,
@@ -487,6 +491,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
           const apiPayload = compileWorkflowForGeneration({
             workflowId: Number(workflowId),
             positivePrompt: item.prompt,
+            triggerWord: triggerWord !== undefined ? String(triggerWord) : undefined,
             negativePrompt: (negativePrompt || '').trim(),
             seed: item.seed,
             aspectRatio: resolvedAr,

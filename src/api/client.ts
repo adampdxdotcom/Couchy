@@ -205,6 +205,7 @@ export const api = {
     payload: {
       loraName: string;
       appearanceLabel?: string;
+      triggerWord?: string;
       loraCategory?: LoraCategory;
       notes?: string;
     }
@@ -460,6 +461,7 @@ export const api = {
     aspectRatio: string;
     megapixels: number;
     prompts: string[];
+    triggerWord?: string;
     negativePrompt: string;
     loras: GenerationLoraSelection[];
     checkpointName?: string;
