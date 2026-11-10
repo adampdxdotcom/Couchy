@@ -708,7 +708,7 @@ Return ONLY a JSON array of {count} complete prompt strings.`,
     },
     '30_10': {
       inputs: {
-        unet_name: '',
+        unet_name: 'lustifyNSFWCheckpoint_v10Krea2.safetensors',
         weight_dtype: 'default',
       },
       class_type: 'UNETLoader',
@@ -943,6 +943,37 @@ Return ONLY a JSON array of {count} complete prompt strings.`,
       `).run(kreaWorkflowId);
     }
   }
+
+  // Ensure any existing default workflow record has lustifyNSFWCheckpoint_v10Krea2.safetensors in Node 30_10
+  const defaultWf = db
+    .prepare(
+      "SELECT id, api_workflow_json FROM workflows WHERE workflow_hash = 'default-krea2-turbo-workflow' OR id = 1 LIMIT 1"
+    )
+    .get() as { id: number; api_workflow_json: string } | undefined;
+  if (defaultWf?.api_workflow_json) {
+    try {
+      const parsed = JSON.parse(defaultWf.api_workflow_json);
+      if (
+        parsed['30_10']?.inputs &&
+        (!parsed['30_10'].inputs.unet_name || !parsed['30_10'].inputs.unet_name.trim())
+      ) {
+        parsed['30_10'].inputs.unet_name = 'lustifyNSFWCheckpoint_v10Krea2.safetensors';
+        db.prepare('UPDATE workflows SET api_workflow_json = ? WHERE id = ?').run(
+          JSON.stringify(parsed, null, 2),
+          defaultWf.id
+        );
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Ensure default model is registered in models table
+  db.prepare(`
+    INSERT INTO models (name, filename, model_type, is_installed, source_type)
+    VALUES ('lustifyNSFWCheckpoint_v10Krea2', 'lustifyNSFWCheckpoint_v10Krea2.safetensors', 'diffusion', 1, 'workflow_default')
+    ON CONFLICT(filename) DO UPDATE SET model_type = 'diffusion', is_installed = 1
+  `).run();
 }
 
 

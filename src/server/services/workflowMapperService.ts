@@ -401,6 +401,7 @@ export function getWorkflowMapping(workflowId: number): {
   mapping: WorkflowNodeMapping;
   nodes: WorkflowNodeSlotInfo[];
   hasValidApiGraph: boolean;
+  defaultCheckpoint?: string | null;
 } {
   const wfRow = db.prepare('SELECT * FROM workflows WHERE id = ?').get(workflowId) as any;
   const apiGraph = getExecutableApiGraph(wfRow);
@@ -434,6 +435,7 @@ export function getWorkflowMapping(workflowId: number): {
       },
       nodes: [],
       hasValidApiGraph: false,
+      defaultCheckpoint: null,
     };
   }
 
@@ -444,8 +446,19 @@ export function getWorkflowMapping(workflowId: number): {
     .prepare('SELECT * FROM workflow_mappings WHERE workflow_id = ?')
     .get(workflowId) as any;
 
+  const resolvedCkptNodeId = savedRow?.checkpoint_node_id ?? autoMapping.checkpointNodeId;
+  const resolvedCkptField =
+    savedRow?.checkpoint_field || autoMapping.checkpointField || 'unet_name';
+  let defaultCheckpoint: string | null = null;
+  if (resolvedCkptNodeId && apiGraph[resolvedCkptNodeId]?.inputs) {
+    const rawVal = apiGraph[resolvedCkptNodeId].inputs[resolvedCkptField];
+    if (typeof rawVal === 'string' && rawVal.trim()) {
+      defaultCheckpoint = rawVal.trim();
+    }
+  }
+
   if (!savedRow) {
-    return { mapping: autoMapping, nodes, hasValidApiGraph: true };
+    return { mapping: autoMapping, nodes, hasValidApiGraph: true, defaultCheckpoint };
   }
 
   let parsedLoraIds: string[] = autoMapping.loraNodeIds;
@@ -486,6 +499,7 @@ export function getWorkflowMapping(workflowId: number): {
     },
     nodes,
     hasValidApiGraph: true,
+    defaultCheckpoint,
   };
 }
 

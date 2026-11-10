@@ -393,6 +393,7 @@ export const api = {
       mapping: WorkflowNodeMapping;
       nodes: WorkflowNodeSlotInfo[];
       hasValidApiGraph: boolean;
+      defaultCheckpoint?: string | null;
     }>(`/api/generation/workflows/${workflowId}/mapping`),
 
   saveWorkflowMapping: (workflowId: number, payload: Partial<WorkflowNodeMapping>) =>

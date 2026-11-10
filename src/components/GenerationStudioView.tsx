@@ -119,6 +119,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
     workflows[0]?.id ?? null
   );
   const [selectedCheckpoint, setSelectedCheckpoint] = useState<string>('');
+  const [workflowDefaultCheckpoint, setWorkflowDefaultCheckpoint] = useState<string>('');
   const [workflowMapping, setWorkflowMapping] = useState<WorkflowNodeMapping | null>(null);
   const [mapperModalState, setMapperModalState] = useState<{
     open: boolean;
@@ -169,13 +170,16 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
   // Combine available diffusion/UNET/checkpoint models from inventory and metadata
   const availableDiffusionModels = useMemo(() => {
     const set = new Set<string>(checkpoints);
+    if (workflowDefaultCheckpoint) {
+      set.add(workflowDefaultCheckpoint);
+    }
     for (const m of models) {
-      if (m.modelType === 'checkpoint' || m.modelType === 'other') {
+      if (m.modelType === 'checkpoint' || m.modelType === 'other' || m.modelType === 'diffusion') {
         set.add(m.filename);
       }
     }
     return Array.from(set).sort();
-  }, [checkpoints, models]);
+  }, [checkpoints, models, workflowDefaultCheckpoint]);
 
   // Prefill LoRAs and Trigger Word (Node #30_27 string_b) whenever character changes
   useEffect(() => {
@@ -214,8 +218,19 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
     if (!selectedWorkflowId) return;
     api
       .getWorkflowMapping(selectedWorkflowId)
-      .then((res) => setWorkflowMapping(res.mapping))
-      .catch(() => setWorkflowMapping(null));
+      .then((res) => {
+        setWorkflowMapping(res.mapping);
+        if (res.defaultCheckpoint) {
+          setWorkflowDefaultCheckpoint(res.defaultCheckpoint);
+          setSelectedCheckpoint((prev) => prev || res.defaultCheckpoint || '');
+        } else {
+          setWorkflowDefaultCheckpoint('');
+        }
+      })
+      .catch(() => {
+        setWorkflowMapping(null);
+        setWorkflowDefaultCheckpoint('');
+      });
   }, [selectedWorkflowId]);
 
   // Load initial templates, LM Studio status + guiding templates, and recent batches
@@ -860,15 +875,31 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-zinc-400 mb-1">
-                  Diffusion Model (Node #30_10 <code className="text-indigo-300">unet_name</code>)
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium text-zinc-400">
+                    Diffusion Model (Node #30_10 <code className="text-indigo-300">unet_name</code>)
+                  </label>
+                  {workflowDefaultCheckpoint && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCheckpoint(workflowDefaultCheckpoint)}
+                      className="text-[10px] text-indigo-400 hover:text-indigo-300 font-mono cursor-pointer"
+                      title="Reset to workflow default model"
+                    >
+                      Reset Default
+                    </button>
+                  )}
+                </div>
                 <input
                   type="text"
                   list="diffusion-models-datalist"
                   value={selectedCheckpoint}
                   onChange={(e) => setSelectedCheckpoint(e.target.value)}
-                  placeholder="Keep workflow default or select model..."
+                  placeholder={
+                    workflowDefaultCheckpoint
+                      ? `Default: ${workflowDefaultCheckpoint}`
+                      : 'Keep workflow default or select model...'
+                  }
                   className="w-full px-3 py-2 text-xs font-mono bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
                 />
                 <datalist id="diffusion-models-datalist">
