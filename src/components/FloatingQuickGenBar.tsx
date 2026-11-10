@@ -21,10 +21,19 @@ import {
   resolveDefaultWorkflow,
 } from '../shared/utils.ts';
 
+export interface QuickGenPrefill {
+  prompt: string;
+  character?: CharacterProfile | null;
+  aspectRatio?: string;
+  batchCount?: number;
+  timestamp: number;
+}
+
 interface FloatingQuickGenBarProps {
   characters: CharacterProfile[];
   allImages: ImageRecord[];
   workflows: WorkflowLibraryItem[];
+  prefillPayload?: QuickGenPrefill | null;
   onRefreshAll: () => Promise<void>;
   onOpenGenerationTab: () => void;
   onPushToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
@@ -50,6 +59,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   characters,
   allImages,
   workflows,
+  prefillPayload,
   onRefreshAll,
   onPushToast,
 }) => {
@@ -58,6 +68,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   const [aspectRatio, setAspectRatio] = useState('2:3 (Portrait Photo)');
   const [batchCount, setBatchCount] = useState<number>(1);
   const [attachedCharacter, setAttachedCharacter] = useState<CharacterProfile | null>(null);
+  const [isHighlighted, setIsHighlighted] = useState(false);
 
   // Popover visibility states
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -86,6 +97,43 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Handle incoming reuse / prefill requests
+  useEffect(() => {
+    if (!prefillPayload) return;
+
+    if (prefillPayload.prompt !== undefined) {
+      setPrompt(prefillPayload.prompt);
+    }
+    if (prefillPayload.character !== undefined) {
+      setAttachedCharacter(prefillPayload.character);
+    }
+    if (prefillPayload.aspectRatio) {
+      setAspectRatio(prefillPayload.aspectRatio);
+    }
+    if (prefillPayload.batchCount !== undefined) {
+      setBatchCount(prefillPayload.batchCount);
+    }
+
+    // Smoothly ensure the quick gen box is in view
+    containerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    // Focus prompt textarea and position cursor at end
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.setSelectionRange(
+          inputRef.current.value.length,
+          inputRef.current.value.length
+        );
+      }
+    }, 60);
+
+    // Pulse highlight animation
+    setIsHighlighted(true);
+    const timer = setTimeout(() => setIsHighlighted(false), 1400);
+    return () => clearTimeout(timer);
+  }, [prefillPayload]);
 
   // Build unified mention candidates (Character entries first, followed by confirmed character images)
   const mentionEntries = useMemo<MentionEntry[]>(() => {
@@ -512,7 +560,13 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
       )}
 
       {/* Main Floating Quick Generation Box */}
-      <div className="bg-zinc-900/95 backdrop-blur-2xl border border-zinc-800/90 rounded-3xl px-4 py-3 shadow-2xl">
+      <div
+        className={`bg-zinc-900/95 backdrop-blur-2xl rounded-3xl px-4 py-3 transition-all duration-500 ${
+          isHighlighted
+            ? 'border-2 border-indigo-500 ring-4 ring-indigo-500/30 shadow-2xl shadow-indigo-500/25'
+            : 'border border-zinc-800/90 shadow-2xl'
+        }`}
+      >
         {/* Attached Character Pill Badge */}
         {attachedCharacter && (
           <div className="mb-2 flex flex-wrap items-center gap-2">

@@ -5,6 +5,7 @@ import {
   Heart,
   Star,
   Download,
+  RotateCcw,
   FolderOpen,
   RefreshCw,
   Settings,
@@ -34,6 +35,7 @@ interface GalleryGridViewProps {
   onSelectAll: () => void;
   onClearSelection: () => void;
   onOpenInspector: (image: ImageRecord) => void;
+  onReusePrompt?: (image: ImageRecord) => void;
   onQuickRate: (id: number, rating: number) => void;
   onQuickFavorite: (id: number, nextFav: boolean) => void;
   onBulkAction: (payload: any) => Promise<void>;
@@ -90,6 +92,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   onSelectAll,
   onClearSelection,
   onOpenInspector,
+  onReusePrompt,
   onQuickRate,
   onQuickFavorite,
   onBulkAction,
@@ -464,14 +467,29 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                       </button>
                     ))}
                   </div>
-                  <a
-                    href={`/api/images/${img.id}/file?download=1`}
-                    onClick={(e) => e.stopPropagation()}
-                    className="p-1 text-zinc-200 hover:text-white"
-                    title="Download Unchanged Original File"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                  </a>
+                  <div className="flex items-center gap-1">
+                    {onReusePrompt && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onReusePrompt(img);
+                        }}
+                        className="p-1 text-zinc-300 hover:text-white hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
+                        title="Reuse prompt & settings in Quick Gen"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    <a
+                      href={`/api/images/${img.id}/file?download=1`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="p-1 text-zinc-200 hover:text-white hover:bg-zinc-800/80 rounded transition-colors"
+                      title="Download Unchanged Original File"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
                 </div>
               </div>
 

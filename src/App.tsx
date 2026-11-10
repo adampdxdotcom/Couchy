@@ -14,7 +14,8 @@ import { GenerationStudioView } from './components/GenerationStudioView.tsx';
 import { LoraAndModelManagerView } from './components/LoraAndModelManagerView.tsx';
 import { WorkflowLibraryView } from './components/WorkflowLibraryView.tsx';
 import { SystemAndBackupView } from './components/SystemAndBackupView.tsx';
-import { FloatingQuickGenBar } from './components/FloatingQuickGenBar.tsx';
+import { FloatingQuickGenBar, type QuickGenPrefill } from './components/FloatingQuickGenBar.tsx';
+import { resolveClosestAspectRatio } from './shared/utils.ts';
 import type {
   AppToastMessage,
   CharacterProfile,
@@ -73,6 +74,7 @@ export default function App() {
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [inspectedImageId, setInspectedImageId] = useState<number | null>(null);
+  const [quickGenPrefill, setQuickGenPrefill] = useState<QuickGenPrefill | null>(null);
 
   // Header ComfyUI Live Status & Toast Message History (Last 10 messages + 3s toast override)
   const [comfyStatus, setComfyStatus] = useState<ComfyUiLiveStatus>({
@@ -266,6 +268,38 @@ export default function App() {
     }
   };
 
+  const handleReusePrompt = useCallback(
+    (img: ImageRecord) => {
+      // Find character profile associated with image
+      const confirmedCharLink = img.characters.find((c) => c.status === 'confirmed');
+      const firstCharLink = confirmedCharLink || img.characters[0];
+      const matchedChar = firstCharLink
+        ? characters.find((c) => c.id === firstCharLink.characterId) || null
+        : null;
+
+      // Extract and format prompt text cleanly
+      let promptText = (img.positivePrompt || '').trim();
+      if (!promptText && matchedChar?.name) {
+        promptText = `portrait of ${matchedChar.name}`;
+      }
+
+      // Calculate matching aspect ratio preset from dimensions
+      const targetRatio = resolveClosestAspectRatio(img.width, img.height);
+
+      setQuickGenPrefill({
+        prompt: promptText,
+        character: matchedChar,
+        aspectRatio: targetRatio,
+        batchCount: 1,
+        timestamp: Date.now(),
+      });
+
+      const charLabel = matchedChar ? ` with ${matchedChar.name}` : '';
+      pushToast(`Reused prompt${charLabel} (${targetRatio}, 1 image) in Quick Gen`, 'success');
+    },
+    [characters, pushToast]
+  );
+
   const inspectedImage =
     images.find((i) => i.id === inspectedImageId) ||
     allImages.find((i) => i.id === inspectedImageId) ||
@@ -343,6 +377,7 @@ export default function App() {
               onSelectAll={() => setSelectedIds(new Set(images.map((i) => i.id)))}
               onClearSelection={() => setSelectedIds(new Set())}
               onOpenInspector={(img) => setInspectedImageId(img.id)}
+              onReusePrompt={handleReusePrompt}
               onQuickRate={async (id, rating) => {
                 setImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
                 setAllImages((prev) =>
@@ -459,6 +494,7 @@ export default function App() {
           characters={characters}
           allImages={allImages}
           workflows={workflows}
+          prefillPayload={quickGenPrefill}
           onRefreshAll={refreshAll}
           onOpenGenerationTab={() => setActiveTab('generation')}
           onPushToast={pushToast}

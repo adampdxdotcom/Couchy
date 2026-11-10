@@ -1,102 +1,117 @@
-# Gallery Search Scoping & Precision Matching
+# Reuse Prompt Action in Gallery Cards
 
-Deliver an accurate, intuitive search experience across 2,000+ local ComfyUI images by scoping default queries strictly to positive prompts, tags, LoRAs, characters, and visual keywords—while enforcing whole-word boundary matching on unquoted terms and exact substring matching on quoted terms.
+Add an intuitive "Reuse Prompt" action button (circular arrow icon) to the left of the download button on each gallery image card. Clicking it pre-fills the persistent bottom Quick Generation bar with the image's prompt, automatically links the associated character profile, matches the aspect ratio to the closest standard preset, sets generation count to 1, and instantly focuses the text input for rapid iteration.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The search engine currently returned nearly every image for general keywords like `blonde` because queries performed unconstrained substring scans across negative prompts, filenames, hashes, and raw notes. The requirements below incorporate your confirmed choices:
-
-- **Target Fields**: Default unquoted search searches **positive prompts, user tags, LoRA names, character names, and AI visual tags**. It **excludes filenames**, negative prompts, content hashes, and technical notes by default.
-- **Word Matching Behavior**:
-  - **Unquoted terms** (e.g., `blonde`): Enforce whole-word boundary matching (`\bblonde\b`), allowing word-level matches on prompts and composite visual tags (e.g., `blonde_hair` matches `blonde`).
-  - **Quoted terms** (e.g., `"blonde"` or `"blonde hair"`): Enforce exact substring matching.
-- **Explicit Field Overrides**: Retain explicit key-value queries for users who intentionally want to search other attributes (e.g. `filename:ComfyUI_0001`, `neg:blurry`, `hash:...`).
-- **AI-Generated Visual Tags**: Treated with equal weight alongside user tags and prompts, matching both standard tags and snake_cased tag tokens.
+> Based on your confirmed choices in Phase 1:
+> - **Pre-fill Target**: Pre-fills the bottom Quick Generation bar so you remain in context without losing your gallery place.
+> - **Focus Idea**: When clicked, the Quick Generation bar's prompt text box immediately gains keyboard cursor focus (`inputRef.current?.focus()`), smoothly highlighting the bar with a subtle indigo glow and toast notification so you can immediately type additions or hit Enter to generate.
+> - **Aspect Ratio**: Automatically calculates the mathematical ratio of the original image dimensions ($W / H$) and selects the closest standard preset (e.g., $1448 \times 2176 \to \text{2:3 (Portrait Photo)}$).
+> - **Character & Prompt Formatting**: Resolves confirmed or linked character profiles from the image metadata, attaches the character badge to the Quick Generation bar, and loads the positive prompt text cleaned of redundant trigger word prefixes.
+> - **Batch Count**: Defaults to a single image ($1\times$), as requested.
 
 ---
 
-## 1. Overview & Core Concept
+### 1. Overview & Core Concept
 
-- **What It Does**: Upgrades the gallery search engine in `galleryQueryService.ts` and the UI in `GalleryFilterBar.tsx` so searching for visual attributes, concepts, characters, or LoRAs returns only relevant images.
-- **Target Audience**: Photographers, concept artists, and AI creators organizing growing local galleries with thousands of generated images.
-- **Key Value**: Eliminates false positives caused by boilerplate negative prompts and random filename strings, making keyword search instant and trustworthy.
-
----
-
-## 2. User Experience & Visual Design
-
-- **Search Input Guidance**:
-  - Update search placeholder in `GalleryFilterBar`:
-    `Search prompts, tags, characters, LoRAs (e.g. blonde, "exact phrase", rating >= 4)`
-- **Search Feedback & Clear Affordance**:
-  - Keep the compact, high-density toolbar design adhering to the SaaS design constitution (no loud badges or generic pill sandwiches).
-  - When an active search query is present, display a quiet inline match indicator (e.g. `24 matches`) with a clean `X` button to immediately reset the query.
-- **Boolean & Advanced Queries Preserved**:
-  - Complex boolean logic (`AND`, `OR`, `NOT`, `character:"Elena"`, `rating >= 4`) continues to work without friction.
+- **What It Does**: Adds a circular arrow icon button (`RotateCcw`) immediately to the left of the download icon in the gallery image card header. One click transfers the generation recipe (prompt text, character association, aspect ratio, single image count) directly into the bottom Quick Generation bar.
+- **Target Audience / Workflow**: Power users browsing generation results who spot a strong pose, composition, or style and want to immediately iterate with the same character and prompt without opening the full inspector drawer or re-typing prompts.
+- **Key Value**: Reduces the prompt-iteration workflow from 6+ manual clicks down to a single click with instant typing focus.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+### 2. User Experience & Visual Design
 
-- **Decision 1: Whole-Word Regex vs Substring for Unquoted Queries**
-  - *Chosen Approach*: Unquoted single-word and multi-word terms use word-boundary matching `\b<term>\b` (with underscore/hyphen awareness for tags like `blonde_hair`).
-  - *Why*: Substring matching causes terms like `art` to match `part`, `start`, `smart`, `artwork`, etc. Whole-word matching delivers the search precision users expect.
-  - *Alternatives Considered*: Fuzzy matching or stemming (introduces unpredictable false positives).
-- **Decision 2: Exclusion of Filenames & Negative Prompts from Universal Search**
-  - *Chosen Approach*: Universal unquoted search matches only content attributes (`positivePrompt`, `tags`, `loras`, `characters`, `visualTags`). Dedicated prefixes `file:` / `filename:` and `neg:` / `negative:` allow power users to search those fields when explicitly requested.
-  - *Why*: ComfyUI filenames are auto-incrementing or hash-based, and negative prompts contain 20–50 generic negative terms (like `worst quality, normal quality, low quality`) present across 95% of images.
-- **Decision 3: Server-Authoritative Matching in SQLite / Query Pipeline**
-  - *Chosen Approach*: Implement regex token boundary matching in `evaluateSinglePredicate` inside `galleryQueryService.ts`.
-  - *Why*: Ensures consistent results across both paginated/filtered queries, batch zip exports, and bulk tag operations.
+#### Visual Hierarchy & Card Placement
+In `GalleryGridView`, each image card top bar currently renders 5 rating stars on the left and a single download button on the right. 
+The new layout places the circular arrow icon right next to the download button:
 
----
-
-## 4. Technical Architecture & Data Strategy
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                    GalleryFilterBar (UI)                     │
-│   Search Input: [ blonde ]  ──>  filters.query = "blonde"    │
-└──────────────────────────────┬───────────────────────────────┘
-                               │ POST /api/images/query
-                               ▼
-┌──────────────────────────────────────────────────────────────┐
-│              galleryQueryService.ts (Backend)                │
-│                                                              │
-│  1. Parse Clauses (AND / OR / NOT / KV / Quoted / Words)     │
-│  2. evaluateSinglePredicate(img, clause):                   │
-│     ├─ If explicit prefix (char:, lora:, file:, neg:, etc.)  │
-│     │    Target only specified field                         │
-│     ├─ If quoted ("blonde"):                                 │
-│     │    Exact substring search across allowed fields        │
-│     └─ If unquoted (blonde):                                 │
-│          Word-boundary regex: (?:\b|_)blonde(?:\b|_)         │
-│          Scoped to:                                          │
-│          • positivePrompt                                    │
-│          • tags                                              │
-│          • loras                                             │
-│          • characters                                        │
-│          • visualTags (WD14 tokens)                          │
-│          [EXCLUDED: filename, negativePrompt, notes, hash]   │
-└──────────────────────────────┬───────────────────────────────┘
-                               │ Matched ImageRecord[]
-                               ▼
-┌──────────────────────────────────────────────────────────────┐
-│                    GalleryGridView (View)                    │
-│   Renders only genuinely matching images (no false matches)  │
-└──────────────────────────────────────────────────────────────┘
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  ⭐ ⭐ ⭐ ⭐ ⭐                                    ↺   ⬇   │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│                    [ Image Preview ]                        │
+│                                                             │
+├─────────────────────────────────────────────────────────────┤
+│  Krea2_turbo_01793_.png                                     │
+│  1448×2176 · lustifyNSFWCheckpoint_v... · 2 LoRAs           │
+│  Ana                                           ✔ Available  │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Targeted Implementation Steps
-1. **`src/server/services/galleryQueryService.ts`**:
-   - Refactor `evaluateSinglePredicate` to distinguish quoted vs unquoted tokens.
-   - For unquoted tokens: compile a boundary-aware RegExp `(?:\b|_)${escapeRegex(token)}(?:\b|_)` with `'i'` flag.
-   - Restrict universal matching to `positivePrompt`, `characters`, `loras`, `tags`, and `visualTags`.
-   - Add explicit field support for `file:` / `filename:` and `neg:` / `negativePrompt:` so users can still search them deliberately.
-2. **`src/components/GalleryFilterBar.tsx`**:
-   - Update search placeholder and accessibility labels.
-   - Ensure clean query clear button and matching count display.
-3. **Verification**:
-   - Run compilation and TypeScript validation (`compile_applet` and `lint_applet`).
-   - Validate queries with `blonde`, `"blonde"`, `character:Elena`, and multi-word terms.
+- **Icon**: `RotateCcw` from `lucide-react` ($14\text{px} \times 14\text{px}$, matching `<Download className="w-3.5 h-3.5" />`).
+- **Styling**: `p-1 text-zinc-400 hover:text-white hover:bg-zinc-800/80 rounded transition-colors`.
+- **Tooltip**: `"Reuse prompt & settings in Quick Gen"`.
+- **Keyboard & Click Interaction**: `e.stopPropagation()` ensures clicking the button does not open the full-screen image inspector drawer.
+
+#### What the "Focus Idea" Delivers
+When the circular arrow is clicked:
+1. **Immediate Pre-fill**:
+   - `prompt`: Pre-filled with the image's positive prompt.
+   - `attachedCharacter`: Matches the character by ID or name from `characters` and renders the character pill.
+   - `aspectRatio`: Closest matching preset (e.g., `2:3 (Portrait Photo)`).
+   - `batchCount`: Reset to `1`.
+2. **Keyboard Cursor Focus**:
+   - `inputRef.current?.focus()` moves cursor to the end of the prompt textarea.
+3. **Visual Affirmation**:
+   - A brief, graceful border glow (`ring-2 ring-indigo-500/60 transition-all duration-500`) pulses on the Quick Generation bar for 1.2 seconds.
+   - A quiet toast message confirms: *"Loaded prompt & settings from Krea2_turbo_... into Quick Gen"*.
+
+---
+
+### 3. Key Product Decisions & Trade-Offs
+
+- **Decision 1: Direct State Pre-fill vs Global Bus**
+  - *Chosen Approach*: Pass a dedicated `onReusePrompt={(img) => ...}` handler from `App.tsx` down through `GalleryGridView.tsx`. `App.tsx` passes a structured `prefillPayload` prop into `FloatingQuickGenBar.tsx`.
+  - *Why*: Strict top-down props without global event emitters or ad-hoc window events maintains clean React architectural boundaries and allows full type validation.
+- **Decision 2: Dimension-to-Preset Mathematical Matching**
+  - *Chosen Approach*: Extract $r = W / H$, compare against all presets in `ASPECT_RATIO_PRESETS`, and pick $\operatorname{argmin} |r - r_{\text{preset}}|$.
+  - *Why*: Ensures images generated at arbitrary pixel resolutions (e.g., $1448 \times 2176 \approx 0.665$, $1024 \times 1536 \approx 0.667$) map reliably to standard ComfyUI generation presets like `2:3 (Portrait Photo)`.
+
+---
+
+### 4. Technical Architecture & Data Strategy
+
+#### Component & Data Flow Diagram
+
+```text
+┌───────────────────────────────────────────────────────────┐
+│                          App.tsx                          │
+│                                                           │
+│  State: [quickGenPrefill, setQuickGenPrefill]             │
+│  Handler: handleReusePrompt(image: ImageRecord)           │
+└─────────────┬───────────────────────────────┬─────────────┘
+              │                               │
+              ▼                               ▼
+┌───────────────────────────┐   ┌───────────────────────────┐
+│    GalleryGridView.tsx    │   │  FloatingQuickGenBar.tsx  │
+│                           │   │                           │
+│  - Card header:           │   │  - Props: prefillPayload  │
+│    <button                │   │  - useEffect on prefill:  │
+│      title="Reuse prompt" │   │    • setPrompt(...)       │
+│      onClick=handleReuse  │   │    • setAttachedChar(...) │
+│    >                      │   │    • setAspectRatio(...)  │
+│      <RotateCcw />        │   │    • setBatchCount(1)     │
+│    </button>              │   │    • textarea.focus()     │
+│                           │   │    • highlight pulse      │
+└───────────────────────────┘   └───────────────────────────┘
+```
+
+#### Shared Aspect Ratio Resolver (`src/shared/utils.ts`)
+Add a helper `resolveClosestAspectRatio(width: number, height: number): string` that matches standard presets:
+- $1:1$ (Square)
+- $2:3$ (Portrait Photo)
+- $3:4$ (Portrait Standard)
+- $4:5$ (Portrait Social)
+- $9:16$ (Story / Reel)
+- $16:9$ (Landscape Standard)
+- $3:2$ (Landscape Photo)
+- $21:9$ (Ultrawide Cinematic)
+
+#### Verification Plan
+1. Co-execute `compile_applet` and `lint_applet` to confirm 0 TypeScript or linting errors.
+2. Test clicking the button on various aspect ratios (e.g. $1448 \times 2176 \to \text{2:3}$, $1024 \times 1024 \to \text{1:1}$, $1920 \times 1080 \to \text{16:9}$).
+3. Verify character attachment, single image count default ($1$), and prompt text pre-fill with autofocus.

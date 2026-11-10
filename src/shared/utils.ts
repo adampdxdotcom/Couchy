@@ -72,6 +72,42 @@ export function normalizeResolutionSelectorRatio(raw: string | undefined | null)
   return str;
 }
 
+/**
+ * Calculates aspect ratio from pixel width and height and finds the closest
+ * standard ComfyUI ResolutionSelector preset.
+ */
+export function resolveClosestAspectRatio(width: number, height: number): string {
+  if (!width || !height || width <= 0 || height <= 0) {
+    return '2:3 (Portrait Photo)';
+  }
+
+  const ratio = width / height;
+
+  const presets: { value: string; ratio: number }[] = [
+    { value: '1:1 (Square)', ratio: 1.0 },
+    { value: '2:3 (Portrait Photo)', ratio: 2 / 3 },
+    { value: '3:2 (Photo)', ratio: 3 / 2 },
+    { value: '3:4 (Portrait Standard)', ratio: 3 / 4 },
+    { value: '4:3 (Standard)', ratio: 4 / 3 },
+    { value: '9:16 (Portrait Widescreen)', ratio: 9 / 16 },
+    { value: '16:9 (Widescreen)', ratio: 16 / 9 },
+    { value: '21:9 (Ultrawide)', ratio: 21 / 9 },
+  ];
+
+  let bestMatch = '2:3 (Portrait Photo)';
+  let minDiff = Infinity;
+
+  for (const item of presets) {
+    const diff = Math.abs(Math.log(ratio / item.ratio));
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestMatch = item.value;
+    }
+  }
+
+  return bestMatch;
+}
+
 // ==========================================
 // 2. Byte & Data Size Formatting
 // ==========================================

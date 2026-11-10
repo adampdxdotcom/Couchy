@@ -1,31 +1,24 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
+  Code,
+  Download,
   Play,
   Plus,
-  Code,
-  Sliders,
-  RefreshCw,
-  CheckCircle2,
-  AlertTriangle,
-  Save,
   RotateCcw,
-  Download,
+  Save,
+  Sliders,
   Star,
-  Trash2,
-  Link2,
-  Layers,
-  Upload,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
-import {
-  RESOLUTION_SELECTOR_OPTIONS,
-  type AppToastMessage,
-  type ImageRecord,
-  type LoraExplorerItem,
-  type ModelInventoryItem,
-  type ReproductionValidationResult,
-  type WorkflowLibraryItem,
+import type {
+  AppToastMessage,
+  ImageRecord,
+  LoraExplorerItem,
+  ModelInventoryItem,
+  ReproductionValidationResult,
+  WorkflowLibraryItem,
 } from '../shared/types.ts';
 import {
   filterDiffusionModels,
@@ -34,6 +27,20 @@ import {
   filterClipModels,
   resolveDefaultWorkflow,
 } from '../shared/utils.ts';
+import { WorkflowSidebarList } from './workflows/WorkflowSidebarList.tsx';
+import {
+  WorkflowReproductionHistory,
+  type WorkflowReproJob,
+} from './workflows/WorkflowReproductionHistory.tsx';
+import {
+  ExportPromptModal,
+  WorkflowCreateModal,
+} from './workflows/WorkflowModals.tsx';
+import { WorkflowGraphInspector } from './workflows/WorkflowGraphInspector.tsx';
+import {
+  applyPowerLoraEntriesToInputs,
+  type PowerLoraEntry,
+} from './workflows/PowerLoraLoaderEditor.tsx';
 
 interface WorkflowLibraryViewProps {
   workflows: WorkflowLibraryItem[];
@@ -46,125 +53,8 @@ interface WorkflowLibraryViewProps {
   onPushToast?: (text: string, type?: AppToastMessage['type']) => void;
 }
 
-interface PowerLoraEntry {
-  key: string;
-  on: boolean;
-  lora: string;
-  strength: number;
-}
-
-const COMMON_SAMPLERS = [
-  'euler',
-  'euler_ancestral',
-  'heun',
-  'dpm_2',
-  'dpm_2_ancestral',
-  'lms',
-  'dpm_fast',
-  'dpm_adaptive',
-  'dpmpp_2s_ancestral',
-  'dpmpp_sde',
-  'dpmpp_2m',
-  'dpmpp_2m_sde',
-  'dpmpp_3m_sde',
-  'ddim',
-  'uni_pc',
-  'uni_pc_bh2',
-];
-
-const COMMON_SCHEDULERS = [
-  'normal',
-  'karras',
-  'exponential',
-  'sgm_uniform',
-  'simple',
-  'ddim_uniform',
-  'beta',
-];
-
 /**
- * Checks whether a ComfyUI node is a Power Lora Loader (rgthree) node.
- */
-function isPowerLoraLoaderNode(nodeObj: any): boolean {
-  if (!nodeObj || typeof nodeObj !== 'object') return false;
-  const ct = String(nodeObj.class_type || '').toLowerCase();
-  const inputs = nodeObj.inputs || {};
-  return ct.includes('power lora loader') || 'PowerLoraLoaderHeaderWidget' in inputs;
-}
-
-/**
- * Extracts ordered lora_1, lora_2, ... entries from a Power Lora Loader node's inputs.
- */
-function extractPowerLoraEntries(inputs: Record<string, any>): PowerLoraEntry[] {
-  const entries: PowerLoraEntry[] = [];
-  const keys = Object.keys(inputs || {})
-    .filter((k) => /^lora_\d+$/i.test(k))
-    .sort((a, b) => {
-      const numA = parseInt(a.replace(/\D+/g, ''), 10) || 0;
-      const numB = parseInt(b.replace(/\D+/g, ''), 10) || 0;
-      return numA - numB;
-    });
-
-  for (const k of keys) {
-    const val = inputs[k];
-    if (val && typeof val === 'object' && !Array.isArray(val)) {
-      entries.push({
-        key: k,
-        on: val.on !== undefined ? Boolean(val.on) : true,
-        lora: String(val.lora || ''),
-        strength: Number(val.strength ?? val.strength_model ?? 1.0),
-      });
-    }
-  }
-  return entries;
-}
-
-/**
- * Writes an array of PowerLoraEntry objects back into a node's inputs as lora_1, lora_2, ...
- */
-function applyPowerLoraEntriesToInputs(
-  inputs: Record<string, any>,
-  entries: PowerLoraEntry[]
-): Record<string, any> {
-  const nextInputs: Record<string, any> = {};
-
-  // Preserve header widget at top if present, or provide default
-  if (inputs.PowerLoraLoaderHeaderWidget) {
-    nextInputs.PowerLoraLoaderHeaderWidget = inputs.PowerLoraLoaderHeaderWidget;
-  } else {
-    nextInputs.PowerLoraLoaderHeaderWidget = { type: 'PowerLoraLoaderHeaderWidget' };
-  }
-
-  // Preserve non-LoRA inputs (like model, clip link tuples) while omitting old lora_N, header, and Add Lora widget
-  const remainingInputs: Record<string, any> = {};
-  for (const [k, v] of Object.entries(inputs || {})) {
-    if (k !== 'PowerLoraLoaderHeaderWidget' && k !== '➕ Add Lora' && !/^lora_\d+$/i.test(k)) {
-      remainingInputs[k] = v;
-    }
-  }
-
-  // Add sequential lora_1, lora_2, ...
-  entries.forEach((entry, idx) => {
-    nextInputs[`lora_${idx + 1}`] = {
-      on: Boolean(entry.on),
-      lora: entry.lora || '',
-      strength: Number(entry.strength ?? 1.0),
-    };
-  });
-
-  // Keep the exact "➕ Add Lora" placeholder key expected by rgthree Power Lora Loader
-  nextInputs['➕ Add Lora'] = inputs['➕ Add Lora'] !== undefined ? inputs['➕ Add Lora'] : '';
-
-  // Append remaining inputs (e.g. model, clip links)
-  for (const [k, v] of Object.entries(remainingInputs)) {
-    nextInputs[k] = v;
-  }
-
-  return nextInputs;
-}
-
-/**
- * Independent Workflow Library, Interactive Node Settings Editor & Reproduction History View.
+ * Orchestrator view for managing, inspecting, and editing ComfyUI workflows.
  */
 export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
   workflows,
@@ -177,23 +67,21 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
   onPushToast,
 }) => {
   const [selectedWfId, setSelectedWfId] = useState<number | null>(null);
-  const [selectedWfDetail, setSelectedWfDetail] = useState<any | null>(null);
-  const [reproJobs, setReproJobs] = useState<any[]>([]);
-  const [validation, setValidation] = useState<ReproductionValidationResult | null>(null);
-  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [selectedWfDetail, setSelectedWfDetail] = useState<any>(null);
 
-  // Editor state for the currently selected workflow
+  // Editor mode: structured graphical settings vs raw JSON
   const [editorMode, setEditorMode] = useState<'structured' | 'json'>('structured');
+  const [nodeSearchFilter, setNodeSearchFilter] = useState('');
+
+  // Editable Draft State
   const [draftName, setDraftName] = useState('');
   const [draftDesc, setDraftDesc] = useState('');
   const [draftIsDefault, setDraftIsDefault] = useState(false);
   const [draftGraph, setDraftGraph] = useState<Record<string, any> | null>(null);
   const [rawJsonText, setRawJsonText] = useState('');
   const [rawJsonError, setRawJsonError] = useState<string | null>(null);
-  const [nodeSearchFilter, setNodeSearchFilter] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
 
-  // Baseline snapshot strings to detect unsaved edits
+  // Baseline snapshot for tracking unsaved dirty state
   const [baselineSnapshot, setBaselineSnapshot] = useState<{
     name: string;
     desc: string;
@@ -201,16 +89,21 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
     jsonStr: string;
   } | null>(null);
 
-  // Export confirmation modal state (when unsaved edits exist)
+  const [isSaving, setIsSaving] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [showExportPromptModal, setShowExportPromptModal] = useState(false);
-
-  // Import/Create Workflow Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
+
+  // Validation & Test Run state
+  const [validation, setValidation] = useState<ReproductionValidationResult | null>(null);
+  const [reproJobs, setReproJobs] = useState<WorkflowReproJob[]>([]);
+
+  // Create Modal Draft Fields
   const [newName, setNewName] = useState('');
   const [newDesc, setNewDesc] = useState('');
   const [newIsDefault, setNewIsDefault] = useState(false);
-  const [newVisualJson, setNewVisualJson] = useState('');
   const [newApiJson, setNewApiJson] = useState('');
+  const [newVisualJson, setNewVisualJson] = useState('');
 
   // Auto-select default or first workflow on initial load
   useEffect(() => {
@@ -220,94 +113,74 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
     }
   }, [workflows, selectedWfId]);
 
-  // Build categorized model and LoRA option lists from app inventory
+  // Categorized model & LoRA options from shared helpers
   const diffusionModelOptions = useMemo(
     () => filterDiffusionModels(models, checkpoints),
     [checkpoints, models]
   );
+  const loraOptions = useMemo(() => filterLoraModels(loras, models), [loras, models]);
+  const vaeOptions = useMemo(() => filterVaeModels(models), [models]);
+  const clipOptions = useMemo(() => filterClipModels(models), [models]);
 
-  const loraOptions = useMemo(
-    () => filterLoraModels(loras, models),
-    [loras, models]
-  );
-
-  const vaeOptions = useMemo(
-    () => filterVaeModels(models),
-    [models]
-  );
-
-  const clipOptions = useMemo(
-    () => filterClipModels(models),
-    [models]
-  );
-
-  const loadJobs = async () => {
+  const loadJobs = useCallback(async () => {
     try {
       const res = await api.listReproductionJobs();
-      setReproJobs(res.items || []);
-    } catch {
-      // ignore
+      setReproJobs((res.items || []) as WorkflowReproJob[]);
+    } catch (err: any) {
+      console.warn('Failed to load reproduction jobs:', err);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadJobs();
-  }, []);
+  }, [loadJobs]);
 
-  // Hydrate draft editor state from a loaded workflow row
-  const hydrateEditorFromWorkflow = (wfRow: any) => {
-    setSelectedWfDetail(wfRow);
-    const nameStr = String(wfRow.name || '');
-    const descStr = String(wfRow.description || '');
-    const isDef = Boolean(wfRow.is_default);
-    const rawStr = wfRow.api_workflow_json || wfRow.visual_workflow_json || '{}';
-
-    let formattedJson = rawStr;
-    let parsedGraph: Record<string, any> | null = null;
+  // Load detailed workflow record when selection changes
+  const loadWorkflowDetail = useCallback(async (id: number) => {
     try {
-      const parsed = JSON.parse(rawStr);
-      formattedJson = JSON.stringify(parsed, null, 2);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed.nodes)) {
-        parsedGraph = parsed;
+      const res = await api.getWorkflow(id);
+      const wfRow = res.workflow;
+      setSelectedWfDetail(wfRow);
+      setDraftName(wfRow.name || '');
+      setDraftDesc(wfRow.description || '');
+      setDraftIsDefault(Boolean(wfRow.is_default));
+
+      const rawStr = wfRow.api_workflow_json || wfRow.visual_workflow_json || '{}';
+      let parsedGraph: Record<string, any> = {};
+      let formattedJson = rawStr;
+      try {
+        const parsed = JSON.parse(rawStr);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          parsedGraph = parsed;
+        }
+        formattedJson = JSON.stringify(parsed, null, 2);
+      } catch {
+        // Fallback for non-JSON strings
       }
-    } catch {
-      parsedGraph = null;
-    }
 
-    setDraftName(nameStr);
-    setDraftDesc(descStr);
-    setDraftIsDefault(isDef);
-    setDraftGraph(parsedGraph);
-    setRawJsonText(formattedJson);
-    setRawJsonError(null);
-    setBaselineSnapshot({
-      name: nameStr,
-      desc: descStr,
-      isDefault: isDef,
-      jsonStr: formattedJson,
-    });
-  };
-
-  useEffect(() => {
-    if (selectedWfId) {
-      api
-        .getWorkflow(selectedWfId)
-        .then((res) => {
-          if (res.workflow) {
-            hydrateEditorFromWorkflow(res.workflow);
-          }
-        })
-        .catch(() => {});
+      setDraftGraph(parsedGraph);
+      setRawJsonText(formattedJson);
+      setRawJsonError(null);
       setValidation(null);
       setStatusMsg(null);
-    } else {
-      setSelectedWfDetail(null);
-      setDraftGraph(null);
-      setBaselineSnapshot(null);
-    }
-  }, [selectedWfId]);
 
-  // Determine whether the user has unsaved modifications
+      setBaselineSnapshot({
+        name: wfRow.name || '',
+        desc: wfRow.description || '',
+        isDefault: Boolean(wfRow.is_default),
+        jsonStr: formattedJson,
+      });
+    } catch (err: any) {
+      setStatusMsg(`Failed to load workflow: ${err.message}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedWfId !== null) {
+      loadWorkflowDetail(selectedWfId);
+    }
+  }, [selectedWfId, loadWorkflowDetail]);
+
   const isDirty = useMemo(() => {
     if (!baselineSnapshot) return false;
     return (
@@ -316,20 +189,22 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
       draftIsDefault !== baselineSnapshot.isDefault ||
       rawJsonText.trim() !== baselineSnapshot.jsonStr.trim()
     );
-  }, [baselineSnapshot, draftName, draftDesc, draftIsDefault, rawJsonText]);
+  }, [draftName, draftDesc, draftIsDefault, rawJsonText, baselineSnapshot]);
 
-  // Update a single node input field inside draftGraph and sync rawJsonText
-  const handleNodeFieldChange = (nodeId: string, fieldKey: string, nextValue: any) => {
+  // Update a single node input inside draftGraph and sync rawJsonText
+  const handleNodeFieldChange = (nodeId: string, fieldKey: string, value: any) => {
     setDraftGraph((prev) => {
       if (!prev || !prev[nodeId]) return prev;
-      const nextNode = {
-        ...prev[nodeId],
-        inputs: {
-          ...(prev[nodeId].inputs || {}),
-          [fieldKey]: nextValue,
+      const next = {
+        ...prev,
+        [nodeId]: {
+          ...prev[nodeId],
+          inputs: {
+            ...(prev[nodeId].inputs || {}),
+            [fieldKey]: value,
+          },
         },
       };
-      const next = { ...prev, [nodeId]: nextNode };
       setRawJsonText(JSON.stringify(next, null, 2));
       setRawJsonError(null);
       return next;
@@ -370,35 +245,41 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
     handlePowerLoraChange(nodeId, next);
   };
 
-  // Handle raw JSON text edits and keep structured draftGraph in sync when valid
+  // Revert all draft inputs to the snapshot
+  const handleCancelEdits = () => {
+    if (!baselineSnapshot) return;
+    setDraftName(baselineSnapshot.name);
+    setDraftDesc(baselineSnapshot.desc);
+    setDraftIsDefault(baselineSnapshot.isDefault);
+    setRawJsonText(baselineSnapshot.jsonStr);
+    setRawJsonError(null);
+    try {
+      const parsed = JSON.parse(baselineSnapshot.jsonStr);
+      setDraftGraph(parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {});
+    } catch {
+      setDraftGraph({});
+    }
+  };
+
+  // Keep structured draftGraph in sync when raw JSON text is edited
   const handleRawJsonChange = (val: string) => {
     setRawJsonText(val);
     try {
       const parsed = JSON.parse(val);
-      setRawJsonError(null);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed.nodes)) {
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         setDraftGraph(parsed);
       }
+      setRawJsonError(null);
     } catch (err: any) {
       setRawJsonError(err?.message || 'Invalid JSON syntax');
     }
   };
 
-  // Cancel: revert all unsaved changes back to server state
-  const handleCancelEdits = () => {
-    if (!selectedWfDetail) return;
-    hydrateEditorFromWorkflow(selectedWfDetail);
-    setStatusMsg('Reverted unsaved changes.');
-    onPushToast?.('Reverted workflow changes', 'info');
-  };
-
-  // Save: persist updated workflow settings and JSON graph to server
+  // Persist updated workflow settings and JSON graph to server
   const handleSaveWorkflow = async (): Promise<boolean> => {
     if (!selectedWfDetail) return false;
-    if (!draftName.trim()) {
-      setStatusMsg('Workflow name cannot be empty.');
-      return false;
-    }
+    setIsSaving(true);
+    setStatusMsg(null);
 
     let finalJsonString = rawJsonText;
     try {
@@ -407,60 +288,53 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
     } catch {
       setStatusMsg('Cannot save: Workflow JSON has syntax errors.');
       onPushToast?.('Workflow JSON has syntax errors', 'error');
+      setIsSaving(false);
       return false;
     }
 
-    setIsSaving(true);
     try {
       const isVisualOnly =
         !selectedWfDetail.api_workflow_json && Boolean(selectedWfDetail.visual_workflow_json);
-      const res = await api.saveWorkflow({
+
+      await api.saveWorkflow({
         id: selectedWfDetail.id,
-        name: draftName.trim(),
+        name: draftName.trim() || selectedWfDetail.name,
         description: draftDesc.trim(),
+        isDefault: draftIsDefault,
         apiWorkflowJson: isVisualOnly ? selectedWfDetail.api_workflow_json : finalJsonString,
         visualWorkflowJson: isVisualOnly ? finalJsonString : selectedWfDetail.visual_workflow_json,
-        isDefault: draftIsDefault,
       });
 
-      if (res.workflow) {
-        hydrateEditorFromWorkflow(res.workflow);
-      }
+      setStatusMsg('Workflow saved successfully!');
+      onPushToast?.(`Saved workflow "${draftName || selectedWfDetail.name}"`, 'success');
       await onRefresh();
-      setStatusMsg('Saved workflow changes to server.');
-      onPushToast?.(`Saved workflow "${draftName.trim()}"`, 'success');
+      await loadWorkflowDetail(selectedWfDetail.id);
       return true;
     } catch (err: any) {
-      setStatusMsg(`Save failed: ${err.message}`);
-      onPushToast?.(`Failed to save workflow: ${err.message}`, 'error');
+      setStatusMsg(`Failed to save workflow: ${err.message}`);
+      onPushToast?.(`Save failed: ${err.message}`, 'error');
       return false;
     } finally {
       setIsSaving(false);
     }
   };
 
-  // Trigger browser download of the workflow JSON file
   const triggerWorkflowJsonDownload = (jsonContent: string, wfName: string) => {
-    const safeSlug =
-      (wfName || 'workflow')
-        .toLowerCase()
-        .replace(/[^a-z0-9-_]+/g, '_')
-        .replace(/^_+|_+$/g, '') || 'workflow';
+    const safeSlug = (wfName || 'workflow')
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '_')
+      .replace(/^_+|_+$/g, '');
     const blob = new Blob([jsonContent], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${safeSlug}.json`;
-    document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
     URL.revokeObjectURL(url);
     onPushToast?.(`Exported ${safeSlug}.json`, 'info');
   };
 
-  // Export button handler: prompts to save first if there are unsaved changes
   const handleExportClick = () => {
-    if (!selectedWfDetail) return;
     if (isDirty) {
       setShowExportPromptModal(true);
     } else {
@@ -468,36 +342,29 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
     }
   };
 
-  // Set a workflow as the primary Default across the app
   const handleSetDefaultWorkflow = async (wfId: number, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     try {
-      const res = await api.setDefaultWorkflow(wfId);
-      if (selectedWfId === wfId && res.workflow) {
-        setSelectedWfDetail(res.workflow);
-        setDraftIsDefault(true);
-        setBaselineSnapshot((prev) => (prev ? { ...prev, isDefault: true } : prev));
-      } else if (selectedWfId !== null) {
-        setDraftIsDefault(false);
-        setBaselineSnapshot((prev) => (prev ? { ...prev, isDefault: false } : prev));
-      }
+      await api.setDefaultWorkflow(wfId);
       await onRefresh();
-      onPushToast?.('Updated default workflow', 'success');
+      if (selectedWfDetail?.id === wfId) {
+        setDraftIsDefault(true);
+      }
+      onPushToast?.('Primary default workflow updated', 'success');
     } catch (err: any) {
-      onPushToast?.(`Failed to set default workflow: ${err.message}`, 'error');
+      onPushToast?.(`Failed to set default: ${err.message}`, 'error');
     }
   };
 
-  // Handle uploading a JSON file inside the Import Modal
   const handleImportFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result || '');
+    reader.onload = (evt) => {
       try {
+        const text = String(evt.target?.result || '');
         const parsed = JSON.parse(text);
-        if (parsed && Array.isArray(parsed.nodes)) {
+        if (parsed.nodes && Array.isArray(parsed.nodes)) {
           setNewVisualJson(JSON.stringify(parsed, null, 2));
         } else {
           setNewApiJson(JSON.stringify(parsed, null, 2));
@@ -506,7 +373,7 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
           setNewName(file.name.replace(/\.json$/i, ''));
         }
       } catch {
-        setNewApiJson(text);
+        onPushToast?.('Selected file is not valid JSON', 'error');
       }
     };
     reader.readAsText(file);
@@ -515,322 +382,54 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
   const handleSaveNewWorkflow = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName.trim()) return;
-    const res = await api.saveWorkflow({
-      name: newName.trim(),
-      description: newDesc.trim(),
-      visualWorkflowJson: newVisualJson.trim() || null,
-      apiWorkflowJson: newApiJson.trim() || null,
-      isDefault: newIsDefault,
-    });
-    setNewName('');
-    setNewDesc('');
-    setNewIsDefault(false);
-    setNewVisualJson('');
-    setNewApiJson('');
-    setShowCreateModal(false);
-    await onRefresh();
-    if (res.workflow?.id) {
-      setSelectedWfId(res.workflow.id);
+
+    try {
+      const res = await api.saveWorkflow({
+        name: newName.trim(),
+        description: newDesc.trim(),
+        isDefault: newIsDefault,
+        apiWorkflowJson: newApiJson.trim() || undefined,
+        visualWorkflowJson: newVisualJson.trim() || undefined,
+      });
+
+      setShowCreateModal(false);
+      setNewName('');
+      setNewDesc('');
+      setNewIsDefault(false);
+      setNewApiJson('');
+      setNewVisualJson('');
+
+      await onRefresh();
+      if (res.workflow?.id) setSelectedWfId(res.workflow.id);
+      onPushToast?.(`Created workflow "${newName}"`, 'success');
+    } catch (err: any) {
+      onPushToast?.(`Failed to create workflow: ${err.message}`, 'error');
     }
-    onPushToast?.('Imported workflow to library', 'success');
   };
 
   const handleValidateWorkflow = async (wfId: number) => {
-    const res = await api.validateReproduction({ workflowId: wfId });
-    setValidation(res);
+    try {
+      const res = await api.validateReproduction({ workflowId: wfId });
+      setValidation(res);
+      onPushToast?.(`Validation format: ${res.workflowFormat}`, 'info');
+    } catch (err: any) {
+      onPushToast?.(`Validation error: ${err.message}`, 'error');
+    }
   };
 
   const handleSubmitWorkflow = async (wfId: number) => {
     try {
       const res = await api.submitReproduction({ workflowId: wfId });
-      setStatusMsg(`Submitted to ComfyUI (Prompt ID: ${res.job.comfyui_prompt_id})`);
+      onPushToast?.(`Submitted to ComfyUI (Prompt ID: ${res.job?.promptId || 'queued'})`, 'success');
       await loadJobs();
     } catch (err: any) {
-      setStatusMsg(`Submission error: ${err.message}`);
+      onPushToast?.(`Submission failed: ${err.message}`, 'error');
     }
-  };
-
-  // Filter nodes in the structured editor
-  const filteredNodeEntries = useMemo(() => {
-    if (!draftGraph) return [];
-    const entries = Object.entries(draftGraph).filter(
-      ([, nodeObj]) => nodeObj && typeof nodeObj === 'object'
-    );
-    const q = nodeSearchFilter.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter(([nodeId, nodeObj]) => {
-      const title = String(nodeObj._meta?.title || '').toLowerCase();
-      const classType = String(nodeObj.class_type || '').toLowerCase();
-      const inputKeys = Object.keys(nodeObj.inputs || {})
-        .join(' ')
-        .toLowerCase();
-      return (
-        nodeId.toLowerCase().includes(q) ||
-        title.includes(q) ||
-        classType.includes(q) ||
-        inputKeys.includes(q)
-      );
-    });
-  }, [draftGraph, nodeSearchFilter]);
-
-  /**
-   * Renders the appropriate input control (Model Dropdown, LoRA Dropdown, Aspect Ratio Dropdown,
-   * Number, Boolean, or Textarea) for a given node input field.
-   */
-  const renderNodeInputControl = (
-    nodeId: string,
-    nodeObj: any,
-    fieldKey: string,
-    fieldVal: any
-  ) => {
-    const classType = String(nodeObj.class_type || '');
-    const keyLower = fieldKey.toLowerCase();
-
-    // 1. Node-to-node link connection [sourceNodeId, outputSlot]
-    if (Array.isArray(fieldVal)) {
-      const sourceNodeId = String(fieldVal[0]);
-      const sourceSlot = fieldVal[1];
-      const sourceTitle =
-        draftGraph?.[sourceNodeId]?._meta?.title ||
-        draftGraph?.[sourceNodeId]?.class_type ||
-        `Node #${sourceNodeId}`;
-      return (
-        <div className="flex items-center justify-between px-2.5 py-1.5 bg-zinc-900/80 border border-zinc-800/80 rounded-lg text-[11px] font-mono text-zinc-400">
-          <span className="inline-flex items-center gap-1.5 text-indigo-300">
-            <Link2 className="w-3 h-3 shrink-0" />
-            <span>
-              Linked from #{sourceNodeId} ({sourceTitle})
-            </span>
-          </span>
-          <span className="text-zinc-500">Output [{sourceSlot}]</span>
-        </div>
-      );
-    }
-
-    // 2. Non-primitive widget metadata object (e.g. PowerLoraLoaderHeaderWidget)
-    if (fieldVal !== null && typeof fieldVal === 'object') {
-      return (
-        <input
-          type="text"
-          readOnly
-          value={JSON.stringify(fieldVal)}
-          className="w-full px-2.5 py-1.5 bg-zinc-900/50 border border-zinc-800 rounded-lg font-mono text-[11px] text-zinc-500"
-        />
-      );
-    }
-
-    // 3. Diffusion Model / Checkpoint selector (unet_name, ckpt_name, model_name)
-    if (
-      keyLower === 'unet_name' ||
-      keyLower === 'ckpt_name' ||
-      (keyLower === 'model_name' &&
-        (classType.toLowerCase().includes('loader') ||
-          classType.toLowerCase().includes('checkpoint') ||
-          classType.toLowerCase().includes('unet')))
-    ) {
-      const currentStr = String(fieldVal ?? '');
-      const opts = Array.from(
-        new Set([...(currentStr ? [currentStr] : []), ...diffusionModelOptions])
-      );
-      return (
-        <select
-          value={currentStr}
-          onChange={(e) => handleNodeFieldChange(nodeId, fieldKey, e.target.value)}
-          className="w-full px-2.5 py-1.5 bg-zinc-950 border border-indigo-500/40 rounded-lg font-mono text-xs text-zinc-100"
-        >
-          <option value="">— Select Model from models/ —</option>
-          {opts.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      );
-    }
-
-    // 4. Single LoRA selector (lora_name)
-    if (keyLower === 'lora_name' || keyLower.startsWith('lora_name')) {
-      const currentStr = String(fieldVal ?? '');
-      const opts = Array.from(new Set([...(currentStr ? [currentStr] : []), ...loraOptions]));
-      return (
-        <select
-          value={currentStr}
-          onChange={(e) => handleNodeFieldChange(nodeId, fieldKey, e.target.value)}
-          className="w-full px-2.5 py-1.5 bg-zinc-950 border border-indigo-500/40 rounded-lg font-mono text-xs text-zinc-100"
-        >
-          <option value="">— Select LoRA from loras/ —</option>
-          {opts.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      );
-    }
-
-    // 5. VAE Model selector (vae_name)
-    if (keyLower === 'vae_name') {
-      const currentStr = String(fieldVal ?? '');
-      const opts = Array.from(new Set([...(currentStr ? [currentStr] : []), ...vaeOptions]));
-      return (
-        <select
-          value={currentStr}
-          onChange={(e) => handleNodeFieldChange(nodeId, fieldKey, e.target.value)}
-          className="w-full px-2.5 py-1.5 bg-zinc-950 border border-indigo-500/40 rounded-lg font-mono text-xs text-zinc-100"
-        >
-          <option value="">— Select VAE from models/ —</option>
-          {opts.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      );
-    }
-
-    // 6. CLIP / Text Encoder selector (clip_name, clip_name1, clip_name2)
-    if (keyLower === 'clip_name' || keyLower === 'clip_name1' || keyLower === 'clip_name2') {
-      const currentStr = String(fieldVal ?? '');
-      const opts = Array.from(new Set([...(currentStr ? [currentStr] : []), ...clipOptions]));
-      return (
-        <select
-          value={currentStr}
-          onChange={(e) => handleNodeFieldChange(nodeId, fieldKey, e.target.value)}
-          className="w-full px-2.5 py-1.5 bg-zinc-950 border border-indigo-500/40 rounded-lg font-mono text-xs text-zinc-100"
-        >
-          <option value="">— Select CLIP / Encoder from models/ —</option>
-          {opts.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      );
-    }
-
-    // 7. ResolutionSelector aspect_ratio dropdown
-    if (classType === 'ResolutionSelector' && keyLower === 'aspect_ratio') {
-      const currentStr = String(fieldVal ?? '2:3 (Portrait Photo)');
-      const ratioValues = RESOLUTION_SELECTOR_OPTIONS.map((o) => o.value as string);
-      const opts = Array.from(new Set([...(currentStr ? [currentStr] : []), ...ratioValues]));
-      return (
-        <select
-          value={currentStr}
-          onChange={(e) => handleNodeFieldChange(nodeId, fieldKey, e.target.value)}
-          className="w-full px-2.5 py-1.5 bg-zinc-950 border border-indigo-500/40 rounded-lg font-mono text-xs text-zinc-100"
-        >
-          {opts.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      );
-    }
-
-    // 8. Sampler & Scheduler dropdowns
-    if (keyLower === 'sampler_name') {
-      const currentStr = String(fieldVal ?? 'euler');
-      const opts = Array.from(new Set([currentStr, ...COMMON_SAMPLERS]));
-      return (
-        <select
-          value={currentStr}
-          onChange={(e) => handleNodeFieldChange(nodeId, fieldKey, e.target.value)}
-          className="w-full px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-xs text-zinc-100"
-        >
-          {opts.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      );
-    }
-
-    if (keyLower === 'scheduler') {
-      const currentStr = String(fieldVal ?? 'simple');
-      const opts = Array.from(new Set([currentStr, ...COMMON_SCHEDULERS]));
-      return (
-        <select
-          value={currentStr}
-          onChange={(e) => handleNodeFieldChange(nodeId, fieldKey, e.target.value)}
-          className="w-full px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-xs text-zinc-100"
-        >
-          {opts.map((opt) => (
-            <option key={opt} value={opt}>
-              {opt}
-            </option>
-          ))}
-        </select>
-      );
-    }
-
-    // 9. Boolean toggle
-    if (typeof fieldVal === 'boolean') {
-      return (
-        <label className="inline-flex items-center gap-2 cursor-pointer select-none py-1">
-          <input
-            type="checkbox"
-            checked={fieldVal}
-            onChange={(e) => handleNodeFieldChange(nodeId, fieldKey, e.target.checked)}
-            className="rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500"
-          />
-          <span className="font-mono text-xs text-zinc-200">{fieldVal ? 'true' : 'false'}</span>
-        </label>
-      );
-    }
-
-    // 10. Numeric input
-    if (typeof fieldVal === 'number') {
-      const isFloat = !Number.isInteger(fieldVal) || keyLower.includes('strength') || keyLower.includes('cfg') || keyLower.includes('denoise') || keyLower.includes('megapixels') || keyLower.includes('temperature') || keyLower.includes('p') || keyLower.includes('penalty');
-      return (
-        <input
-          type="number"
-          step={isFloat ? '0.05' : '1'}
-          value={fieldVal}
-          onChange={(e) => {
-            const parsed = e.target.value === '' ? 0 : Number(e.target.value);
-            handleNodeFieldChange(nodeId, fieldKey, Number.isNaN(parsed) ? 0 : parsed);
-          }}
-          className="w-full px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg font-mono tabular-nums text-xs text-zinc-100"
-        />
-      );
-    }
-
-    // 11. String / Multiline text input
-    const strVal = String(fieldVal ?? '');
-    const isMultiline =
-      strVal.length > 70 ||
-      strVal.includes('\n') ||
-      classType.includes('Multiline') ||
-      keyLower === 'text' ||
-      keyLower === 'prompt' ||
-      (keyLower === 'value' && classType.toLowerCase().includes('string'));
-
-    if (isMultiline) {
-      return (
-        <textarea
-          rows={Math.min(6, Math.max(2, strVal.split('\n').length))}
-          value={strVal}
-          onChange={(e) => handleNodeFieldChange(nodeId, fieldKey, e.target.value)}
-          className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-xs text-zinc-100"
-        />
-      );
-    }
-
-    return (
-      <input
-        type="text"
-        value={strVal}
-        onChange={(e) => handleNodeFieldChange(nodeId, fieldKey, e.target.value)}
-        className="w-full px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-xs text-zinc-100"
-      />
-    );
   };
 
   return (
     <div className="px-6 py-6 max-w-7xl mx-auto space-y-8">
-      {/* Header */}
+      {/* Top Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-display font-semibold text-zinc-100">
@@ -851,91 +450,23 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
         </button>
       </div>
 
-      {/* Workflows Grid & Right-Hand Settings Editor */}
+      {/* Main Grid: Workflows List (Left) & Right Column Editor */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Stored Workflows List */}
-        <div className="lg:col-span-5 space-y-3">
-          <h2 className="text-sm font-display font-semibold text-zinc-200">
-            Stored Workflows ({workflows.length})
-          </h2>
-          {workflows.length === 0 ? (
-            <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-8 text-center text-xs text-zinc-400">
-              No workflows stored yet. Import a ComfyUI workflow JSON or index PNGs with embedded
-              workflows.
-            </div>
-          ) : (
-            <div className="space-y-2.5">
-              {workflows.map((wf) => {
-                const active = selectedWfId === wf.id;
-                return (
-                  <div
-                    key={wf.id}
-                    onClick={() => setSelectedWfId(wf.id)}
-                    className={`p-4 rounded-xl border transition-colors cursor-pointer space-y-2 text-xs ${
-                      active
-                        ? 'bg-zinc-900 border-indigo-500'
-                        : 'bg-zinc-900/70 border-zinc-800 hover:border-zinc-700'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-display font-semibold text-zinc-100">
-                            {wf.name}
-                          </span>
-                          {wf.isDefault && (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-300">
-                              <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                              <span>Default</span>
-                            </span>
-                          )}
-                        </div>
-                        <div className="font-mono text-[11px] text-zinc-400">
-                          {wf.isSavedLibrary ? 'Saved Library' : 'Auto-Extracted'} · {wf.imageCount}{' '}
-                          imgs
-                        </div>
-                      </div>
-
-                      {!wf.isDefault && (
-                        <button
-                          type="button"
-                          onClick={(e) => handleSetDefaultWorkflow(wf.id, e)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-md cursor-pointer whitespace-nowrap shrink-0"
-                          title="Set as Default workflow for Quick Gen and Studio"
-                        >
-                          <Star className="w-3 h-3 text-zinc-400" />
-                          <span>Set Default</span>
-                        </button>
-                      )}
-                    </div>
-
-                    {wf.description && <p className="text-zinc-400 line-clamp-2">{wf.description}</p>}
-
-                    <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-400 font-mono">
-                      <span>API Graph: {wf.hasApiWorkflow ? 'Yes' : 'No'}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>Visual JSON: {wf.hasVisualWorkflow ? 'Yes' : 'No'}</span>
-                      <span aria-hidden="true">·</span>
-                      <span>Hash: {wf.workflowHash.slice(0, 10)}</span>
-                    </div>
-
-                    {wf.characters.length > 0 && (
-                      <div className="text-[11px] text-indigo-300">
-                        Characters: {wf.characters.map((c) => `${c.name} (${c.roleLabel})`).join(' · ')}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        {/* Left Column: Workflows Sidebar */}
+        <div className="lg:col-span-5">
+          <WorkflowSidebarList
+            workflows={workflows}
+            selectedWfId={selectedWfId}
+            onSelectWorkflow={setSelectedWfId}
+            onSetDefault={handleSetDefaultWorkflow}
+          />
         </div>
 
-        {/* Right Column: Selected Workflow Settings Editor & Reproduction Panel */}
+        {/* Right Column: Active Workflow Inspector & Settings */}
         <div className="lg:col-span-7">
           {selectedWfDetail ? (
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-5 text-xs">
-              {/* Top Action Bar: Title, Default Toggle, Cancel, Save, Export */}
+              {/* Action Bar */}
               <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-zinc-800">
                 <div className="space-y-0.5 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -1015,7 +546,7 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
                 </div>
               )}
 
-              {/* Workflow Name, Description & Default Checkbox */}
+              {/* Workflow Name & Description */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 bg-zinc-950 border border-zinc-800 rounded-lg">
                 <div>
                   <label className="block text-[11px] font-medium text-zinc-400 mb-1">
@@ -1042,7 +573,7 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
                 </div>
               </div>
 
-              {/* Editor Mode Switcher + Validate/Reproduce Button */}
+              {/* Mode Switcher & Test Run */}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-1 p-1 bg-zinc-950 border border-zinc-800 rounded-lg">
                   <button
@@ -1108,243 +639,25 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
                 </div>
               )}
 
-              {/* STRUCTURED NODE SETTINGS EDITOR */}
+              {/* Sub-Panel: Structured Node Inspector OR Raw JSON */}
               {editorMode === 'structured' ? (
                 draftGraph ? (
-                  <div className="space-y-4">
-                    {/* Node Search / Filter Bar */}
-                    <div className="flex items-center justify-between gap-3">
-                      <input
-                        type="text"
-                        value={nodeSearchFilter}
-                        onChange={(e) => setNodeSearchFilter(e.target.value)}
-                        placeholder="Filter nodes by title, ID, class_type, or parameter name (e.g. lora, unet, sampler)..."
-                        className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-100"
-                      />
-                      <span className="text-[11px] font-mono text-zinc-400 whitespace-nowrap shrink-0">
-                        {filteredNodeEntries.length} / {Object.keys(draftGraph).length} nodes
-                      </span>
-                    </div>
-
-                    <div className="space-y-3 max-h-[620px] overflow-y-auto pr-1">
-                      {filteredNodeEntries.map(([nodeId, nodeObj]) => {
-                        const title = String(nodeObj._meta?.title || nodeObj.class_type || `Node ${nodeId}`);
-                        const classType = String(nodeObj.class_type || 'UnknownNode');
-                        const inputs =
-                          nodeObj.inputs && typeof nodeObj.inputs === 'object' ? nodeObj.inputs : {};
-                        const isPowerLora = isPowerLoraLoaderNode(nodeObj);
-                        const powerLoraEntries = isPowerLora ? extractPowerLoraEntries(inputs) : [];
-
-                        // Filter out internal PowerLoraLoader widget keys when rendering normal inputs
-                        const regularInputEntries = Object.entries(inputs).filter(([k]) => {
-                          if (!isPowerLora) return true;
-                          if (k === 'PowerLoraLoaderHeaderWidget' || k === '➕ Add Lora') return false;
-                          if (/^lora_\d+$/i.test(k)) return false;
-                          return true;
-                        });
-
-                        return (
-                          <div
-                            key={nodeId}
-                            className="p-4 bg-zinc-950 border border-zinc-800/90 rounded-xl space-y-3"
-                          >
-                            {/* Node Header */}
-                            <div className="flex items-center justify-between gap-2 pb-2 border-b border-zinc-800/70">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="font-mono text-[11px] font-semibold text-indigo-400">
-                                  #{nodeId}
-                                </span>
-                                <span className="font-display font-semibold text-zinc-100 truncate">
-                                  {title}
-                                </span>
-                              </div>
-                              <span className="font-mono text-[11px] text-zinc-400 shrink-0">
-                                {classType}
-                              </span>
-                            </div>
-
-                            {/* Dedicated Multi-LoRA Selector for Power Lora Loader (rgthree) */}
-                            {isPowerLora && (
-                              <div className="p-3.5 bg-zinc-900/90 border border-indigo-500/30 rounded-lg space-y-3 min-w-0">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div className="flex items-center gap-2 min-w-0">
-                                    <span className="font-medium text-indigo-300 flex items-center gap-1.5 text-xs sm:text-sm">
-                                      <Layers className="w-4 h-4 text-indigo-400 shrink-0" />
-                                      <span>
-                                        Power Lora Loader — Multiple LoRAs ({powerLoraEntries.length})
-                                      </span>
-                                    </span>
-                                    <span className="text-[11px] text-zinc-400 hidden sm:inline">
-                                      Discovered in <code className="text-zinc-300 font-mono">loras/</code>
-                                    </span>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleAddPowerLoraSlot(nodeId, powerLoraEntries)}
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-md text-xs font-medium cursor-pointer shrink-0 transition-colors shadow-sm"
-                                    title="Add a new LoRA slot to this loader"
-                                  >
-                                    <Plus className="w-3.5 h-3.5" />
-                                    <span>Add LoRA</span>
-                                  </button>
-                                </div>
-
-                                {powerLoraEntries.length === 0 ? (
-                                  <div className="py-4 px-3 text-center border border-dashed border-zinc-800 rounded-lg bg-zinc-950/60 space-y-2">
-                                    <p className="text-xs text-zinc-400">
-                                      No LoRAs attached to this node yet.
-                                    </p>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleAddPowerLoraSlot(nodeId, powerLoraEntries)}
-                                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium cursor-pointer transition-colors shadow-sm"
-                                    >
-                                      <Plus className="w-3.5 h-3.5" />
-                                      <span>Add First LoRA</span>
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <div className="space-y-2">
-                                    {powerLoraEntries.map((entry, idx) => {
-                                      const rowOpts = Array.from(
-                                        new Set([
-                                          ...(entry.lora ? [entry.lora] : []),
-                                          ...loraOptions,
-                                        ])
-                                      );
-                                      return (
-                                        <div
-                                          key={entry.key || `lora_${idx + 1}`}
-                                          className="flex items-center gap-2 bg-zinc-950 p-2 rounded-lg border border-zinc-800 min-w-0"
-                                        >
-                                          <label
-                                            className="flex items-center gap-1.5 shrink-0 cursor-pointer select-none"
-                                            title="Enable or disable this LoRA slot"
-                                          >
-                                            <input
-                                              type="checkbox"
-                                              checked={entry.on}
-                                              onChange={(e) => {
-                                                const next = [...powerLoraEntries];
-                                                next[idx] = { ...entry, on: e.target.checked };
-                                                handlePowerLoraChange(nodeId, next);
-                                              }}
-                                              className="rounded border-zinc-700 bg-zinc-900 text-indigo-600 cursor-pointer focus:ring-0"
-                                            />
-                                            <span className="font-mono text-[11px] text-zinc-400 w-11 shrink-0">
-                                              lora_{idx + 1}
-                                            </span>
-                                          </label>
-
-                                          <div className="flex-1 min-w-0">
-                                            <select
-                                              value={entry.lora}
-                                              onChange={(e) => {
-                                                const next = [...powerLoraEntries];
-                                                next[idx] = { ...entry, lora: e.target.value };
-                                                handlePowerLoraChange(nodeId, next);
-                                              }}
-                                              className="w-full px-2 py-1 bg-zinc-900 border border-zinc-800 rounded font-mono text-xs text-zinc-100 truncate focus:outline-none focus:border-indigo-500"
-                                            >
-                                              <option value="">— Select LoRA —</option>
-                                              {rowOpts.map((opt) => (
-                                                <option key={opt} value={opt}>
-                                                  {opt}
-                                                </option>
-                                              ))}
-                                            </select>
-                                          </div>
-
-                                          <div className="flex items-center gap-1 shrink-0 bg-zinc-900/80 px-1.5 py-0.5 rounded border border-zinc-800">
-                                            <span className="text-[10px] font-medium text-zinc-400 select-none">
-                                              Str:
-                                            </span>
-                                            <input
-                                              type="number"
-                                              step="0.05"
-                                              min="-4"
-                                              max="4"
-                                              value={entry.strength}
-                                              onChange={(e) => {
-                                                const val = parseFloat(e.target.value);
-                                                const next = [...powerLoraEntries];
-                                                next[idx] = {
-                                                  ...entry,
-                                                  strength: Number.isNaN(val) ? 1.0 : val,
-                                                };
-                                                handlePowerLoraChange(nodeId, next);
-                                              }}
-                                              className="w-16 px-1 py-0.5 bg-zinc-950 border border-zinc-700 rounded font-mono tabular-nums text-xs text-zinc-100 text-right focus:outline-none focus:border-indigo-500"
-                                            />
-                                          </div>
-
-                                          <button
-                                            type="button"
-                                            onClick={() => {
-                                              const next = powerLoraEntries.filter((_, i) => i !== idx);
-                                              handlePowerLoraChange(nodeId, next);
-                                            }}
-                                            className="p-1 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 rounded cursor-pointer shrink-0 transition-colors"
-                                            title={`Remove lora_${idx + 1}`}
-                                          >
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                          </button>
-                                        </div>
-                                      );
-                                    })}
-
-                                    <button
-                                      type="button"
-                                      onClick={() => handleAddPowerLoraSlot(nodeId, powerLoraEntries)}
-                                      className="w-full py-1.5 border border-dashed border-zinc-700/80 hover:border-indigo-500 hover:text-indigo-300 text-zinc-400 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer bg-zinc-950/40 hover:bg-indigo-950/20"
-                                    >
-                                      <Plus className="w-3.5 h-3.5" />
-                                      <span>Add Another LoRA Slot</span>
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-
-                            {/* All Other Inputs on this Node */}
-                            {regularInputEntries.length === 0 ? (
-                              !isPowerLora && (
-                                <p className="text-[11px] text-zinc-500">
-                                  This node has no configurable input fields.
-                                </p>
-                              )
-                            ) : (
-                              <div className="grid grid-cols-1 gap-2.5">
-                                {regularInputEntries.map(([fieldKey, fieldVal]) => (
-                                  <div
-                                    key={fieldKey}
-                                    className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-start"
-                                  >
-                                    <label className="sm:col-span-4 font-mono text-[11px] text-zinc-300 pt-1.5 break-all">
-                                      {fieldKey}
-                                    </label>
-                                    <div className="sm:col-span-8">
-                                      {renderNodeInputControl(nodeId, nodeObj, fieldKey, fieldVal)}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  <WorkflowGraphInspector
+                    draftGraph={draftGraph}
+                    nodeSearchFilter={nodeSearchFilter}
+                    onChangeSearchFilter={setNodeSearchFilter}
+                    diffusionModelOptions={diffusionModelOptions}
+                    loraOptions={loraOptions}
+                    vaeOptions={vaeOptions}
+                    clipOptions={clipOptions}
+                    onNodeFieldChange={handleNodeFieldChange}
+                    onPowerLoraChange={handlePowerLoraChange}
+                    onAddPowerLoraSlot={handleAddPowerLoraSlot}
+                  />
                 ) : (
-                  <div className="p-6 bg-zinc-950 border border-zinc-800 rounded-xl text-center space-y-2">
-                    <p className="text-zinc-300 font-medium">
-                      This workflow stores a visual-only graph without an API prompt dictionary.
-                    </p>
-                    <p className="text-zinc-400">
-                      Switch to the <strong>Raw JSON Editor</strong> tab above to view and edit its
-                      JSON structure directly.
-                    </p>
-                  </div>
+                  <p className="text-xs text-zinc-500 italic p-4 text-center">
+                    No structured graph data available for this workflow.
+                  </p>
                 )
               ) : (
                 /* RAW JSON EDITOR TAB */
@@ -1369,7 +682,7 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
                 </div>
               )}
 
-              {/* Associated Images for this Workflow */}
+              {/* Associated Images */}
               <div className="space-y-2 pt-2 border-t border-zinc-800">
                 <span className="font-medium text-zinc-300 block">
                   Associated Images Using This Workflow
@@ -1404,221 +717,44 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
         </div>
       </div>
 
-      {/* Historical Reproduction Jobs Table */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-display font-semibold text-zinc-100">
-              ComfyUI Reproduction & Execution History
-            </h2>
-            <p className="text-xs text-zinc-400">
-              Tracks every workflow reproduction launched from the gallery with ComfyUI prompt IDs
-              and execution states.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={loadJobs}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-300 hover:text-white cursor-pointer"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Refresh History</span>
-          </button>
-        </div>
+      {/* Historical Execution History Table */}
+      <WorkflowReproductionHistory jobs={reproJobs} onRefresh={loadJobs} />
 
-        {reproJobs.length === 0 ? (
-          <p className="text-xs text-zinc-500">No workflow reproductions submitted yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="border-b border-zinc-800 text-zinc-400">
-                <tr>
-                  <th className="py-2.5 px-3">Job ID</th>
-                  <th className="py-2.5 px-3">Workflow / Source Image</th>
-                  <th className="py-2.5 px-3">ComfyUI Prompt ID</th>
-                  <th className="py-2.5 px-3">Readiness</th>
-                  <th className="py-2.5 px-3">Execution Status</th>
-                  <th className="py-2.5 px-3">Submitted At</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-800/60 font-mono tabular-nums">
-                {reproJobs.map((j) => (
-                  <tr key={j.id}>
-                    <td className="py-2.5 px-3 text-zinc-300">#{j.id}</td>
-                    <td className="py-2.5 px-3 font-sans text-zinc-200">
-                      {j.workflow_name || `Workflow #${j.workflow_id}`}
-                      {j.source_filename ? ` (${j.source_filename})` : ''}
-                    </td>
-                    <td className="py-2.5 px-3 text-zinc-400">{j.comfyui_prompt_id || '—'}</td>
-                    <td className="py-2.5 px-3">{j.readiness_status}</td>
-                    <td className="py-2.5 px-3">
-                      {j.status === 'completed' ? (
-                        <span className="inline-flex items-center gap-1 text-emerald-400">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span>Completed</span>
-                        </span>
-                      ) : j.status === 'failed' ? (
-                        <span className="text-rose-400" title={j.execution_error || ''}>
-                          Failed: {j.execution_error || 'Error'}
-                        </span>
-                      ) : (
-                        <span className="text-sky-400">{j.status}</span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-zinc-400">{j.submitted_at}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      {/* Export Unsaved Changes Confirmation Modal */}
+      <ExportPromptModal
+        isOpen={showExportPromptModal}
+        draftName={draftName}
+        onClose={() => setShowExportPromptModal(false)}
+        onExportWithoutSaving={() => {
+          setShowExportPromptModal(false);
+          triggerWorkflowJsonDownload(rawJsonText, draftName);
+        }}
+        onSaveAndExport={async () => {
+          const saved = await handleSaveWorkflow();
+          if (saved) {
+            setShowExportPromptModal(false);
+            triggerWorkflowJsonDownload(rawJsonText, draftName);
+          }
+        }}
+      />
 
-      {/* Export Unsaved Changes Prompt Modal */}
-      {showExportPromptModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-md w-full p-6 space-y-4 text-xs">
-            <h3 className="text-base font-display font-semibold text-zinc-100">
-              Save Changes Before Exporting?
-            </h3>
-            <p className="text-zinc-300 leading-relaxed">
-              You have unsaved edits in <strong>{draftName || 'this workflow'}</strong>. Would you
-              like to save your changes to the server first before downloading the JSON file?
-            </p>
-            <div className="flex flex-wrap justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowExportPromptModal(false)}
-                className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowExportPromptModal(false);
-                  triggerWorkflowJsonDownload(rawJsonText, draftName);
-                }}
-                className="px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-medium rounded-lg cursor-pointer"
-              >
-                No, Export Without Saving
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  const saved = await handleSaveWorkflow();
-                  if (saved) {
-                    setShowExportPromptModal(false);
-                    triggerWorkflowJsonDownload(rawJsonText, draftName);
-                  }
-                }}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer"
-              >
-                Yes, Save & Export
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Import / Save Workflow Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <form
-            onSubmit={handleSaveNewWorkflow}
-            className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-lg w-full p-6 space-y-4 text-xs"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-display font-semibold text-zinc-100">
-                Import / Save Workflow to Library
-              </h3>
-              <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-indigo-300 rounded-lg cursor-pointer">
-                <Upload className="w-3.5 h-3.5" />
-                <span>Load .json File</span>
-                <input
-                  type="file"
-                  accept=".json,application/json"
-                  onChange={handleImportFileUpload}
-                  className="hidden"
-                />
-              </label>
-            </div>
-
-            <div>
-              <label className="block text-zinc-300 mb-1">Workflow Name *</label>
-              <input
-                type="text"
-                required
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g. Portrait Studio Lighting v3"
-                className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-300 mb-1">Description</label>
-              <input
-                type="text"
-                value={newDesc}
-                onChange={(e) => setNewDesc(e.target.value)}
-                className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-              />
-            </div>
-            <div>
-              <label className="inline-flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={newIsDefault}
-                  onChange={(e) => setNewIsDefault(e.target.checked)}
-                  className="rounded border-zinc-700 bg-zinc-950 text-indigo-600"
-                />
-                <span className="text-zinc-200 font-medium">
-                  Set as primary Default workflow across Quick Gen & Studio
-                </span>
-              </label>
-            </div>
-            <div>
-              <label className="block text-zinc-300 mb-1">
-                API-Format Workflow JSON (Prompt Graph)
-              </label>
-              <textarea
-                rows={4}
-                value={newApiJson}
-                onChange={(e) => setNewApiJson(e.target.value)}
-                placeholder='{"3": {"class_type": "KSampler", "inputs": {...}}}'
-                className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-zinc-200"
-              />
-            </div>
-            <div>
-              <label className="block text-zinc-300 mb-1">
-                Visual ComfyUI Workflow JSON (Optional)
-              </label>
-              <textarea
-                rows={4}
-                value={newVisualJson}
-                onChange={(e) => setNewVisualJson(e.target.value)}
-                placeholder='{"nodes": [...], "links": [...]}'
-                className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-zinc-200"
-              />
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowCreateModal(false)}
-                className="px-3.5 py-2 bg-zinc-800 text-zinc-300 rounded-lg cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer"
-              >
-                Save Workflow
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+      {/* Import / Save New Workflow Modal */}
+      <WorkflowCreateModal
+        isOpen={showCreateModal}
+        newName={newName}
+        onChangeName={setNewName}
+        newDesc={newDesc}
+        onChangeDesc={setNewDesc}
+        newIsDefault={newIsDefault}
+        onChangeIsDefault={setNewIsDefault}
+        newApiJson={newApiJson}
+        onChangeApiJson={setNewApiJson}
+        newVisualJson={newVisualJson}
+        onChangeVisualJson={setNewVisualJson}
+        onFileUpload={handleImportFileUpload}
+        onClose={() => setShowCreateModal(false)}
+        onSubmit={handleSaveNewWorkflow}
+      />
     </div>
   );
 };
