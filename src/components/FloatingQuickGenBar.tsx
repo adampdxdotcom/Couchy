@@ -83,6 +83,10 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   const [activeIndex, setActiveIndex] = useState(0);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
 
+  // Focus & expansion state for prompt textarea
+  const [isPromptFocused, setIsPromptFocused] = useState(false);
+  const isPromptExpanded = isPromptFocused || prompt.trim().length > 0;
+
   // Submission state
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -349,6 +353,8 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
       }
 
       setPrompt('');
+      setIsPromptFocused(false);
+      inputRef.current?.blur();
       await onRefreshAll();
     } catch (err: any) {
       onPushToast(err?.message || 'Failed to submit quick generation.', 'error');
@@ -641,12 +647,16 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
         <div className="flex items-start gap-2">
           <textarea
             ref={inputRef}
-            rows={1}
+            rows={isPromptExpanded ? 4 : 1}
             value={prompt}
             onChange={handlePromptChange}
+            onFocus={() => setIsPromptFocused(true)}
+            onBlur={() => setIsPromptFocused(false)}
             onKeyDown={handleKeyDown}
             placeholder="What do you want to create? (Type @ to mention a character)"
-            className="w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-sm resize-none focus:outline-none leading-relaxed max-h-24 overflow-y-auto"
+            className={`w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-sm resize-none focus:outline-none leading-relaxed transition-[height,min-height] duration-200 overflow-y-auto ${
+              isPromptExpanded ? 'min-h-[5.5rem] max-h-36 sm:max-h-48' : 'min-h-[1.5rem] max-h-24'
+            }`}
           />
           {prompt.length > 0 && (
             <button
@@ -654,8 +664,10 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               onClick={() => {
                 setPrompt('');
                 setMentionOpen(false);
+                setIsPromptFocused(false);
+                inputRef.current?.blur();
               }}
-              className="p-1 text-zinc-500 hover:text-zinc-300 cursor-pointer shrink-0"
+              className="p-1 text-zinc-500 hover:text-zinc-300 cursor-pointer shrink-0 mt-0.5"
               title="Clear prompt"
             >
               <X className="w-4 h-4" />
