@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for interactive workflow editing in the Workflow Library view, including structured node settings, model/LoRA dropdowns, multi-LoRA Power Lora Loader editor, default workflow marking across Quick Gen and Studio, and Save/Cancel/Export controls with unsaved-changes confirmation.",
-  "updatedAt":  "2026-11-10T14:01:19.776270854Z",
+  "summary":  "Updated the Power Lora Loader in Workflow Library to provide prominent Add LoRA buttons, unclipped dropdowns, compact 0.05 step strength inputs, and trash can delete buttons that maintain ComfyUI rgthree JSON structure.",
+  "updatedAt":  "2026-11-10T14:52:22.765159001Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
