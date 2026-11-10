@@ -4,9 +4,17 @@ import {
   Bell,
   CheckCircle2,
   ChevronDown,
+  Images,
   Info,
+  Layers,
   Loader2,
+  Menu,
+  Network,
+  Settings,
+  Sparkles,
   Trash2,
+  Users,
+  X,
   XCircle,
 } from 'lucide-react';
 import type { AppToastMessage, ComfyUiLiveStatus } from '../shared/types.ts';
@@ -26,12 +34,14 @@ interface TopNavHeaderProps {
   activeToast: AppToastMessage | null;
   messages: AppToastMessage[];
   onClearMessages: () => void;
+  isMobileMenuOpen?: boolean;
+  onMobileMenuOpenChange?: (open: boolean) => void;
 }
 
 /**
  * 3-Zone Top Navigation Header:
- * Zone 1: Brand Wordmark
- * Zone 2: Workspace Navigation Links
+ * Zone 1: Mobile Hamburger Toggle + Brand Wordmark
+ * Zone 2: Workspace Navigation Links (Desktop)
  * Zone 3: Unified ComfyUI Live Progress & Toast Message Dropdown Area
  */
 export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
@@ -41,27 +51,73 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   activeToast,
   messages,
   onClearMessages,
+  isMobileMenuOpen,
+  onMobileMenuOpenChange,
 }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [internalMobileMenuOpen, setInternalMobileMenuOpen] = useState(false);
+  const mobileMenuOpen = isMobileMenuOpen !== undefined ? isMobileMenuOpen : internalMobileMenuOpen;
+
+  const setMobileMenuOpenState = (valueOrUpdater: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof valueOrUpdater === 'function' ? valueOrUpdater(mobileMenuOpen) : valueOrUpdater;
+    if (isMobileMenuOpen === undefined) {
+      setInternalMobileMenuOpen(next);
+    }
+    onMobileMenuOpenChange?.(next);
+  };
+
   const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const mobileMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const handleOutside = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (dropdownRef.current && !dropdownRef.current.contains(target)) {
         setDropdownOpen(false);
       }
+      if (
+        mobileMenuRef.current &&
+        !mobileMenuRef.current.contains(target) &&
+        !(target as HTMLElement).closest?.('[data-mobile-menu-trigger]')
+      ) {
+        setMobileMenuOpenState(false);
+      }
     };
-    document.addEventListener('mousedown', handleOutside);
-    return () => document.removeEventListener('mousedown', handleOutside);
-  }, []);
 
-  const navItems: { id: WorkspaceTab; label: string }[] = [
-    { id: 'gallery', label: 'Gallery' },
-    { id: 'characters', label: 'Characters' },
-    { id: 'generation', label: 'Generation' },
-    { id: 'loras', label: 'LoRAs & Models' },
-    { id: 'workflows', label: 'Workflows' },
-    { id: 'system', label: 'System & Backup' },
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setDropdownOpen(false);
+        setMobileMenuOpenState(false);
+      }
+    };
+
+    const handleResize = () => {
+      if (window.innerWidth >= 768) {
+        setMobileMenuOpenState(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('resize', handleResize);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [mobileMenuOpen, isMobileMenuOpen]);
+
+  const navItems: {
+    id: WorkspaceTab;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }[] = [
+    { id: 'gallery', label: 'Gallery', icon: Images },
+    { id: 'characters', label: 'Characters', icon: Users },
+    { id: 'generation', label: 'Generation Studio', icon: Sparkles },
+    { id: 'loras', label: 'LoRAs & Models', icon: Layers },
+    { id: 'workflows', label: 'Workflows', icon: Network },
+    { id: 'system', label: 'System & Backup', icon: Settings },
   ];
 
   const isComfyBusy = comfyStatus.runningCount > 0 || comfyStatus.queuedCount > 0;
@@ -94,18 +150,41 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   };
 
   return (
-    <header className="flex items-center justify-between gap-6 px-6 py-3 bg-zinc-950 border-b border-zinc-800/80 sticky top-0 z-30">
-      {/* Zone 1: Brand Wordmark */}
-      <button
-        type="button"
-        onClick={() => onSelectTab('gallery')}
-        className="text-lg font-display font-bold tracking-tight text-zinc-100 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded cursor-pointer"
-      >
-        Couchy
-      </button>
+    <header className="relative flex items-center justify-between gap-3 sm:gap-6 px-3.5 sm:px-6 py-2.5 sm:py-3 bg-zinc-950 border-b border-zinc-800/80 sticky top-0 z-40">
+      {/* Zone 1: Mobile Hamburger Toggle & Brand Wordmark */}
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+        <button
+          type="button"
+          data-mobile-menu-trigger="true"
+          onClick={() => {
+            setMobileMenuOpenState((prev) => !prev);
+            if (dropdownOpen) setDropdownOpen(false);
+          }}
+          className="md:hidden inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded-xl text-zinc-300 hover:text-zinc-100 hover:bg-zinc-900 border border-zinc-800/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 cursor-pointer transition-colors"
+          aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          aria-expanded={mobileMenuOpen}
+        >
+          {mobileMenuOpen ? (
+            <X className="w-5 h-5 text-zinc-200" />
+          ) : (
+            <Menu className="w-5 h-5 text-zinc-200" />
+          )}
+        </button>
 
-      {/* Zone 2: Navigation Links */}
-      <nav className="flex items-center gap-6 overflow-x-auto">
+        <button
+          type="button"
+          onClick={() => {
+            onSelectTab('gallery');
+            setMobileMenuOpenState(false);
+          }}
+          className="text-lg font-display font-bold tracking-tight text-zinc-100 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded cursor-pointer py-1"
+        >
+          Couchy
+        </button>
+      </div>
+
+      {/* Zone 2: Navigation Links (Desktop only, hidden on mobile) */}
+      <nav className="hidden md:flex items-center gap-6 overflow-x-auto">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
           return (
@@ -129,8 +208,11 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
       <div ref={dropdownRef} className="relative shrink-0">
         <button
           type="button"
-          onClick={() => setDropdownOpen((prev) => !prev)}
-          className={`relative overflow-hidden inline-flex items-center justify-between gap-2.5 px-3.5 py-1.5 rounded-xl border text-xs font-medium transition-all min-w-[230px] max-w-[340px] cursor-pointer ${
+          onClick={() => {
+            setDropdownOpen((prev) => !prev);
+            if (mobileMenuOpen) setMobileMenuOpenState(false);
+          }}
+          className={`relative overflow-hidden inline-flex items-center justify-between gap-2 px-2.5 sm:px-3.5 py-1.5 rounded-xl border text-xs font-medium transition-all min-w-[140px] xs:min-w-[180px] sm:min-w-[230px] max-w-[190px] xs:max-w-[240px] sm:max-w-[340px] cursor-pointer ${
             activeToast
               ? getToastPillStyle(activeToast.type)
               : isComfyBusy
@@ -148,7 +230,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
           )}
 
           {/* Left Content: 3s Toast Override -> ComfyUI Progress -> Idle Status */}
-          <div className="relative z-10 flex items-center gap-2 min-w-0 flex-1">
+          <div className="relative z-10 flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
             {activeToast ? (
               <>
                 {renderToastIcon(activeToast.type)}
@@ -163,7 +245,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
                     ? `${comfyStatus.progressPercent}%`
                     : 'Running'}
                 </span>
-                <span className="text-indigo-300/90 font-mono tabular-nums shrink-0">
+                <span className="hidden sm:inline text-indigo-300/90 font-mono tabular-nums shrink-0">
                   · {totalJobs} {totalJobs === 1 ? 'job' : 'queued'}
                 </span>
               </>
@@ -202,7 +284,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
 
         {/* Dropdown Panel: Live ComfyUI Summary + Last 10 Messages */}
         {dropdownOpen && (
-          <div className="absolute right-0 mt-2 w-96 bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden z-50 text-xs">
+          <div className="absolute right-0 mt-2 w-[calc(100vw-1.75rem)] sm:w-96 max-w-sm bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden z-50 text-xs">
             {/* Live ComfyUI Queue Status Header */}
             <div className="px-4 py-3 bg-zinc-900/70 border-b border-zinc-800/80 space-y-2">
               <div className="flex items-center justify-between">
@@ -300,6 +382,59 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
           </div>
         )}
       </div>
+
+      {/* Mobile Navigation Slide-Down Drawer */}
+      {mobileMenuOpen && (
+        <>
+          {/* Scrim backdrop */}
+          <div
+            className="fixed inset-0 top-[53px] sm:top-[57px] bg-black/85 backdrop-blur-sm z-30 md:hidden"
+            onClick={() => setMobileMenuOpenState(false)}
+            aria-hidden="true"
+          />
+
+          {/* Slide-Down Menu Panel */}
+          <div
+            ref={mobileMenuRef}
+            className="md:hidden absolute top-full left-0 right-0 bg-zinc-950 border-b border-zinc-800 shadow-2xl z-50 px-3 py-3 space-y-1 animate-in fade-in slide-in-from-top-2 duration-150"
+          >
+            <div className="px-3 py-1 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+              Workspace Navigation
+            </div>
+            {navItems.map((item) => {
+              const isActive = activeTab === item.id;
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    onSelectTab(item.id);
+                    setMobileMenuOpenState(false);
+                  }}
+                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-sm font-medium transition-colors text-left cursor-pointer min-h-[48px] ${
+                    isActive
+                      ? 'bg-indigo-600/15 text-indigo-200 border border-indigo-500/40'
+                      : 'text-zinc-300 hover:text-zinc-100 hover:bg-zinc-900/80 border border-transparent'
+                  }`}
+                >
+                  <Icon
+                    className={`w-4 h-4 shrink-0 ${
+                      isActive ? 'text-indigo-400' : 'text-zinc-400'
+                    }`}
+                  />
+                  <span className="flex-1 font-medium">{item.label}</span>
+                  {isActive && (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                      Active
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
     </header>
   );
 };

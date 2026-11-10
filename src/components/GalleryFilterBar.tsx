@@ -40,6 +40,7 @@ interface GalleryFilterBarProps {
   onSaveSearch: (name: string) => void;
   onDeleteSavedSearch: (id: number) => void;
   onExportFilteredZip: () => void;
+  isHiddenOnMobile?: boolean;
 }
 
 /**
@@ -63,6 +64,7 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
   onSaveSearch,
   onDeleteSavedSearch,
   onExportFilteredZip,
+  isHiddenOnMobile = false,
 }) => {
   const [showFilters, setShowFilters] = useState(false);
   const [newPresetName, setNewPresetName] = useState('');
@@ -110,7 +112,11 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
   };
 
   return (
-    <section className="sticky top-0 z-30 bg-zinc-950/95 backdrop-blur-md border-b border-zinc-800 px-4 sm:px-6 py-2.5 transition-all shadow-md space-y-3">
+    <section
+      className={`sticky top-[53px] sm:top-[57px] z-20 bg-zinc-950/95 backdrop-blur-md border-b border-zinc-800 px-4 sm:px-6 py-2.5 transition-all shadow-md space-y-3 ${
+        isHiddenOnMobile ? 'hidden md:block' : 'block'
+      }`}
+    >
       {/* Row 1: Locked Sticky Universal Search Header + Filter Toggle + Export */}
       <div className="flex items-center justify-between gap-2.5 sm:gap-3">
         <div className="relative flex-1 min-w-[200px]">

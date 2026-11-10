@@ -52,6 +52,7 @@ const INITIAL_FILTERS: GalleryFilterState = {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('gallery');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [layout, setLayout] = useState<GalleryViewLayout>('masonry');
   const [thumbScale, setThumbScale] = useState<'sm' | 'md' | 'lg'>('md');
   const [filters, setFilters] = useState<GalleryFilterState>(INITIAL_FILTERS);
@@ -313,7 +314,10 @@ export default function App() {
       {/* 3-Zone Top Bar with Unified Status & Toast Message Area */}
       <TopNavHeader
         activeTab={activeTab}
-        onSelectTab={setActiveTab}
+        onSelectTab={(tab) => {
+          setActiveTab(tab);
+          setIsMobileMenuOpen(false);
+        }}
         comfyStatus={comfyStatus}
         activeToast={activeToast}
         messages={messages}
@@ -321,6 +325,8 @@ export default function App() {
           setMessages([]);
           setActiveToast(null);
         }}
+        isMobileMenuOpen={isMobileMenuOpen}
+        onMobileMenuOpenChange={setIsMobileMenuOpen}
       />
 
       {/* Main Content Area */}
@@ -359,6 +365,7 @@ export default function App() {
                   archiveName: 'couchy-filtered-export',
                 });
               }}
+              isHiddenOnMobile={isMobileMenuOpen}
             />
 
             <GalleryGridView

@@ -1,140 +1,89 @@
-# Mobile UI Refinement & Gallery Search Optimization
+# Mobile Navigation & Top Header Refinement
 
-Transform the mobile user experience across four core areas: docking the generation bar edge-to-edge with a minimize tab, locking the search bar to the top with an expandable filter accordion, eliminating viewport jumping when typing prompts on mobile, and moving full-screen image details to a non-overlapping single-line bottom footer.
+Add a mobile hamburger navigation menu next to the "Couchy" brand title in the top navigation header, standardizing the "Generation Studio" label and providing a clean slide-down navigation panel on mobile screens while preserving the existing desktop navigation bar.
 
 ## User Review & Critical Decisions
 
 > [!IMPORTANT]
 > Decisions confirmed via Phase 1 clarifying questions:
-> - **Filter Sliding Window**: Expandable accordion panel directly below the sticky top search bar, collapsed by default with an active filter badge counter.
-> - **Mobile Generation Bar**: Edge-to-edge full-width bottom dock (losing floating margins on mobile) with a minimize/expand toggle tab so users can reclaim gallery viewing space.
-> - **Full-Screen Image Details**: Compact single-line footer bar pinned to the very bottom edge with zero image overlap, maximizing image visibility.
-> - **Typing Stability**: Fixed bottom anchoring with isolated touch/scroll containment to prevent mobile keyboard viewport shifts and gallery jumping.
+> - **Navigation Presentation**: Slide-down panel anchored immediately under the top header (`top-full left-0 right-0`), animated smoothly with subtle backdrop blur.
+> - **Scope & Focus**: Paused the `README.md` updates per user request to focus entirely on the mobile navigation experience.
+> - **Official Name**: Standardized **"Generation Studio"** as the official title for the generation area in the navigation menu and views.
 
 ---
 
 ### 1. Overview & Core Concept
 
-1. **Edge-to-Edge Mobile Generation Dock (`FloatingQuickGenBar.tsx`)**:
-   - On screens `< 768px` (mobile), the bar transforms from a floating pill into a full-width docked bottom sheet with `bottom-0 left-0 right-0 rounded-t-2xl border-t border-zinc-800`.
-   - Includes a top pull/toggle tab with chevron indicating collapsed vs. expanded states.
-   - Re-architected flex layout prevents control truncation, ensuring the submission button (enter arrow) is always 100% visible and accessible.
-
-2. **Sticky Top Search Bar & Hidden Filter Accordion (`GalleryFilterBar.tsx`)**:
-   - The search bar becomes `sticky top-0 z-30` with backdrop blur, remaining pinned at the top as users scroll through hundreds of images.
-   - All secondary controls (ratings, favorites, sort options, view layout, LoRA/character tags) are tucked into a smooth expandable accordion panel.
-   - The filter trigger button displays an active filter count pill (e.g., `Filters (3)`) so users instantly know when filters are active.
-
-3. **Mobile Keyboard Typing Stability**:
-   - Prevent mobile browser viewport jumping when tapping into the prompt input by removing intrusive `scrollIntoView` calls during typing.
-   - Isolate input focus and ensure proper keyboard handling on mobile devices.
-
-4. **Zero-Overlap Mobile Full-Screen Preview (`ImageInspectorDrawer.tsx`)**:
-   - In full-screen mode, replace the floating card overlay that obscures lower image content with a compact single-line bar pinned to the screen bottom edge.
-   - Ensure the image container reserves space so the entire image remains 100% unobstructed.
+- **The Problem**: On mobile screens, horizontal navigation links (`Gallery`, `Characters`, `Generation`, `LoRAs & Models`, `Workflows`, `System & Backup`) either wrap awkwardly or disappear off-screen due to limited viewport width and the live ComfyUI status pill.
+- **The Solution**: 
+  - On mobile (`< 768px`), hide the horizontal link strip and place a clean hamburger toggle button (`Menu` / `X` icon) directly to the left of the "Couchy" brand wordmark.
+  - Tapping the hamburger button slides down an organized navigation panel containing each primary section with domain icons, active indicators, and full touch targets ($\ge 44\text{px}$).
+  - Tapping any destination or clicking outside automatically selects the tab and closes the panel.
+  - On desktop (`md:`), the horizontal navigation strip remains active and uncluttered.
 
 ---
 
 ### 2. User Experience & Visual Design
 
-#### A. Mobile Quick Generation Docked vs. Minimized States
+#### Header Layout on Mobile (`< 768px`)
 
 ```text
-EXPANDED MOBILE DOCK:
+COLLAPSED MOBILE HEADER:
 ┌─────────────────────────────────────────────────────────────┐
-│                       [ ─ Quick Gen ─ ]                    │
-├─────────────────────────────────────────────────────────────┤
-│  [User Pill: Ana]                                           │
-│  What do you want to create?                                │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  [+] [@Agent]              [Krea2 · 2:3 · x1]        [ → ]  │
+│  [☰] Couchy                               [ ComfyUI Ready ▾]│
 └─────────────────────────────────────────────────────────────┘
 
-MINIMIZED MOBILE DOCK:
+EXPANDED SLIDE-DOWN NAVIGATION PANEL:
 ┌─────────────────────────────────────────────────────────────┐
-│             [ ▴ Quick Gen · Tap to expand ]                 │
+│  [✕] Couchy                               [ ComfyUI Ready ▾]│
+├─────────────────────────────────────────────────────────────┤
+│  [⊞]  Gallery                                            ●  │
+│  [👤] Characters                                             │
+│  [✨] Generation Studio                                      │
+│  [⚙]  LoRAs & Models                                         │
+│  [🔀] Workflows                                              │
+│  [💾] System & Backup                                        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-- **Touch Target**: The minimize handle provides a $\ge 44\text{px}$ touch target with haptic-ready transition.
-- **Responsive Controls**: The workflow name shrinks to fit small screens (down to 360px), guaranteeing the `[ → ]` submit button never gets pushed out of view.
-
-#### B. Sticky Search & Filter Accordion
-
-```text
-PINNED TOP BAR (Default / Collapsed):
-┌─────────────────────────────────────────────────────────────┐
-│  🔍 Search prompts, tags, characters...   [ Filters (2) ▾ ] │
-└─────────────────────────────────────────────────────────────┘
-
-EXPANDED ACCORDION:
-┌─────────────────────────────────────────────────────────────┐
-│  🔍 Search prompts, tags, characters...   [ Filters (2) ▴ ] │
-├─────────────────────────────────────────────────────────────┤
-│  FAVORITES & RATINGS:                                       │
-│  [♥ Favorites Only]   [★ 1] [★ 2] [★ 3] [★ 4] [★ 5]         │
-│                                                             │
-│  SORT & VIEW:                                               │
-│  Sort: [Newest ▾]     Layout: [⊞ Grid]    Thumbs: [M]       │
-│                                                             │
-│  TAGS & CHARACTERS:                                         │
-│  LoRAs: [All ▾]   Characters: [All ▾]   [Reset All Filters] │
-└─────────────────────────────────────────────────────────────┘
-```
-
-#### C. Mobile Full-Screen Image Lightbox
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│  [✕]                                                   [⤢]  │
-│                                                             │
-│                                                             │
-│                     [ FULL IMAGE VIEW ]                     │
-│               (Completely visible, no overlay)              │
-│                                                             │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  Krea2_turbo_01793_.png · 1448×2176 · 3.2 MB        [ ⬇ ]  │
-└─────────────────────────────────────────────────────────────┘
-```
+#### Visual Styling Details:
+- **Hamburger Button**: `p-1.5 -ml-1 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer`.
+- **Slide-Down Menu**: `absolute top-full left-0 right-0 bg-zinc-950/98 backdrop-blur-2xl border-b border-zinc-800 shadow-2xl py-2 px-3 space-y-1 z-50 animate-in slide-in-from-top-2 duration-200`.
+- **Nav Buttons**: Clean unboxed rounded items (`rounded-xl px-3.5 py-2.5`) with domain icons, high contrast text, and subtle indigo accent badge on active tab.
+- **Status Pill Responsiveness**: Constrain status pill on mobile (`max-w-[170px] xs:max-w-[210px] sm:max-w-[340px]`) so it never crowds out the logo or hamburger toggle.
 
 ---
 
 ### 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Accordion Panel vs. Slide-over Drawer**
-  - *Chosen Approach*: Expandable accordion panel directly under the sticky search header.
-  - *Why*: User-confirmed choice. Keeps the search input context visible while toggling filters without obstructing the entire gallery screen with a modal curtain.
-- **Decision 2: Mobile Bottom Dock with Minimize Tab**
-  - *Chosen Approach*: Flush edge-to-edge dock on mobile (`< 768px`) with an interactive toggle tab, preserving the floating card aesthetic only on tablet/desktop (`md:`).
-  - *Why*: Eliminates cramped margins on mobile, guarantees all interactive buttons are visible, and gives users full control to collapse the bar when browsing.
-- **Decision 3: Sticky Top Header Positioning**
-  - *Chosen Approach*: `sticky top-0 z-30` on `GalleryFilterBar`.
-  - *Why*: Prevents users from having to scroll back to the very top of a massive gallery to perform a new search or tweak filters.
+- **Decision 1: Slide-Down Anchored Panel vs Side Drawer**
+  - *Chosen Approach*: Slide-down panel anchored flush beneath the top navigation bar.
+  - *Why*: User-confirmed choice. Keeps the brand header visible, feels natural on modern mobile devices, and avoids heavy layout re-draws associated with full-page drawer overlays.
+- **Decision 2: Name Standardization**
+  - *Chosen Approach*: Update `'Generation'` to `'Generation Studio'` in navigation lists.
+  - *Why*: Clarifies that this is the full generation workspace, distinct from the bottom Quick Gen dock.
 
 ---
 
 ### 4. Technical Implementation Steps
 
-1. **`src/components/FloatingQuickGenBar.tsx`**:
-   - Add `isMinimized` state (with mobile auto-persist in session/local state if desired).
-   - Update outer container:
-     - Mobile: `fixed bottom-0 left-0 right-0 w-full z-40 rounded-t-2xl border-t border-zinc-800 bg-zinc-900/98 backdrop-blur-2xl`
-     - Desktop (`md:`): `md:bottom-5 md:left-1/2 md:-translate-x-1/2 md:w-[94vw] md:max-w-2xl md:rounded-3xl md:border`
-   - Add minimize toggle header bar with chevron icon (`ChevronDown` / `ChevronUp`).
-   - Fix inner controls flexbox: make prompt textarea flexible, add `shrink-0` to the submit button (`[ → ]`) and wrap or truncate settings pill gracefully.
-   - Remove intrusive `scrollIntoView` on keystrokes to stop mobile gallery jumping.
+1. **`src/components/TopNavHeader.tsx`**:
+   - Import `Menu, X, Images, Users, Sparkles, Layers, Network, Settings` from `lucide-react`.
+   - Add `mobileMenuOpen` state (`useState(false)`).
+   - Add outside click listener and Escape key handler for the mobile menu.
+   - Restructure Zone 1 to include the hamburger button for mobile (`md:hidden`) beside `Couchy`.
+   - Update `navItems` array:
+     - Gallery (`Images`)
+     - Characters (`Users`)
+     - Generation Studio (`Sparkles`)
+     - LoRAs & Models (`Layers`)
+     - Workflows (`Network`)
+     - System & Backup (`Settings`)
+   - Keep desktop `<nav>` hidden on mobile: `className="hidden md:flex items-center gap-6 overflow-x-auto"`.
+   - Render the slide-down menu container when `mobileMenuOpen` is true.
+   - Adjust Zone 3 status button width so it scales down gracefully on narrow mobile displays.
 
-2. **`src/components/GalleryFilterBar.tsx`**:
-   - Change container to `sticky top-0 z-30 bg-zinc-950/95 backdrop-blur-md border-b border-zinc-800`.
-   - Move all secondary filter rows into a collapsible `<div className="...">` controlled by `showFilters` state (default: `false`).
-   - Add clean `FilterToggle` button with badge count calculating active non-default filters (e.g. `favoritesOnly`, `minRating > 0`, `characterIds.length > 0`, etc.).
-
-3. **`src/components/ImageInspectorDrawer.tsx`**:
-   - In full-screen mode and mobile view, move the floating bottom metadata box (`absolute bottom-4 left-4 right-4`) to a compact single-line footer docked at the bottom (`fixed bottom-0 inset-x-0 h-11 bg-black/90 border-t border-zinc-800/80 px-4 flex items-center justify-between text-xs`).
-   - Adjust image viewport padding (`pb-12` in mobile/full-screen) so the image never has text or download buttons rendered over it.
-
-4. **Verification**:
-   - Test mobile viewport widths (360px, 390px, 414px) and desktop layouts.
-   - Co-execute `compile_applet` and `lint_applet` for clean zero-error compilation.
+2. **Verification**:
+   - Test mobile viewport widths (360px, 390px, 414px) and desktop breakpoint (`md: 768px`).
+   - Verify tab navigation and closing behavior.
+   - Run `compile_applet` and `lint_applet` together to confirm zero errors.
