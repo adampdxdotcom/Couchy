@@ -1,0 +1,30 @@
+services:
+  comfyui-gallery:
+    build: .
+    container_name: comfyui-gallery
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /path/to/comfyui/output:/data/output:ro
+      - /path/to/comfyui/models:/data/models:ro
+      - /path/to/data/thumbnails:/data/thumbnails
+      - ./gallery-data:/app/data
+      - ./model-downloads:/downloads
+    # Optional: Uncomment to allow the built-in ONNX visual keyword tagger (in /app/data/local_models) to use your NVIDIA GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
