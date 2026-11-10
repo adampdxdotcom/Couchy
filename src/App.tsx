@@ -88,6 +88,7 @@ export default function App() {
   const [activeToast, setActiveToast] = useState<AppToastMessage | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevBusyRef = useRef<boolean>(false);
+  const lastIndexedAtRef = useRef<number>(0);
 
   const pushToast = useCallback(
     (text: string, type: AppToastMessage['type'] = 'info') => {
@@ -225,9 +226,14 @@ export default function App() {
         if (cancelled) return;
         setComfyStatus(status);
 
+        // Silently refresh gallery as soon as any newly generated image is indexed
+        if (status.lastIndexedAt && status.lastIndexedAt > lastIndexedAtRef.current) {
+          lastIndexedAtRef.current = status.lastIndexedAt;
+          refreshAll();
+        }
+
         const isBusy = status.runningCount > 0 || status.queuedCount > 0;
         if (prevBusyRef.current && !isBusy) {
-          pushToast('ComfyUI finished all queued generations', 'success');
           refreshAll();
         }
         prevBusyRef.current = isBusy;
@@ -429,8 +435,12 @@ export default function App() {
           <WorkflowLibraryView
             workflows={workflows}
             allImages={allImages}
+            models={models}
+            loras={loras}
+            checkpoints={checkpoints}
             onRefresh={refreshAll}
             onOpenImage={(img) => setInspectedImageId(img.id)}
+            onPushToast={pushToast}
           />
         )}
 

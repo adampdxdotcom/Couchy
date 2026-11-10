@@ -221,7 +221,13 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
       const found = workflows.find((w) => w.id === charWfId && w.hasApiWorkflow);
       if (found) return found;
     }
-    return workflows.find((w) => w.hasApiWorkflow) || workflows[0] || null;
+    return (
+      workflows.find((w) => w.isDefault && w.hasApiWorkflow) ||
+      workflows.find((w) => w.isDefault) ||
+      workflows.find((w) => w.hasApiWorkflow) ||
+      workflows[0] ||
+      null
+    );
   }, [attachedCharacter, workflows]);
 
   const resolvedShortRatio = useMemo(() => {

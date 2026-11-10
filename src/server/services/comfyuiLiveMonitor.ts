@@ -12,6 +12,7 @@ interface LiveMonitorState {
   maxSteps: number | null;
   currentNode: string | null;
   lastQueueFetchMs: number;
+  lastIndexedAt: number;
 }
 
 const state: LiveMonitorState = {
@@ -23,7 +24,16 @@ const state: LiveMonitorState = {
   maxSteps: null,
   currentNode: null,
   lastQueueFetchMs: 0,
+  lastIndexedAt: Date.now(),
 };
+
+/**
+ * Signals that one or more newly generated images were indexed and committed to SQLite,
+ * allowing connected frontends to refresh their gallery views silently.
+ */
+export function notifyImageIndexed(): void {
+  state.lastIndexedAt = Date.now();
+}
 
 let wsInstance: WebSocket | null = null;
 let connectedWsUrl = '';
@@ -186,5 +196,6 @@ export async function getComfyUiLiveStatus(): Promise<ComfyUiLiveStatus> {
     step: state.runningCount > 0 ? state.step : null,
     maxSteps: state.runningCount > 0 ? state.maxSteps : null,
     currentNode: state.runningCount > 0 ? state.currentNode : null,
+    lastIndexedAt: state.lastIndexedAt,
   };
 }

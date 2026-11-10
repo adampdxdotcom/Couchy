@@ -700,13 +700,7 @@ export function compileWorkflowForGeneration(params: {
     ckptInputs[ckptField] = params.checkpointName;
   }
 
-  // 7. Enable LoRA Boolean Node (e.g. Node #30_23 inputs["value"] = activeLoras.length > 0)
-  if (mapping.enableLoraNodeId && graph[mapping.enableLoraNodeId]?.inputs) {
-    const enableField = mapping.enableLoraField || 'value';
-    graph[mapping.enableLoraNodeId].inputs[enableField] = activeLoras.length > 0;
-  }
-
-  // 8. LoRA Injection (Supports Power Lora Loader (rgthree) Node #50 AND standard LoraLoader chaining)
+  // 7 & 8. LoRA Injection (Supports Power Lora Loader (rgthree) Node #50 AND standard LoraLoader chaining)
   const mappedLoraNodes = (mapping.loraNodeIds || []).filter((id) => Boolean(graph[id]?.inputs));
 
   // Check if any mapped LoRA node is a Power Lora Loader (rgthree)
@@ -718,27 +712,76 @@ export function compileWorkflowForGeneration(params: {
 
   if (powerLoraNodeId) {
     const powerInputs = graph[powerLoraNodeId].inputs;
-    // Remove any pre-existing lora_1, lora_2, ... entries first
-    for (const key of Object.keys(powerInputs)) {
-      if (/^lora_\d+$/i.test(key)) {
-        delete powerInputs[key];
+    // Collect any pre-configured LoRAs saved inside the workflow's Power Lora Loader node
+    const savedEntries: { on: boolean; lora: string; strength: number }[] = [];
+    const existingKeys = Object.keys(powerInputs)
+      .filter((k) => /^lora_\d+$/i.test(k))
+      .sort((a, b) => {
+        const na = parseInt(a.replace(/\D+/g, ''), 10) || 0;
+        const nb = parseInt(b.replace(/\D+/g, ''), 10) || 0;
+        return na - nb;
+      });
+
+    for (const key of existingKeys) {
+      const val = powerInputs[key];
+      if (val && typeof val === 'object' && val.lora && val.on !== false) {
+        savedEntries.push({
+          on: true,
+          lora: String(val.lora),
+          strength: Number(val.strength ?? 1.0),
+        });
+      }
+      delete powerInputs[key];
+    }
+
+    // Merge saved workflow LoRAs with runtime activeLoras (avoiding duplicate filenames)
+    const combinedLoras: { on: boolean; lora: string; strength: number }[] = [];
+    const seenLoraNames = new Set<string>();
+
+    for (const lora of activeLoras) {
+      const key = lora.loraName.toLowerCase();
+      if (!seenLoraNames.has(key)) {
+        seenLoraNames.add(key);
+        combinedLoras.push({
+          on: true,
+          lora: lora.loraName,
+          strength: Number(lora.modelStrength ?? 1.0),
+        });
       }
     }
-    // Inject active LoRAs as lora_1, lora_2, ...
-    activeLoras.forEach((lora, idx) => {
+
+    for (const saved of savedEntries) {
+      const key = saved.lora.toLowerCase();
+      if (!seenLoraNames.has(key)) {
+        seenLoraNames.add(key);
+        combinedLoras.push(saved);
+      }
+    }
+
+    combinedLoras.forEach((entry, idx) => {
       powerInputs[`lora_${idx + 1}`] = {
-        on: true,
-        lora: lora.loraName,
-        strength: Number(lora.modelStrength ?? 1.0),
+        on: entry.on,
+        lora: entry.lora,
+        strength: entry.strength,
       };
     });
-  } else if (activeLoras.length === 0) {
-    for (const nodeId of mappedLoraNodes) {
-      const inputs = graph[nodeId].inputs;
-      if ('strength_model' in inputs) inputs.strength_model = 0;
-      if ('strength_clip' in inputs) inputs.strength_clip = 0;
+
+    if (mapping.enableLoraNodeId && graph[mapping.enableLoraNodeId]?.inputs) {
+      const enableField = mapping.enableLoraField || 'value';
+      graph[mapping.enableLoraNodeId].inputs[enableField] = combinedLoras.length > 0;
     }
-  } else if (mappedLoraNodes.length > 0) {
+  } else {
+    if (mapping.enableLoraNodeId && graph[mapping.enableLoraNodeId]?.inputs) {
+      const enableField = mapping.enableLoraField || 'value';
+      graph[mapping.enableLoraNodeId].inputs[enableField] = activeLoras.length > 0;
+    }
+    if (activeLoras.length === 0) {
+      for (const nodeId of mappedLoraNodes) {
+        const inputs = graph[nodeId].inputs;
+        if ('strength_model' in inputs) inputs.strength_model = 0;
+        if ('strength_clip' in inputs) inputs.strength_clip = 0;
+      }
+    } else if (mappedLoraNodes.length > 0) {
     for (let i = 0; i < mappedLoraNodes.length; i++) {
       const nodeId = mappedLoraNodes[i];
       const inputs = graph[nodeId].inputs;
@@ -779,6 +822,7 @@ export function compileWorkflowForGeneration(params: {
         }
         prevLoraNodeId = newNodeId;
       }
+    }
     }
   }
 

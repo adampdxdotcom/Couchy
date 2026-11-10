@@ -227,6 +227,7 @@ modelsAndWorkflowsRouter.get('/workflows', (_req, res) => {
           w.name,
           w.description,
           w.is_saved_library,
+          w.is_default,
           (w.visual_workflow_json IS NOT NULL AND w.visual_workflow_json != '') AS has_visual,
           (w.api_workflow_json IS NOT NULL AND w.api_workflow_json != '') AS has_api,
           w.workflow_hash,
@@ -236,7 +237,7 @@ modelsAndWorkflowsRouter.get('/workflows', (_req, res) => {
         FROM workflows w
         LEFT JOIN image_workflows iw ON iw.workflow_id = w.id
         GROUP BY w.id
-        ORDER BY w.is_saved_library DESC, w.updated_at DESC
+        ORDER BY w.is_default DESC, w.is_saved_library DESC, w.updated_at DESC
       `
       )
       .all() as any[];
@@ -261,6 +262,7 @@ modelsAndWorkflowsRouter.get('/workflows', (_req, res) => {
       name: r.name,
       description: r.description || '',
       isSavedLibrary: Boolean(r.is_saved_library),
+      isDefault: Boolean(r.is_default),
       hasVisualWorkflow: Boolean(r.has_visual),
       hasApiWorkflow: Boolean(r.has_api),
       workflowHash: r.workflow_hash,
@@ -289,19 +291,94 @@ modelsAndWorkflowsRouter.get('/workflows/:id', (req, res) => {
 });
 
 /**
+ * POST /api/workflows/:id/set-default
+ * Marks a workflow as the primary default workflow across Quick Gen and Generation Studio.
+ */
+modelsAndWorkflowsRouter.post('/workflows/:id/set-default', (req, res) => {
+  try {
+    const wfId = Number(req.params.id);
+    const existing = db.prepare('SELECT * FROM workflows WHERE id = ?').get(wfId) as any;
+    if (!existing) {
+      res.status(404).json({ error: 'Workflow not found' });
+      return;
+    }
+
+    const tx = db.transaction(() => {
+      db.prepare('UPDATE workflows SET is_default = 0 WHERE is_default = 1').run();
+      db.prepare(
+        "UPDATE workflows SET is_default = 1, is_saved_library = 1, updated_at = datetime('now') WHERE id = ?"
+      ).run(wfId);
+    });
+    tx();
+
+    const updated = db.prepare('SELECT * FROM workflows WHERE id = ?').get(wfId);
+    res.json({ ok: true, workflow: updated });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to set default workflow' });
+  }
+});
+
+/**
  * POST /api/workflows
- * Saves or imports a workflow into the Independent Workflow Library.
+ * Saves, updates, or imports a workflow in the Independent Workflow Library.
  */
 modelsAndWorkflowsRouter.post('/workflows', (req, res) => {
   try {
-    const { id, name, description, visualWorkflowJson, apiWorkflowJson } = req.body || {};
+    const { id, name, description, visualWorkflowJson, apiWorkflowJson, isDefault } = req.body || {};
     if (id) {
-      db.prepare(
-        `UPDATE workflows
-         SET name = ?, description = ?, is_saved_library = 1, updated_at = datetime('now')
-         WHERE id = ?`
-      ).run(String(name || 'Saved Workflow'), String(description || ''), Number(id));
-      res.json({ workflow: db.prepare('SELECT * FROM workflows WHERE id = ?').get(Number(id)) });
+      const wfId = Number(id);
+      const current = db.prepare('SELECT * FROM workflows WHERE id = ?').get(wfId) as any;
+      if (!current) {
+        res.status(404).json({ error: 'Workflow not found' });
+        return;
+      }
+
+      const nextName = name !== undefined ? String(name || 'Saved Workflow').trim() : current.name;
+      const nextDesc = description !== undefined ? String(description || '') : current.description;
+      const nextVisual =
+        visualWorkflowJson !== undefined ? visualWorkflowJson : current.visual_workflow_json;
+      const nextApi =
+        apiWorkflowJson !== undefined ? apiWorkflowJson : current.api_workflow_json;
+
+      // Validate JSON if provided
+      if (typeof nextApi === 'string' && nextApi.trim()) {
+        try {
+          JSON.parse(nextApi);
+        } catch {
+          res.status(400).json({ error: 'API Workflow JSON is not valid JSON' });
+          return;
+        }
+      }
+      if (typeof nextVisual === 'string' && nextVisual.trim()) {
+        try {
+          JSON.parse(nextVisual);
+        } catch {
+          res.status(400).json({ error: 'Visual Workflow JSON is not valid JSON' });
+          return;
+        }
+      }
+
+      const tx = db.transaction(() => {
+        if (isDefault) {
+          db.prepare('UPDATE workflows SET is_default = 0 WHERE is_default = 1').run();
+        }
+        const nextDefault = isDefault !== undefined ? (isDefault ? 1 : 0) : current.is_default;
+
+        db.prepare(
+          `UPDATE workflows
+           SET name = ?,
+               description = ?,
+               visual_workflow_json = ?,
+               api_workflow_json = ?,
+               is_saved_library = 1,
+               is_default = ?,
+               updated_at = datetime('now')
+           WHERE id = ?`
+        ).run(nextName, nextDesc, nextVisual, nextApi, nextDefault, wfId);
+      });
+      tx();
+
+      res.json({ workflow: db.prepare('SELECT * FROM workflows WHERE id = ?').get(wfId) });
       return;
     }
 
@@ -315,21 +392,31 @@ modelsAndWorkflowsRouter.post('/workflows', (req, res) => {
       .update((visualWorkflowJson || '') + '||' + (apiWorkflowJson || ''))
       .digest('hex');
 
-    db.prepare(
-      `INSERT INTO workflows (name, description, is_saved_library, visual_workflow_json, api_workflow_json, workflow_hash)
-       VALUES (?, ?, 1, ?, ?, ?)
-       ON CONFLICT(workflow_hash) DO UPDATE SET
-         name = excluded.name,
-         description = excluded.description,
-         is_saved_library = 1,
-         updated_at = datetime('now')`
-    ).run(
-      String(name || `Workflow ${wfHash.slice(0, 8)}`),
-      String(description || ''),
-      visualWorkflowJson || null,
-      apiWorkflowJson || null,
-      wfHash
-    );
+    const tx = db.transaction(() => {
+      if (isDefault) {
+        db.prepare('UPDATE workflows SET is_default = 0 WHERE is_default = 1').run();
+      }
+      db.prepare(
+        `INSERT INTO workflows (name, description, is_saved_library, is_default, visual_workflow_json, api_workflow_json, workflow_hash)
+         VALUES (?, ?, 1, ?, ?, ?, ?)
+         ON CONFLICT(workflow_hash) DO UPDATE SET
+           name = excluded.name,
+           description = excluded.description,
+           visual_workflow_json = COALESCE(excluded.visual_workflow_json, workflows.visual_workflow_json),
+           api_workflow_json = COALESCE(excluded.api_workflow_json, workflows.api_workflow_json),
+           is_saved_library = 1,
+           is_default = CASE WHEN excluded.is_default = 1 THEN 1 ELSE workflows.is_default END,
+           updated_at = datetime('now')`
+      ).run(
+        String(name || `Workflow ${wfHash.slice(0, 8)}`),
+        String(description || ''),
+        isDefault ? 1 : 0,
+        visualWorkflowJson || null,
+        apiWorkflowJson || null,
+        wfHash
+      );
+    });
+    tx();
 
     const row = db.prepare('SELECT * FROM workflows WHERE workflow_hash = ?').get(wfHash);
     res.json({ workflow: row });

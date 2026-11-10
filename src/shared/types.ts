@@ -229,6 +229,7 @@ export interface WorkflowLibraryItem {
   name: string;
   description: string;
   isSavedLibrary: boolean;
+  isDefault?: boolean;
   hasVisualWorkflow: boolean;
   hasApiWorkflow: boolean;
   workflowHash: string;
@@ -417,6 +418,7 @@ export interface ComfyUiLiveStatus {
   step: number | null;
   maxSteps: number | null;
   currentNode: string | null;
+  lastIndexedAt?: number;
 }
 
 export interface AppToastMessage {

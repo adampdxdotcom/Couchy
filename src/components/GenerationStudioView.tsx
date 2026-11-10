@@ -115,9 +115,16 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
   const [generationCount, setGenerationCount] = useState<number>(4);
 
   // 3. Workflow & Diffusion Model (Node #30_10 UNETLoader unet_name)
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(
-    workflows[0]?.id ?? null
-  );
+  const defaultWorkflowId = useMemo(() => {
+    const found =
+      workflows.find((w) => w.isDefault && w.hasApiWorkflow) ||
+      workflows.find((w) => w.isDefault) ||
+      workflows.find((w) => w.hasApiWorkflow) ||
+      workflows[0];
+    return found?.id ?? null;
+  }, [workflows]);
+
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(defaultWorkflowId);
   const [selectedCheckpoint, setSelectedCheckpoint] = useState<string>('');
   const [workflowDefaultCheckpoint, setWorkflowDefaultCheckpoint] = useState<string>('');
   const [workflowMapping, setWorkflowMapping] = useState<WorkflowNodeMapping | null>(null);
@@ -186,6 +193,9 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
     if (!selectedCharacter) {
       setActiveLoras([]);
       setTriggerWord('');
+      if (defaultWorkflowId) {
+        setSelectedWorkflowId(defaultWorkflowId);
+      }
       return;
     }
     const prefilled: GenerationLoraSelection[] = selectedCharacter.loras.map((l) => ({
@@ -205,14 +215,16 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
 
     if (selectedCharacter.workflows.length > 0) {
       setSelectedWorkflowId(selectedCharacter.workflows[0].workflowId);
+    } else if (defaultWorkflowId) {
+      setSelectedWorkflowId(defaultWorkflowId);
     }
-  }, [selectedCharacter]);
+  }, [selectedCharacter, defaultWorkflowId]);
 
   useEffect(() => {
-    if (!selectedWorkflowId && workflows.length > 0) {
-      setSelectedWorkflowId(workflows[0].id);
+    if (!selectedWorkflowId && defaultWorkflowId) {
+      setSelectedWorkflowId(defaultWorkflowId);
     }
-  }, [workflows, selectedWorkflowId]);
+  }, [defaultWorkflowId, selectedWorkflowId]);
 
   useEffect(() => {
     if (!selectedWorkflowId) return;
@@ -869,6 +881,9 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                   {workflows.map((w) => (
                     <option key={w.id} value={w.id}>
                       {w.name}
+                      {w.isDefault && !w.name.toLowerCase().includes('(default)')
+                        ? ' (Default)'
+                        : ''}
                     </option>
                   ))}
                 </select>

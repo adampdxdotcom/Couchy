@@ -7,7 +7,14 @@ import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import { parseImageMetadata, parseImageMetadataFromChunks } from './pngMetadataParser.ts';
 import { runAssistedCharacterIdentificationForImage } from './characterService.ts';
+import { notifyImageIndexed } from './comfyuiLiveMonitor.ts';
 import type { DependencyStatus } from '../../shared/types.ts';
+
+export interface IndexSingleResult {
+  outcome: 'added' | 'modified' | 'unchanged' | 'error';
+  imageId: number | null;
+  contentHash: string | null;
+}
 
 const SUPPORTED_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 
@@ -296,20 +303,77 @@ export function recomputeImageDependencyStatus(imageId: number): DependencyStatu
 }
 
 /**
+ * Resolves the best-matching appearance label for a character from prompt text and LoRAs.
+ */
+export function resolveAppearanceForCharacter(
+  characterId: number,
+  positivePrompt: string | null,
+  loras: { loraName: string }[] = []
+): string {
+  try {
+    const charLoras = db
+      .prepare(
+        'SELECT lora_name, appearance_label FROM character_loras WHERE character_id = ?'
+      )
+      .all(characterId) as { lora_name: string; appearance_label: string }[];
+
+    const promptLower = (positivePrompt || '').toLowerCase();
+
+    // 1. Check if any LoRA matches a character LoRA with an explicit appearance label
+    for (const cl of charLoras) {
+      if (!cl.appearance_label || cl.appearance_label === 'Default') continue;
+      const clName = cl.lora_name.toLowerCase().replace(/\.(safetensors|pt|ckpt)$/i, '');
+      const hitLora = loras.some((l) =>
+        l.loraName.toLowerCase().replace(/\.(safetensors|pt|ckpt)$/i, '') === clName
+      );
+      if (hitLora) {
+        return cl.appearance_label;
+      }
+    }
+
+    // 2. Check if positive prompt mentions any known appearance label for this character
+    for (const cl of charLoras) {
+      if (!cl.appearance_label || cl.appearance_label === 'Default') continue;
+      const appLower = cl.appearance_label.toLowerCase();
+      if (promptLower.includes(appLower)) {
+        return cl.appearance_label;
+      }
+    }
+
+    // 3. Check character tags for appearance hints
+    const tags = db
+      .prepare(
+        'SELECT t.name FROM character_tags ct JOIN tags t ON t.id = ct.tag_id WHERE ct.character_id = ?'
+      )
+      .all(characterId) as { name: string }[];
+    for (const tag of tags) {
+      if (tag.name && promptLower.includes(tag.name.toLowerCase())) {
+        return tag.name;
+      }
+    }
+
+    return 'Default';
+  } catch {
+    return 'Default';
+  }
+}
+
+/**
  * Indexes a single image file from the mounted read-only output directory.
  * Never modifies or moves the source file.
  */
 export async function indexSingleImageFile(
   fullPath: string,
   rootDir: string,
-  forceMetadataRebuild = false
-): Promise<'added' | 'modified' | 'unchanged' | 'error'> {
+  forceMetadataRebuild = false,
+  characterId?: number | null
+): Promise<IndexSingleResult> {
   try {
     const stat = fs.statSync(fullPath);
-    if (!stat.isFile()) return 'unchanged';
+    if (!stat.isFile()) return { outcome: 'unchanged', imageId: null, contentHash: null };
 
     const ext = path.extname(fullPath).toLowerCase();
-    if (!SUPPORTED_EXTENSIONS.has(ext)) return 'unchanged';
+    if (!SUPPORTED_EXTENSIONS.has(ext)) return { outcome: 'unchanged', imageId: null, contentHash: null };
 
     const relativePath = path.relative(rootDir, fullPath).replace(/\\/g, '/');
     const filename = path.basename(fullPath);
@@ -340,7 +404,32 @@ export async function indexSingleImageFile(
           );
         }
       }
-      return 'unchanged';
+
+      if (characterId) {
+        const meta = db
+          .prepare('SELECT positive_prompt FROM image_metadata WHERE image_id = ?')
+          .get(existingByPath.id) as { positive_prompt: string | null } | undefined;
+        const loras = db
+          .prepare('SELECT lora_name AS loraName FROM image_loras WHERE image_id = ?')
+          .all(existingByPath.id) as { loraName: string }[];
+        const appearanceLabel = resolveAppearanceForCharacter(
+          characterId,
+          meta?.positive_prompt ?? null,
+          loras
+        );
+        db.prepare(
+          `INSERT INTO image_characters
+            (image_id, image_content_hash, character_id, status, source, confidence, match_reason, appearance_label)
+           VALUES (?, ?, ?, 'confirmed', 'manual', 1.0, 'Generated with character mention', ?)
+           ON CONFLICT(image_content_hash, character_id) DO UPDATE SET
+            status = 'confirmed',
+            image_id = excluded.image_id,
+            appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
+            updated_at = datetime('now')`
+        ).run(existingByPath.id, existingByPath.content_hash, characterId, appearanceLabel);
+      }
+
+      return { outcome: 'unchanged', imageId: existingByPath.id, contentHash: existingByPath.content_hash };
     }
 
     const contentHash = computeFileSha256(fullPath);
@@ -447,7 +536,7 @@ export async function indexSingleImageFile(
         JSON.stringify(parsed.rawChunks)
       );
 
-      // Store workflow JSONs independently in `workflows`
+      // Store workflow JSONs independently in workflows
       if (parsed.visualWorkflowJson || parsed.apiWorkflowJson) {
         const wfDigest = crypto
           .createHash('sha256')
@@ -477,7 +566,7 @@ export async function indexSingleImageFile(
       db.prepare('DELETE FROM image_models WHERE image_id = ?').run(imageId);
 
       for (const lora of parsed.loras) {
-        // Ensure historical record in `models`
+        // Ensure historical record in models
         db.prepare(
           `INSERT INTO models (name, filename, model_type, is_installed, source_type)
            VALUES (?, ?, 'lora', 0, 'historical')
@@ -522,16 +611,35 @@ export async function indexSingleImageFile(
           dep.provenance
         );
       }
+
+      // Directly link character with appearance if requested
+      if (characterId) {
+        const appearanceLabel = resolveAppearanceForCharacter(
+          characterId,
+          parsed.positivePrompt,
+          parsed.loras
+        );
+        db.prepare(
+          `INSERT INTO image_characters
+            (image_id, image_content_hash, character_id, status, source, confidence, match_reason, appearance_label)
+           VALUES (?, ?, ?, 'confirmed', 'manual', 1.0, 'Generated with character mention', ?)
+           ON CONFLICT(image_content_hash, character_id) DO UPDATE SET
+            status = 'confirmed',
+            image_id = excluded.image_id,
+            appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
+            updated_at = datetime('now')`
+        ).run(imageId, contentHash, characterId, appearanceLabel);
+      }
     });
 
     tx();
     recomputeImageDependencyStatus(imageId!);
     runAssistedCharacterIdentificationForImage(imageId!);
 
-    return outcome;
+    return { outcome, imageId: imageId!, contentHash };
   } catch (err) {
     console.error('Error indexing image file:', fullPath, err);
-    return 'error';
+    return { outcome: 'error', imageId: null, contentHash: null };
   }
 }
 
@@ -597,9 +705,9 @@ export async function runDirectoryScan(
           rootDir,
           scanType === 'rebuild_metadata' || scanType === 'full'
         );
-        if (res === 'added') added++;
-        else if (res === 'modified') modified++;
-        else if (res === 'error') errors.push(`Failed to index ${rel}`);
+        if (res.outcome === 'added') added++;
+        else if (res.outcome === 'modified') modified++;
+        else if (res.outcome === 'error') errors.push(`Failed to index ${rel}`);
 
         if ((i + 1) % 25 === 0 || i === files.length - 1) {
           db.prepare(
@@ -610,7 +718,7 @@ export async function runDirectoryScan(
         }
 
         // Yield to the Node.js event loop so gallery/character API queries execute immediately
-        if (res !== 'unchanged' || i % 20 === 0) {
+        if (res.outcome !== 'unchanged' || i % 20 === 0) {
           await new Promise((resolve) => setImmediate(resolve));
         }
       }
@@ -632,6 +740,10 @@ export async function runDirectoryScan(
              modified_count = ?, deleted_count = ?, error_log = ?, completed_at = datetime('now')
          WHERE id = ?`
       ).run(files.length, added, modified, deleted, JSON.stringify(errors), jobId);
+
+      if (added > 0 || modified > 0 || deleted > 0) {
+        notifyImageIndexed();
+      }
     } catch (err: any) {
       errors.push(err?.message || 'Unexpected scanner error');
       db.prepare(
@@ -668,11 +780,17 @@ export function startFilesystemWatcher(): void {
   });
 
   fsWatcher.on('add', async (filePath) => {
-    await indexSingleImageFile(filePath, watchDir, false);
+    const res = await indexSingleImageFile(filePath, watchDir, false);
+    if (res.outcome === 'added' || res.outcome === 'modified') {
+      notifyImageIndexed();
+    }
   });
 
   fsWatcher.on('change', async (filePath) => {
-    await indexSingleImageFile(filePath, watchDir, true);
+    const res = await indexSingleImageFile(filePath, watchDir, true);
+    if (res.outcome === 'added' || res.outcome === 'modified') {
+      notifyImageIndexed();
+    }
   });
 
   fsWatcher.on('unlink', (filePath) => {

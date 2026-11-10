@@ -476,6 +476,13 @@ export function runMigrations(): void {
         CREATE INDEX IF NOT EXISTS idx_collection_images_hash ON collection_images(image_content_hash);
       `,
     },
+    {
+      version: 6,
+      name: 'workflows_is_default_flag',
+      sql: `
+        ALTER TABLE workflows ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');
@@ -966,6 +973,15 @@ Return ONLY a JSON array of {count} complete prompt strings.`,
     } catch {
       // ignore
     }
+  }
+
+  // Ensure at least one workflow is marked as default
+  const anyDefaultWf = db
+    .prepare('SELECT id FROM workflows WHERE is_default = 1 LIMIT 1')
+    .get() as { id: number } | undefined;
+  if (!anyDefaultWf) {
+    const targetDefaultId = defaultWf?.id ?? kreaWorkflowId ?? 1;
+    db.prepare('UPDATE workflows SET is_default = 1 WHERE id = ?').run(targetDefaultId);
   }
 
   // Ensure default model is registered in models table

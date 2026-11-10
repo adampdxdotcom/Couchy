@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan to align aspect ratio strings across Generation Studio, Floating Quick Bar, and the backend workflow compiler to match ComfyUI ResolutionSelector node exact enum values.",
-  "updatedAt":  "2026-11-10T03:23:54.072219697Z",
+  "summary":  "Implementation plan for interactive workflow editing in the Workflow Library view, including structured node settings, model/LoRA dropdowns, multi-LoRA Power Lora Loader editor, default workflow marking across Quick Gen and Studio, and Save/Cancel/Export controls with unsaved-changes confirmation.",
+  "updatedAt":  "2026-11-10T14:01:19.776270854Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

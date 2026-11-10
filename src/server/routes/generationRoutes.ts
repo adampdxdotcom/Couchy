@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { Router } from 'express';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
@@ -15,8 +17,8 @@ import {
   saveLmStudioGuidingTemplate,
   updateLmStudioSettings,
 } from '../services/lmStudioService.ts';
-import { runDirectoryScan } from '../services/scannerService.ts';
-import { COUCHY_COMFY_CLIENT_ID } from '../services/comfyuiLiveMonitor.ts';
+import { indexSingleImageFile, runDirectoryScan } from '../services/scannerService.ts';
+import { COUCHY_COMFY_CLIENT_ID, notifyImageIndexed } from '../services/comfyuiLiveMonitor.ts';
 import {
   normalizeResolutionSelectorRatio,
   type GenerationBatchRecord,
@@ -348,36 +350,49 @@ function pollGenerationItem(
             return;
           }
 
-          await runDirectoryScan('incremental');
-
           let matchedImageId: number | null = null;
           const outputs = entry.outputs || {};
+          let anyIndexed = false;
+
           for (const nodeOut of Object.values(outputs) as any[]) {
             if (Array.isArray(nodeOut?.images) && nodeOut.images.length > 0) {
-              const filename = nodeOut.images[0]?.filename;
-              if (filename) {
-                const imgRow = db
-                  .prepare(
-                    'SELECT id, content_hash FROM images WHERE filename = ? ORDER BY id DESC LIMIT 1'
-                  )
-                  .get(filename) as { id: number; content_hash: string } | undefined;
-                if (imgRow) {
-                  matchedImageId = imgRow.id;
-                  if (characterId) {
-                    db.prepare(
-                      `INSERT INTO image_characters
-                        (image_id, image_content_hash, character_id, status, source, confidence, match_reason)
-                       VALUES (?, ?, ?, 'confirmed', 'manual', 1.0, 'Generated in Couchy Generation Studio')
-                       ON CONFLICT(image_content_hash, character_id) DO UPDATE SET
-                        status = 'confirmed',
-                        image_id = excluded.image_id,
-                        updated_at = datetime('now')`
-                    ).run(imgRow.id, imgRow.content_hash, characterId);
+              for (const imgSpec of nodeOut.images) {
+                const filename = imgSpec?.filename;
+                const subfolder = imgSpec?.subfolder || '';
+                if (!filename) continue;
+
+                const fullPath = path.join(appConfig.comfyuiOutputDir, subfolder, filename);
+                if (fs.existsSync(fullPath)) {
+                  const resIndex = await indexSingleImageFile(
+                    fullPath,
+                    appConfig.comfyuiOutputDir,
+                    false,
+                    characterId
+                  );
+                  if (resIndex.imageId) {
+                    matchedImageId = resIndex.imageId;
+                    anyIndexed = true;
                   }
-                  break;
+                } else {
+                  // Fallback: check if already in images table
+                  const imgRow = db
+                    .prepare(
+                      'SELECT id, content_hash FROM images WHERE filename = ? ORDER BY id DESC LIMIT 1'
+                    )
+                    .get(filename) as { id: number; content_hash: string } | undefined;
+                  if (imgRow) {
+                    matchedImageId = imgRow.id;
+                  }
                 }
               }
             }
+          }
+
+          if (anyIndexed) {
+            notifyImageIndexed();
+          } else {
+            // Trigger background scan as safety net
+            runDirectoryScan('incremental');
           }
 
           db.prepare(

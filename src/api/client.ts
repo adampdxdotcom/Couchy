@@ -1,6 +1,7 @@
 import type {
   AspectRatioPreset,
   CharacterProfile,
+  ComfyUiLiveStatus,
   GalleryFilterState,
   GenerationBatchRecord,
   GenerationLoraSelection,
@@ -313,10 +314,16 @@ export const api = {
     description?: string;
     visualWorkflowJson?: string | null;
     apiWorkflowJson?: string | null;
+    isDefault?: boolean;
   }) =>
     requestJson<{ workflow: any }>('/api/workflows', {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+
+  setDefaultWorkflow: (id: number) =>
+    requestJson<{ ok: boolean; workflow: any }>(`/api/workflows/${id}/set-default`, {
+      method: 'POST',
     }),
 
   testComfyUi: (baseUrl?: string) =>
@@ -325,16 +332,7 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ baseUrl }) }
     ),
 
-  getComfyUiLiveStatus: () =>
-    requestJson<{
-      online: boolean;
-      runningCount: number;
-      queuedCount: number;
-      progressPercent: number | null;
-      step: number | null;
-      maxSteps: number | null;
-      currentNode: string | null;
-    }>('/api/comfyui/live-status'),
+  getComfyUiLiveStatus: () => requestJson<ComfyUiLiveStatus>('/api/comfyui/live-status'),
 
   validateReproduction: (payload: { imageId?: number; workflowId?: number }) =>
     requestJson<ReproductionValidationResult>('/api/reproduce/validate', {
