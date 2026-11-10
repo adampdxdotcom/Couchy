@@ -10,6 +10,7 @@ import {
   Grid,
   LayoutGrid,
   Columns,
+  X,
 } from 'lucide-react';
 import type {
   CharacterProfile,
@@ -100,9 +101,19 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
             type="text"
             value={filters.query}
             onChange={(e) => onChange({ ...filters, query: e.target.value })}
-            placeholder='Search prompts, filenames, hashes, or boolean query (e.g. character:"Elena" AND lora:detail AND rating >= 4)'
-            className="w-full pl-10 pr-4 py-2 text-sm bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
+            placeholder='Search prompts, tags, loras, characters (e.g. blonde, "exact phrase", rating >= 4)'
+            className="w-full pl-10 pr-9 py-2 text-sm bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
           />
+          {filters.query && (
+            <button
+              type="button"
+              onClick={() => onChange({ ...filters, query: '' })}
+              aria-label="Clear search"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-200 p-0.5 rounded cursor-pointer transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

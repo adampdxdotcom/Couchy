@@ -1,6 +1,6 @@
 {
-  "summary":  "Unified implementation plan for opt-in WD14 ONNX visual keyword tagging stored in data/local_models, lazy model download on toggle, resumable background thumbnail indexing for large galleries, and searchable visual keywords in the Image Detail Inspector.",
-  "updatedAt":  "2026-11-10T15:18:36.422816164Z",
+  "summary":  "Implementation plan to fix gallery search scoping, enforce whole-word matching for unquoted search terms while preserving exact substring queries for quoted terms, exclude filenames and negative prompts from default search, and integrate visual tags seamlessly with token boundary awareness.",
+  "updatedAt":  "2026-11-10T16:41:22.624311055Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

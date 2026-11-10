@@ -395,6 +395,23 @@ function matchesBooleanQuery(img: ImageRecord, rawQuery: string): boolean {
   return true;
 }
 
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function testWordMatch(text: string, term: string): boolean {
+  if (!text || !term) return false;
+  try {
+    const re = new RegExp(
+      '(^|[\\s,;:.!?\'"()\\[\\]/_-])' + escapeRegex(term) + '(?=[\\s,;:.!?\'"()\\[\\]/_-]|$)',
+      'i'
+    );
+    return re.test(text);
+  } catch {
+    return text.toLowerCase().includes(term.toLowerCase());
+  }
+}
+
 function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
   // Numeric comparison e.g. rating >= 4, steps >= 20, cfg <= 8
   const numMatch = predicate.match(/^(rating|steps|cfg|filesize)\s*(>=|<=|>|<|=)\s*([\d.]+)$/i);
@@ -417,7 +434,7 @@ function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
     return actual === target;
   }
 
-  // Field:value predicate e.g. character:"Elena", lora:detail, checkpoint:xl, tag:portrait, visual:glasses
+  // Field:value predicate e.g. character:"Elena", lora:detail, checkpoint:xl, tag:portrait, visual:glasses, file:comfy
   const kvMatch = predicate.match(/^([a-zA-Z_]+)\s*[:=]\s*"?([^"]+)"?$/);
   if (kvMatch) {
     const key = kvMatch[1].toLowerCase();
@@ -450,22 +467,50 @@ function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
         img.loras.some((l) => (l.loraHash || '').toLowerCase().includes(val))
       );
     }
+    if (key === 'file' || key === 'filename') {
+      return img.filename.toLowerCase().includes(val);
+    }
+    if (key === 'prompt' || key === 'pos') {
+      return (img.positivePrompt || '').toLowerCase().includes(val);
+    }
+    if (key === 'negative' || key === 'neg') {
+      return (img.negativePrompt || '').toLowerCase().includes(val);
+    }
+    if (key === 'notes' || key === 'note') {
+      return img.notes.toLowerCase().includes(val);
+    }
   }
 
-  // Universal text search across prompts, filenames, LoRAs, characters, checkpoints, tags, visual keywords, notes, collections, hashes
-  const needle = predicate.replace(/^"|"$/g, '').toLowerCase();
+  // Universal search scoped strictly to: prompts, tags, loras, characters, and visual keywords.
+  // Filenames, negative prompts, hashes, and notes are excluded from universal search.
+  const isQuoted = predicate.startsWith('"') && predicate.endsWith('"') && predicate.length >= 2;
+  const needle = isQuoted ? predicate.slice(1, -1).trim() : predicate.trim();
+  if (!needle) return true;
+
+  if (isQuoted) {
+    const lower = needle.toLowerCase();
+    return (
+      (img.positivePrompt || '').toLowerCase().includes(lower) ||
+      img.loras.some((l) => l.loraName.toLowerCase().includes(lower)) ||
+      img.characters.some((c) => c.characterName.toLowerCase().includes(lower)) ||
+      img.tags.some((t) => t.name.toLowerCase().includes(lower)) ||
+      (img.visualTags || []).some(
+        (vt) =>
+          vt.tag.toLowerCase().includes(lower) ||
+          vt.tag.toLowerCase().replace(/_/g, ' ').includes(lower)
+      )
+    );
+  }
+
+  // Unquoted: Match whole words across positivePrompt, loras, characters, tags, and visualTags
   return (
-    img.filename.toLowerCase().includes(needle) ||
-    (img.positivePrompt || '').toLowerCase().includes(needle) ||
-    (img.negativePrompt || '').toLowerCase().includes(needle) ||
-    (img.checkpointName || '').toLowerCase().includes(needle) ||
-    img.notes.toLowerCase().includes(needle) ||
-    img.contentHash.toLowerCase().includes(needle) ||
-    img.loras.some((l) => l.loraName.toLowerCase().includes(needle)) ||
-    img.characters.some((c) => c.characterName.toLowerCase().includes(needle)) ||
-    img.tags.some((t) => t.name.toLowerCase().includes(needle)) ||
-    (img.visualTags || []).some((vt) => vt.tag.toLowerCase().includes(needle)) ||
-    img.collections.some((c) => c.name.toLowerCase().includes(needle))
+    testWordMatch(img.positivePrompt || '', needle) ||
+    img.loras.some((l) => testWordMatch(l.loraName, needle)) ||
+    img.characters.some((c) => testWordMatch(c.characterName, needle)) ||
+    img.tags.some((t) => testWordMatch(t.name, needle)) ||
+    (img.visualTags || []).some(
+      (vt) => testWordMatch(vt.tag, needle) || testWordMatch(vt.tag.replace(/_/g, ' '), needle)
+    )
   );
 }
 
