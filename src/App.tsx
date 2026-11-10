@@ -53,7 +53,7 @@ const INITIAL_FILTERS: GalleryFilterState = {
 export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('gallery');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [layout, setLayout] = useState<GalleryViewLayout>('masonry');
+  const [layout, setLayout] = useState<GalleryViewLayout>('standard');
   const [thumbScale, setThumbScale] = useState<'sm' | 'md' | 'lg'>('md');
   const [filters, setFilters] = useState<GalleryFilterState>(INITIAL_FILTERS);
 
