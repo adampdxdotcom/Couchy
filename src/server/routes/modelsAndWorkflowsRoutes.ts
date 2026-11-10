@@ -15,9 +15,23 @@ import {
   searchHuggingFaceModels,
   startConfirmedModelDownload,
 } from '../services/modelManagerService.ts';
+import { getComfyUiLiveStatus } from '../services/comfyuiLiveMonitor.ts';
 import type { WorkflowLibraryItem } from '../../shared/types.ts';
 
 export const modelsAndWorkflowsRouter = Router();
+
+/**
+ * GET /api/comfyui/live-status
+ * Returns real-time ComfyUI queue counts and active job step percentage.
+ */
+modelsAndWorkflowsRouter.get('/comfyui/live-status', async (_req, res) => {
+  try {
+    const status = await getComfyUiLiveStatus();
+    res.json(status);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to read ComfyUI live status' });
+  }
+});
 
 /**
  * GET /api/loras

@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowRight,
   Bot,
-  CheckCircle2,
   Loader2,
   Plus,
   Search,
@@ -24,6 +23,7 @@ interface FloatingQuickGenBarProps {
   workflows: WorkflowLibraryItem[];
   onRefreshAll: () => Promise<void>;
   onOpenGenerationTab: () => void;
+  onPushToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
 const ASPECT_RATIO_OPTIONS = [
@@ -57,7 +57,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   allImages,
   workflows,
   onRefreshAll,
-  onOpenGenerationTab,
+  onPushToast,
 }) => {
   const [prompt, setPrompt] = useState('');
   const [agentEnabled, setAgentEnabled] = useState(false);
@@ -75,12 +75,8 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   const [activeIndex, setActiveIndex] = useState(0);
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
 
-  // Submission status feedback
+  // Submission state
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [statusBanner, setStatusBanner] = useState<{
-    type: 'ok' | 'err';
-    message: string;
-  } | null>(null);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -238,15 +234,11 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     if (!cleanPrompt || isSubmitting) return;
 
     if (!resolvedWorkflow) {
-      setStatusBanner({
-        type: 'err',
-        message: 'No ComfyUI API workflow available in Workflows library.',
-      });
+      onPushToast('No ComfyUI API workflow available in Workflows library.', 'error');
       return;
     }
 
     setIsSubmitting(true);
-    setStatusBanner(null);
 
     try {
       const selectedLoras: GenerationLoraSelection[] = attachedCharacter
@@ -297,24 +289,24 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
       const submittedCount = res.batch.items.filter((i) => i.status === 'submitted').length;
       const failedCount = res.batch.items.filter((i) => i.status === 'failed').length;
 
-      setStatusBanner({
-        type: failedCount > 0 && submittedCount === 0 ? 'err' : 'ok',
-        message:
-          failedCount > 0 && submittedCount === 0
-            ? `Batch #${res.batch.id} queued with ComfyUI offline (${res.batch.items[0]?.errorMessage || 'check connection'}).`
-            : `Queued Batch #${res.batch.id} (${submittedCount}/${res.batch.totalCount} sent to ComfyUI${
-                attachedCharacter ? ` · ${attachedCharacter.name}` : ''
-              }).`,
-      });
+      if (failedCount > 0 && submittedCount === 0) {
+        onPushToast(
+          `Batch #${res.batch.id} failed (${res.batch.items[0]?.errorMessage || 'ComfyUI offline'})`,
+          'warning'
+        );
+      } else {
+        onPushToast(
+          `Queued Batch #${res.batch.id} (${submittedCount}/${res.batch.totalCount} sent${
+            attachedCharacter ? ` · ${attachedCharacter.name}` : ''
+          })`,
+          'success'
+        );
+      }
 
       setPrompt('');
       await onRefreshAll();
-      setTimeout(() => setStatusBanner(null), 5000);
     } catch (err: any) {
-      setStatusBanner({
-        type: 'err',
-        message: err?.message || 'Failed to submit quick generation.',
-      });
+      onPushToast(err?.message || 'Failed to submit quick generation.', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -357,37 +349,6 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
       ref={containerRef}
       className="fixed bottom-5 left-1/2 -translate-x-1/2 z-40 w-[94vw] max-w-2xl"
     >
-      {/* Status Toast Banner */}
-      {statusBanner && (
-        <div
-          className={`mb-2.5 px-4 py-2 rounded-2xl border backdrop-blur-xl flex items-center justify-between text-xs shadow-xl ${
-            statusBanner.type === 'ok'
-              ? 'bg-zinc-900/95 border-emerald-500/40 text-emerald-300'
-              : 'bg-zinc-900/95 border-amber-500/40 text-amber-300'
-          }`}
-        >
-          <div className="flex items-center gap-2 truncate">
-            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">{statusBanner.message}</span>
-          </div>
-          <div className="flex items-center gap-2 shrink-0 ml-3">
-            <button
-              type="button"
-              onClick={onOpenGenerationTab}
-              className="text-indigo-300 hover:text-indigo-200 underline cursor-pointer"
-            >
-              View Queue
-            </button>
-            <button
-              type="button"
-              onClick={() => setStatusBanner(null)}
-              className="text-zinc-400 hover:text-zinc-200 cursor-pointer"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Two-Column @Character Mention Popover */}
       {mentionOpen && (

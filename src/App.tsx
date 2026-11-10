@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api/client.ts';
 import { TopNavHeader, type WorkspaceTab } from './components/TopNavHeader.tsx';
 import { GalleryFilterBar, type GalleryViewLayout } from './components/GalleryFilterBar.tsx';
@@ -16,7 +16,9 @@ import { WorkflowLibraryView } from './components/WorkflowLibraryView.tsx';
 import { SystemAndBackupView } from './components/SystemAndBackupView.tsx';
 import { FloatingQuickGenBar } from './components/FloatingQuickGenBar.tsx';
 import type {
+  AppToastMessage,
   CharacterProfile,
+  ComfyUiLiveStatus,
   GalleryFilterState,
   ImageRecord,
   LoraExplorerItem,
@@ -68,10 +70,49 @@ export default function App() {
   const [checkpoints, setCheckpoints] = useState<string[]>([]);
   const [savedSearches, setSavedSearches] = useState<SavedSearchPreset[]>([]);
   const [healthData, setHealthData] = useState<any>(null);
-  const [isScanning, setIsScanning] = useState(false);
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [inspectedImageId, setInspectedImageId] = useState<number | null>(null);
+
+  // Header ComfyUI Live Status & Toast Message History (Last 10 messages + 3s toast override)
+  const [comfyStatus, setComfyStatus] = useState<ComfyUiLiveStatus>({
+    online: false,
+    runningCount: 0,
+    queuedCount: 0,
+    progressPercent: null,
+    step: null,
+    maxSteps: null,
+    currentNode: null,
+  });
+  const [messages, setMessages] = useState<AppToastMessage[]>([]);
+  const [activeToast, setActiveToast] = useState<AppToastMessage | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevBusyRef = useRef<boolean>(false);
+
+  const pushToast = useCallback(
+    (text: string, type: AppToastMessage['type'] = 'info') => {
+      const now = new Date();
+      const timeStr = now.toTimeString().slice(0, 8);
+      const entry: AppToastMessage = {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        text,
+        type,
+        createdAt: timeStr,
+      };
+      setMessages((prev) => [entry, ...prev].slice(0, 10));
+      setActiveToast(entry);
+
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+      // Show incoming message for 3 seconds, then revert to ComfyUI progress / status
+      toastTimerRef.current = setTimeout(() => {
+        setActiveToast(null);
+        toastTimerRef.current = null;
+      }, 3000);
+    },
+    []
+  );
 
   const isDefaultFilters = (f: GalleryFilterState): boolean =>
     !f.query.trim() &&
@@ -107,7 +148,6 @@ export default function App() {
 
       if (healthRes.status === 'fulfilled') {
         setHealthData(healthRes.value);
-        setIsScanning(healthRes.value?.activeScan?.status === 'running');
       }
       if (orgMetaRes.status === 'fulfilled') {
         setTags(orgMetaRes.value.tags || []);
@@ -130,8 +170,6 @@ export default function App() {
       if (unfilteredRes.status === 'fulfilled') {
         const allItems = unfilteredRes.value.items || [];
         setAllImages(allItems);
-        // When default filters are active, derive gallery images directly in memory
-        // instead of firing a duplicate full-library /api/images/query request
         setFilters((currFilters) => {
           if (isDefaultFilters(currFilters)) {
             setImages(allItems.filter((img) => !img.isRejected && !img.isArchived));
@@ -145,7 +183,6 @@ export default function App() {
   }, []);
 
   const loadFilteredImages = useCallback(async () => {
-    // Skip duplicate network call on initial default filter state if allImages is already loaded
     if (isDefaultFilters(filters) && allImages.length > 0) {
       setImages(allImages.filter((img) => !img.isRejected && !img.isArchived));
       return;
@@ -163,7 +200,6 @@ export default function App() {
   }, [loadMetadataAndEntities]);
 
   useEffect(() => {
-    // Only run separate filtered query when custom filters are applied
     if (!isDefaultFilters(filters)) {
       loadFilteredImages();
     } else if (allImages.length > 0) {
@@ -171,23 +207,56 @@ export default function App() {
     }
   }, [filters, allImages, loadFilteredImages]);
 
-  const refreshAll = async () => {
+  const refreshAll = useCallback(async () => {
     await loadMetadataAndEntities();
     if (!isDefaultFilters(filters)) {
       await loadFilteredImages();
     }
-  };
+  }, [loadMetadataAndEntities, loadFilteredImages, filters]);
+
+  // Poll ComfyUI live queue & job progress percentage
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      try {
+        const status = await api.getComfyUiLiveStatus();
+        if (cancelled) return;
+        setComfyStatus(status);
+
+        const isBusy = status.runningCount > 0 || status.queuedCount > 0;
+        if (prevBusyRef.current && !isBusy) {
+          pushToast('ComfyUI finished all queued generations', 'success');
+          refreshAll();
+        }
+        prevBusyRef.current = isBusy;
+
+        timer = setTimeout(poll, isBusy ? 1200 : 3500);
+      } catch {
+        if (!cancelled) {
+          timer = setTimeout(poll, 5000);
+        }
+      }
+    };
+
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [pushToast, refreshAll]);
 
   const handleTriggerScan = async () => {
-    setIsScanning(true);
+    pushToast('Scanning mounted output directory...', 'info');
     try {
       await api.triggerScan('incremental');
       setTimeout(async () => {
         await refreshAll();
-        setIsScanning(false);
+        pushToast('Directory scan complete', 'success');
       }, 900);
     } catch {
-      setIsScanning(false);
+      pushToast('Directory scan failed', 'error');
     }
   };
 
@@ -201,12 +270,17 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
-      {/* 3-Zone Top Bar */}
+      {/* 3-Zone Top Bar with Unified Status & Toast Message Area */}
       <TopNavHeader
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        onTriggerScan={handleTriggerScan}
-        isScanning={isScanning}
+        comfyStatus={comfyStatus}
+        activeToast={activeToast}
+        messages={messages}
+        onClearMessages={() => {
+          setMessages([]);
+          setActiveToast(null);
+        }}
       />
 
       {/* Main Content Area */}
@@ -231,17 +305,20 @@ export default function App() {
               onSaveSearch={async (name) => {
                 await api.saveSearchPreset(name, filters.query, filters);
                 await loadMetadataAndEntities();
+                pushToast(`Saved search preset "${name}"`, 'success');
               }}
               onDeleteSavedSearch={async (id) => {
                 await api.deleteSearchPreset(id);
                 await loadMetadataAndEntities();
+                pushToast('Deleted saved search preset', 'info');
               }}
-              onExportFilteredZip={() =>
+              onExportFilteredZip={() => {
+                pushToast('Preparing filtered ZIP archive...', 'info');
                 api.exportImagesZip({
                   filters,
                   archiveName: 'couchy-filtered-export',
-                })
-              }
+                });
+              }}
             />
 
             <GalleryGridView
@@ -261,15 +338,14 @@ export default function App() {
               onClearSelection={() => setSelectedIds(new Set())}
               onOpenInspector={(img) => setInspectedImageId(img.id)}
               onQuickRate={async (id, rating) => {
-                // Optimistically update image rating in memory without full library reload
                 setImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
                 setAllImages((prev) =>
                   prev.map((img) => (img.id === id ? { ...img, rating } : img))
                 );
                 await api.updateImageAnnotations(id, { rating });
+                pushToast(rating > 0 ? `Rated image ★ ${rating}` : 'Cleared image rating', 'info');
               }}
               onQuickFavorite={async (id, isFavorite) => {
-                // Optimistically update image favorite state in memory without full library reload
                 const favoritedAt = isFavorite ? new Date().toISOString() : null;
                 setImages((prev) =>
                   prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
@@ -278,20 +354,24 @@ export default function App() {
                   prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
                 );
                 await api.updateImageAnnotations(id, { isFavorite });
+                pushToast(isFavorite ? 'Added to Favorites' : 'Removed from Favorites', 'info');
               }}
               onBulkAction={async (payload) => {
+                const count = selectedIds.size;
                 await api.bulkUpdateImages({
                   imageIds: Array.from(selectedIds),
                   ...payload,
                 });
                 await refreshAll();
+                pushToast(`Updated ${count} selected image(s)`, 'success');
               }}
-              onExportSelectedZip={() =>
+              onExportSelectedZip={() => {
+                pushToast(`Exporting ${selectedIds.size} selected image(s) as ZIP...`, 'info');
                 api.exportImagesZip({
                   imageIds: Array.from(selectedIds),
                   archiveName: 'couchy-selected-export',
-                })
-              }
+                });
+              }}
               characters={characters}
               collections={collections}
               mountedOutputDir={healthData?.config?.comfyuiOutputDir || '/data/output'}
@@ -371,6 +451,7 @@ export default function App() {
           workflows={workflows}
           onRefreshAll={refreshAll}
           onOpenGenerationTab={() => setActiveTab('generation')}
+          onPushToast={pushToast}
         />
       )}
 

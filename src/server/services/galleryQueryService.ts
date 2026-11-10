@@ -166,22 +166,6 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
       else lorasByImageId.set(l.imageId, [enriched]);
     }
 
-    // Bulk fetch all image_models in one query
-    const allModels = db
-      .prepare(
-        `SELECT
-           id, image_id AS imageId, model_id AS modelId, model_name AS modelName,
-           model_type AS modelType, model_hash AS modelHash,
-           node_id AS nodeId, node_type AS nodeType, provenance, status
-         FROM image_models`
-      )
-      .all() as any[];
-    for (const m of allModels) {
-      const arr = modelsByImageId.get(m.imageId);
-      if (arr) arr.push(m);
-      else modelsByImageId.set(m.imageId, [m]);
-    }
-
     // Bulk fetch all non-rejected image_characters in one query
     const allChars = db
       .prepare(
@@ -258,6 +242,8 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
     }
   }
 
+  const isSingleDetail = rows.length === 1;
+
   return rows.map((r) => {
     const loras = lorasByImageId.get(r.id) || [];
     const models = modelsByImageId.get(r.id) || [];
@@ -268,16 +254,20 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
 
     let missingFields: string[] = [];
     let provenance: Record<string, any> = {};
-    try {
-      missingFields = r.missing_fields_json ? JSON.parse(r.missing_fields_json) : [];
-    } catch {
-      missingFields = [];
+    if (isSingleDetail) {
+      try {
+        missingFields = r.missing_fields_json ? JSON.parse(r.missing_fields_json) : [];
+      } catch {
+        missingFields = [];
+      }
+      try {
+        provenance = r.provenance_json ? JSON.parse(r.provenance_json) : {};
+      } catch {
+        provenance = {};
+      }
     }
-    try {
-      provenance = r.provenance_json ? JSON.parse(r.provenance_json) : {};
-    } catch {
-      provenance = {};
-    }
+
+    const hashParam = r.content_hash ? `?h=${String(r.content_hash).slice(0, 12)}` : '';
 
     return {
       id: r.id,
@@ -291,7 +281,7 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
       createdAt: r.created_at,
       fileMtime: r.file_mtime,
       isMissing: Boolean(r.is_missing),
-      thumbnailUrl: `/api/images/${r.id}/thumbnail`,
+      thumbnailUrl: `/api/images/${r.id}/thumbnail${hashParam}`,
       originalUrl: `/api/images/${r.id}/file`,
       dependencyStatus: r.dependency_status,
       rating: Number(r.rating || 0),
@@ -447,7 +437,7 @@ export function queryGalleryImages(filters: Partial<GalleryFilterState>): ImageR
         r.rating, r.is_favorite, r.is_rejected, r.is_archived, r.notes, r.favorited_at,
         m.positive_prompt, m.negative_prompt, m.seed, m.steps, m.cfg, m.sampler,
         m.scheduler, m.denoise, m.batch_size, m.batch_index, m.generation_date,
-        m.checkpoint_name, m.checkpoint_hash, m.vae_name, m.missing_fields_json, m.provenance_json
+        m.checkpoint_name, m.checkpoint_hash, m.vae_name
       FROM images i
       LEFT JOIN ratings r ON r.content_hash = i.content_hash
       LEFT JOIN image_metadata m ON m.image_id = i.id

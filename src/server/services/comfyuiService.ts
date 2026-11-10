@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import { recomputeImageDependencyStatus } from './scannerService.ts';
+import { COUCHY_COMFY_CLIENT_ID } from './comfyuiLiveMonitor.ts';
 import type {
   DependencyStatus,
   ModelInventoryItem,
@@ -517,7 +518,7 @@ export async function submitWorkflowReproduction(params: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         prompt: validation.apiPromptPayload,
-        client_id: `couchy-${jobId}`,
+        client_id: COUCHY_COMFY_CLIENT_ID,
       }),
     });
 

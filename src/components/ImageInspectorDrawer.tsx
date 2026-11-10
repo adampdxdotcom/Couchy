@@ -50,6 +50,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   onFilterByCharacter,
 }) => {
   const [detailData, setDetailData] = useState<{
+    image?: ImageRecord;
     rawMetadata: Record<string, string>;
     visualWorkflowJson: string | null;
     apiWorkflowJson: string | null;
@@ -69,6 +70,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   const [reproStatusMsg, setReproStatusMsg] = useState<string | null>(null);
   const [showRawWorkflow, setShowRawWorkflow] = useState(false);
 
+  const activeImage = detailData?.image || image;
+
   useEffect(() => {
     setNotes(image.notes);
     setReproValidation(null);
@@ -77,6 +80,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
       .getImageDetail(image.id)
       .then((res) => {
         setDetailData({
+          image: res.image,
           rawMetadata: res.rawMetadata,
           visualWorkflowJson: res.visualWorkflowJson,
           apiWorkflowJson: res.apiWorkflowJson,
@@ -528,9 +532,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   Positive Prompt
                 </span>
                 <div className="flex items-center gap-2">
-                  {image.provenance.positivePrompt && (
+                  {activeImage.provenance.positivePrompt && (
                     <span className="text-[11px] text-zinc-400">
-                      Source: {image.provenance.positivePrompt}
+                      Source: {activeImage.provenance.positivePrompt}
                     </span>
                   )}
                   {image.positivePrompt && (
@@ -624,9 +628,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
               </div>
             </div>
 
-            {image.missingFields.length > 0 && (
+            {activeImage.missingFields.length > 0 && (
               <p className="text-[11px] text-zinc-500">
-                Unextracted fields: {image.missingFields.join(' · ')}
+                Unextracted fields: {activeImage.missingFields.join(' · ')}
               </p>
             )}
           </div>

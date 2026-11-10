@@ -409,3 +409,21 @@ export interface LmStudioStatus {
   error: string | null;
 }
 
+export interface ComfyUiLiveStatus {
+  online: boolean;
+  runningCount: number;
+  queuedCount: number;
+  progressPercent: number | null;
+  step: number | null;
+  maxSteps: number | null;
+  currentNode: string | null;
+}
+
+export interface AppToastMessage {
+  id: string;
+  text: string;
+  type: 'info' | 'success' | 'warning' | 'error';
+  createdAt: string;
+}
+
+

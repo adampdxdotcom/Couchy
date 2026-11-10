@@ -16,6 +16,7 @@ import {
   updateLmStudioSettings,
 } from '../services/lmStudioService.ts';
 import { runDirectoryScan } from '../services/scannerService.ts';
+import { COUCHY_COMFY_CLIENT_ID } from '../services/comfyuiLiveMonitor.ts';
 import type {
   GenerationBatchRecord,
   GenerationLoraSelection,
@@ -510,7 +511,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
             signal: controller.signal,
             body: JSON.stringify({
               prompt: apiPayload,
-              client_id: `couchy-batch-${batchId}-item-${item.itemId}`,
+              client_id: COUCHY_COMFY_CLIENT_ID,
             }),
           });
           clearTimeout(timer);

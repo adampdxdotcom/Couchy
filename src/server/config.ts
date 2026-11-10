@@ -32,6 +32,27 @@ function resolveDbFilePath(envValue: string | undefined): string {
   }
 }
 
+/**
+ * Resolves the WebP thumbnail cache directory, defaulting to `data/thumbnails`
+ * in the project root (`process.cwd()/data/thumbnails`).
+ */
+function resolveThumbnailPath(envValue: string | undefined): string {
+  const projectRootThumbs = path.resolve(process.cwd(), 'data/thumbnails');
+  const trimmed = envValue?.trim();
+  if (!trimmed || trimmed === '/app/data/thumbnails' || trimmed === 'data/thumbnails' || trimmed === './data/thumbnails') {
+    fs.mkdirSync(projectRootThumbs, { recursive: true });
+    return projectRootThumbs;
+  }
+  const candidate = path.isAbsolute(trimmed) ? trimmed : path.resolve(process.cwd(), trimmed);
+  try {
+    fs.mkdirSync(candidate, { recursive: true });
+    return candidate;
+  } catch {
+    fs.mkdirSync(projectRootThumbs, { recursive: true });
+    return projectRootThumbs;
+  }
+}
+
 export interface AppConfig {
   port: number;
   comfyuiUrl: string;
@@ -54,7 +75,7 @@ export const appConfig: AppConfig = {
   comfyuiOutputDir: resolveStoragePath(process.env.COMFYUI_OUTPUT_DIR, '/data/output', 'mounted-data/output'),
   comfyuiModelsDir: resolveStoragePath(process.env.COMFYUI_MODELS_DIR, '/data/models', 'mounted-data/models'),
   databasePath: resolveDbFilePath(process.env.DATABASE_PATH),
-  thumbnailPath: resolveStoragePath(process.env.THUMBNAIL_PATH, '/app/data/thumbnails', 'gallery-data/thumbnails'),
+  thumbnailPath: resolveThumbnailPath(process.env.THUMBNAIL_PATH),
   backupPath: resolveStoragePath(process.env.BACKUP_PATH, '/app/data/backups', 'gallery-data/backups'),
   downloadsDir: resolveStoragePath(process.env.DOWNLOADS_DIR, '/downloads', 'model-downloads'),
   civitaiApiKey: process.env.CIVITAI_API_KEY || '',

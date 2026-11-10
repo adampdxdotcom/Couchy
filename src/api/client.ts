@@ -325,6 +325,17 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ baseUrl }) }
     ),
 
+  getComfyUiLiveStatus: () =>
+    requestJson<{
+      online: boolean;
+      runningCount: number;
+      queuedCount: number;
+      progressPercent: number | null;
+      step: number | null;
+      maxSteps: number | null;
+      currentNode: string | null;
+    }>('/api/comfyui/live-status'),
+
   validateReproduction: (payload: { imageId?: number; workflowId?: number }) =>
     requestJson<ReproductionValidationResult>('/api/reproduce/validate', {
       method: 'POST',

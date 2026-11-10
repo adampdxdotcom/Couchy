@@ -126,14 +126,19 @@ export function computeFileSha256(filePath: string): string {
 }
 
 /**
- * Generates an asynchronous WebP thumbnail (480px max width) in THUMBNAIL_PATH.
+ * Generates an asynchronous WebP thumbnail (384px max on the long side) in data/thumbnails.
  */
-async function ensureWebpThumbnail(sourceFile: string, contentHash: string): Promise<{
+export async function ensureWebpThumbnail(
+  sourceFile: string,
+  contentHash: string,
+  forceOverwrite = false
+): Promise<{
   thumbPath: string | null;
   width: number;
   height: number;
   format: string;
 }> {
+  fs.mkdirSync(appConfig.thumbnailPath, { recursive: true });
   const thumbFile = path.join(appConfig.thumbnailPath, `${contentHash}.webp`);
   try {
     const metadata = await sharp(sourceFile).metadata();
@@ -141,15 +146,81 @@ async function ensureWebpThumbnail(sourceFile: string, contentHash: string): Pro
     const height = metadata.height || 0;
     const format = (metadata.format || path.extname(sourceFile).slice(1)).toUpperCase();
 
-    if (!fs.existsSync(thumbFile)) {
+    if (forceOverwrite || !fs.existsSync(thumbFile)) {
       await sharp(sourceFile)
-        .resize({ width: 520, withoutEnlargement: true })
-        .webp({ quality: 82 })
+        .resize({ width: 384, height: 384, fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 80 })
         .toFile(thumbFile);
     }
     return { thumbPath: thumbFile, width, height, format };
   } catch {
     return { thumbPath: null, width: 0, height: 0, format: 'PNG' };
+  }
+}
+
+let isThumbnailMigrationRunning = false;
+
+/**
+ * Background migration that ensures all indexed images have a 384px long-side WebP
+ * thumbnail inside `data/thumbnails`, yielding between files so requests are never blocked.
+ */
+export async function runBackgroundThumbnailMigration(): Promise<void> {
+  if (isThumbnailMigrationRunning) return;
+  isThumbnailMigrationRunning = true;
+
+  try {
+    const migrationSetting = db
+      .prepare("SELECT value FROM app_settings WHERE key = 'thumb_migration_384_v1'")
+      .get() as { value: string } | undefined;
+    const forceRebuildAll = migrationSetting?.value !== '1';
+
+    const rows = db
+      .prepare(
+        `SELECT id, content_hash, relative_path, thumbnail_path
+         FROM images
+         WHERE is_missing = 0
+         ORDER BY id DESC`
+      )
+      .all() as {
+      id: number;
+      content_hash: string;
+      relative_path: string;
+      thumbnail_path: string | null;
+    }[];
+
+    const updateStmt = db.prepare('UPDATE images SET thumbnail_path = ? WHERE id = ?');
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const expectedThumb = path.join(appConfig.thumbnailPath, `${row.content_hash}.webp`);
+      const thumbExists = fs.existsSync(expectedThumb);
+
+      if (forceRebuildAll || !thumbExists || row.thumbnail_path !== expectedThumb) {
+        const origPath = path.resolve(appConfig.comfyuiOutputDir, row.relative_path);
+        if (fs.existsSync(origPath)) {
+          const { thumbPath } = await ensureWebpThumbnail(origPath, row.content_hash, forceRebuildAll);
+          if (thumbPath && row.thumbnail_path !== thumbPath) {
+            updateStmt.run(thumbPath, row.id);
+          }
+        }
+        // Yield to event loop after each generated thumbnail
+        await new Promise((resolve) => setImmediate(resolve));
+      } else if (i % 50 === 0) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
+
+    if (forceRebuildAll) {
+      db.prepare(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('thumb_migration_384_v1', '1', datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = datetime('now')`
+      ).run();
+    }
+  } catch (err) {
+    console.error('Background thumbnail migration error:', err);
+  } finally {
+    isThumbnailMigrationRunning = false;
   }
 }
 
@@ -244,9 +315,12 @@ export async function indexSingleImageFile(
     const filename = path.basename(fullPath);
     const mtimeIso = stat.mtime.toISOString();
 
-    // Fast skip if relative_path + file_size + mtime already match and no rebuild requested
+    // Fast skip if relative_path + file_size + mtime already match and no rebuild requested,
+    // while self-healing if the WebP thumbnail in data/thumbnails is missing on disk.
     const existingByPath = db
-      .prepare('SELECT id, content_hash, file_size, file_mtime, is_missing FROM images WHERE relative_path = ?')
+      .prepare(
+        'SELECT id, content_hash, file_size, file_mtime, is_missing, thumbnail_path FROM images WHERE relative_path = ?'
+      )
       .get(relativePath) as any;
 
     if (
@@ -256,6 +330,16 @@ export async function indexSingleImageFile(
       existingByPath.file_mtime === mtimeIso &&
       existingByPath.is_missing === 0
     ) {
+      const expectedThumb = path.join(appConfig.thumbnailPath, `${existingByPath.content_hash}.webp`);
+      if (!fs.existsSync(expectedThumb) || existingByPath.thumbnail_path !== expectedThumb) {
+        const { thumbPath } = await ensureWebpThumbnail(fullPath, existingByPath.content_hash);
+        if (thumbPath) {
+          db.prepare('UPDATE images SET thumbnail_path = ? WHERE id = ?').run(
+            thumbPath,
+            existingByPath.id
+          );
+        }
+      }
       return 'unchanged';
     }
 

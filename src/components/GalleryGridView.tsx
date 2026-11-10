@@ -401,7 +401,10 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                 <img
                   src={img.thumbnailUrl}
                   alt={img.filename}
+                  width={img.width || undefined}
+                  height={img.height || undefined}
                   loading="lazy"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                   className={`w-full ${
                     layout === 'masonry' ? 'h-auto object-contain' : 'h-full object-cover'

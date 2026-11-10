@@ -10,6 +10,7 @@ const createZipArchive = ((archiverPkg as any).default || archiverPkg) as (
 ) => archiverPkg.Archiver;
 import { appConfig } from '../config.ts';
 import { hydrateImageRecords, queryGalleryImages } from '../services/galleryQueryService.ts';
+import { ensureWebpThumbnail } from '../services/scannerService.ts';
 import type { GalleryFilterState } from '../../shared/types.ts';
 
 export const imagesRouter = Router();
@@ -87,27 +88,44 @@ imagesRouter.get('/:id', (req, res) => {
 
 /**
  * GET /api/images/:id/thumbnail
- * Serves the generated WebP thumbnail or falls back to original file.
+ * Serves the 384px long-side WebP thumbnail from data/thumbnails (generating it on-demand if missing)
+ * with immutable browser cache headers.
  */
-imagesRouter.get('/:id/thumbnail', (req, res) => {
+imagesRouter.get('/:id/thumbnail', async (req, res) => {
   const id = Number(req.params.id);
   const row = db
-    .prepare('SELECT relative_path, thumbnail_path FROM images WHERE id = ?')
-    .get(id) as { relative_path: string; thumbnail_path: string | null } | undefined;
+    .prepare('SELECT id, content_hash, relative_path, thumbnail_path FROM images WHERE id = ?')
+    .get(id) as
+    | { id: number; content_hash: string; relative_path: string; thumbnail_path: string | null }
+    | undefined;
 
   if (!row) {
     res.status(404).end();
     return;
   }
 
-  if (row.thumbnail_path && fs.existsSync(row.thumbnail_path)) {
+  const expectedThumbPath = path.join(appConfig.thumbnailPath, `${row.content_hash}.webp`);
+
+  if (fs.existsSync(expectedThumbPath)) {
+    if (row.thumbnail_path !== expectedThumbPath) {
+      db.prepare('UPDATE images SET thumbnail_path = ? WHERE id = ?').run(expectedThumbPath, row.id);
+    }
     res.setHeader('Content-Type', 'image/webp');
-    res.sendFile(path.resolve(row.thumbnail_path));
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.sendFile(path.resolve(expectedThumbPath));
     return;
   }
 
   const origPath = path.resolve(appConfig.comfyuiOutputDir, row.relative_path);
   if (fs.existsSync(origPath)) {
+    const { thumbPath } = await ensureWebpThumbnail(origPath, row.content_hash);
+    if (thumbPath && fs.existsSync(thumbPath)) {
+      db.prepare('UPDATE images SET thumbnail_path = ? WHERE id = ?').run(thumbPath, row.id);
+      res.setHeader('Content-Type', 'image/webp');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.sendFile(path.resolve(thumbPath));
+      return;
+    }
     res.sendFile(origPath);
     return;
   }
