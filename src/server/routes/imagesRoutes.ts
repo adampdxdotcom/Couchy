@@ -382,3 +382,34 @@ imagesRouter.post('/export-zip', (req, res) => {
     }
   }
 });
+
+/**
+ * POST /api/images/:id/visual-tags/rescan
+ * Runs the WD14 ONNX visual keyword tagger on a single image immediately.
+ */
+imagesRouter.post('/:id/visual-tags/rescan', async (req, res) => {
+  try {
+    const { tagSingleImageById } = await import('../services/visualTaggerService.ts');
+    const visualTags = await tagSingleImageById(Number(req.params.id), true);
+    res.json({ ok: true, visualTags });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to run visual tagger on image' });
+  }
+});
+
+/**
+ * DELETE /api/images/:id/visual-tags/:tag
+ * Removes a specific system-generated visual keyword from an image.
+ */
+imagesRouter.delete('/:id/visual-tags/:tag', async (req, res) => {
+  try {
+    const { removeVisualTagFromImage } = await import('../services/visualTaggerService.ts');
+    const visualTags = removeVisualTagFromImage(
+      Number(req.params.id),
+      decodeURIComponent(req.params.tag)
+    );
+    res.json({ ok: true, visualTags });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to remove visual keyword' });
+  }
+});

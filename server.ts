@@ -15,6 +15,11 @@ import { charactersRouter } from './src/server/routes/charactersRoutes.ts';
 import { modelsAndWorkflowsRouter } from './src/server/routes/modelsAndWorkflowsRoutes.ts';
 import { systemRouter } from './src/server/routes/systemRoutes.ts';
 import { generationRouter } from './src/server/routes/generationRoutes.ts';
+import {
+  getTaggerSettings,
+  isTaggerModelDownloaded,
+  startVisualTaggerQueue,
+} from './src/server/services/visualTaggerService.ts';
 
 async function startServer() {
   // 1. Run SQLite schema migrations & one-time prompt backfill
@@ -58,6 +63,7 @@ async function startServer() {
     console.log(`Couchy running on http://0.0.0.0:${appConfig.port}`);
     console.log(`Watching ComfyUI Output Directory: ${appConfig.comfyuiOutputDir}`);
     console.log(`WebP Thumbnail Cache (384px long-side): ${appConfig.thumbnailPath}`);
+    console.log(`Local Models Directory: ${appConfig.localModelsDir}`);
 
     // Trigger initial thumbnail migration, model inventory sync, and incremental scan in the background
     setImmediate(async () => {
@@ -65,6 +71,10 @@ async function startServer() {
         await runBackgroundThumbnailMigration();
         await syncModelInventory();
         await runDirectoryScan('incremental');
+        // Only resume visual tagging if user previously enabled it AND model is already on disk
+        if (getTaggerSettings().enabled && isTaggerModelDownloaded()) {
+          startVisualTaggerQueue().catch(() => {});
+        }
       } catch (err) {
         console.error('Background startup scan error:', err);
       }

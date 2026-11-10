@@ -41,6 +41,7 @@ export interface AppConfig {
   databasePath: string;
   thumbnailPath: string;
   backupPath: string;
+  localModelsDir: string;
   downloadsDir: string;
   civitaiApiKey: string;
   hfApiToken: string;
@@ -60,6 +61,7 @@ export const appConfig: AppConfig = {
     'data/thumbnails'
   ),
   backupPath: resolveStoragePath(process.env.BACKUP_PATH, '/app/data/backups', 'gallery-data/backups'),
+  localModelsDir: resolveStoragePath(process.env.LOCAL_MODELS_DIR, '/app/data/local_models', 'data/local_models'),
   downloadsDir: resolveStoragePath(process.env.DOWNLOADS_DIR, '/downloads', 'model-downloads'),
   civitaiApiKey: process.env.CIVITAI_API_KEY || '',
   hfApiToken: process.env.HF_API_TOKEN || '',

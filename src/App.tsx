@@ -489,6 +489,14 @@ export default function App() {
             setFilters({ ...INITIAL_FILTERS, characterIds: [charId] });
             setActiveTab('gallery');
           }}
+          visualTaggerEnabled={Boolean(healthData?.visualTagger?.enabled)}
+          onFilterByVisualKeyword={(keyword) => {
+            setFilters({
+              ...INITIAL_FILTERS,
+              query: keyword.includes(' ') ? `"${keyword}"` : keyword,
+            });
+            setActiveTab('gallery');
+          }}
         />
       )}
     </div>

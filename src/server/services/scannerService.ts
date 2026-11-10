@@ -8,6 +8,7 @@ import { appConfig } from '../config.ts';
 import { parseImageMetadata, parseImageMetadataFromChunks } from './pngMetadataParser.ts';
 import { runAssistedCharacterIdentificationForImage } from './characterService.ts';
 import { notifyImageIndexed } from './comfyuiLiveMonitor.ts';
+import { startVisualTaggerQueue } from './visualTaggerService.ts';
 import type { DependencyStatus } from '../../shared/types.ts';
 
 export interface IndexSingleResult {
@@ -635,6 +636,11 @@ export async function indexSingleImageFile(
     tx();
     recomputeImageDependencyStatus(imageId!);
     runAssistedCharacterIdentificationForImage(imageId!);
+
+    // If opt-in visual keyword tagging is enabled, queue background tagging for the newly ingested image
+    setImmediate(() => {
+      startVisualTaggerQueue().catch(() => {});
+    });
 
     return { outcome, imageId: imageId!, contentHash };
   } catch (err) {

@@ -16,6 +16,7 @@ import {
   AlertTriangle,
   Maximize2,
   Minimize2,
+  RefreshCw,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
@@ -35,6 +36,8 @@ interface ImageInspectorDrawerProps {
   collections: { id: number; name: string }[];
   onFilterByLora: (loraFilename: string) => void;
   onFilterByCharacter: (characterId: number) => void;
+  visualTaggerEnabled?: boolean;
+  onFilterByVisualKeyword?: (keyword: string) => void;
 }
 
 /**
@@ -50,6 +53,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   collections,
   onFilterByLora,
   onFilterByCharacter,
+  visualTaggerEnabled = false,
+  onFilterByVisualKeyword,
 }) => {
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [detailData, setDetailData] = useState<{
@@ -64,6 +69,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   const [charAppearance, setCharAppearance] = useState('');
   const [selectedColId, setSelectedColId] = useState('');
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [isRescanningVisualTags, setIsRescanningVisualTags] = useState(false);
 
   // Workflow Save & Reproduction state
   const [workflowName, setWorkflowName] = useState('');
@@ -762,8 +768,98 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             )}
           </div>
 
-          {/* Section 5: Tags, Collections & Notes */}
+          {/* Section 5: System Visual Keywords, User Tags, Collections & Notes */}
           <div className="space-y-3 pt-2 border-t border-zinc-800">
+            {visualTaggerEnabled && (
+              <div className="space-y-1.5 pb-2 border-b border-zinc-800/70">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-display font-semibold text-zinc-200 uppercase tracking-wider">
+                    Visual Keywords ({(activeImage.visualTags || []).length})
+                  </span>
+                  <button
+                    type="button"
+                    disabled={isRescanningVisualTags}
+                    onClick={async () => {
+                      setIsRescanningVisualTags(true);
+                      try {
+                        const res = await api.rescanImageVisualTags(image.id);
+                        setDetailData((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                image: prev.image
+                                  ? { ...prev.image, visualTags: res.visualTags }
+                                  : prev.image,
+                              }
+                            : prev
+                        );
+                        onUpdated();
+                      } finally {
+                        setIsRescanningVisualTags(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 disabled:opacity-50 cursor-pointer"
+                    title="Re-run WD14 ONNX visual keyword extractor on this image"
+                  >
+                    <RefreshCw
+                      className={`w-3 h-3 ${isRescanningVisualTags ? 'animate-spin' : ''}`}
+                    />
+                    <span>{isRescanningVisualTags ? 'Tagging...' : 'Re-tag Image'}</span>
+                  </button>
+                </div>
+
+                {!activeImage.visualTags || activeImage.visualTags.length === 0 ? (
+                  <p className="text-[11px] text-zinc-500">
+                    No visual keywords extracted yet. Click &ldquo;Re-tag Image&rdquo; or let the background queue scan it.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {activeImage.visualTags.map((vt) => (
+                      <div
+                        key={vt.tag}
+                        className="inline-flex items-center bg-zinc-950 border border-zinc-800 hover:border-indigo-500/50 rounded overflow-hidden"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onFilterByVisualKeyword) {
+                              onFilterByVisualKeyword(vt.tag);
+                              onClose();
+                            }
+                          }}
+                          className="px-2 py-0.5 text-zinc-200 hover:text-indigo-300 cursor-pointer font-mono text-[11px]"
+                          title={`Filter gallery by "${vt.tag}" (Confidence: ${Math.round(vt.confidence * 100)}%)`}
+                        >
+                          {vt.tag}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const res = await api.removeImageVisualTag(image.id, vt.tag);
+                            setDetailData((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    image: prev.image
+                                      ? { ...prev.image, visualTags: res.visualTags }
+                                      : prev.image,
+                                  }
+                                : prev
+                            );
+                            onUpdated();
+                          }}
+                          className="px-1.5 py-0.5 text-zinc-500 hover:text-rose-400 hover:bg-rose-500/10 border-l border-zinc-800/80 cursor-pointer"
+                          title={`Remove "${vt.tag}" from this image`}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="space-y-1.5">
               <span className="font-display font-semibold text-zinc-200 uppercase tracking-wider block">
                 Tags

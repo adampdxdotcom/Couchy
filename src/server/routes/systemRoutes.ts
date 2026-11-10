@@ -14,6 +14,11 @@ import {
   listDatabaseBackups,
   restoreUserAnnotationsJson,
 } from '../services/backupService.ts';
+import {
+  controlVisualTaggerQueue,
+  getVisualTaggerStatus,
+  updateVisualTaggerConfig,
+} from '../services/visualTaggerService.ts';
 
 export const systemRouter = Router();
 
@@ -50,6 +55,7 @@ systemRouter.get('/health', (_req, res) => {
       comfyuiModelsDir: appConfig.comfyuiModelsDir,
       databasePath: appConfig.databasePath,
       thumbnailPath: appConfig.thumbnailPath,
+      localModelsDir: appConfig.localModelsDir,
       downloadsDir: appConfig.downloadsDir,
       hasCivitaiKey: Boolean(appConfig.civitaiApiKey),
       hasHfToken: Boolean(appConfig.hfApiToken),
@@ -58,6 +64,7 @@ systemRouter.get('/health', (_req, res) => {
     },
     comfyuiInstance: comfyRow || null,
     activeScan: getActiveScanStatus(),
+    visualTagger: getVisualTaggerStatus(),
   });
 });
 
@@ -311,5 +318,44 @@ systemRouter.post('/backups/annotations-restore', (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || 'Failed to restore annotations' });
+  }
+});
+
+/**
+ * GET /api/tagger/status
+ * Returns current status of opt-in WD14 ONNX visual keyword tagger.
+ */
+systemRouter.get('/tagger/status', (_req, res) => {
+  res.json(getVisualTaggerStatus());
+});
+
+/**
+ * PATCH /api/tagger/config
+ * Toggles visual keyword tagging on/off, updates confidence threshold, or sets device ('cpu' | 'gpu').
+ */
+systemRouter.patch('/tagger/config', (req, res) => {
+  try {
+    const status = updateVisualTaggerConfig(req.body || {});
+    res.json(status);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to update visual tagger settings' });
+  }
+});
+
+/**
+ * POST /api/tagger/control
+ * Controls background queue ('pause' | 'resume' | 'scan_unindexed' | 'rescan_all').
+ */
+systemRouter.post('/tagger/control', (req, res) => {
+  try {
+    const action = req.body?.action;
+    if (!['pause', 'resume', 'scan_unindexed', 'rescan_all'].includes(action)) {
+      res.status(400).json({ error: 'Invalid tagger control action' });
+      return;
+    }
+    const status = controlVisualTaggerQueue(action);
+    res.json(status);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to control visual tagger queue' });
   }
 });

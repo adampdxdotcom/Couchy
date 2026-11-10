@@ -87,6 +87,11 @@ export interface ImageTagItem {
   color: string;
 }
 
+export interface VisualTagItem {
+  tag: string;
+  confidence: number;
+}
+
 export interface ImageCollectionItem {
   id: number;
   name: string;
@@ -139,6 +144,7 @@ export interface ImageRecord {
   models: ImageModelDependency[];
   characters: ImageCharacterLink[];
   tags: ImageTagItem[];
+  visualTags?: VisualTagItem[];
   collections: ImageCollectionItem[];
 }
 
@@ -426,6 +432,27 @@ export interface AppToastMessage {
   text: string;
   type: 'info' | 'success' | 'warning' | 'error';
   createdAt: string;
+}
+
+export interface VisualTaggerStatus {
+  enabled: boolean;
+  threshold: number;
+  device: 'cpu' | 'gpu';
+  activeProvider: string;
+  localModelsDir: string;
+  modelDownloaded: boolean;
+  isDownloading: boolean;
+  downloadProgressPercent: number;
+  downloadedBytes: number;
+  totalDownloadBytes: number;
+  downloadError: string | null;
+  isScanning: boolean;
+  isPaused: boolean;
+  scannedCount: number;
+  totalImagesCount: number;
+  pendingCount: number;
+  totalVisualTagsCount: number;
+  lastError: string | null;
 }
 
 /**

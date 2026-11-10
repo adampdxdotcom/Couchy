@@ -1,8 +1,10 @@
 import { db } from '../db.ts';
+import { getTaggerSettings } from './visualTaggerService.ts';
 import type {
   GalleryFilterState,
   ImageRecord,
   LoraExplorerItem,
+  VisualTagItem,
 } from '../../shared/types.ts';
 
 /**
@@ -11,6 +13,8 @@ import type {
  */
 export function hydrateImageRecords(rows: any[]): ImageRecord[] {
   if (rows.length === 0) return [];
+
+  const visualTaggerEnabled = getTaggerSettings().enabled;
 
   // Build fast lookup for installed models by id and lowercase filename
   const modelRows = db
@@ -32,6 +36,7 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
   const modelsByImageId = new Map<number, any[]>();
   const charsByHash = new Map<string, any[]>();
   const tagsByHash = new Map<string, any[]>();
+  const visualTagsByHash = new Map<string, VisualTagItem[]>();
   const colsByHash = new Map<string, any[]>();
   const wfByImageId = new Map<
     number,
@@ -107,6 +112,20 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
         )
         .all(single.content_hash) as any[]
     );
+
+    if (visualTaggerEnabled) {
+      visualTagsByHash.set(
+        single.content_hash,
+        db
+          .prepare(
+            `SELECT tag, confidence
+             FROM image_visual_tags
+             WHERE image_content_hash = ?
+             ORDER BY confidence DESC`
+          )
+          .all(single.content_hash) as VisualTagItem[]
+      );
+    }
 
     colsByHash.set(
       single.content_hash,
@@ -240,6 +259,22 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
         });
       }
     }
+
+    if (visualTaggerEnabled) {
+      const allVTags = db
+        .prepare(
+          `SELECT image_content_hash AS contentHash, tag, confidence
+           FROM image_visual_tags
+           ORDER BY confidence DESC`
+        )
+        .all() as { contentHash: string; tag: string; confidence: number }[];
+      for (const vt of allVTags) {
+        const arr = visualTagsByHash.get(vt.contentHash);
+        const item = { tag: vt.tag, confidence: vt.confidence };
+        if (arr) arr.push(item);
+        else visualTagsByHash.set(vt.contentHash, [item]);
+      }
+    }
   }
 
   const isSingleDetail = rows.length === 1;
@@ -249,6 +284,7 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
     const models = modelsByImageId.get(r.id) || [];
     const characters = charsByHash.get(r.content_hash) || [];
     const tags = tagsByHash.get(r.content_hash) || [];
+    const visualTags = visualTagsByHash.get(r.content_hash) || [];
     const collections = colsByHash.get(r.content_hash) || [];
     const wf = wfByImageId.get(r.id);
 
@@ -313,6 +349,7 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
       models,
       characters,
       tags,
+      visualTags,
       collections,
     };
   });
@@ -380,7 +417,7 @@ function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
     return actual === target;
   }
 
-  // Field:value predicate e.g. character:"Elena", lora:detail, checkpoint:xl, tag:portrait
+  // Field:value predicate e.g. character:"Elena", lora:detail, checkpoint:xl, tag:portrait, visual:glasses
   const kvMatch = predicate.match(/^([a-zA-Z_]+)\s*[:=]\s*"?([^"]+)"?$/);
   if (kvMatch) {
     const key = kvMatch[1].toLowerCase();
@@ -395,7 +432,13 @@ function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
       return (img.checkpointName || '').toLowerCase().includes(val);
     }
     if (key === 'tag') {
-      return img.tags.some((t) => t.name.toLowerCase().includes(val));
+      return (
+        img.tags.some((t) => t.name.toLowerCase().includes(val)) ||
+        (img.visualTags || []).some((vt) => vt.tag.toLowerCase().includes(val))
+      );
+    }
+    if (key === 'visual' || key === 'vtag' || key === 'keyword') {
+      return (img.visualTags || []).some((vt) => vt.tag.toLowerCase().includes(val));
     }
     if (key === 'collection') {
       return img.collections.some((c) => c.name.toLowerCase().includes(val));
@@ -409,7 +452,7 @@ function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
     }
   }
 
-  // Universal text search across prompts, filenames, LoRAs, characters, checkpoints, tags, notes, collections, hashes
+  // Universal text search across prompts, filenames, LoRAs, characters, checkpoints, tags, visual keywords, notes, collections, hashes
   const needle = predicate.replace(/^"|"$/g, '').toLowerCase();
   return (
     img.filename.toLowerCase().includes(needle) ||
@@ -421,6 +464,7 @@ function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
     img.loras.some((l) => l.loraName.toLowerCase().includes(needle)) ||
     img.characters.some((c) => c.characterName.toLowerCase().includes(needle)) ||
     img.tags.some((t) => t.name.toLowerCase().includes(needle)) ||
+    (img.visualTags || []).some((vt) => vt.tag.toLowerCase().includes(needle)) ||
     img.collections.some((c) => c.name.toLowerCase().includes(needle))
   );
 }

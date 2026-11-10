@@ -483,6 +483,24 @@ export function runMigrations(): void {
         ALTER TABLE workflows ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
       `,
     },
+    {
+      version: 7,
+      name: 'visual_keyword_tagger_schema',
+      sql: `
+        ALTER TABLE images ADD COLUMN visual_tags_scanned_at TEXT;
+
+        CREATE TABLE IF NOT EXISTS image_visual_tags (
+          image_content_hash TEXT NOT NULL,
+          image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+          tag TEXT NOT NULL COLLATE NOCASE,
+          confidence REAL NOT NULL DEFAULT 1.0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (image_content_hash, tag)
+        );
+        CREATE INDEX IF NOT EXISTS idx_img_visual_tags_hash ON image_visual_tags(image_content_hash);
+        CREATE INDEX IF NOT EXISTS idx_img_visual_tags_tag ON image_visual_tags(LOWER(tag));
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

@@ -14,6 +14,8 @@ import type {
   PromptTemplate,
   ReproductionValidationResult,
   SavedSearchPreset,
+  VisualTagItem,
+  VisualTaggerStatus,
   WorkflowLibraryItem,
   WorkflowNodeMapping,
   WorkflowNodeSlotInfo,
@@ -480,5 +482,38 @@ export const api = {
     requestJson<{ batch: GenerationBatchRecord; batches: GenerationBatchRecord[] }>(
       '/api/generation/submit-batch',
       { method: 'POST', body: JSON.stringify(payload) }
+    ),
+
+  // Visual Keyword Tagger (WD14 ONNX)
+  getVisualTaggerStatus: () => requestJson<VisualTaggerStatus>('/api/tagger/status'),
+
+  updateVisualTaggerConfig: (payload: {
+    enabled?: boolean;
+    threshold?: number;
+    device?: 'cpu' | 'gpu';
+  }) =>
+    requestJson<VisualTaggerStatus>('/api/tagger/config', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+
+  controlVisualTaggerQueue: (
+    action: 'pause' | 'resume' | 'scan_unindexed' | 'rescan_all'
+  ) =>
+    requestJson<VisualTaggerStatus>('/api/tagger/control', {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
+
+  rescanImageVisualTags: (imageId: number) =>
+    requestJson<{ ok: boolean; visualTags: VisualTagItem[] }>(
+      `/api/images/${imageId}/visual-tags/rescan`,
+      { method: 'POST' }
+    ),
+
+  removeImageVisualTag: (imageId: number, tag: string) =>
+    requestJson<{ ok: boolean; visualTags: VisualTagItem[] }>(
+      `/api/images/${imageId}/visual-tags/${encodeURIComponent(tag)}`,
+      { method: 'DELETE' }
     ),
 };
