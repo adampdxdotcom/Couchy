@@ -18,15 +18,54 @@ Couchy bridges the gap between raw ComfyUI generation folders and an organized, 
 
 ## Key Features
 
-### 1. Generation Studio & Quick Gen Dock
+### 1. Generation Studio & Floating Quick Gen Box
 - **Generation Studio**: A full-featured workspace to generate single images or multi-image sets. Configure aspect ratio presets (`1:1`, `9:16`, `16:9`, `3:4`, `4:3`, `2:3`, `3:2`), output counts, checkpoint models, and stacked LoRAs with custom weights.
-- **Quick Gen Bottom Dock**: A fast-action prompt bar accessible from any tab. Type `@character` to search and mention characters, pick aspect ratios, adjust batch sizes, and submit jobs directly to ComfyUI. On mobile devices, the dock features an edge-to-edge layout with a minimize/expand toggle tab.
-- **Reuse Prompt (`RotateCcw`)**: With one click on any gallery card or full-screen preview, pre-fill the Quick Gen dock with the image's prompt, automatically match the image dimensions to the closest aspect ratio preset, and re-attach associated characters.
-- **Local LLM Photo Set Agent**: Connect an OpenAI-compatible local model (e.g. LM Studio or Ollama). Provide high-level narrative instructions across a batch—such as:
-  > *"The character should grow increasingly tired through the series"*
-  > or *"Shift the scene from golden hour sunlight to midnight rain over 6 shots"*
-  
-  The agent intelligently adjusts each sequential prompt while preserving your character's LoRA trigger words, scene context, and styling consistency.
+- **Floating Quick Gen Box**: An always-accessible bottom generation dock available across the Gallery, Characters, LoRAs & Models, and Workflows tabs (detailed below).
+
+---
+
+## Floating Quick Gen Box
+
+The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless image generation from anywhere in Couchy without leaving your current view.
+
+### Core Capabilities & Controls
+
+- **Collapsible Bottom Dock**:
+  - Stays anchored at the bottom of the screen as you browse your gallery or characters.
+  - Click the **Quick Gen** tab handle to minimize the dock out of the way (displaying a preview snippet if a draft prompt is present) or expand it on demand.
+  - Automatically expands the prompt input box when focused or populated, and submits on `Enter` (`Shift+Enter` for new lines).
+
+- **`@Character` Mention Picker & Auto-LoRA Attachment**:
+  - Type `@` anywhere in the prompt (or click the **`+`** button) to open a two-column searchable character & image picker.
+  - Filter characters by name, alias, LoRA filename, or trigger word using keyboard navigation (`ArrowUp`, `ArrowDown`, `Enter`/`Tab`, `Escape`) or mouse hover to preview character portraits and recent confirmed images.
+  - Selecting a character attaches a removable **Character Pill Badge** above the prompt and automatically injects that character's configured LoRAs, model/CLIP weights, trigger words, and preferred default workflow on submission.
+
+- **Hybrid Image-to-Prompt Interrogation (Drag, Paste, or Upload)**:
+  - **Drop, Paste, or Browse**: Drag and drop an image file onto the Quick Gen Box, paste an image from your clipboard (`Ctrl+V` / `Cmd+V`), or click the **Image Upload (`ImagePlus`)** button.
+  - **1MP Downscaling & Auto Aspect Ratio**: The browser automatically downscales the reference image to at most ~1 Megapixel (`1,048,576` pixels) while preserving its aspect ratio, and sets the Quick Gen aspect ratio selector to the closest matching preset.
+  - **Hybrid Vision / WD14 + LLM Pipeline**:
+    - **Vision Model Loaded in LM Studio**: Sends the 1MP image directly to the local Vision Language Model (VLM) to synthesize a detailed prose prompt (independent of whether the `Agent` toggle is active).
+    - **Text-Only Model Loaded in LM Studio**: Runs the image through the local `wd-vit-tagger-v3` ONNX visual tagger first, then feeds the extracted tags into the local text LLM to write a natural prose prompt.
+    - Automatically disabled with a helpful tooltip whenever LM Studio is offline.
+  - **Character-Aware Physical Trait Stripping**: If a character is already attached in the Quick Gen Box when you drop or upload a photo, Couchy automatically strips conflicting physical identity traits—such as hair color, eye color, permanent facial features (freckles, moles), skin tone, race/ethnicity, and body proportions—while keeping hairstyle structure, transient facial expressions/emotions (e.g., smiling, blushing), pose, clothing/NSFW state, lighting, and framing so the character's LoRA defines their appearance cleanly.
+  - **Optional Reference Archiving**: Enable *"Save Uploaded Prompt Images"* in **System & Backup** to automatically save a copy of each 1MP downscaled reference image to `data/uploaded`.
+
+- **Local LLM Photo Set Agent (`Agent` Toggle)**:
+  - Toggle the **Agent** button to have your local LLM expand a single prompt or high-level narrative instruction into a cohesive multi-image sequence across your selected batch count:
+    > *"The character should grow increasingly tired through the series"*
+    > or *"Shift the scene from golden hour sunlight to midnight rain over 6 shots"*
+  - Preserves your attached character's trigger words, LoRA context, and visual continuity across every generated frame.
+
+- **Workflow, Aspect Ratio & Batch Size Selector**:
+  - Click the workflow/ratio pill (e.g., `Krea2_turbo · 2:3 · x1`) to open the quick settings popover:
+    - **Aspect Ratio Presets**: `1:1`, `9:16`, `16:9`, `3:4`, `4:3`, `2:3`, and `3:2` (mapped directly to your workflow's resolution/aspect node).
+    - **Number of Generations**: `x1`, `x2`, `x4`, `x6`, or `x8` images per batch.
+  - Automatically displays and uses the attached character's preferred workflow if configured, or falls back to your default ComfyUI workflow.
+
+- **One-Click "Reuse Prompt" Integration**:
+  - Clicking **Reuse Prompt** (`RotateCcw`) on any gallery card or full-screen image inspector automatically expands the Quick Gen Box, fills in the positive prompt, matches the original image's aspect ratio preset, and re-attaches the confirmed character.
+
+---
 
 ### 2. First-Class Character Organization & Auto-Recognition
 - **Character Profiles**: Create characters with custom trigger words, LoRA weights, outfits, descriptions, and avatar images.
