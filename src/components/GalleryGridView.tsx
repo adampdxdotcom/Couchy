@@ -45,6 +45,7 @@ interface GalleryGridViewProps {
   mountedOutputDir: string;
   onTriggerScan: () => void;
   onOpenSystemSettings: () => void;
+  isLoading?: boolean;
 }
 
 export function renderDependencyLabel(status: DependencyStatus) {
@@ -102,6 +103,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   mountedOutputDir,
   onTriggerScan,
   onOpenSystemSettings,
+  isLoading = false,
 }) => {
   const [page, setPage] = useState(1);
   const pageSize = 48;
@@ -112,6 +114,67 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   const totalPages = Math.max(1, Math.ceil(images.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pagedImages = images.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  const getGridClasses = () => {
+    if (layout === 'masonry') {
+      if (thumbScale === 'sm') return 'columns-2 sm:columns-4 lg:columns-6 xl:columns-7 gap-3 space-y-3';
+      if (thumbScale === 'lg') return 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-4 space-y-4';
+      return 'columns-2 sm:columns-3 lg:columns-4 xl:columns-5 gap-4 space-y-4';
+    }
+    if (layout === 'compact') {
+      if (thumbScale === 'sm') return 'grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2';
+      if (thumbScale === 'lg') return 'grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3';
+      return 'grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-2.5';
+    }
+    // Standard Grid
+    if (thumbScale === 'sm') return 'grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3.5';
+    if (thumbScale === 'lg') return 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5';
+    return 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4';
+  };
+
+  // Loading Skeleton State: renders layout-matching skeleton cards while images are in-flight
+  if (isLoading) {
+    const skeletonCount = 12;
+    return (
+      <div className="px-6 py-5 space-y-4">
+        {/* Skeleton Top Counter */}
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin shrink-0" />
+          <span className="text-xs text-zinc-400 font-medium">Loading indexed image gallery...</span>
+        </div>
+
+        {/* Skeleton Responsive Card Grid */}
+        <div className={getGridClasses()}>
+          {Array.from({ length: skeletonCount }).map((_, idx) => (
+            <div
+              key={idx}
+              className={`bg-zinc-900 border border-zinc-800/80 rounded-xl overflow-hidden animate-pulse ${
+                layout === 'masonry' ? 'break-inside-avoid mb-4' : ''
+              }`}
+            >
+              <div
+                className={`w-full bg-zinc-800/50 ${
+                  layout === 'compact'
+                    ? 'aspect-square'
+                    : idx % 3 === 0
+                    ? 'aspect-[2/3]'
+                    : idx % 2 === 0
+                    ? 'aspect-[3/4]'
+                    : 'aspect-square'
+                }`}
+              />
+              {layout !== 'compact' && (
+                <div className="p-3 space-y-2">
+                  <div className="h-3.5 bg-zinc-800/80 rounded w-3/4" />
+                  <div className="h-2.5 bg-zinc-800/50 rounded w-1/2" />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   // Empty State when mounted ComfyUI output directory has no indexed images
   if (images.length === 0) {
@@ -156,23 +219,6 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
       </div>
     );
   }
-
-  const getGridClasses = () => {
-    if (layout === 'masonry') {
-      if (thumbScale === 'sm') return 'columns-2 sm:columns-4 lg:columns-6 xl:columns-7 gap-3 space-y-3';
-      if (thumbScale === 'lg') return 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-4 space-y-4';
-      return 'columns-2 sm:columns-3 lg:columns-4 xl:columns-5 gap-4 space-y-4';
-    }
-    if (layout === 'compact') {
-      if (thumbScale === 'sm') return 'grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2';
-      if (thumbScale === 'lg') return 'grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3';
-      return 'grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-2.5';
-    }
-    // Standard Grid
-    if (thumbScale === 'sm') return 'grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 xl:grid-cols-7 gap-3.5';
-    if (thumbScale === 'lg') return 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5';
-    return 'grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4';
-  };
 
   return (
     <div className="px-6 py-5 space-y-6">

@@ -59,6 +59,7 @@ export default function App() {
 
   const [images, setImages] = useState<ImageRecord[]>([]);
   const [allImages, setAllImages] = useState<ImageRecord[]>([]);
+  const [isLoadingImages, setIsLoadingImages] = useState<boolean>(true);
   const [characters, setCharacters] = useState<CharacterProfile[]>([]);
   const [loras, setLoras] = useState<LoraExplorerItem[]>([]);
   const [models, setModels] = useState<ModelInventoryItem[]>([]);
@@ -148,18 +149,35 @@ export default function App() {
     !f.dateTo;
 
   const loadMetadataAndEntities = useCallback(async () => {
-    try {
-      const [healthRes, orgMetaRes, charRes, loraRes, modelRes, wfRes, unfilteredRes] =
-        await Promise.allSettled([
-          api.getHealth(),
-          api.getOrganizationMeta(),
-          api.listCharacters(),
-          api.listLoras(),
-          api.listModelInventory(),
-          api.listWorkflows(),
-          api.queryImages({ rejectedMode: 'include', archivedMode: 'include' }),
-        ]);
+    // Prioritize querying gallery images immediately to render cards/skeletons without waiting for secondary metadata
+    const imagesPromise = api
+      .queryImages({ rejectedMode: 'include', archivedMode: 'include' })
+      .then((unfilteredRes) => {
+        const allItems = unfilteredRes.items || [];
+        setAllImages(allItems);
+        setFilters((currFilters) => {
+          if (isDefaultFilters(currFilters)) {
+            setImages(allItems.filter((img) => !img.isRejected && !img.isArchived));
+          }
+          return currFilters;
+        });
+      })
+      .catch((err) => {
+        console.error('Failed to query images:', err);
+      })
+      .finally(() => {
+        setIsLoadingImages(false);
+      });
 
+    // Secondary metadata runs concurrently in the background without blocking image presentation
+    const metaPromise = Promise.allSettled([
+      api.getHealth(),
+      api.getOrganizationMeta(),
+      api.listCharacters(),
+      api.listLoras(),
+      api.listModelInventory(),
+      api.listWorkflows(),
+    ]).then(([healthRes, orgMetaRes, charRes, loraRes, modelRes, wfRes]) => {
       if (healthRes.status === 'fulfilled') {
         setHealthData(healthRes.value);
       }
@@ -181,31 +199,25 @@ export default function App() {
       if (wfRes.status === 'fulfilled') {
         setWorkflows(wfRes.value.items || []);
       }
-      if (unfilteredRes.status === 'fulfilled') {
-        const allItems = unfilteredRes.value.items || [];
-        setAllImages(allItems);
-        setFilters((currFilters) => {
-          if (isDefaultFilters(currFilters)) {
-            setImages(allItems.filter((img) => !img.isRejected && !img.isArchived));
-          }
-          return currFilters;
-        });
-      }
-    } catch (err) {
-      console.error('Failed to load gallery metadata:', err);
-    }
+    });
+
+    await Promise.allSettled([imagesPromise, metaPromise]);
   }, []);
 
   const loadFilteredImages = useCallback(async () => {
     if (isDefaultFilters(filters) && allImages.length > 0) {
       setImages(allImages.filter((img) => !img.isRejected && !img.isArchived));
+      setIsLoadingImages(false);
       return;
     }
+    setIsLoadingImages(true);
     try {
       const res = await api.queryImages(filters);
       setImages(res.items || []);
     } catch (err) {
       console.error('Failed to query filtered images:', err);
+    } finally {
+      setIsLoadingImages(false);
     }
   }, [filters, allImages]);
 
@@ -429,6 +441,7 @@ export default function App() {
 
             <GalleryGridView
               images={images}
+              isLoading={isLoadingImages}
               layout={layout}
               thumbScale={thumbScale}
               selectedIds={selectedIds}
