@@ -39,6 +39,7 @@ interface FloatingQuickGenBarProps {
   onRefreshAll: () => Promise<void>;
   onOpenGenerationTab: () => void;
   onPushToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
+  lmStudioOnline?: boolean;
 }
 
 const BATCH_COUNT_OPTIONS = [1, 2, 4, 6, 8];
@@ -64,9 +65,17 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   prefillPayload,
   onRefreshAll,
   onPushToast,
+  lmStudioOnline = true,
 }) => {
   const [prompt, setPrompt] = useState('');
   const [agentEnabled, setAgentEnabled] = useState(false);
+
+  // Auto-disable agent mode if LM Studio goes offline
+  useEffect(() => {
+    if (!lmStudioOnline && agentEnabled) {
+      setAgentEnabled(false);
+    }
+  }, [lmStudioOnline, agentEnabled]);
   const [aspectRatio, setAspectRatio] = useState('2:3 (Portrait Photo)');
   const [batchCount, setBatchCount] = useState<number>(1);
   const [attachedCharacter, setAttachedCharacter] = useState<CharacterProfile | null>(null);
@@ -694,13 +703,23 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
             <button
               type="button"
-              onClick={() => setAgentEnabled((prev) => !prev)}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors cursor-pointer shrink-0 ${
-                agentEnabled
-                  ? 'bg-indigo-600/25 border border-indigo-500/60 text-indigo-200'
-                  : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-transparent'
+              disabled={!lmStudioOnline}
+              onClick={() => {
+                if (!lmStudioOnline) return;
+                setAgentEnabled((prev) => !prev);
+              }}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 ${
+                !lmStudioOnline
+                  ? 'opacity-40 cursor-not-allowed bg-zinc-800/50 text-zinc-500 border border-transparent'
+                  : agentEnabled
+                  ? 'bg-indigo-600/25 border border-indigo-500/60 text-indigo-200 cursor-pointer'
+                  : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-transparent cursor-pointer'
               }`}
-              title="Toggle LM Studio Agent to expand your prompt into a themed photo set"
+              title={
+                lmStudioOnline
+                  ? 'Toggle LM Studio Agent to expand your prompt into a themed photo set'
+                  : 'LM Studio is offline — start LM Studio or check connection in System settings'
+              }
             >
               <Bot className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Agent</span>

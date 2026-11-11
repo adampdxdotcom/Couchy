@@ -87,6 +87,16 @@ export default function App() {
     maxSteps: null,
     currentNode: null,
   });
+  const [lmStudioStatus, setLmStudioStatus] = useState<{
+    online: boolean;
+    selectedModel: string;
+    baseUrl: string;
+  }>({
+    online: false,
+    selectedModel: '',
+    baseUrl: '',
+  });
+  const prevLmStudioOnlineRef = useRef<boolean | null>(null);
   const [messages, setMessages] = useState<AppToastMessage[]>([]);
   const [activeToast, setActiveToast] = useState<AppToastMessage | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -256,6 +266,53 @@ export default function App() {
     };
   }, [pushToast, refreshAll]);
 
+  // Poll LM Studio connection every 15s; alert on state transitions after initial check
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const pollLmStudio = async () => {
+      try {
+        const res = await api.getLmStudioStatus();
+        if (cancelled) return;
+
+        setLmStudioStatus({
+          online: Boolean(res.online),
+          selectedModel: res.selectedModel || '',
+          baseUrl: res.baseUrl || '',
+        });
+
+        const prev = prevLmStudioOnlineRef.current;
+        if (prev !== null) {
+          if (prev === true && !res.online) {
+            pushToast('LM Studio Offline', 'warning');
+          } else if (prev === false && res.online) {
+            pushToast('LM Studio Reconnected', 'success');
+          }
+        }
+        prevLmStudioOnlineRef.current = Boolean(res.online);
+      } catch {
+        if (cancelled) return;
+        const prev = prevLmStudioOnlineRef.current;
+        if (prev !== null && prev === true) {
+          pushToast('LM Studio Offline', 'warning');
+        }
+        prevLmStudioOnlineRef.current = false;
+        setLmStudioStatus((prevStatus) => ({ ...prevStatus, online: false }));
+      } finally {
+        if (!cancelled) {
+          timer = setTimeout(pollLmStudio, 15000);
+        }
+      }
+    };
+
+    pollLmStudio();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [pushToast]);
+
   const handleTriggerScan = async () => {
     pushToast('Scanning mounted output directory...', 'info');
     try {
@@ -328,6 +385,7 @@ export default function App() {
         }}
         isMobileMenuOpen={isMobileMenuOpen}
         onMobileMenuOpenChange={setIsMobileMenuOpen}
+        lmStudioStatus={lmStudioStatus}
       />
 
       {/* Main Content Area */}
@@ -506,6 +564,7 @@ export default function App() {
           onRefreshAll={refreshAll}
           onOpenGenerationTab={() => setActiveTab('generation')}
           onPushToast={pushToast}
+          lmStudioOnline={lmStudioStatus.online}
         />
       )}
 

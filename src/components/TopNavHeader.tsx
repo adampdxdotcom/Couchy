@@ -36,6 +36,11 @@ interface TopNavHeaderProps {
   onClearMessages: () => void;
   isMobileMenuOpen?: boolean;
   onMobileMenuOpenChange?: (open: boolean) => void;
+  lmStudioStatus?: {
+    online: boolean;
+    selectedModel?: string;
+    baseUrl?: string;
+  };
 }
 
 /**
@@ -53,6 +58,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   onClearMessages,
   isMobileMenuOpen,
   onMobileMenuOpenChange,
+  lmStudioStatus,
 }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [internalMobileMenuOpen, setInternalMobileMenuOpen] = useState(false);
@@ -332,6 +338,26 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
                       style={{ width: `${comfyStatus.progressPercent ?? 15}%` }}
                     />
                   </div>
+                </div>
+              )}
+
+              {lmStudioStatus && (
+                <div className="flex items-center justify-between pt-1.5 border-t border-zinc-800/60 text-[11px]">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        lmStudioStatus.online ? 'bg-emerald-400' : 'bg-zinc-500'
+                      }`}
+                    />
+                    <span className="font-semibold text-zinc-200">
+                      LM Studio {lmStudioStatus.online ? 'Online' : 'Offline'}
+                    </span>
+                  </div>
+                  <span className="font-mono text-zinc-400 truncate max-w-[150px]">
+                    {lmStudioStatus.online
+                      ? lmStudioStatus.selectedModel || 'Connected'
+                      : 'Disconnected'}
+                  </span>
                 </div>
               )}
             </div>
