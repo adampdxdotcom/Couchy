@@ -523,6 +523,7 @@ export default function App() {
               await api.updateImageAnnotations(id, { rating });
               pushToast(rating > 0 ? `Rated image ★ ${rating}` : 'Cleared image rating', 'info');
             }}
+            onPushToast={pushToast}
           />
         )}
 

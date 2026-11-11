@@ -38,6 +38,7 @@ interface CharacterExplorerViewProps {
   onFilterGalleryByCharacter: (charId: number) => void;
   onQuickRate: (id: number, rating: number) => void;
   onReusePrompt?: (img: ImageRecord) => void;
+  onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
 /**
@@ -54,15 +55,22 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   onFilterGalleryByCharacter,
   onQuickRate,
   onReusePrompt,
+  onPushToast,
 }) => {
   const [selectedCharId, setSelectedCharId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'images' | 'rating' | 'recent'>('images');
   const [isHighestRatedExpanded, setIsHighestRatedExpanded] = useState(false);
+  const [optimisticPortraitId, setOptimisticPortraitId] = useState<number | null>(null);
 
   useEffect(() => {
     setIsHighestRatedExpanded(false);
+    setOptimisticPortraitId(null);
   }, [selectedCharId]);
+
+  useEffect(() => {
+    setOptimisticPortraitId(null);
+  }, [characters]);
 
   // Create Character Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -175,6 +183,35 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
       ? targetHighestRatedPool
       : targetHighestRatedPool.slice(0, 6);
 
+    const activePortraitId = optimisticPortraitId ?? selectedCharacter.portraitImageId;
+    const currentPortraitThumb =
+      (optimisticPortraitId
+        ? allImages.find((i) => i.id === optimisticPortraitId)?.thumbnailUrl
+        : null) || selectedCharacter.portraitThumbnailUrl;
+
+    const handleSetPortrait = async (img: ImageRecord) => {
+      setOptimisticPortraitId(img.id);
+      try {
+        await api.updateCharacter(selectedCharacter.id, {
+          portraitImageId: img.id,
+        });
+        await onRefresh();
+        setStatusMessage(`Set "${img.filename}" as character portrait.`);
+        if (onPushToast) {
+          onPushToast(`Set ${selectedCharacter.name}'s portrait`, 'success');
+        }
+        setTimeout(() => setStatusMessage(null), 3000);
+      } catch (err: any) {
+        console.error('Failed to set character portrait:', err);
+        setOptimisticPortraitId(null);
+        setStatusMessage('Failed to set character portrait.');
+        if (onPushToast) {
+          onPushToast('Failed to set character portrait', 'error');
+        }
+        setTimeout(() => setStatusMessage(null), 3000);
+      }
+    };
+
     return (
       <div className="px-3.5 sm:px-6 py-4 sm:py-6 w-full max-w-7xl mx-auto space-y-6 overflow-x-hidden">
         {/* Top Back Navigation */}
@@ -231,9 +268,9 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
         <div className="bg-zinc-900 border border-zinc-800/80 rounded-xl p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden">
           <div className="lg:col-span-3 min-w-0 flex flex-col items-center lg:items-start gap-3">
             <div className="w-36 h-36 sm:w-40 sm:h-40 rounded-xl bg-zinc-950 border border-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
-              {selectedCharacter.portraitThumbnailUrl ? (
+              {currentPortraitThumb ? (
                 <img
-                  src={selectedCharacter.portraitThumbnailUrl}
+                  src={currentPortraitThumb}
                   alt={selectedCharacter.name}
                   className="w-full h-full object-cover"
                 />
@@ -796,80 +833,123 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
               )}
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              {displayedHighestRated.map((img) => (
-                <div
-                  key={img.id}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden group flex flex-col justify-between"
-                >
-                  <div
-                    onClick={() => onOpenImage(img)}
-                    className="relative aspect-square bg-black cursor-pointer overflow-hidden"
-                  >
-                    <img
-                      src={img.thumbnailUrl}
-                      alt={img.filename}
-                      className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
-                    />
+              {displayedHighestRated.map((img) => {
+                const isPortrait =
+                  (activePortraitId !== null && activePortraitId === img.id) ||
+                  (selectedCharacter.portraitContentHash !== null &&
+                    selectedCharacter.portraitContentHash === img.contentHash);
 
-                    {/* Bottom Floating Bar on Card: Rating Stars (Left) + Actions (Right) */}
+                return (
+                  <div
+                    key={img.id}
+                    className={`bg-zinc-900 rounded-lg overflow-hidden group flex flex-col justify-between transition-all duration-200 ${
+                      isPortrait
+                        ? 'border-2 border-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.35)] ring-1 ring-amber-400/50'
+                        : 'border border-zinc-800 hover:border-zinc-700'
+                    }`}
+                  >
                     <div
-                      className="absolute bottom-0 inset-x-0 p-2 sm:p-2.5 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex items-center justify-between opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={() => onOpenImage(img)}
+                      className="relative aspect-square bg-black cursor-pointer overflow-hidden"
                     >
+                      <img
+                        src={img.thumbnailUrl}
+                        alt={img.filename}
+                        className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
+                      />
+
+                      {/* Gold Portrait Badge on Image */}
+                      {isPortrait && (
+                        <div className="absolute top-2 left-2 z-10 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400 text-zinc-950 text-[10px] font-bold tracking-wider uppercase shadow-md pointer-events-none">
+                          <Star className="w-2.5 h-2.5 fill-zinc-950 text-zinc-950" />
+                          <span>Portrait</span>
+                        </div>
+                      )}
+
+                      {/* Bottom Floating Bar on Card: Rating Stars (Left) + Actions (Right) */}
                       <div
-                        className="flex items-center gap-0.5"
+                        className="absolute bottom-0 inset-x-0 p-2 sm:p-2.5 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex items-center justify-between opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {[1, 2, 3, 4, 5].map((star) => (
-                          <button
-                            key={star}
-                            type="button"
-                            onClick={() => onQuickRate(img.id, img.rating === star ? 0 : star)}
-                            className="p-0.5 cursor-pointer"
-                          >
-                            <Star
-                              className={`w-3.5 h-3.5 ${
-                                star <= img.rating
-                                  ? 'fill-amber-400 text-amber-400'
-                                  : 'text-zinc-400 hover:text-amber-300'
-                              }`}
-                            />
-                          </button>
-                        ))}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        {onReusePrompt && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onReusePrompt(img);
-                            }}
-                            className="p-1 text-zinc-300 hover:text-white hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
-                            title="Reuse prompt & settings in Quick Gen"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        <a
-                          href={`/api/images/${img.id}/file?download=1`}
+                        <div
+                          className="flex items-center gap-0.5"
                           onClick={(e) => e.stopPropagation()}
-                          className="p-1 text-zinc-200 hover:text-white hover:bg-zinc-800/80 rounded transition-colors"
-                          title="Download Unchanged Original File"
                         >
-                          <Download className="w-3.5 h-3.5" />
-                        </a>
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <button
+                              key={star}
+                              type="button"
+                              onClick={() => onQuickRate(img.id, img.rating === star ? 0 : star)}
+                              className="p-0.5 cursor-pointer"
+                            >
+                              <Star
+                                className={`w-3.5 h-3.5 ${
+                                  star <= img.rating
+                                    ? 'fill-amber-400 text-amber-400'
+                                    : 'text-zinc-400 hover:text-amber-300'
+                                }`}
+                              />
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {onReusePrompt && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onReusePrompt(img);
+                              }}
+                              className="p-1 text-zinc-300 hover:text-white hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
+                              title="Reuse prompt & settings in Quick Gen"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          <a
+                            href={`/api/images/${img.id}/file?download=1`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="p-1 text-zinc-200 hover:text-white hover:bg-zinc-800/80 rounded transition-colors"
+                            title="Download Unchanged Original File"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </a>
+                        </div>
                       </div>
                     </div>
+                    <div className="p-2 text-xs flex items-center justify-between gap-1.5">
+                      <span
+                        onClick={() => onOpenImage(img)}
+                        className="truncate text-zinc-200 cursor-pointer hover:text-white"
+                        title={img.filename}
+                      >
+                        {img.filename}
+                      </span>
+                      {isPortrait ? (
+                        <span
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-400 shrink-0"
+                          title="Current Character Portrait"
+                        >
+                          <CheckCircle2 className="w-3 h-3 text-amber-400" />
+                          <span>Portrait</span>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            await handleSetPortrait(img);
+                          }}
+                          className="text-[11px] text-zinc-400 hover:text-amber-400 shrink-0 cursor-pointer transition-colors"
+                          title="Set as Character Portrait"
+                        >
+                          Set Portrait
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div
-                    onClick={() => onOpenImage(img)}
-                    className="p-2 text-xs flex items-center justify-between cursor-pointer"
-                  >
-                    <span className="truncate text-zinc-300">{img.filename}</span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
@@ -885,95 +965,123 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
             </p>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
-              {confirmedImages.map((img) => (
-                <div
-                  key={img.id}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden group flex flex-col justify-between"
-                >
-                  <div
-                    onClick={() => onOpenImage(img)}
-                    className="relative aspect-square bg-black cursor-pointer overflow-hidden"
-                  >
-                    <img
-                      src={img.thumbnailUrl}
-                      alt={img.filename}
-                      className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
-                    />
+              {confirmedImages.map((img) => {
+                const isPortrait =
+                  (activePortraitId !== null && activePortraitId === img.id) ||
+                  (selectedCharacter.portraitContentHash !== null &&
+                    selectedCharacter.portraitContentHash === img.contentHash);
 
-                    {/* Bottom Floating Bar on Card: Rating Stars (Left) + Actions (Right) */}
+                return (
+                  <div
+                    key={img.id}
+                    className={`bg-zinc-900 rounded-lg overflow-hidden group flex flex-col justify-between transition-all duration-200 ${
+                      isPortrait
+                        ? 'border-2 border-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.35)] ring-1 ring-amber-400/50'
+                        : 'border border-zinc-800 hover:border-zinc-700'
+                    }`}
+                  >
                     <div
-                      className="absolute bottom-0 inset-x-0 p-2 sm:p-2.5 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex items-center justify-between opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10"
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={() => onOpenImage(img)}
+                      className="relative aspect-square bg-black cursor-pointer overflow-hidden"
                     >
+                      <img
+                        src={img.thumbnailUrl}
+                        alt={img.filename}
+                        className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
+                      />
+
+                      {/* Gold Portrait Badge on Image */}
+                      {isPortrait && (
+                        <div className="absolute top-2 left-2 z-10 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400 text-zinc-950 text-[10px] font-bold tracking-wider uppercase shadow-md pointer-events-none">
+                          <Star className="w-2.5 h-2.5 fill-zinc-950 text-zinc-950" />
+                          <span>Portrait</span>
+                        </div>
+                      )}
+
+                      {/* Bottom Floating Bar on Card: Rating Stars (Left) + Actions (Right) */}
                       <div
-                        className="flex items-center gap-0.5"
+                        className="absolute bottom-0 inset-x-0 p-2 sm:p-2.5 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex items-center justify-between opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        {[1, 2, 3, 4, 5].map((star) => (
-                          <button
-                            key={star}
-                            type="button"
-                            onClick={() => onQuickRate(img.id, img.rating === star ? 0 : star)}
-                            className="p-0.5 cursor-pointer"
-                          >
-                            <Star
-                              className={`w-3.5 h-3.5 ${
-                                star <= img.rating
-                                  ? 'fill-amber-400 text-amber-400'
-                                  : 'text-zinc-400 hover:text-amber-300'
-                              }`}
-                            />
-                          </button>
-                        ))}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        {onReusePrompt && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onReusePrompt(img);
-                            }}
-                            className="p-1 text-zinc-300 hover:text-white hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
-                            title="Reuse prompt & settings in Quick Gen"
-                          >
-                            <RotateCcw className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                        <a
-                          href={`/api/images/${img.id}/file?download=1`}
+                        <div
+                          className="flex items-center gap-0.5"
                           onClick={(e) => e.stopPropagation()}
-                          className="p-1 text-zinc-200 hover:text-white hover:bg-zinc-800/80 rounded transition-colors"
-                          title="Download Unchanged Original File"
                         >
-                          <Download className="w-3.5 h-3.5" />
-                        </a>
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <button
+                              key={star}
+                              type="button"
+                              onClick={() => onQuickRate(img.id, img.rating === star ? 0 : star)}
+                              className="p-0.5 cursor-pointer"
+                            >
+                              <Star
+                                className={`w-3.5 h-3.5 ${
+                                  star <= img.rating
+                                    ? 'fill-amber-400 text-amber-400'
+                                    : 'text-zinc-400 hover:text-amber-300'
+                                }`}
+                              />
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {onReusePrompt && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onReusePrompt(img);
+                              }}
+                              className="p-1 text-zinc-300 hover:text-white hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
+                              title="Reuse prompt & settings in Quick Gen"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          <a
+                            href={`/api/images/${img.id}/file?download=1`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="p-1 text-zinc-200 hover:text-white hover:bg-zinc-800/80 rounded transition-colors"
+                            title="Download Unchanged Original File"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </a>
+                        </div>
                       </div>
                     </div>
+                    <div className="p-2 text-xs flex items-center justify-between gap-1.5">
+                      <span
+                        onClick={() => onOpenImage(img)}
+                        className="truncate text-zinc-200 cursor-pointer hover:text-white"
+                        title={img.filename}
+                      >
+                        {img.filename}
+                      </span>
+                      {isPortrait ? (
+                        <span
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-400 shrink-0"
+                          title="Current Character Portrait"
+                        >
+                          <CheckCircle2 className="w-3 h-3 text-amber-400" />
+                          <span>Portrait</span>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            await handleSetPortrait(img);
+                          }}
+                          className="text-[11px] text-zinc-400 hover:text-amber-400 shrink-0 cursor-pointer transition-colors"
+                          title="Set as Character Portrait"
+                        >
+                          Set Portrait
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="p-2 text-xs flex items-center justify-between gap-1">
-                    <span
-                      onClick={() => onOpenImage(img)}
-                      className="truncate text-zinc-200 cursor-pointer"
-                    >
-                      {img.filename}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await api.updateCharacter(selectedCharacter.id, {
-                          portraitImageId: img.id,
-                        });
-                        await onRefresh();
-                      }}
-                      className="text-[11px] text-indigo-400 hover:text-indigo-300 shrink-0 cursor-pointer"
-                      title="Set as Character Portrait"
-                    >
-                      Set Portrait
-                    </button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

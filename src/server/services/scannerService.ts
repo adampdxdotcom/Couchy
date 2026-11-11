@@ -490,6 +490,10 @@ export async function indexSingleImageFile(
         imageId,
         contentHash
       );
+      db.prepare('UPDATE characters SET portrait_image_id = ? WHERE portrait_content_hash = ?').run(
+        imageId,
+        contentHash
+      );
 
       // Upsert machine-derived metadata
       db.prepare(

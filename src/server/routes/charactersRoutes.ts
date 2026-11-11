@@ -96,7 +96,7 @@ charactersRouter.post('/', (req, res) => {
  * PATCH /api/characters/:id
  * Updates a character profile's name, description, notes, portrait, aliases, tags, or collections.
  */
-charactersRouter.patch('/:id', (req, res) => {
+const updateCharacterHandler = (req: any, res: any) => {
   try {
     const charId = Number(req.params.id);
     const existing = db.prepare('SELECT * FROM characters WHERE id = ?').get(charId) as any;
@@ -120,6 +120,19 @@ charactersRouter.patch('/:id', (req, res) => {
           .prepare('SELECT content_hash FROM images WHERE id = ?')
           .get(portraitId) as { content_hash: string } | undefined;
         portraitHash = img?.content_hash || null;
+
+        // Ensure selected portrait image is confirmed for this character
+        if (portraitHash) {
+          db.prepare(
+            `INSERT INTO image_characters
+              (image_id, image_content_hash, character_id, status, source, confidence)
+             VALUES (?, ?, ?, 'confirmed', 'manual', 1.0)
+             ON CONFLICT(image_content_hash, character_id) DO UPDATE SET
+              status = 'confirmed',
+              image_id = excluded.image_id,
+              updated_at = datetime('now')`
+          ).run(portraitId, portraitHash, charId);
+        }
       }
     }
 
@@ -171,9 +184,11 @@ charactersRouter.patch('/:id', (req, res) => {
     runAssistedCharacterIdentificationForAll();
     res.json({ character: getCharacterProfileById(charId) });
   } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to update character' });
   }
-});
+};
+
+charactersRouter.patch('/:id', updateCharacterHandler);
+charactersRouter.put('/:id', updateCharacterHandler);
 
 /**
  * DELETE /api/characters/:id

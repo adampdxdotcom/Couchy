@@ -120,9 +120,28 @@ function buildCharacterProfile(row: any): CharacterProfile {
     )
     .get(row.id) as any;
 
-  // Fallback portrait to highest-rated confirmed image for this character if none explicitly set
+  // Portrait resolution:
+  // If the user has specifically chosen a portrait, prioritize it and NEVER overwrite with fallback.
   let portraitId = row.resolved_portrait_id || null;
-  if (!portraitId) {
+  const hasExplicitPortrait = Boolean(row.portrait_image_id || row.portrait_content_hash);
+
+  if (hasExplicitPortrait && !portraitId) {
+    if (row.portrait_content_hash) {
+      const imgByHash = db
+        .prepare('SELECT id FROM images WHERE content_hash = ? AND is_missing = 0 LIMIT 1')
+        .get(row.portrait_content_hash) as { id: number } | undefined;
+      if (imgByHash) portraitId = imgByHash.id;
+    }
+    if (!portraitId && row.portrait_image_id) {
+      const imgById = db
+        .prepare('SELECT id FROM images WHERE id = ? LIMIT 1')
+        .get(row.portrait_image_id) as { id: number } | undefined;
+      if (imgById) portraitId = imgById.id;
+    }
+  }
+
+  // Automatic portrait fallback (highest-rated or latest generation) ONLY when NO portrait has ever been chosen
+  if (!portraitId && !hasExplicitPortrait) {
     const fallbackImg = db
       .prepare(
         `
