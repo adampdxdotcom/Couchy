@@ -454,14 +454,15 @@ modelsAndWorkflowsRouter.post('/reproduce/validate', async (req, res) => {
  */
 modelsAndWorkflowsRouter.post('/reproduce/submit', async (req, res) => {
   try {
-    const { imageId, workflowId } = req.body || {};
+    const { imageId, workflowId, positivePrompt } = req.body || {};
     const job = await submitWorkflowReproduction({
       imageId: imageId ? Number(imageId) : undefined,
-      workflowId: Number(workflowId),
+      workflowId: workflowId ? Number(workflowId) : undefined,
+      positivePrompt: typeof positivePrompt === 'string' ? positivePrompt : undefined,
     });
     res.json({ job });
   } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Reproduction submission failed' });
+    res.status(400).json({ error: err?.message || 'Workflow execution failed' });
   }
 });
 

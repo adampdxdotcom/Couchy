@@ -342,7 +342,11 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  submitReproduction: (payload: { imageId?: number; workflowId: number }) =>
+  submitReproduction: (payload: {
+    imageId?: number;
+    workflowId?: number;
+    positivePrompt?: string;
+  }) =>
     requestJson<{ job: any }>('/api/reproduce/submit', {
       method: 'POST',
       body: JSON.stringify(payload),

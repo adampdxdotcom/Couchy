@@ -7,13 +7,12 @@ import {
   Copy,
   Check,
   Play,
-  Bookmark,
+  Loader2,
   Sparkles,
   CheckCircle2,
   XCircle,
   ChevronLeft,
   ChevronRight,
-  AlertTriangle,
   Maximize2,
   Minimize2,
   RefreshCw,
@@ -24,7 +23,6 @@ import { renderDependencyLabel } from './GalleryGridView.tsx';
 import type {
   CharacterProfile,
   ImageRecord,
-  ReproductionValidationResult,
 } from '../shared/types.ts';
 
 interface ImageInspectorDrawerProps {
@@ -42,7 +40,7 @@ interface ImageInspectorDrawerProps {
 }
 
 /**
- * Full-Screen Lightbox & Comprehensive Image Detail Inspector with Workflow Reproduction Wizard.
+ * Full-Screen Lightbox & Comprehensive Image Detail Inspector with Workflow Execution.
  */
 export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   image,
@@ -64,6 +62,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     visualWorkflowJson: string | null;
     apiWorkflowJson: string | null;
   } | null>(null);
+  const [editablePositivePrompt, setEditablePositivePrompt] = useState(image.positivePrompt || '');
   const [notes, setNotes] = useState(image.notes);
   const [newTag, setNewTag] = useState('');
   const [selectedCharId, setSelectedCharId] = useState('');
@@ -72,20 +71,19 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [isRescanningVisualTags, setIsRescanningVisualTags] = useState(false);
 
-  // Workflow Save & Reproduction state
-  const [workflowName, setWorkflowName] = useState('');
-  const [workflowSavedMsg, setWorkflowSavedMsg] = useState<string | null>(null);
-  const [reproValidation, setReproValidation] = useState<ReproductionValidationResult | null>(null);
-  const [isValidatingRepro, setIsValidatingRepro] = useState(false);
+  // Workflow Run state
+  const [isRunningWorkflow, setIsRunningWorkflow] = useState(false);
   const [reproStatusMsg, setReproStatusMsg] = useState<string | null>(null);
+  const [reproStatusIsError, setReproStatusIsError] = useState(false);
   const [showRawWorkflow, setShowRawWorkflow] = useState(false);
 
   const activeImage = detailData?.image || image;
 
   useEffect(() => {
+    setEditablePositivePrompt(image.positivePrompt || '');
     setNotes(image.notes);
-    setReproValidation(null);
     setReproStatusMsg(null);
+    setReproStatusIsError(false);
     api
       .getImageDetail(image.id)
       .then((res) => {
@@ -97,7 +95,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
         });
       })
       .catch(() => {});
-  }, [image.id, image.notes]);
+  }, [image.id, image.notes, image.positivePrompt]);
 
   // Keyboard navigation (Escape, Left, Right)
   useEffect(() => {
@@ -128,44 +126,25 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     onUpdated();
   };
 
-  const handleOpenReproductionCheck = async () => {
-    setIsValidatingRepro(true);
+  const handleRunWorkflow = async () => {
+    setIsRunningWorkflow(true);
     setReproStatusMsg(null);
-    try {
-      const res = await api.validateReproduction({
-        imageId: image.id,
-        workflowId: image.workflowId ?? undefined,
-      });
-      setReproValidation(res);
-    } catch (err: any) {
-      setReproStatusMsg(err.message || 'Validation failed');
-    } finally {
-      setIsValidatingRepro(false);
-    }
-  };
-
-  const handleSubmitReproduction = async () => {
-    if (!reproValidation?.workflowId) return;
+    setReproStatusIsError(false);
     try {
       const res = await api.submitReproduction({
         imageId: image.id,
-        workflowId: reproValidation.workflowId,
+        workflowId: image.workflowId ?? undefined,
+        positivePrompt: editablePositivePrompt,
       });
+      setReproStatusIsError(false);
       setReproStatusMsg(`Submitted to ComfyUI (Prompt ID: ${res.job.comfyui_prompt_id})`);
+      onUpdated();
     } catch (err: any) {
-      setReproStatusMsg(`Error: ${err.message}`);
+      setReproStatusIsError(true);
+      setReproStatusMsg(err.message || 'Failed to run workflow');
+    } finally {
+      setIsRunningWorkflow(false);
     }
-  };
-
-  const handleSaveToWorkflowLibrary = async () => {
-    if (!image.workflowId) return;
-    await api.saveWorkflow({
-      id: image.workflowId,
-      name: workflowName.trim() || `Workflow from ${image.filename}`,
-      description: `Saved from image ${image.filename}`,
-    });
-    setWorkflowSavedMsg('Saved to independent Workflow Library');
-    setTimeout(() => setWorkflowSavedMsg(null), 2500);
   };
 
   return (
@@ -361,122 +340,54 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
         {/* Inspector Body */}
         <div className="p-4 sm:p-5 space-y-6 text-xs min-w-0">
-          {/* Workflow Reproduction & Library Bar */}
-          <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-3 min-w-0">
-            <div className="flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <h4 className="text-sm font-display font-semibold text-zinc-100">
-                  Workflow & Reproducibility
-                </h4>
-                <p className="text-zinc-400 mt-0.5">
-                  Visual Graph: {image.hasVisualWorkflow ? 'Embedded' : 'None'} · API Graph:{' '}
-                  {image.hasApiWorkflow ? 'Embedded' : 'None'}
-                </p>
-              </div>
-              {(image.hasVisualWorkflow || image.hasApiWorkflow) && (
-                <button
-                  type="button"
-                  onClick={handleOpenReproductionCheck}
-                  disabled={isValidatingRepro}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer shrink-0"
-                >
-                  <Play className="w-3.5 h-3.5" />
-                  <span>{isValidatingRepro ? 'Checking...' : 'Reproduce'}</span>
-                </button>
-              )}
-            </div>
-
-            {image.workflowId && (
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
-                <input
-                  type="text"
-                  value={workflowName}
-                  onChange={(e) => setWorkflowName(e.target.value)}
-                  placeholder="Save workflow to library as..."
-                  className="flex-1 min-w-0 w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-200"
-                />
-                <button
-                  type="button"
-                  onClick={handleSaveToWorkflowLibrary}
-                  className="inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded cursor-pointer shrink-0"
-                >
-                  <Bookmark className="w-3.5 h-3.5" />
-                  <span>Save Workflow</span>
-                </button>
-              </div>
-            )}
-            {workflowSavedMsg && <p className="text-emerald-400">{workflowSavedMsg}</p>}
-
-            {/* Reproduction Pre-Flight Summary Box */}
-            {reproValidation && (
-              <div className="mt-3 pt-3 border-t border-zinc-800 space-y-2.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-semibold text-zinc-200">
-                    Reproduction Readiness Summary
-                  </span>
-                  {renderDependencyLabel(reproValidation.readinessStatus)}
-                </div>
-
-                {reproValidation.warnings.map((w, i) => (
-                  <div
-                    key={i}
-                    className="flex items-start gap-2 text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded p-2"
-                  >
-                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                    <span className="break-words min-w-0">{w}</span>
-                  </div>
-                ))}
-
-                {reproValidation.requiredModels.length > 0 && (
-                  <div className="space-y-1">
-                    <span className="text-zinc-400 font-medium">Required Model Dependencies:</span>
-                    {reproValidation.requiredModels.map((rm, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center justify-between gap-2 bg-zinc-900 px-2.5 py-1.5 rounded border border-zinc-800 min-w-0"
-                      >
-                        <span className="font-mono text-zinc-200 truncate">{rm.name}</span>
-                        <span
-                          className={`shrink-0 ${
-                            rm.status === 'exact_match'
-                              ? 'text-emerald-400'
-                              : rm.status === 'available'
-                              ? 'text-sky-400'
-                              : 'text-rose-400'
-                          }`}
-                        >
-                          {rm.status}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="flex items-center justify-end gap-2 pt-1">
-                  <button
-                    type="button"
-                    disabled={!reproValidation.canSubmit}
-                    onClick={handleSubmitReproduction}
-                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-medium rounded cursor-pointer"
-                  >
-                    Submit Workflow to ComfyUI
-                  </button>
-                </div>
-                {reproStatusMsg && (
-                  <p className="text-indigo-300 font-mono break-words">{reproStatusMsg}</p>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Section 1: Character Associations & Assisted Suggestions */}
+          {/* Section 1: Assigned Character */}
           <div className="space-y-2.5 min-w-0">
             <h4 className="text-xs font-display font-semibold text-zinc-200 uppercase tracking-wider">
-              Characters & Assisted Identification
+              Assigned Character
             </h4>
 
             {image.characters.length === 0 ? (
-              <p className="text-zinc-500">No characters linked or suggested for this image.</p>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-0.5">
+                <select
+                  value={selectedCharId}
+                  onChange={(e) => setSelectedCharId(e.target.value)}
+                  className="w-full sm:flex-1 min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+                >
+                  <option value="">Assign Character...</option>
+                  {characters.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex items-center gap-2 w-full sm:w-auto min-w-0">
+                  <input
+                    type="text"
+                    value={charAppearance}
+                    onChange={(e) => setCharAppearance(e.target.value)}
+                    placeholder="Outfit/Variant (optional)"
+                    className="flex-1 sm:w-36 min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!selectedCharId) return;
+                      await api.updateCharacterAssociationStatus({
+                        imageId: image.id,
+                        characterId: Number(selectedCharId),
+                        status: 'confirmed',
+                        appearanceLabel: charAppearance.trim() || undefined,
+                      });
+                      setSelectedCharId('');
+                      setCharAppearance('');
+                      onUpdated();
+                    }}
+                    className="px-3.5 py-2 sm:py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded cursor-pointer shrink-0"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
             ) : (
               <div className="space-y-1.5">
                 {image.characters.map((ch) => (
@@ -568,68 +479,28 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 ))}
               </div>
             )}
-
-            {/* Manual Character Assignment */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
-              <select
-                value={selectedCharId}
-                onChange={(e) => setSelectedCharId(e.target.value)}
-                className="w-full sm:flex-1 min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
-              >
-                <option value="">Assign Character...</option>
-                {characters.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <div className="flex items-center gap-2 w-full sm:w-auto min-w-0">
-                <input
-                  type="text"
-                  value={charAppearance}
-                  onChange={(e) => setCharAppearance(e.target.value)}
-                  placeholder="Outfit/Variant (optional)"
-                  className="flex-1 sm:w-36 min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
-                />
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (!selectedCharId) return;
-                    await api.updateCharacterAssociationStatus({
-                      imageId: image.id,
-                      characterId: Number(selectedCharId),
-                      status: 'confirmed',
-                      appearanceLabel: charAppearance.trim() || undefined,
-                    });
-                    setSelectedCharId('');
-                    setCharAppearance('');
-                    onUpdated();
-                  }}
-                  className="px-3.5 py-2 sm:py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded cursor-pointer shrink-0"
-                >
-                  Add
-                </button>
-              </div>
-            </div>
           </div>
 
           {/* Section 2: Positive & Negative Prompts with Provenance */}
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="font-display font-semibold text-zinc-200 uppercase tracking-wider">
+              <div className="flex items-center justify-between gap-2">
+                <label
+                  htmlFor="inspector-positive-prompt"
+                  className="font-display font-semibold text-zinc-200 uppercase tracking-wider"
+                >
                   Positive Prompt
-                </span>
+                </label>
                 <div className="flex items-center gap-2">
                   {activeImage.provenance.positivePrompt && (
                     <span className="text-[11px] text-zinc-400">
                       Source: {activeImage.provenance.positivePrompt}
                     </span>
                   )}
-                  {image.positivePrompt && (
+                  {editablePositivePrompt.trim().length > 0 && (
                     <button
                       type="button"
-                      onClick={() => copyText(image.positivePrompt!, 'pos')}
+                      onClick={() => copyText(editablePositivePrompt, 'pos')}
                       className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 cursor-pointer"
                     >
                       {copiedField === 'pos' ? (
@@ -642,11 +513,14 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   )}
                 </div>
               </div>
-              <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-zinc-200 leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto">
-                {image.positivePrompt || (
-                  <span className="text-zinc-500 italic">Not embedded in file metadata</span>
-                )}
-              </div>
+              <textarea
+                id="inspector-positive-prompt"
+                rows={4}
+                value={editablePositivePrompt}
+                onChange={(e) => setEditablePositivePrompt(e.target.value)}
+                placeholder="Edit positive prompt to send with Run Workflow..."
+                className="w-full bg-zinc-950 border border-zinc-800 focus:border-indigo-500 focus:outline-none rounded-lg p-3 text-zinc-200 leading-relaxed resize-y"
+              />
             </div>
 
             <div className="space-y-1.5">
@@ -761,6 +635,46 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+
+          {/* Section 5: Workflow & Reproducibility (Moved below Extracted LoRAs) */}
+          <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-2.5 min-w-0">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h4 className="text-sm font-display font-semibold text-zinc-100">
+                  Workflow & Reproducibility
+                </h4>
+                <p className="text-zinc-400 mt-0.5">
+                  Visual Graph: {image.hasVisualWorkflow ? 'Embedded' : 'None'} · API Graph:{' '}
+                  {image.hasApiWorkflow ? 'Embedded' : 'None'}
+                </p>
+              </div>
+              {(image.hasVisualWorkflow || image.hasApiWorkflow) && (
+                <button
+                  type="button"
+                  onClick={handleRunWorkflow}
+                  disabled={isRunningWorkflow}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium rounded-lg cursor-pointer shrink-0 transition-colors"
+                >
+                  {isRunningWorkflow ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Play className="w-3.5 h-3.5" />
+                  )}
+                  <span>{isRunningWorkflow ? 'Running...' : 'Run Workflow'}</span>
+                </button>
+              )}
+            </div>
+
+            {reproStatusMsg && (
+              <p
+                className={`font-mono break-words text-[11px] ${
+                  reproStatusIsError ? 'text-rose-400' : 'text-emerald-400'
+                }`}
+              >
+                {reproStatusMsg}
+              </p>
             )}
           </div>
 

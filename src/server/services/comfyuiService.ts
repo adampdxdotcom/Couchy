@@ -5,6 +5,7 @@ import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import { recomputeImageDependencyStatus } from './scannerService.ts';
 import { COUCHY_COMFY_CLIENT_ID } from './comfyuiLiveMonitor.ts';
+import { autoDetectWorkflowMapping, getWorkflowMapping } from './workflowMapperService.ts';
 import type {
   DependencyStatus,
   ModelInventoryItem,
@@ -480,12 +481,18 @@ export async function validateWorkflowReproduction(params: {
 
 /**
  * Submits a validated workflow to ComfyUI and records a reproduction_jobs entry.
+ * If positivePrompt is provided, injects it into the workflow's positive prompt node
+ * while preserving the original seed and parameters from the embedded metadata.
  */
 export async function submitWorkflowReproduction(params: {
   imageId?: number;
-  workflowId: number;
+  workflowId?: number;
+  positivePrompt?: string;
 }): Promise<any> {
-  const validation = await validateWorkflowReproduction(params);
+  const validation = await validateWorkflowReproduction({
+    imageId: params.imageId,
+    workflowId: params.workflowId,
+  });
   if (!validation.apiPromptPayload) {
     throw new Error('Workflow does not have a valid API prompt graph for execution.');
   }
@@ -495,8 +502,79 @@ export async function submitWorkflowReproduction(params: {
 
   const missingDeps = validation.requiredModels.filter((m) => m.status === 'missing').map((m) => m.name);
   if (missingDeps.length > 0) {
-    throw new Error(`Cannot reproduce workflow with missing models: ${missingDeps.join(', ')}`);
+    throw new Error(`Cannot run workflow with missing models: ${missingDeps.join(', ')}`);
   }
+
+  // Clone the API prompt payload and inject edited positivePrompt if provided
+  const promptPayload: Record<string, any> = JSON.parse(
+    JSON.stringify(validation.apiPromptPayload)
+  );
+
+  if (typeof params.positivePrompt === 'string') {
+    const nextPrompt = params.positivePrompt.trim();
+    let injected = false;
+
+    // 1. Try explicit or auto-detected workflow node mapping
+    if (validation.workflowId) {
+      try {
+        const { mapping } = getWorkflowMapping(validation.workflowId);
+        if (mapping.positivePromptNodeId && promptPayload[mapping.positivePromptNodeId]?.inputs) {
+          const posNodeInputs = promptPayload[mapping.positivePromptNodeId].inputs;
+          const posField =
+            mapping.positivePromptField && mapping.positivePromptField in posNodeInputs
+              ? mapping.positivePromptField
+              : 'value' in posNodeInputs
+              ? 'value'
+              : 'text';
+          posNodeInputs[posField] = nextPrompt;
+          injected = true;
+        }
+      } catch {
+        // fallback below
+      }
+    }
+
+    if (!injected) {
+      const autoMap = autoDetectWorkflowMapping(validation.workflowId || 0, promptPayload);
+      if (autoMap.positivePromptNodeId && promptPayload[autoMap.positivePromptNodeId]?.inputs) {
+        const posNodeInputs = promptPayload[autoMap.positivePromptNodeId].inputs;
+        const posField =
+          autoMap.positivePromptField && autoMap.positivePromptField in posNodeInputs
+            ? autoMap.positivePromptField
+            : 'value' in posNodeInputs
+            ? 'value'
+            : 'text';
+        posNodeInputs[posField] = nextPrompt;
+        injected = true;
+      }
+    }
+
+    // 2. Fallback: match node containing the original extracted positive_prompt from image_metadata
+    if (!injected && params.imageId) {
+      const metaRow = db
+        .prepare('SELECT positive_prompt FROM image_metadata WHERE image_id = ?')
+        .get(params.imageId) as { positive_prompt?: string | null } | undefined;
+      const origPrompt = (metaRow?.positive_prompt || '').trim();
+      if (origPrompt) {
+        for (const node of Object.values(promptPayload)) {
+          if (!node || typeof node !== 'object' || !node.inputs) continue;
+          for (const field of ['value', 'text', 'text_g', 'text_l', 'prompt', 'positive', 'string']) {
+            if (
+              typeof node.inputs[field] === 'string' &&
+              node.inputs[field].trim() === origPrompt
+            ) {
+              node.inputs[field] = nextPrompt;
+              injected = true;
+              break;
+            }
+          }
+          if (injected) break;
+        }
+      }
+    }
+  }
+
+  const resolvedWorkflowId = validation.workflowId || params.workflowId || 0;
 
   const info = db
     .prepare(
@@ -506,7 +584,7 @@ export async function submitWorkflowReproduction(params: {
     )
     .run(
       params.imageId ?? null,
-      params.workflowId,
+      resolvedWorkflowId,
       validation.readinessStatus,
       JSON.stringify(missingDeps)
     );
@@ -517,7 +595,7 @@ export async function submitWorkflowReproduction(params: {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        prompt: validation.apiPromptPayload,
+        prompt: promptPayload,
         client_id: COUCHY_COMFY_CLIENT_ID,
       }),
     });
