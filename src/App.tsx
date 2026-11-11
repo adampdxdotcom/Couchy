@@ -241,6 +241,8 @@ export default function App() {
   }, [loadMetadataAndEntities, loadFilteredImages, filters]);
 
   // Poll ComfyUI live queue & job progress percentage
+  const [hasUnseenCompletion, setHasUnseenCompletion] = useState<boolean>(false);
+
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -258,7 +260,13 @@ export default function App() {
         }
 
         const isBusy = status.runningCount > 0 || status.queuedCount > 0;
-        if (prevBusyRef.current && !isBusy) {
+        if (isBusy) {
+          setHasUnseenCompletion(false);
+        } else if (prevBusyRef.current && !isBusy) {
+          // Run just completed: if the user is not actively viewing the tab, show "Couchy (Done)"
+          if (document.hidden || !document.hasFocus()) {
+            setHasUnseenCompletion(true);
+          }
           refreshAll();
         }
         prevBusyRef.current = isBusy;
@@ -277,6 +285,37 @@ export default function App() {
       if (timer) clearTimeout(timer);
     };
   }, [pushToast, refreshAll]);
+
+  // Clear "Couchy (Done)" immediately when the user focuses or makes the tab visible
+  useEffect(() => {
+    const clearIfVisible = () => {
+      if (!document.hidden) {
+        setHasUnseenCompletion(false);
+      }
+    };
+    window.addEventListener('focus', clearIfVisible);
+    document.addEventListener('visibilitychange', clearIfVisible);
+    return () => {
+      window.removeEventListener('focus', clearIfVisible);
+      document.removeEventListener('visibilitychange', clearIfVisible);
+    };
+  }, []);
+
+  // Synchronize browser tab title with live generation progress and unseen completion state
+  useEffect(() => {
+    const isBusy = comfyStatus.runningCount > 0 || comfyStatus.queuedCount > 0;
+    if (isBusy) {
+      const total =
+        comfyStatus.totalRunJobs ?? comfyStatus.runningCount + comfyStatus.queuedCount;
+      const current = comfyStatus.currentJobIndex ?? 1;
+      const pct = comfyStatus.progressPercent ?? 0;
+      document.title = `Couchy (${current} of ${total} - ${pct}%)`;
+    } else if (hasUnseenCompletion) {
+      document.title = 'Couchy (Done)';
+    } else {
+      document.title = 'Couchy';
+    }
+  }, [comfyStatus, hasUnseenCompletion]);
 
   // Poll LM Studio connection every 15s; alert on state transitions after initial check
   useEffect(() => {

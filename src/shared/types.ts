@@ -424,6 +424,8 @@ export interface ComfyUiLiveStatus {
   step: number | null;
   maxSteps: number | null;
   currentNode: string | null;
+  currentJobIndex?: number | null;
+  totalRunJobs?: number | null;
   lastIndexedAt?: number;
 }
 

@@ -241,10 +241,10 @@ async function getOrCreateSession(device: 'cpu' | 'gpu'): Promise<ort.InferenceS
 }
 
 /**
- * Preprocesses an image file into a [1, 448, 448, 3] Float32 BGR tensor expected by WD14 v3.
+ * Preprocesses an image file path or Buffer into a [1, 448, 448, 3] Float32 BGR tensor expected by WD14 v3.
  */
-async function preprocessImageToTensor(imagePath: string): Promise<ort.Tensor> {
-  const { data } = await sharp(imagePath)
+async function preprocessImageToTensor(imageInput: string | Buffer): Promise<ort.Tensor> {
+  const { data } = await sharp(imageInput)
     .flatten({ background: { r: 255, g: 255, b: 255 } })
     .resize(INPUT_SIZE, INPUT_SIZE, {
       fit: 'contain',
@@ -269,6 +269,52 @@ async function preprocessImageToTensor(imagePath: string): Promise<ort.Tensor> {
   }
 
   return new ort.Tensor('float32', floatData, [1, INPUT_SIZE, INPUT_SIZE, 3]);
+}
+
+/**
+ * Runs WD14 v3 ONNX inference directly on an in-memory image Buffer (for on-demand image interrogation)
+ * without requiring the image to be indexed in the gallery database.
+ */
+export async function interrogateImageBufferWithWd14(
+  imageBuffer: Buffer,
+  customThreshold?: number
+): Promise<VisualTagItem[]> {
+  if (!isTaggerModelDownloaded()) {
+    const ok = await ensureTaggerModelDownloaded();
+    if (!ok) {
+      throw new Error(downloadError || 'Failed to download local WD14 ONNX tagger model.');
+    }
+  }
+
+  const settings = getTaggerSettings();
+  const threshold = customThreshold ?? Math.min(settings.threshold, 0.3);
+
+  const session = await getOrCreateSession(settings.device);
+  const tagsList = loadTagDefinitions();
+  const inputTensor = await preprocessImageToTensor(imageBuffer);
+
+  const inputName = session.inputNames[0];
+  const outputName = session.outputNames[0];
+  const results = await session.run({ [inputName]: inputTensor });
+  const probs = results[outputName].data as Float32Array;
+
+  const matched: VisualTagItem[] = [];
+  const limit = Math.min(probs.length, tagsList.length);
+
+  for (let i = 0; i < limit; i++) {
+    const def = tagsList[i];
+    if (def.category === 9) continue; // skip general/sensitive/explicit meta-rating category
+    const score = probs[i];
+    if (score >= threshold) {
+      matched.push({
+        tag: def.name.replace(/_/g, ' '),
+        confidence: Math.round(score * 1000) / 1000,
+      });
+    }
+  }
+
+  matched.sort((a, b) => b.confidence - a.confidence);
+  return matched.slice(0, 45);
 }
 
 /**

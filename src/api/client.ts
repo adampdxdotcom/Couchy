@@ -466,6 +466,17 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  interrogateImage: (payload: { imageBase64DataUrl: string; characterName?: string }) =>
+    requestJson<{
+      prompt: string;
+      pipelineUsed: 'vision' | 'wd14_text';
+      tags: string[];
+      modelUsed: string;
+    }>('/api/generation/interrogate-image', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   listGenerationBatches: () =>
     requestJson<{ items: GenerationBatchRecord[] }>('/api/generation/batches'),
 

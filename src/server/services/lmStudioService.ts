@@ -2,6 +2,7 @@ import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import type { LmStudioGuidingTemplate, LmStudioStatus } from '../../shared/types.ts';
 import { interpolatePrompt } from '../../shared/utils.ts';
+import { interrogateImageBufferWithWd14 } from './visualTaggerService.ts';
 
 function mapGuidingRow(row: any): LmStudioGuidingTemplate {
   return {
@@ -456,3 +457,197 @@ Rules:
     };
   }
 }
+
+/**
+ * Heuristic check for whether a model identifier in LM Studio is likely a Vision-Language Model (VLM).
+ */
+function isLikelyVisionModelId(modelId: string): boolean {
+  return /(?:\b|_|-)(?:vl|vision|llava|joycaption|pixtral|minicpm|moondream|florence|internvl|molmo|bakllava|cogvlm|idefics|paligemma|gemma-?3|qwen[\w.-]*vl)(?:\b|_|-)/i.test(
+    modelId
+  );
+}
+
+/**
+ * Hybrid Image-to-Prompt Interrogation Pipeline:
+ * 1. Verifies LM Studio is online.
+ * 2. If a Vision-capable model is loaded in LM Studio, sends the downscaled 1MP image directly to `/v1/chat/completions`.
+ * 3. If a Text-only model is loaded (or if the Vision call is unsupported/refused), runs the image through
+ *    local uncensored WD14 v3 ONNX (`interrogateImageBufferWithWd14`) and passes the extracted tags to the LM Studio
+ *    text model to synthesize a detailed generation prompt.
+ */
+export async function interrogateImageToPrompt(params: {
+  imageBase64DataUrl: string;
+  characterName?: string;
+}): Promise<{
+  prompt: string;
+  pipelineUsed: 'vision' | 'wd14_text';
+  tags: string[];
+  modelUsed: string;
+}> {
+  const status = await checkLmStudioStatus();
+  if (!status.online) {
+    throw new Error('LM Studio is offline. Connect LM Studio to interrogate images.');
+  }
+
+  const rawDataUrl = (params.imageBase64DataUrl || '').trim();
+  const base64Match = rawDataUrl.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+  const base64Payload = base64Match ? base64Match[1] : rawDataUrl;
+  if (!base64Payload) {
+    throw new Error('Invalid or empty image payload.');
+  }
+
+  const imageBuffer = Buffer.from(base64Payload, 'base64');
+  const fullDataUrl = base64Match ? rawDataUrl : `data:image/jpeg;base64,${base64Payload}`;
+
+  const settings = getLmStudioSettings();
+  const baseUrl = settings.baseUrl.replace(/\/+$/, '');
+  const chatEndpoint = baseUrl.endsWith('/v1')
+    ? `${baseUrl}/chat/completions`
+    : `${baseUrl}/v1/chat/completions`;
+  const modelToUse = status.selectedModel || settings.selectedModel || 'local-model';
+
+  // Extract local WD14 v3 visual/NSFW tags so they are available both as supplemental context and for text-model synthesis
+  let extractedTags: string[] = [];
+  try {
+    const tagItems = await interrogateImageBufferWithWd14(imageBuffer, 0.28);
+    extractedTags = tagItems.map((t) => t.tag);
+  } catch {
+    // Continue even if WD14 model isn't ready yet and a Vision model is active
+  }
+
+  const systemInstruction = `You are an uncensored, clinical Stable Diffusion and Flux image captioning specialist.
+Describe the subject, appearance, clothing or nudity/anatomical details (including explicit or NSFW elements if present), pose, camera framing, setting, lighting, and artistic style in one cohesive, vivid image generation prompt.
+Rules:
+- Refer to the subject neutrally ("the subject", "a woman", "a man", "they") without inventing personal names.
+- Never mention LoRA or checkpoint filenames.
+- Output ONLY the final image generation prompt text with no preamble, no quotes, and no markdown.`;
+
+  // Try Vision path if model ID looks like a VLM or if we want to attempt multimodal completion first
+  const tryVisionFirst = isLikelyVisionModelId(modelToUse) || extractedTags.length === 0;
+
+  if (tryVisionFirst) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 35000);
+
+      const tagHintText =
+        extractedTags.length > 0
+          ? `\nReference visual tags detected in image: ${extractedTags.slice(0, 30).join(', ')}.`
+          : '';
+
+      const visionRes = await fetch(chatEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: modelToUse,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: `Analyze this image and write a detailed, accurate image generation prompt capturing the subject, pose, clothing/anatomy, framing, lighting, and environment.${tagHintText}`,
+                },
+                {
+                  type: 'image_url',
+                  image_url: { url: fullDataUrl },
+                },
+              ],
+            },
+          ],
+          temperature: 0.4,
+          max_tokens: 500,
+        }),
+      });
+      clearTimeout(timer);
+
+      if (visionRes.ok) {
+        const data = (await visionRes.json()) as any;
+        const rawText: string = data?.choices?.[0]?.message?.content?.trim() || '';
+        const cleaned = rawText
+          .replace(/<think>[\s\S]*?<\/think>/gi, '')
+          .replace(/^["']|["']$/g, '')
+          .trim();
+
+        const looksLikeRefusal =
+          /cannot see|can't see|unable to view|as a text-based|i cannot fulfill|i'm sorry, but i can't/i.test(
+            cleaned
+          );
+
+        if (cleaned.length > 10 && !looksLikeRefusal) {
+          return {
+            prompt: sanitizeAgentPrompt(cleaned, params.characterName),
+            pipelineUsed: 'vision',
+            tags: extractedTags,
+            modelUsed: data?.model || modelToUse,
+          };
+        }
+      }
+    } catch {
+      // Fall through to WD14 + Text LLM path below
+    }
+  }
+
+  // Path 2: WD14 Visual/NSFW Tags -> LM Studio Text Model
+  if (extractedTags.length === 0) {
+    const tagItems = await interrogateImageBufferWithWd14(imageBuffer, 0.25);
+    extractedTags = tagItems.map((t) => t.tag);
+  }
+
+  if (extractedTags.length === 0) {
+    throw new Error('Could not extract visual features from the uploaded image.');
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+  try {
+    const textRes = await fetch(chatEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: modelToUse,
+        messages: [
+          { role: 'system', content: systemInstruction },
+          {
+            role: 'user',
+            content: `Convert the following ordered visual tags (extracted from an image, ordered from highest confidence to lowest) into a single cohesive, descriptive image generation prompt that preserves all subject, pose, clothing/anatomical/NSFW, lighting, and setting details:\n\nVisual Tags: ${extractedTags.join(', ')}\n\nOutput ONLY the prompt text:`,
+          },
+        ],
+        temperature: 0.5,
+        max_tokens: 500,
+      }),
+    });
+    clearTimeout(timer);
+
+    if (!textRes.ok) {
+      const errBody = await textRes.text();
+      throw new Error(`LM Studio returned HTTP ${textRes.status}: ${errBody}`);
+    }
+
+    const data = (await textRes.json()) as any;
+    const rawContent: string = data?.choices?.[0]?.message?.content?.trim() || '';
+    const cleaned = rawContent
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/^["']|["']$/g, '')
+      .trim();
+
+    // If the text LLM refused or returned empty, fall back to the clean comma-separated WD14 tags
+    const finalPrompt =
+      cleaned.length > 10 && !/i cannot fulfill|i'm sorry, but i can't/i.test(cleaned)
+        ? sanitizeAgentPrompt(cleaned, params.characterName)
+        : extractedTags.join(', ');
+
+    return {
+      prompt: finalPrompt,
+      pipelineUsed: 'wd14_text',
+      tags: extractedTags,
+      modelUsed: data?.model || modelToUse,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+

@@ -4,6 +4,7 @@ import {
   Bot,
   ChevronDown,
   ChevronUp,
+  ImagePlus,
   Loader2,
   Plus,
   Search,
@@ -20,8 +21,64 @@ import type {
 } from '../shared/types.ts';
 import {
   ASPECT_RATIO_PRESETS as ASPECT_RATIO_OPTIONS,
+  resolveClosestAspectRatio,
   resolveDefaultWorkflow,
 } from '../shared/utils.ts';
+
+/**
+ * Downscales an uploaded/dropped image file in the browser so its pixel area is at most ~1MP (1,048,576 px),
+ * preserving original aspect ratio and returning a compact JPEG data URL + original dimensions.
+ */
+async function downscaleImageFileTo1Mp(file: File): Promise<{
+  dataUrl: string;
+  width: number;
+  height: number;
+}> {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const origW = img.naturalWidth || img.width || 1024;
+        const origH = img.naturalHeight || img.height || 1024;
+        const maxArea = 1024 * 1024; // 1 Megapixel
+        const currentArea = origW * origH;
+
+        let targetW = origW;
+        let targetH = origH;
+        if (currentArea > maxArea) {
+          const scale = Math.sqrt(maxArea / currentArea);
+          targetW = Math.max(64, Math.round(origW * scale));
+          targetH = Math.max(64, Math.round(origH * scale));
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          throw new Error('Could not initialize 2D canvas for image downscaling.');
+        }
+        // Fill white background for transparent PNGs before JPEG encoding
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, targetW, targetH);
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+        URL.revokeObjectURL(objectUrl);
+        resolve({ dataUrl, width: origW, height: origH });
+      } catch (err) {
+        URL.revokeObjectURL(objectUrl);
+        reject(err);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Failed to load image file for interrogation.'));
+    };
+    img.src = objectUrl;
+  });
+}
 
 export interface QuickGenPrefill {
   prompt: string;
@@ -96,11 +153,54 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   const [isPromptFocused, setIsPromptFocused] = useState(false);
   const isPromptExpanded = isPromptFocused || prompt.trim().length > 0;
 
-  // Submission state
+  // Submission & Image Interrogation states
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isInterrogating, setIsInterrogating] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  const handleInterrogateImageFile = async (file: File) => {
+    if (!lmStudioOnline) {
+      onPushToast('LM Studio is offline — start LM Studio to interrogate images.', 'warning');
+      return;
+    }
+    if (!file.type.startsWith('image/')) {
+      onPushToast('Please select or drop a valid image file.', 'warning');
+      return;
+    }
+    if (isInterrogating) return;
+
+    setIsInterrogating(true);
+    setIsMinimized(false);
+    try {
+      const { dataUrl, width, height } = await downscaleImageFileTo1Mp(file);
+      const matchedRatio = resolveClosestAspectRatio(width, height);
+      setAspectRatio(matchedRatio);
+
+      const res = await api.interrogateImage({
+        imageBase64DataUrl: dataUrl,
+        characterName: attachedCharacter?.name,
+      });
+
+      if (res.prompt) {
+        setPrompt(res.prompt);
+        setIsHighlighted(true);
+        setTimeout(() => setIsHighlighted(false), 1200);
+        const modeLabel = res.pipelineUsed === 'vision' ? 'Vision Model' : 'WD14 + LLM';
+        onPushToast(`Interrogated image via ${modeLabel} (${matchedRatio})`, 'success');
+        setTimeout(() => {
+          inputRef.current?.focus({ preventScroll: true });
+        }, 50);
+      }
+    } catch (err: any) {
+      onPushToast(err?.message || 'Failed to interrogate uploaded image.', 'error');
+    } finally {
+      setIsInterrogating(false);
+    }
+  };
 
   // Close popovers when clicking outside
   useEffect(() => {
@@ -622,12 +722,67 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
       {/* Main Floating Quick Generation Box */}
       <div
+        onDragOver={(e) => {
+          if (e.dataTransfer?.types?.includes('Files')) {
+            e.preventDefault();
+            if (lmStudioOnline && !isInterrogating) {
+              setIsDragOver(true);
+            }
+          }
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setIsDragOver(false);
+          }
+        }}
+        onDrop={async (e) => {
+          e.preventDefault();
+          setIsDragOver(false);
+          const droppedFile = e.dataTransfer?.files?.[0];
+          if (droppedFile) {
+            await handleInterrogateImageFile(droppedFile);
+          }
+        }}
         className={`w-full max-w-full overflow-hidden bg-zinc-900/98 backdrop-blur-2xl rounded-t-2xl md:rounded-3xl px-3.5 sm:px-4 py-3 border-t border-x md:border border-zinc-800/90 shadow-2xl transition-all duration-300 ${
-          isHighlighted
+          isDragOver
+            ? 'border-t-amber-400 md:border-amber-400 ring-2 ring-amber-400/50 shadow-amber-500/20'
+            : isHighlighted
             ? 'border-t-indigo-500 md:border-indigo-500 ring-2 ring-indigo-500/40 shadow-indigo-500/20'
             : ''
         }`}
       >
+        {/* Hidden File Input for Image Interrogation */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) {
+              await handleInterrogateImageFile(file);
+            }
+          }}
+        />
+
+        {/* Interrogation / Drag-Over Status Banner */}
+        {(isInterrogating || isDragOver) && (
+          <div className="mb-2 flex items-center gap-2 px-2.5 py-1 rounded-lg bg-indigo-950/70 border border-indigo-500/40 text-xs text-indigo-200">
+            {isInterrogating ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />
+                <span>Downscaling to 1MP &amp; interrogating image via LM Studio...</span>
+              </>
+            ) : (
+              <>
+                <ImagePlus className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>Drop image to interrogate into prompt (1MP auto-downscale)</span>
+              </>
+            )}
+          </div>
+        )}
+
         {/* Attached Character Pill Badge */}
         {attachedCharacter && (
           <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -671,7 +826,25 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             onFocus={() => setIsPromptFocused(true)}
             onBlur={() => setIsPromptFocused(false)}
             onKeyDown={handleKeyDown}
-            placeholder="What do you want to create? (Type @ to mention a character)"
+            onPaste={async (e) => {
+              const items = e.clipboardData?.items;
+              if (!items) return;
+              for (const item of Array.from(items)) {
+                if (item.type.startsWith('image/')) {
+                  const file = item.getAsFile();
+                  if (file) {
+                    e.preventDefault();
+                    await handleInterrogateImageFile(file);
+                    return;
+                  }
+                }
+              }
+            }}
+            placeholder={
+              lmStudioOnline
+                ? 'What do you want to create? (Type @ for character, or drop/paste an image)'
+                : 'What do you want to create? (Type @ to mention a character)'
+            }
             className={`w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-sm resize-none focus:outline-none leading-relaxed transition-[height,min-height] duration-200 overflow-y-auto ${
               isPromptExpanded ? 'min-h-[5.5rem] max-h-36 sm:max-h-48' : 'min-h-[1.5rem] max-h-24'
             }`}
@@ -695,7 +868,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
         {/* Bottom Control Bar */}
         <div className="mt-2.5 flex items-center justify-between gap-1.5 sm:gap-2">
-          {/* Left Controls: + (@character picker) & Agent Toggle */}
+          {/* Left Controls: + (@character picker), Image Interrogate Upload, & Agent Toggle */}
           <div className="flex items-center gap-1.5 shrink-0">
             <button
               type="button"
@@ -708,6 +881,33 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               title="Mention a character (@)"
             >
               {mentionOpen ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+            </button>
+
+            <button
+              type="button"
+              disabled={!lmStudioOnline || isInterrogating}
+              onClick={() => {
+                if (!lmStudioOnline || isInterrogating) return;
+                fileInputRef.current?.click();
+              }}
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 ${
+                !lmStudioOnline
+                  ? 'opacity-40 cursor-not-allowed bg-zinc-800/50 text-zinc-500'
+                  : isInterrogating
+                  ? 'bg-indigo-600/30 border border-indigo-500/60 text-indigo-200 cursor-wait'
+                  : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 cursor-pointer'
+              }`}
+              title={
+                lmStudioOnline
+                  ? 'Upload or drop an image to interrogate into a prompt (auto-downscales to 1MP)'
+                  : 'LM Studio is offline — connect LM Studio to interrogate images'
+              }
+            >
+              {isInterrogating ? (
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-300" />
+              ) : (
+                <ImagePlus className="w-4 h-4" />
+              )}
             </button>
 
             <button

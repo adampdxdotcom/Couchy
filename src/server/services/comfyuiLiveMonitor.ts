@@ -11,6 +11,8 @@ interface LiveMonitorState {
   step: number | null;
   maxSteps: number | null;
   currentNode: string | null;
+  runTotalJobs: number;
+  prevTotalRemaining: number;
   lastQueueFetchMs: number;
   lastIndexedAt: number;
 }
@@ -23,9 +25,29 @@ const state: LiveMonitorState = {
   step: null,
   maxSteps: null,
   currentNode: null,
+  runTotalJobs: 0,
+  prevTotalRemaining: 0,
   lastQueueFetchMs: 0,
   lastIndexedAt: Date.now(),
 };
+
+/**
+ * Updates active run job total and remaining counts so current image index (1 of X) stays accurate.
+ */
+function syncRunJobCounts(totalRemaining: number): void {
+  if (totalRemaining <= 0) {
+    state.runTotalJobs = 0;
+    state.prevTotalRemaining = 0;
+    return;
+  }
+  if (state.runTotalJobs === 0) {
+    state.runTotalJobs = totalRemaining;
+  } else if (totalRemaining > state.prevTotalRemaining) {
+    state.runTotalJobs += totalRemaining - state.prevTotalRemaining;
+  }
+  state.runTotalJobs = Math.max(state.runTotalJobs, totalRemaining);
+  state.prevTotalRemaining = totalRemaining;
+}
 
 /**
  * Signals that one or more newly generated images were indexed and committed to SQLite,
@@ -106,6 +128,7 @@ export function ensureComfyUiWsMonitor(): void {
           state.online = true;
         } else if (type === 'status' && data?.status?.exec_info) {
           const totalRemaining = Number(data.status.exec_info.queue_remaining ?? 0);
+          syncRunJobCounts(totalRemaining);
           if (totalRemaining === 0) {
             state.runningCount = 0;
             state.queuedCount = 0;
@@ -165,6 +188,7 @@ export async function getComfyUiLiveStatus(): Promise<ComfyUiLiveStatus> {
         state.online = true;
         state.runningCount = running;
         state.queuedCount = pending;
+        syncRunJobCounts(running + pending);
 
         if (running === 0) {
           state.progressPercent = null;
@@ -176,6 +200,7 @@ export async function getComfyUiLiveStatus(): Promise<ComfyUiLiveStatus> {
         state.online = false;
         state.runningCount = 0;
         state.queuedCount = 0;
+        syncRunJobCounts(0);
       }
     } catch {
       state.online = false;
@@ -185,8 +210,16 @@ export async function getComfyUiLiveStatus(): Promise<ComfyUiLiveStatus> {
       state.step = null;
       state.maxSteps = null;
       state.currentNode = null;
+      syncRunJobCounts(0);
     }
   }
+
+  const totalRemaining = state.runningCount + state.queuedCount;
+  const totalRunJobs = totalRemaining > 0 ? Math.max(state.runTotalJobs, totalRemaining) : null;
+  const currentJobIndex =
+    totalRemaining > 0 && totalRunJobs !== null
+      ? Math.min(totalRunJobs, Math.max(1, totalRunJobs - totalRemaining + 1))
+      : null;
 
   return {
     online: state.online,
@@ -196,6 +229,8 @@ export async function getComfyUiLiveStatus(): Promise<ComfyUiLiveStatus> {
     step: state.runningCount > 0 ? state.step : null,
     maxSteps: state.runningCount > 0 ? state.maxSteps : null,
     currentNode: state.runningCount > 0 ? state.currentNode : null,
+    currentJobIndex,
+    totalRunJobs,
     lastIndexedAt: state.lastIndexedAt,
   };
 }

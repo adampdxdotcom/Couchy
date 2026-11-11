@@ -13,6 +13,7 @@ import {
   checkLmStudioStatus,
   deleteLmStudioGuidingTemplate,
   generatePhotoSetPromptsWithAgent,
+  interrogateImageToPrompt,
   listLmStudioGuidingTemplates,
   saveLmStudioGuidingTemplate,
   updateLmStudioSettings,
@@ -252,6 +253,26 @@ generationRouter.post('/lmstudio/generate-prompts', async (req, res) => {
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/generation/interrogate-image
+ * Runs hybrid Vision VLM or WD14 + Text LLM interrogation on a downscaled ~1MP image.
+ */
+generationRouter.post('/interrogate-image', async (req, res) => {
+  try {
+    const { imageBase64DataUrl, characterName } = req.body || {};
+    if (!imageBase64DataUrl || typeof imageBase64DataUrl !== 'string') {
+      return res.status(400).json({ error: 'Please provide an image to interrogate.' });
+    }
+    const result = await interrogateImageToPrompt({
+      imageBase64DataUrl,
+      characterName: characterName ? String(characterName) : undefined,
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to interrogate image.' });
   }
 });
 
