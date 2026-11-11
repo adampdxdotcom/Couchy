@@ -361,7 +361,16 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
         );
       }
 
+      // Reset prompt, character, and all buttons (agent, aspect ratio, batch count, popovers)
       setPrompt('');
+      setAttachedCharacter(null);
+      setAgentEnabled(false);
+      setAspectRatio('2:3 (Portrait Photo)');
+      setBatchCount(1);
+      setMentionOpen(false);
+      setShowSettingsMenu(false);
+      setMentionTriggerRange(null);
+      setMentionQuery('');
       setIsPromptFocused(false);
       inputRef.current?.blur();
       await onRefreshAll();

@@ -15,6 +15,8 @@ import {
   Square,
   Star,
   RotateCcw,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import type {
@@ -56,6 +58,11 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   const [selectedCharId, setSelectedCharId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'images' | 'rating' | 'recent'>('images');
+  const [isHighestRatedExpanded, setIsHighestRatedExpanded] = useState(false);
+
+  useEffect(() => {
+    setIsHighestRatedExpanded(false);
+  }, [selectedCharId]);
 
   // Create Character Modal State
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -156,10 +163,17 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
         (c) => c.characterId === selectedCharacter.id && c.status === 'suggested'
       )
     );
-    const highestRatedImages = [...confirmedImages]
+    const fiveStarImages = confirmedImages.filter((img) => img.rating === 5);
+    const fourStarOrHigher = [...confirmedImages]
       .filter((i) => i.rating >= 4)
-      .sort((a, b) => b.rating - a.rating)
-      .slice(0, 6);
+      .sort((a, b) => b.rating - a.rating);
+
+    // Target pool for Highest Rated: 5-star photos if any exist, otherwise 4+ star photos
+    const targetHighestRatedPool = fiveStarImages.length > 0 ? fiveStarImages : fourStarOrHigher;
+    const canExpandHighestRated = targetHighestRatedPool.length > 6;
+    const displayedHighestRated = isHighestRatedExpanded
+      ? targetHighestRatedPool
+      : targetHighestRatedPool.slice(0, 6);
 
     return (
       <div className="px-3.5 sm:px-6 py-4 sm:py-6 w-full max-w-7xl mx-auto space-y-6 overflow-x-hidden">
@@ -750,13 +764,39 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
         )}
 
         {/* Highest-Rated Character Works */}
-        {highestRatedImages.length > 0 && (
+        {displayedHighestRated.length > 0 && (
           <div className="space-y-3">
-            <h3 className="text-sm font-display font-semibold text-zinc-100">
-              Highest-Rated Generations
-            </h3>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h3 className="text-sm font-display font-semibold text-zinc-100">
+                Highest-Rated Generations
+              </h3>
+              {canExpandHighestRated && (
+                <button
+                  type="button"
+                  onClick={() => setIsHighestRatedExpanded((prev) => !prev)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg bg-zinc-900 hover:bg-zinc-800 text-indigo-400 hover:text-indigo-300 border border-zinc-800 hover:border-zinc-700 transition-colors cursor-pointer select-none"
+                  title={
+                    isHighestRatedExpanded
+                      ? 'Show 1 row only'
+                      : `Show all ${targetHighestRatedPool.length} 5-star photos`
+                  }
+                >
+                  {isHighestRatedExpanded ? (
+                    <>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                      <span>Collapse</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                      <span>Expand ({targetHighestRatedPool.length})</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              {highestRatedImages.map((img) => (
+              {displayedHighestRated.map((img) => (
                 <div
                   key={img.id}
                   className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden group flex flex-col justify-between"
