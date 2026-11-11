@@ -41,6 +41,11 @@ systemRouter.get('/health', (_req, res) => {
     .get() as { value: string } | undefined;
   const quickGenBoxEnabled = quickGenRow ? quickGenRow.value === '1' : true;
 
+  const saveUploadedRow = db
+    .prepare("SELECT value FROM app_settings WHERE key = 'save_uploaded_prompt_images'")
+    .get() as { value: string } | undefined;
+  const saveUploadedPromptImages = saveUploadedRow ? saveUploadedRow.value === '1' : false;
+
   res.json({
     status: 'ok',
     counts: {
@@ -57,10 +62,12 @@ systemRouter.get('/health', (_req, res) => {
       thumbnailPath: appConfig.thumbnailPath,
       localModelsDir: appConfig.localModelsDir,
       downloadsDir: appConfig.downloadsDir,
+      uploadedImagesDir: appConfig.uploadedImagesDir,
       hasCivitaiKey: Boolean(appConfig.civitaiApiKey),
       hasHfToken: Boolean(appConfig.hfApiToken),
       scheduledBackupHours: appConfig.scheduledBackupHours,
       quickGenBoxEnabled,
+      saveUploadedPromptImages,
     },
     comfyuiInstance: comfyRow || null,
     activeScan: getActiveScanStatus(),
@@ -81,6 +88,7 @@ systemRouter.patch('/config', (req, res) => {
       downloadsDir,
       scheduledBackupHours,
       quickGenBoxEnabled,
+      saveUploadedPromptImages,
     } = req.body || {};
 
     if (comfyuiUrl && String(comfyuiUrl).trim()) {
@@ -114,6 +122,13 @@ systemRouter.patch('/config', (req, res) => {
          VALUES ('quick_gen_box_enabled', ?, datetime('now'))
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
       ).run(quickGenBoxEnabled ? '1' : '0');
+    }
+    if (saveUploadedPromptImages !== undefined) {
+      db.prepare(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('save_uploaded_prompt_images', ?, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+      ).run(saveUploadedPromptImages ? '1' : '0');
     }
 
     res.json({ ok: true, config: appConfig });
