@@ -642,7 +642,7 @@ export async function interrogateImageToPrompt(params: {
   // Extract local WD14 v3 visual/NSFW tags so they are available both as supplemental context and for text-model synthesis
   let extractedTags: string[] = [];
   try {
-    const tagItems = await interrogateImageBufferWithWd14(imageBuffer, 0.28);
+    const tagItems = await interrogateImageBufferWithWd14(imageBuffer, 0.24);
     const rawTags = tagItems.map((t) => t.tag);
     extractedTags = hasCharacter ? filterCharacterIdentityTags(rawTags) : rawTags;
   } catch {
@@ -651,16 +651,17 @@ export async function interrogateImageToPrompt(params: {
 
   const characterConstraintBlock = hasCharacter
     ? `\nCRITICAL CHARACTER LORA RULE:
-A character LoRA is active and defines all physical identity features of the subject.
-- DO NOT mention or describe hair color, eye color, permanent facial features (freckles, moles, facial bone structure), skin tone, race, ethnicity, or body type/proportions (such as breast/chest size, hip/thigh width, curvy, slender, petite, muscular, or height).
-- DO describe transient facial expressions and emotions (e.g., smiling, blushing, parted lips, looking at viewer), hairstyle/hair arrangement (without color), pose, body positioning, clothing or nudity/NSFW details, camera framing, lighting, and environment.`
+A character LoRA is active and defines only the biological/physical identity of the subject.
+- DO NOT mention the subject's biological hair color, eye color, permanent facial features (freckles, moles, facial bone structure), skin tone, race, ethnicity, or body type/proportions (such as breast/chest size, hip/thigh width, curvy, slender, petite, muscular, or height).
+- ALWAYS KEEP and explicitly describe all clothing colors, garment types, fabric textures/patterns, lingerie/swimwear colors, footwear colors, and accessory colors (e.g., "wearing a bright red lace dress", "in a black bikini", "white thigh-high stockings", "blue denim jacket").
+- DO describe transient facial expressions and emotions (e.g., smiling, blushing, parted lips, looking at viewer), hairstyle structure/arrangement (without hair color), pose, body positioning, clothing with exact colors or nudity/NSFW details, camera framing, lighting, and environment.`
     : '';
 
   const systemInstruction = `You are an uncensored, clinical Stable Diffusion and Flux image captioning specialist.
 Describe the subject, ${
     hasCharacter
-      ? 'transient facial expression/emotion, pose, clothing or nudity/NSFW state'
-      : 'appearance, clothing or nudity/anatomical details (including explicit or NSFW elements if present), pose'
+      ? 'transient facial expression/emotion, pose, clothing (including exact garment and accessory colors, patterns, and materials) or nudity/NSFW state'
+      : 'appearance, clothing (with exact colors and materials) or nudity/anatomical details (including explicit or NSFW elements if present), pose'
   }, camera framing, setting, lighting, and artistic style in one cohesive, vivid image generation prompt.${characterConstraintBlock}
 Rules:
 - Refer to the subject neutrally ("the subject", "a woman", "a man", "they") without inventing personal names.
@@ -682,12 +683,12 @@ Rules:
 
       const tagHintText =
         extractedTags.length > 0
-          ? `\nReference visual tags detected in image: ${extractedTags.slice(0, 30).join(', ')}.`
+          ? `\nReference visual tags detected in image: ${extractedTags.slice(0, 45).join(', ')}.`
           : '';
 
       const visionUserPrompt = hasCharacter
-        ? `Analyze this image and write a detailed image generation prompt capturing ONLY the pose, facial expression/emotion (e.g. smiling, blushing), clothing or nudity/NSFW state, camera framing, lighting, and environment. Omit all descriptions of hair color, eye color, facial structure/freckles, skin tone, race/ethnicity, and body type/proportions.${tagHintText}`
-        : `Analyze this image and write a detailed, accurate image generation prompt capturing the subject, pose, clothing/anatomy, framing, lighting, and environment.${tagHintText}`;
+        ? `Analyze this image and write a detailed image generation prompt capturing the pose, facial expression/emotion (e.g. smiling, blushing), full outfit/clothing details WITH ALL EXACT CLOTHING AND ACCESSORY COLORS (or nudity/NSFW state), hairstyle shape, camera framing, lighting, and environment. Only omit the subject's biological hair color, eye color, facial structure/freckles, skin tone, race/ethnicity, and body type/proportions.${tagHintText}`
+        : `Analyze this image and write a detailed, accurate image generation prompt capturing the subject, pose, clothing (with exact colors and fabrics) or anatomy, framing, lighting, and environment.${tagHintText}`;
 
       const visionRes = await fetch(chatEndpoint, {
         method: 'POST',
@@ -746,7 +747,7 @@ Rules:
 
   // Path 2: WD14 Visual/NSFW Tags -> LM Studio Text Model
   if (extractedTags.length === 0) {
-    const tagItems = await interrogateImageBufferWithWd14(imageBuffer, 0.25);
+    const tagItems = await interrogateImageBufferWithWd14(imageBuffer, 0.22);
     const rawTags = tagItems.map((t) => t.tag);
     extractedTags = hasCharacter ? filterCharacterIdentityTags(rawTags) : rawTags;
   }
@@ -759,8 +760,8 @@ Rules:
   const timer = setTimeout(() => controller.abort(), 30000);
   try {
     const textUserPrompt = hasCharacter
-      ? `Convert the following ordered visual tags (extracted from an image) into a single cohesive, descriptive image generation prompt. Preserve facial expressions/emotions (e.g. smiling, blushing), pose, clothing or nudity/NSFW details, lighting, camera framing, and setting, but DO NOT include any mention of hair color, eye color, facial features, skin tone, race/ethnicity, or body type/proportions:\n\nVisual Tags: ${extractedTags.join(', ')}\n\nOutput ONLY the prompt text:`
-      : `Convert the following ordered visual tags (extracted from an image, ordered from highest confidence to lowest) into a single cohesive, descriptive image generation prompt that preserves all subject, pose, clothing/anatomical/NSFW, lighting, and setting details:\n\nVisual Tags: ${extractedTags.join(', ')}\n\nOutput ONLY the prompt text:`;
+      ? `Convert the following ordered visual tags (extracted from an image) into a single cohesive, descriptive image generation prompt. Preserve all clothing/outfit/accessory colors and fabrics (e.g. red dress, black bikini, white stockings), facial expressions/emotions (e.g. smiling, blushing), hairstyle shape, pose, nudity/NSFW details, lighting, camera framing, and setting. Only omit the subject's biological hair color, eye color, permanent facial features, skin tone, race/ethnicity, and body type/proportions:\n\nVisual Tags: ${extractedTags.join(', ')}\n\nOutput ONLY the prompt text:`
+      : `Convert the following ordered visual tags (extracted from an image, ordered from highest confidence to lowest) into a single cohesive, descriptive image generation prompt that preserves all subject, pose, clothing (with exact colors), anatomical/NSFW, lighting, and setting details:\n\nVisual Tags: ${extractedTags.join(', ')}\n\nOutput ONLY the prompt text:`;
 
     const textRes = await fetch(chatEndpoint, {
       method: 'POST',

@@ -271,6 +271,9 @@ async function preprocessImageToTensor(imageInput: string | Buffer): Promise<ort
   return new ort.Tensor('float32', floatData, [1, INPUT_SIZE, INPUT_SIZE, 3]);
 }
 
+const OUTFIT_COLOR_TAG_REGEX =
+  /\b(?:red|blue|black|white|pink|green|yellow|purple|orange|brown|grey|gray|silver|gold|golden|aqua|cyan|teal|navy|maroon|burgundy|crimson|violet|lavender|beige|tan|cream|ivory|multicolored|two-tone|striped|plaid|polka dot|floral|checkered|camouflage|sheer|see-through|lace|leather|latex|denim|silk|satin)\s+(?:dress|shirt|T-shirt|blouse|top|crop top|tank top|sweater|hoodie|jacket|coat|blazer|cardigan|suit|vest|skirt|miniskirt|pants|jeans|shorts|trousers|leggings|bikini|swimsuit|one-piece swimsuit|swimwear|bra|panties|underwear|lingerie|bodysuit|leotard|corset|bustier|negligee|nightgown|pajamas|robe|kimono|yukata|cheongsam|apron|maid headdress|uniform|school uniform|serafuku|sailor collar|necktie|bowtie|ribbon|bow|scarf|choker|collar|gloves|sleeves|stockings|thighhighs|pantyhose|socks|kneehighs|footwear|shoes|heels|high heels|boots|sandals|sneakers|hat|cap|beret|headband|hairband|glasses|sunglasses|earrings|necklace|bracelet|belt|bag|handbag|umbrella|cape|cloak)\b/i;
+
 /**
  * Runs WD14 v3 ONNX inference directly on an in-memory image Buffer (for on-demand image interrogation)
  * without requiring the image to be indexed in the gallery database.
@@ -287,7 +290,9 @@ export async function interrogateImageBufferWithWd14(
   }
 
   const settings = getTaggerSettings();
-  const threshold = customThreshold ?? Math.min(settings.threshold, 0.3);
+  const threshold = customThreshold ?? Math.min(settings.threshold, 0.25);
+  // Allow compound clothing/outfit color tags at a slightly lower threshold (0.18) so garment colors aren't dropped
+  const outfitColorThreshold = Math.min(threshold, 0.18);
 
   const session = await getOrCreateSession(settings.device);
   const tagsList = loadTagDefinitions();
@@ -305,16 +310,21 @@ export async function interrogateImageBufferWithWd14(
     const def = tagsList[i];
     if (def.category === 9) continue; // skip general/sensitive/explicit meta-rating category
     const score = probs[i];
-    if (score >= threshold) {
+    const cleanTagName = def.name.replace(/_/g, ' ');
+    const effectiveThreshold = OUTFIT_COLOR_TAG_REGEX.test(cleanTagName)
+      ? outfitColorThreshold
+      : threshold;
+
+    if (score >= effectiveThreshold) {
       matched.push({
-        tag: def.name.replace(/_/g, ' '),
+        tag: cleanTagName,
         confidence: Math.round(score * 1000) / 1000,
       });
     }
   }
 
   matched.sort((a, b) => b.confidence - a.confidence);
-  return matched.slice(0, 45);
+  return matched.slice(0, 55);
 }
 
 /**
