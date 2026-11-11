@@ -1,6 +1,6 @@
 {
-  "summary":  "Implementation plan for adding a mobile hamburger navigation menu next to the Couchy title, standardizing 'Generation Studio' in the UI, and providing a clean slide-down navigation panel on phones.",
-  "updatedAt":  "2026-11-10T21:31:32.783633119Z",
+  "summary":  "Implementation plan to resolve mobile viewport shrinking and horizontal overflow on the Character Explorer page, stack and wrap the Associated Workflows and Associated LoRAs forms cleanly on mobile, enforce strict viewport containment across the app and Image Inspector, and hide the Quick Gen bar on the Generation Studio tab.",
+  "updatedAt":  "2026-11-11T13:41:11.161372088Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

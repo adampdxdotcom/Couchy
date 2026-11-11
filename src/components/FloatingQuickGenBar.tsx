@@ -398,10 +398,10 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   return (
     <div
       ref={containerRef}
-      className="fixed bottom-0 left-0 right-0 z-40 w-full md:bottom-5 md:left-1/2 md:-translate-x-1/2 md:w-[94vw] md:max-w-2xl"
+      className="fixed bottom-0 left-0 right-0 z-40 w-full max-w-[100vw] md:bottom-5 md:left-1/2 md:-translate-x-1/2 md:w-[94vw] md:max-w-2xl"
     >
       {/* Minimize / Expand Toggle Tab */}
-      <div className="flex justify-center -mb-px">
+      <div className="flex justify-center -mb-px px-2">
         <button
           type="button"
           onClick={() => {
@@ -409,13 +409,13 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             setMentionOpen(false);
             setShowSettingsMenu(false);
           }}
-          className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-t-xl bg-zinc-900/98 border-t border-x border-zinc-800 text-xs font-medium text-zinc-300 hover:text-white transition-colors shadow-lg cursor-pointer select-none"
+          className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-t-xl bg-zinc-900/98 border-t border-x border-zinc-800 text-xs font-medium text-zinc-300 hover:text-white transition-colors shadow-lg cursor-pointer select-none max-w-full"
           title={isMinimized ? 'Expand Generation Dock' : 'Minimize Generation Dock'}
         >
           {isMinimized ? (
             <>
-              <ChevronUp className="w-4 h-4 text-indigo-400" />
-              <span className="font-semibold text-zinc-200">Quick Gen</span>
+              <ChevronUp className="w-4 h-4 text-indigo-400 shrink-0" />
+              <span className="font-semibold text-zinc-200 shrink-0">Quick Gen</span>
               {prompt.trim() ? (
                 <span className="text-[11px] text-zinc-400 truncate max-w-[140px] sm:max-w-[200px]">
                   "{prompt.trim()}"
@@ -426,7 +426,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             </>
           ) : (
             <>
-              <ChevronDown className="w-3.5 h-3.5 text-zinc-400" />
+              <ChevronDown className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
               <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">Quick Gen</span>
             </>
           )}
@@ -437,10 +437,10 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
         <>
           {/* Two-Column @Character Mention Popover */}
           {mentionOpen && (
-        <div className="mb-3 bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-3xl shadow-2xl overflow-hidden text-xs">
+        <div className="mb-2 mx-2 md:mx-0 bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-3xl shadow-2xl overflow-hidden text-xs max-w-[calc(100vw-1rem)]">
           {/* Top Search Header */}
           <div className="px-4 py-3 border-b border-zinc-800/80 flex items-center gap-3">
-            <div className="relative flex-1">
+            <div className="relative flex-1 min-w-0">
               <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
@@ -456,7 +456,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             <button
               type="button"
               onClick={() => setMentionOpen(false)}
-              className="p-1.5 text-zinc-400 hover:text-zinc-200 rounded-full hover:bg-zinc-900 cursor-pointer"
+              className="p-1.5 text-zinc-400 hover:text-zinc-200 rounded-full hover:bg-zinc-900 cursor-pointer shrink-0"
               title="Close character picker"
             >
               <X className="w-4 h-4" />
@@ -554,7 +554,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
       {/* Aspect Ratio & Batch Count Popover */}
       {showSettingsMenu && (
-        <div className="mb-3 ml-auto w-72 bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-2xl p-3.5 shadow-2xl space-y-3 text-xs">
+        <div className="mb-2 mr-2 md:mr-0 ml-auto w-72 max-w-[calc(100vw-1rem)] bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-2xl p-3.5 shadow-2xl space-y-3 text-xs">
           <div>
             <span className="block text-[11px] font-medium text-zinc-400 mb-1.5">
               Aspect Ratio (Node #49)
@@ -604,7 +604,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
       {/* Main Floating Quick Generation Box */}
       <div
-        className={`bg-zinc-900/98 backdrop-blur-2xl rounded-t-2xl md:rounded-3xl px-4 py-3 border-t border-x md:border border-zinc-800/90 shadow-2xl transition-all duration-300 ${
+        className={`w-full max-w-full overflow-hidden bg-zinc-900/98 backdrop-blur-2xl rounded-t-2xl md:rounded-3xl px-3.5 sm:px-4 py-3 border-t border-x md:border border-zinc-800/90 shadow-2xl transition-all duration-300 ${
           isHighlighted
             ? 'border-t-indigo-500 md:border-indigo-500 ring-2 ring-indigo-500/40 shadow-indigo-500/20'
             : ''

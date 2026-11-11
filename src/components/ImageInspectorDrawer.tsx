@@ -298,15 +298,15 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
       {/* Right Pane: Comprehensive Metadata, Character & Workflow Reproduction Inspector */}
       <aside
-        className={`w-full lg:w-[500px] xl:w-[540px] bg-zinc-900 border-l border-zinc-800 flex flex-col h-[55vh] lg:h-full overflow-y-auto ${
+        className={`w-full max-w-full lg:w-[500px] xl:w-[540px] bg-zinc-900 border-l border-zinc-800 flex flex-col h-[55vh] lg:h-full overflow-y-auto overflow-x-hidden ${
           isFullScreen ? 'hidden' : ''
         }`}
       >
         {/* Inspector Header */}
-        <div className="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-xs border-b border-zinc-800 px-5 py-3.5 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
+        <div className="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-xs border-b border-zinc-800 px-4 sm:px-5 py-3.5 flex items-center justify-between gap-2 sm:gap-3">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
             {/* Rating Stars */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 shrink-0">
               {[1, 2, 3, 4, 5].map((star) => (
                 <button
                   key={star}
@@ -336,7 +336,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 await api.updateImageAnnotations(image.id, { isFavorite: !image.isFavorite });
                 onUpdated();
               }}
-              className={`p-1.5 rounded-lg border cursor-pointer ${
+              className={`p-1.5 rounded-lg border cursor-pointer shrink-0 ${
                 image.isFavorite
                   ? 'bg-rose-500/15 border-rose-500/40 text-rose-400'
                   : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-rose-300'
@@ -352,7 +352,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-100 cursor-pointer"
+            className="p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-100 cursor-pointer shrink-0"
             title="Close Inspector (Esc)"
           >
             <X className="w-4 h-4" />
@@ -360,11 +360,11 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
         </div>
 
         {/* Inspector Body */}
-        <div className="p-5 space-y-6 text-xs">
+        <div className="p-4 sm:p-5 space-y-6 text-xs min-w-0">
           {/* Workflow Reproduction & Library Bar */}
-          <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-3">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-3 min-w-0">
             <div className="flex items-center justify-between gap-2">
-              <div>
+              <div className="min-w-0">
                 <h4 className="text-sm font-display font-semibold text-zinc-100">
                   Workflow & Reproducibility
                 </h4>
@@ -387,18 +387,18 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             </div>
 
             {image.workflowId && (
-              <div className="flex items-center gap-2 pt-1">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
                 <input
                   type="text"
                   value={workflowName}
                   onChange={(e) => setWorkflowName(e.target.value)}
                   placeholder="Save workflow to library as..."
-                  className="flex-1 px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-200"
+                  className="flex-1 min-w-0 w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-200"
                 />
                 <button
                   type="button"
                   onClick={handleSaveToWorkflowLibrary}
-                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded cursor-pointer shrink-0"
+                  className="inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded cursor-pointer shrink-0"
                 >
                   <Bookmark className="w-3.5 h-3.5" />
                   <span>Save Workflow</span>
@@ -410,7 +410,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             {/* Reproduction Pre-Flight Summary Box */}
             {reproValidation && (
               <div className="mt-3 pt-3 border-t border-zinc-800 space-y-2.5">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="font-semibold text-zinc-200">
                     Reproduction Readiness Summary
                   </span>
@@ -423,7 +423,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                     className="flex items-start gap-2 text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded p-2"
                   >
                     <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                    <span>{w}</span>
+                    <span className="break-words min-w-0">{w}</span>
                   </div>
                 ))}
 
@@ -433,17 +433,17 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                     {reproValidation.requiredModels.map((rm, idx) => (
                       <div
                         key={idx}
-                        className="flex items-center justify-between bg-zinc-900 px-2.5 py-1.5 rounded border border-zinc-800"
+                        className="flex items-center justify-between gap-2 bg-zinc-900 px-2.5 py-1.5 rounded border border-zinc-800 min-w-0"
                       >
                         <span className="font-mono text-zinc-200 truncate">{rm.name}</span>
                         <span
-                          className={
+                          className={`shrink-0 ${
                             rm.status === 'exact_match'
                               ? 'text-emerald-400'
                               : rm.status === 'available'
                               ? 'text-sky-400'
                               : 'text-rose-400'
-                          }
+                          }`}
                         >
                           {rm.status}
                         </span>
@@ -463,14 +463,14 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   </button>
                 </div>
                 {reproStatusMsg && (
-                  <p className="text-indigo-300 font-mono">{reproStatusMsg}</p>
+                  <p className="text-indigo-300 font-mono break-words">{reproStatusMsg}</p>
                 )}
               </div>
             )}
           </div>
 
           {/* Section 1: Character Associations & Assisted Suggestions */}
-          <div className="space-y-2.5">
+          <div className="space-y-2.5 min-w-0">
             <h4 className="text-xs font-display font-semibold text-zinc-200 uppercase tracking-wider">
               Characters & Assisted Identification
             </h4>
@@ -482,17 +482,17 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 {image.characters.map((ch) => (
                   <div
                     key={ch.id}
-                    className="flex items-center justify-between gap-2 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2"
+                    className="flex items-center justify-between gap-2 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 min-w-0"
                   >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <button
                           type="button"
                           onClick={() => {
                             onFilterByCharacter(ch.characterId);
                             onClose();
                           }}
-                          className="font-medium text-zinc-100 hover:text-indigo-400 cursor-pointer"
+                          className="font-medium text-zinc-100 hover:text-indigo-400 cursor-pointer truncate"
                         >
                           {ch.characterName}
                         </button>
@@ -501,7 +501,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                         )}
                         {ch.status === 'suggested' && (
                           <span className="inline-flex items-center gap-1 text-amber-400">
-                            <Sparkles className="w-3 h-3" />
+                            <Sparkles className="w-3 h-3 shrink-0" />
                             <span>Suggested ({Math.round(ch.confidence * 100)}%)</span>
                           </span>
                         )}
@@ -570,11 +570,11 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             )}
 
             {/* Manual Character Assignment */}
-            <div className="flex items-center gap-2 pt-1">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
               <select
                 value={selectedCharId}
                 onChange={(e) => setSelectedCharId(e.target.value)}
-                className="flex-1 px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+                className="w-full sm:flex-1 min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
               >
                 <option value="">Assign Character...</option>
                 {characters.map((c) => (
@@ -583,31 +583,33 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   </option>
                 ))}
               </select>
-              <input
-                type="text"
-                value={charAppearance}
-                onChange={(e) => setCharAppearance(e.target.value)}
-                placeholder="Outfit/Variant (optional)"
-                className="w-36 px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
-              />
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!selectedCharId) return;
-                  await api.updateCharacterAssociationStatus({
-                    imageId: image.id,
-                    characterId: Number(selectedCharId),
-                    status: 'confirmed',
-                    appearanceLabel: charAppearance.trim() || undefined,
-                  });
-                  setSelectedCharId('');
-                  setCharAppearance('');
-                  onUpdated();
-                }}
-                className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded cursor-pointer"
-              >
-                Add
-              </button>
+              <div className="flex items-center gap-2 w-full sm:w-auto min-w-0">
+                <input
+                  type="text"
+                  value={charAppearance}
+                  onChange={(e) => setCharAppearance(e.target.value)}
+                  placeholder="Outfit/Variant (optional)"
+                  className="flex-1 sm:w-36 min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!selectedCharId) return;
+                    await api.updateCharacterAssociationStatus({
+                      imageId: image.id,
+                      characterId: Number(selectedCharId),
+                      status: 'confirmed',
+                      appearanceLabel: charAppearance.trim() || undefined,
+                    });
+                    setSelectedCharId('');
+                    setCharAppearance('');
+                    onUpdated();
+                  }}
+                  className="px-3.5 py-2 sm:py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded cursor-pointer shrink-0"
+                >
+                  Add
+                </button>
+              </div>
             </div>
           </div>
 

@@ -307,10 +307,11 @@ export default function App() {
     null;
 
   const inspectedIdx = images.findIndex((i) => i.id === inspectedImageId);
-  const showQuickGenBar = healthData?.config?.quickGenBoxEnabled !== false;
+  const showQuickGenBar =
+    healthData?.config?.quickGenBoxEnabled !== false && activeTab !== 'generation';
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-zinc-950 text-zinc-100 flex flex-col">
       {/* 3-Zone Top Bar with Unified Status & Toast Message Area */}
       <TopNavHeader
         activeTab={activeTab}
@@ -330,7 +331,7 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <main className={`flex-1 ${showQuickGenBar ? 'pb-36 md:pb-28' : ''}`}>
+      <main className={`flex-1 w-full max-w-full min-w-0 overflow-x-hidden ${showQuickGenBar ? 'pb-36 md:pb-28' : ''}`}>
         {activeTab === 'gallery' && (
           <>
             <GalleryFilterBar

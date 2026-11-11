@@ -156,23 +156,23 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
       .slice(0, 6);
 
     return (
-      <div className="px-6 py-6 max-w-7xl mx-auto space-y-6">
+      <div className="px-3.5 sm:px-6 py-4 sm:py-6 w-full max-w-7xl mx-auto space-y-6 overflow-x-hidden">
         {/* Top Back Navigation */}
-        <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <button
             type="button"
             onClick={() => setSelectedCharId(null)}
             className="inline-flex items-center gap-2 text-xs font-medium text-zinc-300 hover:text-white cursor-pointer"
           >
-            <ArrowLeft className="w-4 h-4" />
+            <ArrowLeft className="w-4 h-4 shrink-0" />
             <span>Back to Character Explorer</span>
           </button>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
             <button
               type="button"
               onClick={() => onFilterGalleryByCharacter(selectedCharacter.id)}
-              className="px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-200 rounded-lg cursor-pointer"
+              className="px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-200 rounded-lg cursor-pointer whitespace-nowrap"
             >
               Open in Main Gallery Filter
             </button>
@@ -185,9 +185,9 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                   archiveName: `character-${selectedCharacter.name}`,
                 })
               }
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-lg cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-lg cursor-pointer whitespace-nowrap"
             >
-              <Download className="w-3.5 h-3.5" />
+              <Download className="w-3.5 h-3.5 shrink-0" />
               <span className="font-mono tabular-nums">
                 Download All Images ({confirmedImages.length})
               </span>
@@ -199,18 +199,18 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                 setSelectedCharId(null);
                 await onRefresh();
               }}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs bg-zinc-900 border border-zinc-800 hover:border-rose-500/50 text-rose-400 rounded-lg cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs bg-zinc-900 border border-zinc-800 hover:border-rose-500/50 text-rose-400 rounded-lg cursor-pointer whitespace-nowrap"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-3.5 h-3.5 shrink-0" />
               <span>Delete Profile</span>
             </button>
           </div>
         </div>
 
         {/* Profile Overview Banner */}
-        <div className="bg-zinc-900 border border-zinc-800/80 rounded-xl p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-3 flex flex-col items-center lg:items-start gap-3">
-            <div className="w-40 h-40 rounded-xl bg-zinc-950 border border-zinc-800 overflow-hidden flex items-center justify-center">
+        <div className="bg-zinc-900 border border-zinc-800/80 rounded-xl p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden">
+          <div className="lg:col-span-3 min-w-0 flex flex-col items-center lg:items-start gap-3">
+            <div className="w-36 h-36 sm:w-40 sm:h-40 rounded-xl bg-zinc-950 border border-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
               {selectedCharacter.portraitThumbnailUrl ? (
                 <img
                   src={selectedCharacter.portraitThumbnailUrl}
@@ -234,12 +234,12 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
             </div>
           </div>
 
-          <div className="lg:col-span-9 space-y-4">
-            <div>
-              <h1 className="text-2xl font-display font-bold text-zinc-100">
+          <div className="lg:col-span-9 min-w-0 space-y-4">
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-2xl font-display font-bold text-zinc-100 break-words">
                 {selectedCharacter.name}
               </h1>
-              <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400 mt-1">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400 mt-1 break-words">
                 <span>
                   Aliases:{' '}
                   {selectedCharacter.aliases.length > 0
@@ -250,7 +250,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-              <div>
+              <div className="min-w-0">
                 <label className="block text-zinc-400 mb-1 font-medium">
                   Character Description
                 </label>
@@ -267,7 +267,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                   className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200"
                 />
               </div>
-              <div>
+              <div className="min-w-0">
                 <label className="block text-zinc-400 mb-1 font-medium">User Notes</label>
                 <textarea
                   rows={3}
@@ -283,13 +283,13 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
             </div>
 
             {/* Edit Aliases Inline */}
-            <div className="flex items-center gap-2 text-xs">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 text-xs">
               <input
                 type="text"
                 value={editAliasesInput}
                 onChange={(e) => setEditAliasesInput(e.target.value)}
                 placeholder="Update comma-separated aliases (used by Assisted Identification)..."
-                className="flex-1 px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200"
+                className="flex-1 min-w-0 w-full px-3 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200"
               />
               <button
                 type="button"
@@ -302,7 +302,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                   setEditAliasesInput('');
                   await onRefresh();
                 }}
-                className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg cursor-pointer"
+                className="px-3 py-2 sm:py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg cursor-pointer shrink-0 whitespace-nowrap"
               >
                 Save Aliases
               </button>
@@ -313,7 +313,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
         {/* Linked LoRAs & Workflows Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Associated LoRAs (Character, Outfit, Clothing, Style, Pose) */}
-          <div className="bg-zinc-900 border border-zinc-800/80 rounded-xl p-5 space-y-3 text-xs">
+          <div className="min-w-0 bg-zinc-900 border border-zinc-800/80 rounded-xl p-4 sm:p-5 space-y-3 text-xs overflow-hidden">
             <h3 className="text-sm font-display font-semibold text-zinc-100">
               Associated LoRAs & Outfits ({selectedCharacter.loras.length})
             </h3>
@@ -327,12 +327,14 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                 {selectedCharacter.loras.map((l) => (
                   <div
                     key={l.id}
-                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 space-y-2"
+                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 space-y-2 min-w-0 overflow-hidden"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <div className="font-medium text-zinc-200">{l.loraName}</div>
-                        <div className="text-[11px] text-zinc-400">
+                    <div className="flex items-start justify-between gap-2 min-w-0">
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-zinc-200 truncate break-all" title={l.loraName}>
+                          {l.loraName}
+                        </div>
+                        <div className="text-[11px] text-zinc-400 break-words">
                           Role: {l.appearanceLabel} · Type: {l.loraCategory} ·{' '}
                           {l.isInstalled ? 'Installed' : 'Missing'}
                         </div>
@@ -343,15 +345,15 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                           await api.unlinkLoraFromCharacter(selectedCharacter.id, l.id);
                           await onRefresh();
                         }}
-                        className="text-zinc-500 hover:text-rose-400 cursor-pointer"
+                        className="text-zinc-500 hover:text-rose-400 cursor-pointer shrink-0"
                       >
                         Unlink
                       </button>
                     </div>
 
                     {/* Editable Trigger Word for Node #30_27 */}
-                    <div className="flex items-center gap-2 pt-1 border-t border-zinc-900">
-                      <span className="text-[11px] text-zinc-400 whitespace-nowrap">
+                    <div className="flex items-center gap-2 pt-1 border-t border-zinc-900 min-w-0">
+                      <span className="text-[11px] text-zinc-400 whitespace-nowrap shrink-0">
                         Trigger Word:
                       </span>
                       <input
@@ -370,7 +372,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                           });
                           await onRefresh();
                         }}
-                        className="flex-1 px-2 py-1 text-xs font-mono bg-zinc-900 border border-zinc-800 rounded text-indigo-200 focus:outline-none focus:border-indigo-500"
+                        className="flex-1 min-w-0 px-2 py-1 text-xs font-mono bg-zinc-900 border border-zinc-800 rounded text-indigo-200 focus:outline-none focus:border-indigo-500"
                       />
                     </div>
                   </div>
@@ -385,7 +387,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                 value={linkLoraName}
                 onChange={(e) => setLinkLoraName(e.target.value)}
                 placeholder="LoRA filename (e.g. char_v1.safetensors)..."
-                className="px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+                className="w-full min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
               />
               <datalist id="known-loras-datalist">
                 {loras.map((l) => (
@@ -397,20 +399,20 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                 value={linkLoraTriggerWord}
                 onChange={(e) => setLinkLoraTriggerWord(e.target.value)}
                 placeholder="Trigger Word (e.g. xmelx for Node #30_27)"
-                className="px-2.5 py-1.5 font-mono bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+                className="w-full min-w-0 px-2.5 py-2 sm:py-1.5 font-mono bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
               />
               <input
                 type="text"
                 value={linkLoraAppearance}
                 onChange={(e) => setLinkLoraAppearance(e.target.value)}
                 placeholder="Appearance / Outfit label"
-                className="px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+                className="w-full min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
               />
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-2 min-w-0">
                 <select
                   value={linkLoraCategory}
                   onChange={(e) => setLinkLoraCategory(e.target.value as LoraCategory)}
-                  className="flex-1 px-2 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+                  className="flex-1 min-w-0 px-2 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
                 >
                   <option value="character">Character</option>
                   <option value="clothing">Clothing / Outfit</option>
@@ -432,7 +434,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                     setLinkLoraTriggerWord('');
                     await onRefresh();
                   }}
-                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded cursor-pointer"
+                  className="px-3.5 py-2 sm:py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded cursor-pointer shrink-0"
                 >
                   Link
                 </button>
@@ -441,7 +443,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
           </div>
 
           {/* Associated Workflows & Collections */}
-          <div className="bg-zinc-900 border border-zinc-800/80 rounded-xl p-5 space-y-3 text-xs">
+          <div className="min-w-0 bg-zinc-900 border border-zinc-800/80 rounded-xl p-4 sm:p-5 space-y-3 text-xs overflow-hidden">
             <h3 className="text-sm font-display font-semibold text-zinc-100">
               Associated Workflows ({selectedCharacter.workflows.length})
             </h3>
@@ -450,20 +452,20 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                 {selectedCharacter.workflows.map((w) => (
                   <div
                     key={w.workflowId}
-                    className="flex items-center justify-between bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2"
+                    className="flex items-center justify-between gap-2 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 min-w-0"
                   >
-                    <span className="font-medium text-zinc-200">{w.workflowName}</span>
-                    <span className="text-zinc-400">{w.roleLabel}</span>
+                    <span className="font-medium text-zinc-200 truncate">{w.workflowName}</span>
+                    <span className="text-zinc-400 shrink-0">{w.roleLabel}</span>
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="flex items-center gap-2 pt-2">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-2">
               <select
                 value={linkWorkflowId}
                 onChange={(e) => setLinkWorkflowId(e.target.value)}
-                className="flex-1 px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+                className="w-full sm:flex-1 min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
               >
                 <option value="">Select workflow to associate...</option>
                 {workflows.map((wf) => (
@@ -472,29 +474,31 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
                   </option>
                 ))}
               </select>
-              <input
-                type="text"
-                value={linkWorkflowRole}
-                onChange={(e) => setLinkWorkflowRole(e.target.value)}
-                placeholder="Role label..."
-                className="w-36 px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
-              />
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!linkWorkflowId) return;
-                  await api.linkWorkflowToCharacter(
-                    selectedCharacter.id,
-                    Number(linkWorkflowId),
-                    linkWorkflowRole
-                  );
-                  setLinkWorkflowId('');
-                  await onRefresh();
-                }}
-                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded cursor-pointer"
-              >
-                Link
-              </button>
+              <div className="flex items-center gap-2 w-full sm:w-auto min-w-0">
+                <input
+                  type="text"
+                  value={linkWorkflowRole}
+                  onChange={(e) => setLinkWorkflowRole(e.target.value)}
+                  placeholder="Role label..."
+                  className="flex-1 sm:w-36 min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+                />
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!linkWorkflowId) return;
+                    await api.linkWorkflowToCharacter(
+                      selectedCharacter.id,
+                      Number(linkWorkflowId),
+                      linkWorkflowRole
+                    );
+                    setLinkWorkflowId('');
+                    await onRefresh();
+                  }}
+                  className="px-3.5 py-2 sm:py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded cursor-pointer shrink-0"
+                >
+                  Link
+                </button>
+              </div>
             </div>
 
             {collections.length > 0 && (
@@ -820,9 +824,9 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
 
   // Main Character Explorer Roster View
   return (
-    <div className="px-6 py-6 max-w-7xl mx-auto space-y-6">
+    <div className="px-3.5 sm:px-6 py-4 sm:py-6 w-full max-w-7xl mx-auto space-y-6 overflow-x-hidden">
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-xl font-display font-semibold text-zinc-100">
             Character Explorer
           </h1>
@@ -837,7 +841,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
             onClick={handleRunSuggestions}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-amber-300 rounded-lg cursor-pointer"
           >
-            <Sparkles className="w-3.5 h-3.5" />
+            <Sparkles className="w-3.5 h-3.5 shrink-0" />
             <span>Run Assisted Character Identification</span>
           </button>
 
@@ -847,7 +851,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
               onClick={() => setShowMergeModal(true)}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-200 rounded-lg cursor-pointer"
             >
-              <GitMerge className="w-3.5 h-3.5" />
+              <GitMerge className="w-3.5 h-3.5 shrink-0" />
               <span>Merge Characters</span>
             </button>
           )}
@@ -857,7 +861,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
             onClick={() => setShowCreateModal(true)}
             className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg cursor-pointer"
           >
-            <UserPlus className="w-3.5 h-3.5" />
+            <UserPlus className="w-3.5 h-3.5 shrink-0" />
             <span>New Character Profile</span>
           </button>
         </div>
@@ -870,9 +874,9 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
       )}
 
       {/* Search & Sort Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-3">
-        <div className="relative flex-1 min-w-[240px]">
-          <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-3">
+        <div className="relative flex-1 min-w-0">
+          <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={searchQuery}
@@ -884,7 +888,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
         <select
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as any)}
-          className="px-3 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200"
+          className="px-3 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 shrink-0"
         >
           <option value="images">Sort: Most Images</option>
           <option value="rating">Sort: Highest Avg Rating</option>
