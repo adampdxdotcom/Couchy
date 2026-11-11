@@ -13,6 +13,8 @@ import {
   User,
   CheckSquare,
   Square,
+  Star,
+  RotateCcw,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import type {
@@ -32,6 +34,8 @@ interface CharacterExplorerViewProps {
   onRefresh: () => Promise<void>;
   onOpenImage: (img: ImageRecord) => void;
   onFilterGalleryByCharacter: (charId: number) => void;
+  onQuickRate: (id: number, rating: number) => void;
+  onReusePrompt?: (img: ImageRecord) => void;
 }
 
 /**
@@ -46,6 +50,8 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   onRefresh,
   onOpenImage,
   onFilterGalleryByCharacter,
+  onQuickRate,
+  onReusePrompt,
 }) => {
   const [selectedCharId, setSelectedCharId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -753,17 +759,74 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
               {highestRatedImages.map((img) => (
                 <div
                   key={img.id}
-                  onClick={() => onOpenImage(img)}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden cursor-pointer"
+                  className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden group flex flex-col justify-between"
                 >
-                  <img
-                    src={img.thumbnailUrl}
-                    alt={img.filename}
-                    className="w-full aspect-square object-cover"
-                  />
-                  <div className="p-2 text-xs flex items-center justify-between">
+                  <div
+                    onClick={() => onOpenImage(img)}
+                    className="relative aspect-square bg-black cursor-pointer overflow-hidden"
+                  >
+                    <img
+                      src={img.thumbnailUrl}
+                      alt={img.filename}
+                      className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
+                    />
+
+                    {/* Bottom Floating Bar on Card: Rating Stars (Left) + Actions (Right) */}
+                    <div
+                      className="absolute bottom-0 inset-x-0 p-2 sm:p-2.5 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex items-center justify-between opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div
+                        className="flex items-center gap-0.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <button
+                            key={star}
+                            type="button"
+                            onClick={() => onQuickRate(img.id, img.rating === star ? 0 : star)}
+                            className="p-0.5 cursor-pointer"
+                          >
+                            <Star
+                              className={`w-3.5 h-3.5 ${
+                                star <= img.rating
+                                  ? 'fill-amber-400 text-amber-400'
+                                  : 'text-zinc-400 hover:text-amber-300'
+                              }`}
+                            />
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {onReusePrompt && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onReusePrompt(img);
+                            }}
+                            className="p-1 text-zinc-300 hover:text-white hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
+                            title="Reuse prompt & settings in Quick Gen"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <a
+                          href={`/api/images/${img.id}/file?download=1`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="p-1 text-zinc-200 hover:text-white hover:bg-zinc-800/80 rounded transition-colors"
+                          title="Download Unchanged Original File"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    onClick={() => onOpenImage(img)}
+                    className="p-2 text-xs flex items-center justify-between cursor-pointer"
+                  >
                     <span className="truncate text-zinc-300">{img.filename}</span>
-                    <span className="text-amber-400 font-mono">★ {img.rating}</span>
                   </div>
                 </div>
               ))}
@@ -785,20 +848,76 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
               {confirmedImages.map((img) => (
                 <div
                   key={img.id}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden group"
+                  className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden group flex flex-col justify-between"
                 >
                   <div
                     onClick={() => onOpenImage(img)}
-                    className="aspect-square bg-black cursor-pointer overflow-hidden"
+                    className="relative aspect-square bg-black cursor-pointer overflow-hidden"
                   >
                     <img
                       src={img.thumbnailUrl}
                       alt={img.filename}
-                      className="w-full h-full object-cover"
+                      className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
                     />
+
+                    {/* Bottom Floating Bar on Card: Rating Stars (Left) + Actions (Right) */}
+                    <div
+                      className="absolute bottom-0 inset-x-0 p-2 sm:p-2.5 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex items-center justify-between opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div
+                        className="flex items-center gap-0.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <button
+                            key={star}
+                            type="button"
+                            onClick={() => onQuickRate(img.id, img.rating === star ? 0 : star)}
+                            className="p-0.5 cursor-pointer"
+                          >
+                            <Star
+                              className={`w-3.5 h-3.5 ${
+                                star <= img.rating
+                                  ? 'fill-amber-400 text-amber-400'
+                                  : 'text-zinc-400 hover:text-amber-300'
+                              }`}
+                            />
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {onReusePrompt && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onReusePrompt(img);
+                            }}
+                            className="p-1 text-zinc-300 hover:text-white hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
+                            title="Reuse prompt & settings in Quick Gen"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <a
+                          href={`/api/images/${img.id}/file?download=1`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="p-1 text-zinc-200 hover:text-white hover:bg-zinc-800/80 rounded transition-colors"
+                          title="Download Unchanged Original File"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </a>
+                      </div>
+                    </div>
                   </div>
                   <div className="p-2 text-xs flex items-center justify-between gap-1">
-                    <span className="truncate text-zinc-200">{img.filename}</span>
+                    <span
+                      onClick={() => onOpenImage(img)}
+                      className="truncate text-zinc-200 cursor-pointer"
+                    >
+                      {img.filename}
+                    </span>
                     <button
                       type="button"
                       onClick={async () => {

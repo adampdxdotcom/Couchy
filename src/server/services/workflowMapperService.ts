@@ -623,7 +623,13 @@ export function compileWorkflowForGeneration(params: {
         : 'value' in posNodeInputs
         ? 'value'
         : 'text';
-    posNodeInputs[posField] = params.positivePrompt;
+    const cleanPositivePrompt = (params.positivePrompt || '')
+      .replace(/\b[\w\.\-]+\.(?:safetensors|ckpt|pt|bin)\b/gi, '')
+      .replace(/\s*,\s*,+/g, ',')
+      .replace(/^[\s,;:\-–—]+/, '')
+      .replace(/[\s,;:\-–—]+$/, '')
+      .trim();
+    posNodeInputs[posField] = cleanPositivePrompt || params.positivePrompt;
   }
 
   // 2. Character / LoRA Trigger Word (e.g. Node #30_27 inputs["string_b"])

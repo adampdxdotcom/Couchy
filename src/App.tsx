@@ -501,6 +501,15 @@ export default function App() {
               setFilters({ ...INITIAL_FILTERS, characterIds: [charId] });
               setActiveTab('gallery');
             }}
+            onReusePrompt={handleReusePrompt}
+            onQuickRate={async (id, rating) => {
+              setImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
+              setAllImages((prev) =>
+                prev.map((img) => (img.id === id ? { ...img, rating } : img))
+              );
+              await api.updateImageAnnotations(id, { rating });
+              pushToast(rating > 0 ? `Rated image ★ ${rating}` : 'Cleared image rating', 'info');
+            }}
           />
         )}
 

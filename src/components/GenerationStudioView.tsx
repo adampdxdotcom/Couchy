@@ -77,7 +77,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
   // 4. Prompt Mode & Template State
   const [generationMode, setGenerationMode] = useState<'single' | 'theme_set'>('single');
   const [positivePromptTemplate, setPositivePromptTemplate] = useState<string>(
-    '{character}, beautiful portrait, soft cinematic lighting, highly detailed, masterwork'
+    'beautiful portrait, soft cinematic lighting, highly detailed, masterwork'
   );
   const [negativePrompt, setNegativePrompt] = useState<string>(
     'worst quality, normal quality, low quality, low res, blurry, distorted, extra limbs, bad anatomy'

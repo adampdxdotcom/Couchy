@@ -555,9 +555,10 @@ export function runMigrations(): void {
     `).run(
       appConfig.lmStudioUrl,
       `You are a creative photography director and Stable Diffusion / Flux prompt engineer.
-Given a Character Name, Character LoRA / appearance details, a base prompt style, and a Photo Set Theme, generate an array of distinct, cohesive image generation prompts for a full photo set.
-Vary the camera framing (close-up portrait, medium candid, wide environmental shot, over-the-shoulder, dynamic angle), poses, lighting nuances, and micro-actions within the theme while keeping the character identity consistent.
-Return ONLY a JSON array of prompt strings, or one complete prompt per line with no extra commentary.`
+Given a Photo Set Theme and Base Scene Style, generate an array of distinct, cohesive image generation prompts for a full photo set.
+Refer to the subject neutrally (e.g. "they", "them", "the subject", "a person") without including specific character names or LoRA/model filenames.
+Vary the camera framing (close-up portrait, medium candid, wide environmental shot, over-the-shoulder, dynamic angle), poses, lighting nuances, and micro-actions within the theme.
+Return ONLY a JSON array of prompt strings.`
     );
   }
 
@@ -574,16 +575,20 @@ Return ONLY a JSON array of prompt strings, or one complete prompt per line with
     insertGuiding.run(
       'Editorial Photo Set Director (Default)',
       `You are a creative photography director and ComfyUI prompt engineer.
-Your job is to take a Photo Set Theme, a Character identity, and a Base Prompt Style, and write {count} distinct, cohesive image generation prompts for a multi-photo set.
+Your job is to take a Photo Set Theme and Base Scene Style, and write {count} distinct, cohesive image generation prompts for a multi-photo set.
 Vary the camera framing across the set (e.g., intimate close-up portrait, medium three-quarter candid, wide full-body environmental shot, dramatic over-the-shoulder angle), vary poses and micro-expressions, and enrich the lighting and background details to match the theme.
+Refer to the subject neutrally (e.g., "they", "them", "the subject", "a person") without including specific character names or model/LoRA filenames.
 Return ONLY a valid JSON array of {count} prompt strings (e.g. ["prompt 1", "prompt 2"]) with no markdown formatting or extra commentary.`,
       `Generate {count} distinct image prompts for a cohesive photo set:
-Character: {character}
-LoRA / Appearance Triggers: {lora}
+Subject: The subject (refer to them using neutral terms like "they", "them", or "the subject")
 Photo Set Theme: {theme}
-Base Prompt Style to Incorporate: {base_prompt}
+Base Scene Style: {base_prompt}
 
-Return ONLY a JSON array of {count} complete prompt strings.`,
+Rules:
+- Refer to the subject neutrally (e.g. "they", "them", "the subject", "a person").
+- Do NOT include character names, model filenames, or file extensions (e.g. no .safetensors).
+- Focus on setting, lighting, framing, poses, and clothing/mood.
+- Return ONLY a JSON array of {count} complete prompt strings.`,
       1
     );
 
@@ -591,15 +596,17 @@ Return ONLY a JSON array of {count} complete prompt strings.`,
       'Cinematic Storyboard Sequence',
       `You are a film director and cinematographer scripting a sequential {count}-shot storyboard for a character scene.
 Progress the scene chronologically across the {count} shots: start with an establishing atmospheric shot, move into medium action/interaction within the setting, then capture an emotional close-up and a dramatic climax angle.
-Keep the character ({character}) and LoRA triggers ({lora}) consistent in every prompt.
+Refer to the subject neutrally (e.g. "they", "the subject") without including character names or LoRA filenames.
 Return ONLY a valid JSON array of {count} prompt strings.`,
       `Create a {count}-shot sequential cinematic storyboard:
-Character: {character}
-LoRA Triggers: {lora}
+Subject: The subject (refer to them using neutral terms like "they" or "the subject")
 Scene / Theme: {theme}
 Visual Style Foundation: {base_prompt}
 
-Return ONLY a JSON array of {count} complete prompt strings.`,
+Rules:
+- Refer to the subject neutrally (e.g. "they", "the subject").
+- Do NOT include character names or model/LoRA filenames.
+- Return ONLY a JSON array of {count} complete prompt strings.`,
       0
     );
 
@@ -607,16 +614,40 @@ Return ONLY a JSON array of {count} complete prompt strings.`,
       'Pose, Angle & Lighting Lookbook Variations',
       `You are a studio fashion & portrait photographer directing a {count}-image lookbook session.
 Keep the setting and theme ({theme}) consistent, but systematically vary the pose, camera lens (35mm, 50mm, 85mm, 135mm), camera angle (eye-level, low angle, profile, three-quarter), and lighting mood across all {count} prompts.
+Refer to the subject neutrally without hardcoding names or model filenames.
 Return ONLY a valid JSON array of {count} prompt strings.`,
       `Generate {count} lookbook variation prompts:
-Character: {character}
-LoRA Triggers: {lora}
+Subject: The subject (refer to them using neutral terms like "they" or "the subject")
 Theme & Wardrobe Context: {theme}
 Base Prompt Template: {base_prompt}
 
-Return ONLY a JSON array of {count} complete prompt strings.`,
+Rules:
+- Refer to the subject neutrally (e.g. "they", "the subject").
+- Do NOT include character names or model/LoRA filenames.
+- Return ONLY a JSON array of {count} complete prompt strings.`,
       0
     );
+  }
+
+  // Migration: sanitize existing database templates so they do not prompt LLM for {lora} filenames or character names
+  try {
+    db.prepare(`
+      UPDATE lm_studio_prompt_templates
+      SET system_prompt = REPLACE(
+            REPLACE(system_prompt, 'Keep the character ({character}) and LoRA triggers ({lora}) consistent in every prompt.', 'Refer to the subject neutrally (e.g. "they", "the subject") without including character names or LoRA filenames.'),
+            'a Character identity, and a Base Prompt Style', 'and a Base Scene Style'
+          ),
+          user_prompt_template = REPLACE(
+            REPLACE(
+              REPLACE(user_prompt_template, 'Character: {character}\nLoRA / Appearance Triggers: {lora}\n', 'Subject: The subject (refer to them using neutral terms like "they" or "the subject")\n'),
+              'Character: {character}\nLoRA Triggers: {lora}\n', 'Subject: The subject (refer to them using neutral terms like "they" or "the subject")\n'
+            ),
+            'Character: {character}\n', ''
+          )
+      WHERE user_prompt_template LIKE '%{lora}%' OR user_prompt_template LIKE '%{character}%'
+    `).run();
+  } catch {
+    // ignore if table doesn't have matching rows
   }
 
   // Ensure the Krea2_turbo Base Default Workflow exists and is mapped

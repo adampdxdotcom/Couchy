@@ -321,7 +321,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
           loraNames: selectedLoras.map((l) => l.loraName),
           theme: cleanPrompt,
           count: batchCount,
-          basePromptTemplate: '{character}, {theme}',
+          basePromptTemplate: '{theme}',
         });
         promptsToRun =
           agentRes.prompts && agentRes.prompts.length > 0
