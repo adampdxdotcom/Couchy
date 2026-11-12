@@ -412,6 +412,37 @@ export default function App() {
     [characters, pushToast]
   );
 
+  const handleQuickReject = useCallback(
+    async (id: number, nextRejected: boolean) => {
+      setAllImages((prev) =>
+        prev.map((img) => (img.id === id ? { ...img, isRejected: nextRejected } : img))
+      );
+      setImages((prev) => {
+        if (filters.rejectedMode === 'exclude' && nextRejected) {
+          return prev.filter((img) => img.id !== id);
+        }
+        if (filters.rejectedMode === 'only' && !nextRejected) {
+          return prev.filter((img) => img.id !== id);
+        }
+        return prev.map((img) => (img.id === id ? { ...img, isRejected: nextRejected } : img));
+      });
+      try {
+        await api.updateImageAnnotations(id, { isRejected: nextRejected });
+        pushToast(
+          nextRejected
+            ? 'Image rejected (hidden from standard library)'
+            : 'Image restored from rejected',
+          'info'
+        );
+      } catch (err: any) {
+        console.error('Failed to update rejection status:', err);
+        pushToast('Failed to update rejection status', 'error');
+        refreshAll();
+      }
+    },
+    [filters.rejectedMode, pushToast, refreshAll]
+  );
+
   const inspectedImage =
     images.find((i) => i.id === inspectedImageId) ||
     allImages.find((i) => i.id === inspectedImageId) ||
@@ -518,6 +549,7 @@ export default function App() {
                 await api.updateImageAnnotations(id, { isFavorite });
                 pushToast(isFavorite ? 'Added to Favorites' : 'Removed from Favorites', 'info');
               }}
+              onQuickReject={handleQuickReject}
               onBulkAction={async (payload) => {
                 const count = selectedIds.size;
                 await api.bulkUpdateImages({
@@ -565,6 +597,7 @@ export default function App() {
               await api.updateImageAnnotations(id, { rating });
               pushToast(rating > 0 ? `Rated image ★ ${rating}` : 'Cleared image rating', 'info');
             }}
+            onQuickReject={handleQuickReject}
             onPushToast={pushToast}
           />
         )}

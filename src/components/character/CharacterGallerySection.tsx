@@ -6,6 +6,7 @@ import {
   Download,
   RotateCcw,
   Star,
+  Trash2,
 } from 'lucide-react';
 import type { CharacterProfile, ImageRecord } from '../../shared/types.ts';
 
@@ -18,6 +19,7 @@ interface CharacterGallerySectionProps {
   onQuickRate: (id: number, rating: number) => void;
   onSetPortrait: (img: ImageRecord) => Promise<void>;
   onReusePrompt?: (img: ImageRecord) => void;
+  onQuickReject?: (id: number, nextRejected: boolean) => void;
   emptyText?: string;
   isExpandable?: boolean;
   isExpanded?: boolean;
@@ -34,6 +36,7 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
   onQuickRate,
   onSetPortrait,
   onReusePrompt,
+  onQuickReject,
   emptyText,
   isExpandable = false,
   isExpanded = false,
@@ -159,6 +162,23 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
                       >
                         <Download className="w-3.5 h-3.5" />
                       </a>
+                      {onQuickReject && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onQuickReject(img.id, !img.isRejected);
+                          }}
+                          className={`p-1 rounded transition-colors cursor-pointer ${
+                            img.isRejected
+                              ? 'text-rose-400 hover:text-rose-300 hover:bg-rose-950/60'
+                              : 'text-zinc-300 hover:text-rose-400 hover:bg-zinc-800/80'
+                          }`}
+                          title={img.isRejected ? 'Restore from rejected' : 'Reject image (hide from library)'}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

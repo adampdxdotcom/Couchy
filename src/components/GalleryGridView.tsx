@@ -38,6 +38,7 @@ interface GalleryGridViewProps {
   onReusePrompt?: (image: ImageRecord) => void;
   onQuickRate: (id: number, rating: number) => void;
   onQuickFavorite: (id: number, nextFav: boolean) => void;
+  onQuickReject?: (id: number, nextRejected: boolean) => void;
   onBulkAction: (payload: any) => Promise<void>;
   onExportSelectedZip: () => void;
   characters: CharacterProfile[];
@@ -96,6 +97,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   onReusePrompt,
   onQuickRate,
   onQuickFavorite,
+  onQuickReject,
   onBulkAction,
   onExportSelectedZip,
   characters,
@@ -535,6 +537,23 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                     >
                       <Download className="w-3.5 h-3.5" />
                     </a>
+                    {onQuickReject && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onQuickReject(img.id, !img.isRejected);
+                        }}
+                        className={`p-1 rounded transition-colors cursor-pointer ${
+                          img.isRejected
+                            ? 'text-rose-400 hover:text-rose-300 hover:bg-rose-950/60'
+                            : 'text-zinc-300 hover:text-rose-400 hover:bg-zinc-800/80'
+                        }`}
+                        title={img.isRejected ? 'Restore from rejected' : 'Reject image (hide from library)'}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

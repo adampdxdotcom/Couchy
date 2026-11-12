@@ -16,6 +16,7 @@ import {
   Maximize2,
   Minimize2,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
@@ -323,6 +324,22 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
               title="Favorite"
             >
               <Heart className={`w-4 h-4 ${image.isFavorite ? 'fill-rose-400' : ''}`} />
+            </button>
+
+            <button
+              type="button"
+              onClick={async () => {
+                await api.updateImageAnnotations(image.id, { isRejected: !image.isRejected });
+                onUpdated();
+              }}
+              className={`p-1.5 rounded-lg border cursor-pointer shrink-0 ${
+                image.isRejected
+                  ? 'bg-rose-500/20 border-rose-500/50 text-rose-400'
+                  : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-rose-300'
+              }`}
+              title={image.isRejected ? 'Restore from Rejected' : 'Reject Image (Hide from Library)'}
+            >
+              <Trash2 className="w-4 h-4" />
             </button>
 
             {renderDependencyLabel(image.dependencyStatus)}

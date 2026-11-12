@@ -25,6 +25,7 @@ interface CharacterExplorerViewProps {
   onFilterGalleryByCharacter: (charId: number) => void;
   onQuickRate: (id: number, rating: number) => void;
   onReusePrompt?: (img: ImageRecord) => void;
+  onQuickReject?: (id: number, nextRejected: boolean) => void;
   onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
@@ -42,6 +43,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   onFilterGalleryByCharacter,
   onQuickRate,
   onReusePrompt,
+  onQuickReject,
   onPushToast,
 }) => {
   const [selectedCharId, setSelectedCharId] = useState<number | null>(null);
@@ -114,15 +116,19 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
 
   // Detailed Character Profile Page
   if (selectedCharacter) {
-    const confirmedImages = allImages.filter((img) =>
-      img.characters.some(
-        (c) => c.characterId === selectedCharacter.id && c.status === 'confirmed'
-      )
+    const confirmedImages = allImages.filter(
+      (img) =>
+        !img.isRejected &&
+        img.characters.some(
+          (c) => c.characterId === selectedCharacter.id && c.status === 'confirmed'
+        )
     );
-    const suggestedImages = allImages.filter((img) =>
-      img.characters.some(
-        (c) => c.characterId === selectedCharacter.id && c.status === 'suggested'
-      )
+    const suggestedImages = allImages.filter(
+      (img) =>
+        !img.isRejected &&
+        img.characters.some(
+          (c) => c.characterId === selectedCharacter.id && c.status === 'suggested'
+        )
     );
     const fiveStarImages = confirmedImages.filter((img) => img.rating === 5);
     const fourStarOrHigher = [...confirmedImages]
@@ -193,6 +199,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
             onQuickRate={onQuickRate}
             onSetPortrait={handleSetPortrait}
             onReusePrompt={onReusePrompt}
+            onQuickReject={onQuickReject}
             isExpandable={canExpandHighestRated}
             isExpanded={isHighestRatedExpanded}
             onToggleExpand={() => setIsHighestRatedExpanded((prev) => !prev)}
@@ -209,6 +216,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
           onQuickRate={onQuickRate}
           onSetPortrait={handleSetPortrait}
           onReusePrompt={onReusePrompt}
+          onQuickReject={onQuickReject}
           emptyText="No confirmed images yet. Assign images from the gallery or confirm suggestions above."
         />
       </div>
