@@ -649,7 +649,6 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
         mode: agentEnabled ? 'theme_set' : 'single',
         themeTitle: cleanPrompt.slice(0, 80),
         aspectRatio,
-        megapixels: 3.0,
         prompts: promptsToRun,
         triggerWord,
         negativePrompt: '',

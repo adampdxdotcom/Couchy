@@ -466,8 +466,35 @@ generationRouter.post('/submit-batch', async (req, res) => {
       return res.status(400).json({ error: 'At least one positive prompt is required.' });
     }
 
-    const resolvedAr = normalizeResolutionSelectorRatio(aspectRatio);
-    const resolvedMp = Math.max(0.1, Math.min(10.0, Number(megapixels) || 3.0));
+    // Inspect mapped workflow defaults (megapixels, aspect ratio, checkpoint)
+    let wfDefaultMp: number | null = null;
+    let wfDefaultAr: string | null = null;
+    let wfDefaultCkpt: string | null = null;
+    try {
+      const wfInfo = getWorkflowMapping(Number(workflowId));
+      wfDefaultMp = wfInfo.defaultMegapixels ?? null;
+      wfDefaultAr = wfInfo.defaultAspectRatio ?? null;
+      const ckptNode = wfInfo.nodes.find((n) => n.nodeId === wfInfo.mapping.checkpointNodeId);
+      const ckptVal =
+        ckptNode?.currentValues?.[wfInfo.mapping.checkpointField] ||
+        ckptNode?.currentValues?.unet_name ||
+        ckptNode?.currentValues?.ckpt_name;
+      if (typeof ckptVal === 'string' && ckptVal.trim()) {
+        wfDefaultCkpt = ckptVal.trim();
+      }
+    } catch {
+      // Fallback if mapping lookup fails
+    }
+
+    const resolvedAr = normalizeResolutionSelectorRatio(aspectRatio || wfDefaultAr || undefined);
+    const explicitMp =
+      megapixels !== undefined && megapixels !== null && Number(megapixels) > 0
+        ? Number(megapixels)
+        : null;
+    const resolvedMp = Math.max(
+      0.1,
+      Math.min(10.0, explicitMp ?? wfDefaultMp ?? 3.0)
+    );
     const { width: computedWidth, height: computedHeight } = computeDimensionsFromMegapixels(
       resolvedAr,
       resolvedMp
@@ -476,22 +503,9 @@ generationRouter.post('/submit-batch', async (req, res) => {
     const activeLorasCount = loraSelections.filter((l) => Boolean(l.loraName?.trim())).length;
 
     // Resolve checkpoint name from request or mapped workflow checkpoint node
-    let resolvedCheckpointName: string | null = checkpointName ? String(checkpointName).trim() : null;
-    if (!resolvedCheckpointName) {
-      try {
-        const wfInfo = getWorkflowMapping(Number(workflowId));
-        const ckptNode = wfInfo.nodes.find((n) => n.nodeId === wfInfo.mapping.checkpointNodeId);
-        const ckptVal =
-          ckptNode?.currentValues?.[wfInfo.mapping.checkpointField] ||
-          ckptNode?.currentValues?.unet_name ||
-          ckptNode?.currentValues?.ckpt_name;
-        if (typeof ckptVal === 'string' && ckptVal.trim()) {
-          resolvedCheckpointName = ckptVal.trim();
-        }
-      } catch {
-        // Fallback to workflow name if mapping lookup fails
-      }
-    }
+    const resolvedCheckpointName: string | null = checkpointName
+      ? String(checkpointName).trim()
+      : wfDefaultCkpt;
 
     // 1. Create batch and items in SQLite
     const batchInfo = db

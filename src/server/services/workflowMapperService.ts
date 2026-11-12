@@ -402,6 +402,8 @@ export function getWorkflowMapping(workflowId: number): {
   nodes: WorkflowNodeSlotInfo[];
   hasValidApiGraph: boolean;
   defaultCheckpoint?: string | null;
+  defaultMegapixels?: number | null;
+  defaultAspectRatio?: string | null;
 } {
   const wfRow = db.prepare('SELECT * FROM workflows WHERE id = ?').get(workflowId) as any;
   const apiGraph = getExecutableApiGraph(wfRow);
@@ -436,6 +438,8 @@ export function getWorkflowMapping(workflowId: number): {
       nodes: [],
       hasValidApiGraph: false,
       defaultCheckpoint: null,
+      defaultMegapixels: null,
+      defaultAspectRatio: null,
     };
   }
 
@@ -457,8 +461,45 @@ export function getWorkflowMapping(workflowId: number): {
     }
   }
 
+  const resolvedLatentNodeId = savedRow?.latent_node_id ?? autoMapping.latentNodeId;
+  const resolvedMpField =
+    savedRow?.megapixels_field || autoMapping.megapixelsField || 'megapixels';
+  const resolvedArField =
+    savedRow?.aspect_ratio_field || autoMapping.aspectRatioField || 'aspect_ratio';
+  let defaultMegapixels: number | null = null;
+  let defaultAspectRatio: string | null = null;
+
+  if (resolvedLatentNodeId && apiGraph[resolvedLatentNodeId]?.inputs) {
+    const latentInputs = apiGraph[resolvedLatentNodeId].inputs;
+    const rawMp = Number(latentInputs[resolvedMpField]);
+    if (Number.isFinite(rawMp) && rawMp > 0) {
+      defaultMegapixels = rawMp;
+    } else if (
+      typeof latentInputs.width === 'number' &&
+      typeof latentInputs.height === 'number' &&
+      latentInputs.width > 0 &&
+      latentInputs.height > 0
+    ) {
+      defaultMegapixels = Number(
+        ((latentInputs.width * latentInputs.height) / 1_000_000).toFixed(2)
+      );
+    }
+
+    const rawAr = latentInputs[resolvedArField];
+    if (typeof rawAr === 'string' && rawAr.trim()) {
+      defaultAspectRatio = normalizeResolutionSelectorRatio(rawAr.trim());
+    }
+  }
+
   if (!savedRow) {
-    return { mapping: autoMapping, nodes, hasValidApiGraph: true, defaultCheckpoint };
+    return {
+      mapping: autoMapping,
+      nodes,
+      hasValidApiGraph: true,
+      defaultCheckpoint,
+      defaultMegapixels,
+      defaultAspectRatio,
+    };
   }
 
   let parsedLoraIds: string[] = autoMapping.loraNodeIds;
@@ -500,6 +541,8 @@ export function getWorkflowMapping(workflowId: number): {
     nodes,
     hasValidApiGraph: true,
     defaultCheckpoint,
+    defaultMegapixels,
+    defaultAspectRatio,
   };
 }
 

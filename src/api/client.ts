@@ -410,6 +410,8 @@ export const api = {
       nodes: WorkflowNodeSlotInfo[];
       hasValidApiGraph: boolean;
       defaultCheckpoint?: string | null;
+      defaultMegapixels?: number | null;
+      defaultAspectRatio?: string | null;
     }>(`/api/generation/workflows/${workflowId}/mapping`),
 
   saveWorkflowMapping: (workflowId: number, payload: Partial<WorkflowNodeMapping>) =>
@@ -498,7 +500,7 @@ export const api = {
     mode: 'single' | 'theme_set';
     themeTitle?: string;
     aspectRatio: string;
-    megapixels: number;
+    megapixels?: number;
     prompts: string[];
     triggerWord?: string;
     negativePrompt: string;

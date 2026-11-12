@@ -187,11 +187,17 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
     }
   }, [selectedCharacter, workflows]);
 
-  // Inspect workflow mapping and extract default checkpoint
+  // Inspect workflow mapping and extract default checkpoint & resolution
   const loadWorkflowMapping = useCallback(async (wfId: number) => {
     try {
       const res = await api.getWorkflowMapping(wfId);
       setWorkflowMapping(res.mapping);
+      if (typeof res.defaultMegapixels === 'number' && res.defaultMegapixels > 0) {
+        setMegapixels(res.defaultMegapixels);
+      }
+      if (typeof res.defaultAspectRatio === 'string' && res.defaultAspectRatio.trim()) {
+        setAspectRatio(res.defaultAspectRatio);
+      }
       const wfDetail = await api.getWorkflow(wfId);
       const rawStr = wfDetail.workflow?.api_workflow_json || wfDetail.workflow?.visual_workflow_json;
       if (rawStr) {

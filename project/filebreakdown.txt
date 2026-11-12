@@ -1,0 +1,738 @@
+================================================================================
+PROJECT FILE BREAKDOWN
+================================================================================
+
+--------------------------------------------------------------------------------
+Folder: src/api
+--------------------------------------------------------------------------------
+
+File: src/api/client.ts
+Purpose:
+  Centralized, typed frontend HTTP API client (`api` object) wrapping `fetch`
+  calls to the Express backend (`/api/*`). Provides `requestJson` error handling
+  and exposes domain-grouped methods for:
+  - System & Scans: health/status checks, runtime config updates, scan
+    triggers, and scan job history.
+  - Organization & Gallery: metadata/tags/collections/saved-search presets,
+    filtered image queries, image details, single/bulk image annotations, and
+    ZIP archive downloads.
+  - Characters: character CRUD, character merging, linking/unlinking LoRAs and
+    workflows, single/bulk character-image association status updates, and
+    running suggestion heuristics.
+  - LoRAs, Models & Workflows: LoRA explorer listing/classification/@mention
+    configuration, model inventory listing/syncing, model usage impact reports,
+    Civitai and Hugging Face searches, confirmed model downloads, workflow CRUD,
+    and setting the default workflow.
+  - ComfyUI & Reproduction: connection testing, live queue/progress polling,
+    workflow reproduction validation/submission, and reproduction job history.
+  - Backups: database backup listing/creation and annotation JSON restores.
+  - Generation Studio: prompt template CRUD, workflow node mapping retrieval
+    and saving, LM Studio status/config/guiding templates/prompt-set generation,
+    image interrogation, batch submission, and generation batch history.
+  - Visual Keyword Tagger (WD14 ONNX): tagger status/config updates, queue
+    control actions, and per-image visual tag rescanning or removal.
+
+--------------------------------------------------------------------------------
+Folder: src/components/character
+--------------------------------------------------------------------------------
+
+File: src/components/character/CharacterCard.tsx
+Responsible for:
+  Presentational card component for a single character in the Character Explorer
+  roster grid. Displays the character's portrait thumbnail (or fallback icon),
+  character name, average rating, confirmed image count, linked LoRA count,
+  pending suggestion count, and aliases list.
+
+File: src/components/character/CharacterGallerySection.tsx
+Responsible for:
+  Renders a character's image gallery section (including expandable 5-star pools
+  and standard galleries) along with live ComfyUI pending/progress ghost preview
+  cards at the front of the grid. Provides image actions per card: open detail
+  inspector, set as character portrait (highlighting the active portrait card),
+  quick star rating, favorite toggle, prompt reuse into Quick Gen, original file
+  download, and quick reject/restore.
+
+File: src/components/character/CharacterLorasAndWorkflows.tsx
+Responsible for:
+  Detail-page panel managing a character's linked resources. Allows viewing,
+  linking, and unlinking associated LoRAs (with appearance roles, categories,
+  and inline blur-saved trigger words), linking preferred ComfyUI workflows with
+  role labels, and toggling character collection memberships.
+
+File: src/components/character/CharacterProfileHeader.tsx
+Responsible for:
+  Top navigation bar and profile overview banner on a character's detail page.
+  Provides navigation back to the roster, filtering the Main Gallery by the
+  character, exporting all confirmed character images as a ZIP archive, deleting
+  the profile, viewing portrait/generation stats, and inline editing of
+  character description, user notes, and comma-separated aliases.
+
+File: src/components/character/CharacterRosterView.tsx
+Responsible for:
+  Main Character Explorer directory view. Handles searching characters (by name,
+  description, alias, or LoRA) and sorting (by image count, average rating,
+  most recent generation, or name), triggers assisted character identification
+  and profile creation/merge modals, and renders the responsive grid of
+  `CharacterCard` items or an empty state.
+
+File: src/components/character/CharacterSuggestionsReview.tsx
+Responsible for:
+  Review panel for pending assisted character-image match suggestions on a
+  character detail page. Supports individual and multi-select bulk actions to
+  confirm or reject suggested matches (plus "Confirm All") and displays match
+  reasons alongside image thumbnails.
+
+File: src/components/character/CreateCharacterModal.tsx
+Responsible for:
+  Modal dialog form for creating a new character profile with required name,
+  comma-separated aliases/prompt triggers, description, and notes.
+
+File: src/components/character/MergeCharactersModal.tsx
+Responsible for:
+  Modal dialog form for merging two character profiles, moving all aliases,
+  confirmed/suggested images, linked LoRAs, workflows, collections, and notes
+  from a selected source character into a primary target character.
+
+--------------------------------------------------------------------------------
+Folder: src/components/generation
+--------------------------------------------------------------------------------
+
+File: src/components/generation/BatchQueueHistory.tsx
+Responsible for:
+  Displays the history and live status of dispatched ComfyUI generation batches
+  and their individual shot items. Shows batch metadata (character, aspect ratio,
+  megapixels, theme), per-batch completion/queued/failed counts, thumbnails (with
+  click-to-open in the image inspector), seeds, prompts, and error messages,
+  plus a manual queue refresh trigger.
+
+File: src/components/generation/CharacterLoraStackPanel.tsx
+Responsible for:
+  Step 01 panel in Generation Studio for selecting a target character (or custom
+  subject), editing the injected character/LoRA trigger word (`string_b`), and
+  managing the active LoRA stack (`Power Lora Loader` slots)—including adding
+  extra LoRAs, adjusting model/CLIP strengths, and removing LoRAs.
+
+File: src/components/generation/PromptTemplateEditor.tsx
+Responsible for:
+  Step 04 panel in Generation Studio for choosing between Verbatim single-prompt
+  mode and Photo Set Theme (LM Studio) mode, selecting/saving reusable prompt
+  templates (`{character}`, `{lora}`, `{theme}`), editing positive/negative
+  prompts, configuring LM Studio endpoint/model/guiding templates, triggering
+  LM Studio prompt scripting, and dispatching the final generation batch.
+
+File: src/components/generation/ResolutionSelectorPanel.tsx
+Responsible for:
+  Step 02 panel in Generation Studio for selecting output aspect ratio presets
+  (or custom `aspect_ratio` strings), adjusting target megapixels (0.1–10.0 MP
+  via slider, exact number input, or quick presets), and setting the batch size
+  (1–20 generations).
+
+File: src/components/generation/WorkflowSelectionPanel.tsx
+Responsible for:
+  Step 03 panel in Generation Studio for selecting the active ComfyUI workflow,
+  overriding or resetting the workflow's diffusion/checkpoint model (`unet_name`),
+  viewing the detected/custom node mapping summary (Prompt, Trigger, LoRA,
+  Resolution, Seed, Model), and opening the Node Mapper / JSON Import modal.
+
+--------------------------------------------------------------------------------
+Folder: src/components/system
+--------------------------------------------------------------------------------
+
+File: src/components/system/CollectionsAndScannerSection.tsx
+Responsible for:
+  System settings section managing virtual collections (creating and deleting
+  collections with image counts) alongside the filesystem scanner controls
+  (triggering incremental scans or full machine-metadata rebuilds) and a table
+  of recent scan job history and file counts.
+
+File: src/components/system/ComfyUiConnectionSection.tsx
+Responsible for:
+  Configuration form for the ComfyUI server URL, mounted directory paths
+  (`COMFYUI_OUTPUT_DIR`, `COMFYUI_MODELS_DIR`, `DOWNLOADS_DIR`), and scheduled
+  database backup intervals, plus a button and status banner for testing live
+  ComfyUI connectivity.
+
+File: src/components/system/DatabaseBackupSection.tsx
+Responsible for:
+  Panel displaying SQLite database integrity status, stored snapshot history,
+  and actions to trigger manual SQLite backups or export/restore SHA-256-keyed
+  user annotations as JSON files.
+
+File: src/components/system/LmStudioTemplatesSection.tsx
+Responsible for:
+  Configuration and editor panel for the local LM Studio OpenAI-compatible
+  endpoint URL, active model selection, connection testing, and CRUD management
+  of database-persisted System & User Guiding Prompt Templates (with variable
+  placeholders like `{character}`, `{lora}`, `{theme}`, `{count}`, and
+  `{base_prompt}`).
+
+File: src/components/system/VisualTaggerSection.tsx
+Responsible for:
+  Control panel for the WD14 v3 ONNX visual keyword tagger, handling its
+  on-demand enable/disable toggle, ~360 MB model download progress display,
+  indexing progress counters, confidence threshold slider, CPU/GPU execution
+  device selector, and queue actions (pause, scan pending, rescan all).
+
+File: src/components/system/WorkspacePreferencesSection.tsx
+Responsible for:
+  Workspace toggle controls in System & Backup settings to enable or disable
+  the cross-tab Floating Quick Generation Box and automatic saving of 1MP
+  downscaled uploaded/pasted interrogation images.
+
+--------------------------------------------------------------------------------
+Folder: src/components/workflows
+--------------------------------------------------------------------------------
+
+File: src/components/workflows/PowerLoraLoaderEditor.tsx
+Responsible for:
+  Helper utilities and interactive UI editor for rgthree `Power Lora Loader`
+  nodes. Detects Power Lora Loader nodes, extracts/serializes ordered `lora_N`
+  entries (`on`, `lora`, `strength`), and renders slot enable checkboxes, LoRA
+  file dropdowns, numeric strength controls, slot addition, and slot deletion.
+
+File: src/components/workflows/WorkflowGraphInspector.tsx
+Responsible for:
+  Structured node-level parameter editor for ComfyUI API prompt graphs.
+  Filters nodes by ID, title, class_type, or input keys; renders node-to-node
+  link badges, `PowerLoraLoaderEditor` for rgthree multi-LoRA nodes, dropdowns
+  for diffusion/checkpoint models, LoRAs, VAEs, CLIPs, ResolutionSelector ratios,
+  samplers, and schedulers, plus boolean, numeric, and multiline text inputs.
+
+File: src/components/workflows/WorkflowJsonModal.tsx
+Responsible for:
+  Modal viewer and editor for raw ComfyUI API prompt graph or visual workflow
+  JSON documents, showing live JSON syntax validation status, character count,
+  copy-to-clipboard, download-as-JSON, and save-to-server actions.
+
+File: src/components/workflows/WorkflowModals.tsx
+Responsible for:
+  Contains two workflow dialogs: `ExportPromptModal` (prompts the user to save
+  unsaved edits before downloading workflow JSON) and `WorkflowCreateModal`
+  (form for importing `.json` files or pasting API/visual workflow JSONs into
+  the library and optionally setting a workflow as default).
+
+File: src/components/workflows/WorkflowReproductionHistory.tsx
+Responsible for:
+  Displays a table of historical ComfyUI workflow reproduction runs launched from
+  the gallery/inspector, including job ID, workflow/source image, ComfyUI
+  prompt ID, readiness status, execution state (`completed`, `failed`, or
+  queued), submission timestamp, and a manual refresh button.
+
+File: src/components/workflows/WorkflowSidebarList.tsx
+Responsible for:
+  Sidebar list of stored workflows (both saved library and auto-extracted),
+  displaying selection state, default badge and "Set Default" button, image
+  counts, API/visual JSON availability, workflow hash, and linked characters.
+
+--------------------------------------------------------------------------------
+Folder: src (root files)
+--------------------------------------------------------------------------------
+
+File: src/App.tsx
+Responsible for:
+  Root React application container and global state coordinator. Manages active
+  workspace tab navigation (`gallery`, `characters`, `generation`, `loras`,
+  `workflows`, `system`), gallery filter/pagination/infinite-scroll state,
+  concurrent loading of images and secondary metadata, real-time ComfyUI live
+  queue/progress polling (updating browser tab title, ghost cards, and silent
+  gallery refreshes on newly indexed outputs), LM Studio connectivity polling,
+  toast message history, quick-gen prompt reuse prefill wiring, quick image
+  rating/favorite/reject handlers, bulk updates, and rendering the
+  `TopNavHeader`, active tab view, `FloatingQuickGenBar`, and
+  `ImageInspectorDrawer`.
+
+File: src/index.css
+Responsible for:
+  Global Tailwind CSS v4 stylesheet and theme base rules. Imports Tailwind,
+  defines CSS custom properties for display (`Plus Jakarta Sans`), sans
+  (`DM Sans`), and monospace (`JetBrains Mono`) font stacks, sets dark-mode
+  body background/text colors, enforces tabular-nums for monospace/numeric
+  utilities, and forces hover action bars visible on touch devices (`hover: none`).
+
+File: src/main.tsx
+Responsible for:
+  Browser Vite/React entry point. Mounts the root `App` component into the DOM
+  element `#root` and imports `src/index.css`.
+
+--------------------------------------------------------------------------------
+Folder: src/server
+--------------------------------------------------------------------------------
+
+File: src/server/config.ts
+Responsible for:
+  Centralized runtime configuration resolver (`appConfig`) for the Express
+  backend. Detects Docker/container mount paths vs. local workspace paths and
+  resolves directory locations for ComfyUI outputs, ComfyUI models, SQLite
+  database file, 384px WebP thumbnails, database backups, local ONNX models,
+  verified model downloads, and uploaded 1MP prompt images, along with service
+  URLs (`comfyuiUrl`, `lmStudioUrl`), external API keys (`civitaiApiKey`,
+  `hfApiToken`), server port, and scheduled backup intervals. Also exports
+  `ensureDirectories()` to create required writable directories on startup.
+
+File: src/server/db.ts
+Responsible for:
+  SQLite database connection manager and versioned schema initializer using
+  `better-sqlite3` (WAL mode, foreign keys enabled, 5000ms busy timeout). Runs
+  migrations (v1–v9) creating and indexing all core tables (`images`,
+  `image_metadata`, `models`, `image_loras`, `image_models`, `characters`,
+  `character_aliases`, `character_loras`, `image_characters`, `tags`,
+  `image_tags`, `character_tags`, `workflows`, `image_workflows`,
+  `character_workflows`, `collections`, `collection_images`,
+  `character_collections`, `ratings`, `saved_searches`, `comfyui_instances`,
+  `reproduction_jobs`, `scan_jobs`, `download_jobs`, `prompt_templates`,
+  `workflow_mappings`, `generation_batches`, `generation_items`,
+  `lm_studio_settings`, `lm_studio_prompt_templates`, `app_settings`,
+  `image_visual_tags`) and seeds default ComfyUI instance, prompt templates,
+  LM Studio settings/guiding templates, and default `Krea2_turbo` workflow and
+  node mappings.
+
+--------------------------------------------------------------------------------
+Folder: src/server/routes
+--------------------------------------------------------------------------------
+
+File: src/server/routes/charactersRoutes.ts
+Responsible for:
+  Express router handling `/api/characters/*` endpoints. Provides character
+  profile listing and detail retrieval, character creation and full updates
+  (name, description, notes, portrait selection, aliases, tags, collections),
+  transactional character deletion and merging (`/:id/merge`), linking/updating/
+  unlinking character LoRAs and workflows, single and bulk character-image
+  association status confirmation/rejection (with automatic appearance label
+  resolution), and manual triggering of assisted character identification.
+
+File: src/server/routes/generationRoutes.ts
+Responsible for:
+  Express router handling `/api/generation/*` endpoints. Provides reusable
+  prompt template CRUD, workflow node mapping inspection/auto-detection/saving,
+  LM Studio connection checks/settings/guiding-template CRUD and photo-set prompt
+  generation, image-to-prompt interrogation (handling base64 image payloads),
+  generation batch history listing, and `/submit-batch` orchestration (creating
+  batch/item records, compiling workflow graphs per shot, concurrently
+  submitting prompts to ComfyUI `/prompt`, and polling ComfyUI `/history` to
+  index generated outputs and update completion states).
+
+File: src/server/routes/imagesRoutes.ts
+Responsible for:
+  Express router handling `/api/images/*` endpoints. Implements filtered image
+  querying (`POST /query`), single-image full detail hydration with parsed raw
+  metadata and workflow JSONs (`GET /:id`), immutable-cached 384px WebP
+  thumbnail serving with on-demand generation (`GET /:id/thumbnail`), unaltered
+  original file streaming and download (`GET /:id/file`), content-hash-keyed
+  annotation updates (ratings, favorites, reject/archive, notes, tags,
+  collections, appearance labels), transactional bulk image actions (`POST /bulk`),
+  streaming ZIP archive export (`POST /export-zip`), and single-image WD14
+  visual tag rescanning/removal.
+
+File: src/server/routes/modelsAndWorkflowsRoutes.ts
+Responsible for:
+  Express router handling LoRA, model, ComfyUI, and workflow endpoints
+  (`/api/comfyui/*`, `/api/loras/*`, `/api/models/*`, `/api/downloads/*`,
+  `/api/workflows/*`, `/api/reproduce/*`). Exposes live ComfyUI queue/progress
+  status and connectivity testing, LoRA Explorer listing, category
+  classification, and `@mention` configuration (nickname, toggle, default
+  strengths, trigger word sync), model inventory listing/syncing and usage
+  impact reports, Civitai/Hugging Face model search, confirmed download starts
+  and job listing, workflow library CRUD and default workflow switching, and
+  workflow reproduction validation, submission, and job history.
+
+File: src/server/routes/systemRoutes.ts
+Responsible for:
+  Express router handling `/api/health`, `/api/config`, `/api/scans/*`,
+  `/api/organization/*`, `/api/backups/*`, and `/api/tagger/*` endpoints.
+  Serves system health/gallery counts and workspace toggles, applies runtime
+  configuration updates (paths, URLs, backup interval, Quick Gen/upload toggles),
+  triggers and monitors filesystem scans, manages global tags, collections, and
+  saved searches, creates/lists SQLite binary backups and JSON annotation
+  exports/restores, and controls the WD14 visual keyword tagger config and queue.
+
+--------------------------------------------------------------------------------
+Folder: src/server/services
+--------------------------------------------------------------------------------
+
+File: src/server/services/backupService.ts
+Responsible for:
+  Database backup and user-annotation portability service. Creates verified
+  SQLite binary backups (`db.backup` + `PRAGMA integrity_check`), lists backup
+  artifacts in the backup directory, exports and restores user-created
+  annotations independently of machine-derived metadata (ratings, tags,
+  collections, saved searches, saved workflows, and character profiles/links),
+  and manages the scheduled automatic backup timer.
+
+File: src/server/services/characterService.ts
+Responsible for:
+  Character profile builder, merge engine, and deterministic Assisted Character
+  Identification engine. Aggregates character portraits (honoring explicit user
+  selections before fallback), aliases, LoRAs, workflows, tags, collections, and
+  gallery statistics; executes transactional character merges; runs heuristic
+  matching across linked LoRAs (0.90), prompt name/alias regexes (0.75), and
+  linked workflows (0.65) for single images or the whole gallery without
+  overwriting confirmed/rejected matches; and updates LoRA categories.
+
+File: src/server/services/comfyuiLiveMonitor.ts
+Responsible for:
+  Real-time ComfyUI queue and WebSocket execution monitor. Maintains a live
+  WebSocket connection to ComfyUI `/ws` (capturing step progress, active node,
+  and prompt completion/error transitions) combined with cached `/queue` HTTP
+  polling, and assembles active/queued/indexing ghost preview cards from
+  `generation_items`, `reproduction_jobs`, and external direct ComfyUI queue
+  entries.
+
+File: src/server/services/comfyuiService.ts
+Responsible for:
+  ComfyUI integration, model inventory synchronization, and workflow reproduction
+  service. Tests ComfyUI `/system_stats` connectivity, recursively scans local
+  model folders and ComfyUI `/object_info` to compute SHA-256/AutoV2 hashes and
+  sync the `models` inventory, converts standard visual workflows to API prompt
+  graphs, validates reproduction readiness (checking missing models/custom nodes
+  without silent substitution), injects edited positive prompts, dispatches
+  reproduction jobs to `/prompt`, and polls `/history` to index outputs.
+
+File: src/server/services/galleryQueryService.ts
+Responsible for:
+  High-performance gallery query, hydration, and boolean search engine. Batch-
+  hydrates `ImageRecord` objects without N+1 queries or heavy JSON blobs,
+  evaluates complex boolean search expressions (`AND`, `OR`, `NOT`, `field:value`,
+  numeric comparisons, quoted phrases, and universal word matching across
+  prompts/tags/LoRAs/characters/visual tags), applies multi-LoRA/character/
+  status/date filters and 9 sort modes, and aggregates LoRA Explorer records.
+
+File: src/server/services/lmStudioService.ts
+Responsible for:
+  LM Studio OpenAI-compatible LLM/VLM integration and prompt interrogation
+  pipeline. Manages SQLite-persisted LM Studio settings and Guiding Prompt
+  Templates, checks `/v1/models` availability, generates themed multi-shot photo
+  set prompts (with sanitization and an offline fallback shot director), and
+  runs a hybrid image-to-prompt pipeline (Vision-Language Model direct captioning
+  with automatic fallback to local WD14 ONNX tag extraction + text LLM
+  synthesis, stripping physical character identity traits when a character LoRA
+  is active).
+
+File: src/server/services/modelManagerService.ts
+Responsible for:
+  External model discovery and verified download manager. Queries Civitai
+  (by AutoV2/SHA-256 hash or text search) and Hugging Face Hub APIs to resolve
+  downloadable `.safetensors`/checkpoint/LoRA files, validates target filenames
+  against path traversal and overwrite rules, streams confirmed downloads to
+  `.part` files in `DOWNLOADS_DIR` with live progress tracking in `download_jobs`,
+  verifies SHA-256 checksums, registers downloaded models, and syncs inventory.
+
+File: src/server/services/pngMetadataParser.ts
+Responsible for:
+  Read-only PNG binary chunk (`tEXt`, `iTXt`, `zTXt`) and generation metadata
+  extractor. Parses ComfyUI API graphs (`prompt` chunk), ComfyUI visual workflows
+  (`workflow` chunk), and Automatic1111 `parameters` text chunks; traces upstream
+  conditioning, switches, and `StringConcatenate` nodes to extract positive/
+  negative prompts, seeds, sampler settings, checkpoints, VAEs, ControlNets,
+  CLIPs, upscalers, and single/multi-slot LoRAs with provenance tracking.
+
+File: src/server/services/scannerService.ts
+Responsible for:
+  Filesystem image indexer, thumbnail generator, and live directory watcher.
+  Recursively scans `COMFYUI_OUTPUT_DIR` and watches for new/modified/deleted
+  files via `chokidar`, computes SHA-256 content hashes (preserving annotations
+  across file moves), generates 384px WebP thumbnails via `sharp` (plus a
+  non-blocking startup migration), extracts and persists metadata/workflows/
+  LoRAs/dependencies, reconciles missing files, links completed generation items
+  by seed, and triggers assisted character ID and visual tagging.
+
+File: src/server/services/visualTaggerService.ts
+Responsible for:
+  Local uncensored WD14 v3 (`SmilingWolf/wd-vit-tagger-v3`) ONNX Runtime visual
+  keyword tagger service. Handles lazy ~360 MB ONNX/CSV model downloading,
+  `sharp` 448x448 BGR tensor preprocessing, single-image buffer and gallery
+  database inference (supporting CPU or CUDA execution), non-blocking
+  background queue processing with pause/resume/rescan controls, and per-image
+  visual tag storage and removal.
+
+File: src/server/services/workflowMapperService.ts
+Responsible for:
+  Workflow node-mapping and generation-time API graph compiler. Computes target
+  width/height from aspect ratios and megapixels, inspects workflow node slots
+  for the Node Mapper UI, auto-detects and persists mappings for prompt, trigger
+  word, negative prompt, seed, steps, CFG, sampler, resolution/latent, model,
+  and LoRA nodes (including rgthree `Power Lora Loader` and `Krea2_turbo` nodes),
+  and compiles per-item executable ComfyUI API graphs with prompt, seed,
+  resolution, checkpoint/UNET, and active LoRA stack overrides.
+
+--------------------------------------------------------------------------------
+Folder: src/shared
+--------------------------------------------------------------------------------
+
+File: src/shared/types.ts
+Responsible for:
+  Shared TypeScript contract definitions used across both frontend and backend.
+  Defines domain union types (`DependencyStatus`, `ProvenanceSource`,
+  `LoraCategory`, `ModelType`, `CharacterAssociationStatus`,
+  `CharacterSuggestionSource`, `AspectRatioPreset`) and data interfaces for
+  images (`ImageRecord`, `ImageLoraRecord`, `ImageModelDependency`,
+  `ImageCharacterLink`, `ImageTagItem`, `VisualTagItem`, `ImageCollectionItem`),
+  characters (`CharacterProfile`), LoRA Explorer and model inventory items
+  (`LoraExplorerItem`, `ModelInventoryItem`), workflows and reproduction
+  validation (`WorkflowLibraryItem`, `ReproductionValidationResult`,
+  `WorkflowNodeSlotInfo`, `WorkflowNodeMapping`), gallery filters/presets
+  (`GalleryFilterState`, `SavedSearchPreset`), Generation Studio batches and
+  LM Studio integration (`PromptTemplate`, `GenerationLoraSelection`,
+  `GenerationItemRecord`, `GenerationBatchRecord`, `QueuedGhostCardItem`,
+  `LmStudioGuidingTemplate`, `LmStudioStatus`), live ComfyUI status and toasts
+  (`ComfyUiLiveStatus`, `AppToastMessage`), and WD14 visual tagger status
+  (`VisualTaggerStatus`), while re-exporting resolution selector types and
+  helpers from `src/shared/utils.ts`.
+
+File: src/shared/utils.ts
+Responsible for:
+  Shared cross-environment utility functions, formatting helpers, and UI
+  constants. Defines `ASPECT_RATIO_PRESETS` / `RESOLUTION_SELECTOR_OPTIONS`
+  and `MEGAPIXEL_PRESETS`, aspect-ratio normalization and closest-match
+  resolution helpers (`normalizeResolutionSelectorRatio`,
+  `resolveClosestAspectRatio`), byte-size formatters (`formatBytes`,
+  `formatMb`), template placeholder interpolation (`interpolatePrompt`), model
+  inventory type filters (`filterDiffusionModels`, `filterLoraModels`,
+  `filterVaeModels`, `filterClipModels`), and default workflow prioritization
+  (`resolveDefaultWorkflow`).
+
+--------------------------------------------------------------------------------
+Folder: / (project root files)
+--------------------------------------------------------------------------------
+
+File: .dockerignore
+Responsible for:
+  Docker build context exclusion list. Excludes `node_modules`, `dist`, local
+  runtime/data folders (`gallery-data`, `mounted-data`, `model-downloads`),
+  `.git`, `.env`, and `*.log` files when building the container image.
+
+File: .env.example
+Responsible for:
+  Template environment variable file for local and Docker deployments. Documents
+  `PORT`, `COMFYUI_URL`, `LM_STUDIO_URL`, mounted directory paths
+  (`COMFYUI_OUTPUT_DIR`, `COMFYUI_MODELS_DIR`, `DATABASE_PATH`, `THUMBNAIL_PATH`,
+  `BACKUP_PATH`, `LOCAL_MODELS_DIR`, `DOWNLOADS_DIR`), and optional server-side
+  API keys (`CIVITAI_API_KEY`, `HF_API_TOKEN`).
+
+File: .gitignore
+Responsible for:
+  Git ignore rules excluding `node_modules/`, `build/`, `dist/`, `coverage/`,
+  `.DS_Store`, `*.log`, and `.env*` files (while explicitly tracking
+  `.env.example`).
+
+File: .npmrc
+Responsible for:
+  NPM configuration setting `legacy-peer-deps=true` for dependency installation
+  compatibility.
+
+File: Dockerfile
+Responsible for:
+  Multi-stage Docker image definition (`node:22-bookworm-slim` builder and
+  runtime stages). Installs native build tools for `better-sqlite3` and `sharp`,
+  installs npm dependencies, runs `npm run build` for the Vite frontend, creates
+  and chowns container mount directories (`/data/*`, `/app/data/*`, `/downloads`)
+  to the non-root `node` user (`1000:1000`), exposes port `8080`, and starts the
+  server via `tsx server.ts`.
+
+File: README.md
+Responsible for:
+  Comprehensive project documentation covering Couchy's architecture, features
+  (Generation Studio, Floating Quick Gen Box with `@character` mentions, hybrid
+  image-to-prompt interrogation, and LLM Photo Set Agent, Character Organization,
+  Gallery filters, Workflow Node Mapper, LoRA/Model Management, and local ONNX
+  WD14 visual tagger), Docker Compose installation steps, environment variable
+  reference, and backup/restore instructions.
+
+File: bun.lock
+Responsible for:
+  Package manager lockfile pinning resolved dependency versions and integrity
+  hashes.
+
+File: couchy.db
+Responsible for:
+  Local SQLite database file present in the workspace root.
+
+File: docker-compose.yml
+Responsible for:
+  Production Docker Compose service definition for `comfyui-gallery`. Configures
+  container user (`1000:1000`), security hardening (`no-new-privileges`,
+  `cap_drop: ALL`), port mapping (`9980:8080`), `.env` loading, `host.docker.internal`
+  gateway, host bind mounts for thumbnails, read-only ComfyUI output/models,
+  gallery data, and model downloads, NVIDIA GPU reservation for ONNX tagging,
+  and an `/api/health` container healthcheck.
+
+File: docker-compose.yml.example
+Responsible for:
+  Example Docker Compose template with placeholder host volume paths
+  (`/path/to/comfyui/...`), default `8080:8080` port mapping, and commented-out
+  optional NVIDIA GPU device reservation block.
+
+File: example.env
+Responsible for:
+  Companion environment template file (`cp example.env .env` referenced in
+  `README.md`) defining default container ports, ComfyUI/LM Studio URLs, volume
+  paths, and optional Civitai/Hugging Face API keys.
+
+File: index.html
+Responsible for:
+  HTML entry point for the Vite React SPA. Configures dark mode styling, mobile
+  viewport settings, page title and OpenGraph/Twitter meta tags (`Couchy`),
+  Google Fonts (`DM Sans`, `JetBrains Mono`, `Plus Jakarta Sans`), `#root` mount
+  container, and loads `/src/main.tsx`.
+
+File: metadata.json
+Responsible for:
+  AI Studio applet metadata manifest specifying the application name,
+  description, frame permissions, and major capabilities.
+
+File: package.json
+Responsible for:
+  Node.js package manifest defining scripts (`dev` and `start` running
+  `tsx server.ts`, `build` running `vite build`, `preview`, `clean`, and `lint`
+  running `tsc --noEmit`) along with runtime and development dependencies
+  (Express, `better-sqlite3`, `sharp`, `onnxruntime-node`, `chokidar`, `archiver`,
+  React 19, Vite, Tailwind CSS v4, Lucide icons, Motion, and TypeScript).
+
+File: server.ts
+Responsible for:
+  Main full-stack application server entry point. Runs SQLite migrations and
+  one-time prompt backfill, starts the `chokidar` filesystem watcher, initializes
+  Express (`25mb` JSON payload limit), mounts all `/api/*` routers, schedules
+  5-minute directory reconciliation scans, mounts Vite dev middleware (or serves
+  static `dist/` in production), listens on `0.0.0.0:<port>`, and triggers
+  non-blocking startup tasks (384px WebP thumbnail migration, model inventory
+  sync, incremental image scan, and visual tagger queue resume).
+
+File: tsconfig.json
+Responsible for:
+  TypeScript compiler configuration targeting `ES2022` / `ESNext` with bundler
+  module resolution, `react-jsx`, `@/*` path alias to the workspace root, and
+  `noEmit: true` for typechecking (`npm run lint`).
+
+File: vite.config.ts
+Responsible for:
+  Vite bundler configuration enabling `@vitejs/plugin-react` and
+  `@tailwindcss/vite`, configuring the `@` path alias to the project root, and
+  toggling HMR/file-watching based on `DISABLE_HMR`.
+
+--------------------------------------------------------------------------------
+Folder: src/components (top-level files)
+--------------------------------------------------------------------------------
+
+File: src/components/CharacterExplorerView.tsx
+Responsible for:
+  Top-level container for the Characters workspace tab. Coordinates switching
+  between the `CharacterRosterView` directory and a selected character's profile
+  detail view (`CharacterProfileHeader`, `CharacterLorasAndWorkflows`,
+  `CharacterSuggestionsReview`, expandable Highest-Rated
+  `CharacterGallerySection`, and All Confirmed Images `CharacterGallerySection`
+  with live ComfyUI ghost cards), as well as character creation, non-destructive
+  merging (`MergeCharactersModal`), portrait assignment, and assisted character
+  suggestion runs.
+
+File: src/components/FloatingQuickGenBar.tsx
+Responsible for:
+  Collapsible cross-tab bottom Quick Generation dock. Supports prompt entry,
+  `@character` and `@lora` autocomplete mention popover (with All/Characters/
+  LoRAs tabs and preview pane), removable character and LoRA pill badges
+  (tracking `removedLoraKeys` so removed pills or unlinked character LoRAs are
+  excluded on submission), one-click prompt/character/LoRA reuse prefill, 1MP
+  client-side image downscaling and drag/drop/paste/upload interrogation via
+  LM Studio (Vision or WD14+LLM), LM Studio Photo Set Agent toggle, aspect ratio
+  (`Node #49`) and batch count (`x1`–`x8`) selector popover, and ComfyUI batch
+  submission.
+
+File: src/components/GalleryFilterBar.tsx
+Responsible for:
+  Sticky top search and expandable filter bar for the Main Gallery. Provides a
+  universal boolean search input, total matching count, ZIP export of matching
+  images, pagination controls (`Prev`/`Next`), Infinite Scroll switch, and an
+  expandable filter drawer with Favorites-only toggle, minimum star rating, 9
+  sort modes, layout mode switcher (`standard`, `masonry`, `compact`), thumbnail
+  scale (`sm`, `md`, `lg`), multi-character filter (`ALL`/`ANY` + unconfirmed
+  suggestions toggle), multi-LoRA filter (`ALL`/`ANY` + min/max strength
+  bounds), checkpoint/collection/dependency/rejected/archived filters, tag
+  pills, and saved search preset management.
+
+File: src/components/GalleryGridView.tsx
+Responsible for:
+  Main Gallery viewport component supporting Standard Grid, Masonry, and Compact
+  layouts across `sm`/`md`/`lg` thumbnail scales, pagination or
+  `IntersectionObserver`-driven infinite scroll (+48 images per batch), loading
+  skeletons, and an empty-directory onboarding state. Renders live ComfyUI
+  queued/generating ghost preview cards at the front of the grid, image cards
+  with hover/mobile quick actions (select, favorite, 1–5 star rating, reuse
+  prompt in Quick Gen, download original file, reject/restore) and zero-pill
+  metadata footers, plus a floating multi-select bulk operations bar (bulk rate,
+  favorite, archive, reject, tag, assign character, add to collection, and ZIP
+  download).
+
+File: src/components/GenerationStudioView.tsx
+Responsible for:
+  Top-level orchestrator for the Generation Studio & Photo Set Director
+  workspace tab. Coordinates Step 01 (`CharacterLoraStackPanel`), Step 02
+  (`ResolutionSelectorPanel`), Step 03 (`WorkflowSelectionPanel` +
+  `NodeMapperModal`), and Step 04 (`PromptTemplateEditor` with Verbatim vs. LM
+  Studio Photo Set Theme modes), along with the editable Outgoing Prompt Queue
+  Preview (per-shot prompt editing) and `BatchQueueHistory`.
+
+File: src/components/ImageInspectorDrawer.tsx
+Responsible for:
+  Full-screen split-pane Lightbox and Image Metadata/Workflow Inspector drawer.
+  The left pane provides a zoomable full-screen image viewer with keyboard/arrow
+  navigation (`Escape`, `ArrowLeft`, `ArrowRight`) and a bottom file/hash/
+  download bar; the right pane provides star rating, favorite/reject toggles,
+  character assignment and suggestion confirmation/rejection, editable positive
+  prompt (with provenance and copy buttons), negative prompt, generation
+  parameters grid, extracted LoRA chain with click-to-filter, one-click ComfyUI
+  workflow reproduction ("Run Workflow"), WD14 visual keyword tags (filter,
+  re-tag, remove), user tags, collections, auto-saved user notes, and a raw
+  workflow JSON viewer.
+
+File: src/components/LoraAndModelManagerView.tsx
+Responsible for:
+  Top-level view for the LoRAs & Models workspace tab with three sub-tabs and a
+  dedicated LoRA detail page: (1) LoRA Explorer table & detail view (search,
+  semantic category classification, Quick Gen `@mention` enable checkbox, inline
+  `@nickname` and default model/CLIP strength configuration, usage impact
+  report, ZIP export, and associated images grid), (2) Model Inventory & Missing
+  Dependencies dashboard (highlighting missing models referenced by indexed
+  images with one-click locate & download, plus full SHA-256/AutoV2 inventory
+  table), and (3) Civitai & Hugging Face model search and user-confirmed
+  downloader modal with active download queue status.
+
+File: src/components/NodeMapperModal.tsx
+Responsible for:
+  Modal dialog for inspecting and adapting ComfyUI workflows for Generation
+  Studio. Contains two tabs: "Node Slot Mapper" (auto-detects or manually binds
+  nodes and input fields for User Prompt, LoRA Trigger Word, Seed/KSampler,
+  Resolution Selector aspect ratio & megapixels, Diffusion/Checkpoint model,
+  Enable LoRA boolean switch, and multi-LoRA loader nodes like `Power Lora
+  Loader`) and "Import Preferred API Workflow" (validates and imports ComfyUI
+  API-format `.json` files or pasted JSON).
+
+File: src/components/SystemAndBackupView.tsx
+Responsible for:
+  Top-level orchestrator for the System & Backup workspace tab. Manages state
+  and API calls for `WorkspacePreferencesSection` (Quick Gen dock and 1MP
+  uploaded prompt image archiving toggles), `VisualTaggerSection` (WD14 ONNX
+  tagger config and queue controls), `LmStudioTemplatesSection` (LM Studio
+  endpoint/model config and Guiding Prompt Templates CRUD),
+  `ComfyUiConnectionSection` (ComfyUI URL, mount paths, scheduled backup
+  interval, and connectivity test), `DatabaseBackupSection` (SQLite snapshots
+  and JSON annotation export/restore), and `CollectionsAndScannerSection`
+  (virtual collections and directory scanner controls/history).
+
+File: src/components/TopNavHeader.tsx
+Responsible for:
+  Sticky 3-zone top application header. Zone 1 renders the mobile hamburger menu
+  toggle (with slide-down drawer) and `Couchy` brand button; Zone 2 renders
+  desktop workspace tab links (`gallery`, `characters`, `generation`, `loras`,
+  `workflows`, `system`); Zone 3 renders the unified status and notification
+  dropdown pill (displaying 3-second toast overrides, live ComfyUI step progress
+  fill and job counts, LM Studio online/model status, and the last 10
+  notification messages).
+
+File: src/components/WorkflowLibraryView.tsx
+Responsible for:
+  Top-level orchestrator for the Workflows workspace tab. Combines
+  `WorkflowSidebarList`, a dual-mode workflow editor (`WorkflowGraphInspector`
+  for structured node/model/`PowerLoraLoaderEditor` settings vs. live-validated
+  Raw JSON editor) with dirty-state tracking, default workflow toggling,
+  save/cancel, JSON export (`ExportPromptModal`), workflow import
+  (`WorkflowCreateModal`), ComfyUI reproduction readiness validation and test
+  submission, associated images preview, and `WorkflowReproductionHistory`.
