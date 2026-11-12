@@ -191,6 +191,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const lastAppliedTimestampRef = useRef<number | null>(null);
 
   const handleInterrogateImageFile = async (file: File) => {
     if (!lmStudioOnline) {
@@ -244,9 +245,10 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Handle incoming reuse / prefill requests
+  // Handle incoming reuse / prefill requests once per unique timestamp
   useEffect(() => {
-    if (!prefillPayload) return;
+    if (!prefillPayload || lastAppliedTimestampRef.current === prefillPayload.timestamp) return;
+    lastAppliedTimestampRef.current = prefillPayload.timestamp;
 
     // Ensure the dock is expanded when reusing a prompt
     setIsMinimized(false);
