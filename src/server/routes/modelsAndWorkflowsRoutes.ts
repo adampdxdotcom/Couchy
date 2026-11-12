@@ -64,6 +64,73 @@ modelsAndWorkflowsRouter.patch('/loras/classify', (req, res) => {
 });
 
 /**
+ * PATCH /api/loras/mention-config
+ * Updates Quick Gen @mention settings (mention_enabled, nickname, default strengths) for a LoRA.
+ */
+modelsAndWorkflowsRouter.patch('/loras/mention-config', (req, res) => {
+  try {
+    const { loraName, mentionEnabled, nickname, defaultModelStrength, defaultClipStrength } =
+      req.body || {};
+    if (!loraName) {
+      res.status(400).json({ error: 'loraName is required' });
+      return;
+    }
+
+    const cleanNick =
+      typeof nickname === 'string'
+        ? nickname.trim().replace(/^@+/, '').toLowerCase()
+        : null;
+
+    // Check collision if cleanNick is set
+    if (cleanNick) {
+      const existing = db
+        .prepare(
+          `SELECT filename FROM models WHERE LOWER(nickname) = ? AND LOWER(filename) != LOWER(?)`
+        )
+        .get(cleanNick, loraName) as any;
+      if (existing) {
+        res.status(400).json({
+          error: `Nickname "@${cleanNick}" is already assigned to ${existing.filename}`,
+        });
+        return;
+      }
+    }
+
+    const cleanModelStr =
+      defaultModelStrength !== undefined && !Number.isNaN(Number(defaultModelStrength))
+        ? Math.max(0.0, Math.min(2.0, Number(defaultModelStrength)))
+        : 1.0;
+    const cleanClipStr =
+      defaultClipStrength !== undefined && !Number.isNaN(Number(defaultClipStrength))
+        ? Math.max(0.0, Math.min(2.0, Number(defaultClipStrength)))
+        : 1.0;
+    const isMention = mentionEnabled ? 1 : 0;
+
+    // Ensure model row exists in models table
+    db.prepare(
+      `INSERT INTO models (name, filename, model_type, lora_category, nickname, mention_enabled, default_model_strength, default_clip_strength)
+       VALUES (?, ?, 'lora', 'unclassified', ?, ?, ?, ?)
+       ON CONFLICT(filename) DO UPDATE SET
+         nickname = excluded.nickname,
+         mention_enabled = excluded.mention_enabled,
+         default_model_strength = excluded.default_model_strength,
+         default_clip_strength = excluded.default_clip_strength`
+    ).run(
+      loraName.replace(/\.(safetensors|pt|ckpt)$/i, ''),
+      loraName,
+      cleanNick || null,
+      isMention,
+      cleanModelStr,
+      cleanClipStr
+    );
+
+    res.json({ ok: true, items: listLoraExplorerItems() });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to update LoRA mention settings' });
+  }
+});
+
+/**
  * GET /api/models/inventory
  * Returns known model inventory and Missing Dependencies summary.
  */

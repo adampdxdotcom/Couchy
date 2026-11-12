@@ -207,6 +207,10 @@ export interface LoraExplorerItem {
   minClipStrength: number | null;
   maxClipStrength: number | null;
   characters: { id: number; name: string; appearanceLabel: string }[];
+  nickname?: string | null;
+  mentionEnabled?: boolean;
+  defaultModelStrength?: number;
+  defaultClipStrength?: number;
 }
 
 export interface ModelInventoryItem {
@@ -361,6 +365,7 @@ export interface GenerationLoraSelection {
   clipStrength: number;
   triggerWord?: string;
   appearanceLabel?: string;
+  nickname?: string;
 }
 
 export interface GenerationItemRecord {

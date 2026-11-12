@@ -5,9 +5,11 @@ import {
   ChevronDown,
   ChevronUp,
   ImagePlus,
+  Layers,
   Loader2,
   Plus,
   Search,
+  Sliders,
   Sparkles,
   User,
   X,
@@ -17,6 +19,7 @@ import type {
   CharacterProfile,
   GenerationLoraSelection,
   ImageRecord,
+  LoraExplorerItem,
   WorkflowLibraryItem,
 } from '../shared/types.ts';
 import {
@@ -90,6 +93,7 @@ export interface QuickGenPrefill {
 
 interface FloatingQuickGenBarProps {
   characters: CharacterProfile[];
+  loras?: LoraExplorerItem[];
   allImages: ImageRecord[];
   workflows: WorkflowLibraryItem[];
   prefillPayload?: QuickGenPrefill | null;
@@ -103,8 +107,9 @@ const BATCH_COUNT_OPTIONS = [1, 2, 4, 6, 8];
 
 interface MentionEntry {
   key: string;
-  type: 'character' | 'image';
-  character: CharacterProfile;
+  type: 'character' | 'image' | 'lora';
+  character?: CharacterProfile;
+  loraItem?: LoraExplorerItem;
   title: string;
   subtitle: string;
   thumbnailUrl: string | null;
@@ -112,11 +117,12 @@ interface MentionEntry {
 }
 
 /**
- * Floating Quick Generation Bar with @character mention popover,
+ * Floating Quick Generation Bar with @character and @lora mention popover,
  * aspect ratio & batch count selectors, and LM Studio Agent toggle.
  */
 export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   characters,
+  loras = [],
   allImages,
   workflows,
   prefillPayload,
@@ -136,6 +142,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   const [aspectRatio, setAspectRatio] = useState('2:3 (Portrait Photo)');
   const [batchCount, setBatchCount] = useState<number>(1);
   const [attachedCharacter, setAttachedCharacter] = useState<CharacterProfile | null>(null);
+  const [attachedLoras, setAttachedLoras] = useState<GenerationLoraSelection[]>([]);
   const [isHighlighted, setIsHighlighted] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
 
@@ -251,11 +258,41 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     return () => clearTimeout(timer);
   }, [prefillPayload]);
 
-  // Build unified mention candidates (Character entries first, followed by confirmed character images)
+  // Build unified mention candidates:
+  // 1. Mention-enabled LoRAs with nicknames or matching filenames
+  // 2. Character entries
+  // 3. Confirmed character images
   const mentionEntries = useMemo<MentionEntry[]>(() => {
     const q = mentionQuery.trim().toLowerCase();
     const entries: MentionEntry[] = [];
 
+    // Filter candidate LoRAs (must have mentionEnabled true OR matching nickname)
+    const mentionableLoras = loras.filter((l) => l.mentionEnabled);
+    for (const lora of mentionableLoras) {
+      const nick = (lora.nickname || '').toLowerCase();
+      const loraName = lora.name.toLowerCase();
+      const loraFile = lora.filename.toLowerCase();
+
+      const matchesLora =
+        !q ||
+        (nick && nick.includes(q)) ||
+        loraName.includes(q) ||
+        loraFile.includes(q);
+
+      if (matchesLora) {
+        entries.push({
+          key: `lora-${lora.filename}`,
+          type: 'lora',
+          loraItem: lora,
+          title: lora.nickname ? `@${lora.nickname}` : lora.name,
+          subtitle: `LoRA · ${lora.loraCategory} · ${(lora.defaultModelStrength ?? 1.0).toFixed(1)}x`,
+          thumbnailUrl: null,
+          promptSnippet: lora.filename,
+        });
+      }
+    }
+
+    // Characters
     for (const char of characters) {
       const charImages = allImages.filter((img) =>
         img.characters.some((c) => c.characterId === char.id && c.status === 'confirmed')
@@ -283,9 +320,9 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
         });
       }
 
-      // Include recent confirmed images of matching characters (up to 6 per character)
+      // Include recent confirmed images of matching characters (up to 4 per character)
       if (matchesChar || q.length >= 2) {
-        for (const img of charImages.slice(0, 6)) {
+        for (const img of charImages.slice(0, 4)) {
           const promptLine = (img.positivePrompt || '').trim();
           const shortTitle = promptLine
             ? promptLine.slice(0, 42) + (promptLine.length > 42 ? '...' : '')
@@ -306,7 +343,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     }
 
     return entries;
-  }, [characters, allImages, mentionQuery]);
+  }, [characters, loras, allImages, mentionQuery]);
 
   // Keep activeIndex in bounds
   useEffect(() => {
@@ -340,22 +377,51 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     }
   };
 
-  // Select a character/image from the @mention popover
+  // Select a character, LoRA, or image from the @mention popover
   const handleSelectMention = (entry: MentionEntry) => {
-    const char = entry.character;
-    setAttachedCharacter(char);
-
     let nextPrompt = prompt;
-    if (mentionTriggerRange) {
-      const before = prompt.slice(0, mentionTriggerRange.start);
-      const after = prompt.slice(mentionTriggerRange.end);
-      const needsTrailingSpace = after.length === 0 || !after.startsWith(' ');
-      nextPrompt = `${before}${char.name}${needsTrailingSpace ? ' ' : ''}${after}`;
-    } else {
-      // Triggered via "+" button
-      const trimmed = prompt.trim();
-      if (!trimmed.toLowerCase().includes(char.name.toLowerCase())) {
-        nextPrompt = trimmed ? `${char.name} ${trimmed}` : `${char.name} `;
+
+    if (entry.type === 'lora' && entry.loraItem) {
+      const lora = entry.loraItem;
+      // Add to attachedLoras list (avoiding duplicate filenames)
+      setAttachedLoras((prev) => {
+        if (prev.some((al) => al.loraName.toLowerCase() === lora.filename.toLowerCase())) {
+          return prev;
+        }
+        return [
+          ...prev,
+          {
+            loraName: lora.filename,
+            modelStrength: lora.defaultModelStrength ?? 1.0,
+            clipStrength: lora.defaultClipStrength ?? 1.0,
+            nickname: lora.nickname || lora.name,
+          },
+        ];
+      });
+
+      // Remove the @mention token from prompt text without leaving stranded '@'
+      if (mentionTriggerRange) {
+        const before = prompt.slice(0, mentionTriggerRange.start);
+        const after = prompt.slice(mentionTriggerRange.end);
+        const cleanBefore = before.endsWith(' ') ? before : before ? `${before} ` : '';
+        const cleanAfter = after.startsWith(' ') ? after.slice(1) : after;
+        nextPrompt = `${cleanBefore}${cleanAfter}`.trim();
+      }
+    } else if (entry.character) {
+      const char = entry.character;
+      setAttachedCharacter(char);
+
+      if (mentionTriggerRange) {
+        const before = prompt.slice(0, mentionTriggerRange.start);
+        const after = prompt.slice(mentionTriggerRange.end);
+        const needsTrailingSpace = after.length === 0 || !after.startsWith(' ');
+        nextPrompt = `${before}${char.name}${needsTrailingSpace ? ' ' : ''}${after}`;
+      } else {
+        // Triggered via "+" button
+        const trimmed = prompt.trim();
+        if (!trimmed.toLowerCase().includes(char.name.toLowerCase())) {
+          nextPrompt = trimmed ? `${char.name} ${trimmed}` : `${char.name} `;
+        }
       }
     }
 
@@ -366,7 +432,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
     setTimeout(() => {
       if (inputRef.current) {
-        inputRef.current.focus();
+        inputRef.current.focus({ preventScroll: true });
       }
     }, 10);
   };
@@ -399,7 +465,8 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     setIsSubmitting(true);
 
     try {
-      const selectedLoras: GenerationLoraSelection[] = attachedCharacter
+      // Merge character LoRAs with standalone mentioned LoRAs
+      const charLoras: GenerationLoraSelection[] = attachedCharacter
         ? attachedCharacter.loras.map((l) => ({
             loraName: l.loraName,
             modelStrength: 1.0,
@@ -408,6 +475,14 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             appearanceLabel: l.appearanceLabel || '',
           }))
         : [];
+
+      // Combine ensuring unique loraNames
+      const selectedLoras: GenerationLoraSelection[] = [...charLoras];
+      for (const al of attachedLoras) {
+        if (!selectedLoras.some((sl) => sl.loraName.toLowerCase() === al.loraName.toLowerCase())) {
+          selectedLoras.push(al);
+        }
+      }
 
       const triggerWord =
         attachedCharacter?.loras.find((l) => l.triggerWord?.trim())?.triggerWord?.trim() || '';
@@ -453,17 +528,20 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
           'warning'
         );
       } else {
+        const loraCountNotice =
+          attachedLoras.length > 0 ? ` + ${attachedLoras.length} LoRA(s)` : '';
         onPushToast(
           `Queued Batch #${res.batch.id} (${submittedCount}/${res.batch.totalCount} sent${
             attachedCharacter ? ` · ${attachedCharacter.name}` : ''
-          })`,
+          }${loraCountNotice})`,
           'success'
         );
       }
 
-      // Reset prompt, character, and all buttons (agent, aspect ratio, batch count, popovers)
+      // Reset prompt, character, attached LoRAs, and controls
       setPrompt('');
       setAttachedCharacter(null);
+      setAttachedLoras([]);
       setAgentEnabled(false);
       setAspectRatio('2:3 (Portrait Photo)');
       setBatchCount(1);
@@ -583,11 +661,11 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
           {mentionEntries.length === 0 ? (
             <div className="p-6 text-center text-zinc-400">
-              No matching characters found. Create a character in the Characters tab to @mention them.
+              No matching characters or @mentioned LoRAs found. Enable LoRAs for @mention in the LoRA Explorer!
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-12 max-h-[380px]">
-              {/* Left Column: Character & Image Matches */}
+              {/* Left Column: Character, LoRA & Image Matches */}
               <div className="sm:col-span-6 p-2.5 overflow-y-auto max-h-[360px] space-y-1 border-r border-zinc-800/70">
                 {mentionEntries.map((entry, idx) => {
                   const isSelected = idx === activeIndex;
@@ -604,7 +682,11 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                       }`}
                     >
                       <div className="w-9 h-9 rounded-xl bg-zinc-900 border border-zinc-700/60 overflow-hidden shrink-0 flex items-center justify-center">
-                        {entry.thumbnailUrl ? (
+                        {entry.type === 'lora' ? (
+                          <div className="w-full h-full bg-amber-500/10 flex items-center justify-center text-amber-400">
+                            <Layers className="w-4 h-4" />
+                          </div>
+                        ) : entry.thumbnailUrl ? (
                           <img
                             src={entry.thumbnailUrl}
                             alt={entry.title}
@@ -615,10 +697,17 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                         )}
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="font-medium text-zinc-100 truncate">{entry.title}</div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium text-zinc-100 truncate">{entry.title}</span>
+                          {entry.type === 'lora' && (
+                            <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-amber-400/10 text-amber-300 border border-amber-400/20 shrink-0">
+                              LoRA
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[11px] text-zinc-400 flex items-center gap-1.5">
                           <span>{entry.subtitle}</span>
-                          {entry.type === 'character' && entry.character.loras.length > 0 && (
+                          {entry.type === 'character' && entry.character && entry.character.loras.length > 0 && (
                             <span className="text-indigo-400 font-mono truncate">
                               · {entry.character.loras[0].triggerWord || entry.character.loras[0].loraName}
                             </span>
@@ -634,7 +723,28 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               {highlightedEntry && (
                 <div className="sm:col-span-6 p-3.5 flex flex-col justify-between bg-zinc-950/60">
                   <div className="relative rounded-2xl bg-zinc-900 border border-zinc-800/80 overflow-hidden h-56 flex items-center justify-center">
-                    {highlightedEntry.thumbnailUrl ? (
+                    {highlightedEntry.type === 'lora' ? (
+                      <div className="flex flex-col items-center gap-2.5 p-4 text-center">
+                        <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-inner">
+                          <Layers className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <div className="text-sm font-semibold text-zinc-100">
+                            {highlightedEntry.title}
+                          </div>
+                          <div className="text-xs font-mono text-zinc-400 mt-0.5 truncate max-w-[220px]">
+                            {highlightedEntry.loraItem?.filename}
+                          </div>
+                        </div>
+                        <div className="text-[11px] text-zinc-400 flex items-center gap-2">
+                          <span className="capitalize">{highlightedEntry.loraItem?.loraCategory}</span>
+                          <span>·</span>
+                          <span className="font-mono text-amber-300">
+                            Strength: {(highlightedEntry.loraItem?.defaultModelStrength ?? 1.0).toFixed(1)}x
+                          </span>
+                        </div>
+                      </div>
+                    ) : highlightedEntry.thumbnailUrl ? (
                       <img
                         src={highlightedEntry.thumbnailUrl}
                         alt={highlightedEntry.title}
@@ -643,15 +753,19 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                     ) : (
                       <div className="flex flex-col items-center gap-2 text-zinc-500">
                         <User className="w-10 h-10 stroke-1" />
-                        <span>{highlightedEntry.character.name}</span>
+                        <span>{highlightedEntry.character?.name}</span>
                       </div>
                     )}
                     <div className="absolute bottom-2 left-2 right-2 px-2.5 py-1.5 rounded-xl bg-zinc-950/85 backdrop-blur-md border border-zinc-800/80 flex items-center justify-between text-[11px]">
                       <span className="font-medium text-zinc-200 truncate">
-                        {highlightedEntry.character.name}
+                        {highlightedEntry.type === 'lora'
+                          ? highlightedEntry.loraItem?.name
+                          : highlightedEntry.character?.name}
                       </span>
                       <span className="text-indigo-300 font-mono shrink-0 ml-2">
-                        {highlightedEntry.character.loras.length} LoRA(s)
+                        {highlightedEntry.type === 'lora'
+                          ? (highlightedEntry.loraItem?.isInstalled ? 'Installed' : 'Missing')
+                          : `${highlightedEntry.character?.loras.length || 0} LoRA(s)`}
                       </span>
                     </div>
                   </div>
@@ -783,36 +897,67 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
           </div>
         )}
 
-        {/* Attached Character Pill Badge */}
-        {attachedCharacter && (
+        {/* Attached Character and LoRA Pill Badges */}
+        {(attachedCharacter || attachedLoras.length > 0) && (
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <div className="inline-flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full bg-indigo-950/70 border border-indigo-500/40 text-xs text-indigo-200">
-              <div className="w-5 h-5 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center">
-                {attachedCharacter.portraitThumbnailUrl ? (
-                  <img
-                    src={attachedCharacter.portraitThumbnailUrl}
-                    alt={attachedCharacter.name}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <User className="w-3 h-3 text-indigo-300" />
+            {/* Character Badge */}
+            {attachedCharacter && (
+              <div className="inline-flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full bg-indigo-950/70 border border-indigo-500/40 text-xs text-indigo-200 shadow-sm">
+                <div className="w-5 h-5 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                  {attachedCharacter.portraitThumbnailUrl ? (
+                    <img
+                      src={attachedCharacter.portraitThumbnailUrl}
+                      alt={attachedCharacter.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <User className="w-3 h-3 text-indigo-300" />
+                  )}
+                </div>
+                <span className="font-medium">{attachedCharacter.name}</span>
+                {attachedCharacter.loras[0]?.triggerWord && (
+                  <span className="text-[11px] font-mono text-indigo-300/90">
+                    ({attachedCharacter.loras[0].triggerWord})
+                  </span>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setAttachedCharacter(null)}
+                  className="text-indigo-300/70 hover:text-white cursor-pointer ml-0.5"
+                  title="Remove character"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
-              <span className="font-medium">{attachedCharacter.name}</span>
-              {attachedCharacter.loras[0]?.triggerWord && (
-                <span className="text-[11px] font-mono text-indigo-300/90">
-                  ({attachedCharacter.loras[0].triggerWord})
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() => setAttachedCharacter(null)}
-                className="text-indigo-300/70 hover:text-white cursor-pointer"
-                title="Remove character LoRA & trigger word"
+            )}
+
+            {/* Mentioned LoRA Badges */}
+            {attachedLoras.map((lora) => (
+              <div
+                key={lora.loraName}
+                className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full bg-amber-950/60 border border-amber-500/40 text-xs text-amber-200 shadow-sm"
               >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
+                <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span className="font-medium text-amber-100">
+                  {lora.nickname ? `@${lora.nickname}` : lora.loraName}
+                </span>
+                <span className="text-[11px] font-mono text-amber-300/90 tabular-nums">
+                  {lora.modelStrength.toFixed(1)}x
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAttachedLoras((prev) =>
+                      prev.filter((l) => l.loraName.toLowerCase() !== lora.loraName.toLowerCase())
+                    )
+                  }
+                  className="text-amber-300/70 hover:text-white cursor-pointer ml-0.5"
+                  title={`Remove ${lora.nickname || lora.loraName}`}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
 

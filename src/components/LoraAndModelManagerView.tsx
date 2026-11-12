@@ -9,6 +9,9 @@ import {
   ShieldCheck,
   HardDriveDownload,
   FileWarning,
+  AtSign,
+  Layers,
+  Check,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
@@ -26,6 +29,7 @@ interface LoraAndModelManagerViewProps {
   onRefresh: () => Promise<void>;
   onOpenImage: (img: ImageRecord) => void;
   onFilterGalleryByLora: (loraFilename: string) => void;
+  onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
 /**
@@ -39,6 +43,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   onRefresh,
   onOpenImage,
   onFilterGalleryByLora,
+  onPushToast,
 }) => {
   const [subTab, setSubTab] = useState<'loras' | 'dependencies' | 'downloader'>('loras');
   const [selectedLoraName, setSelectedLoraName] = useState<string | null>(null);
@@ -110,6 +115,44 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       setDownloads(dls.items || []);
     } catch (err: any) {
       setDlError(err.message || 'Download could not start');
+    }
+  };
+
+  const handleUpdateMentionConfig = async (
+    loraName: string,
+    payload: {
+      mentionEnabled?: boolean;
+      nickname?: string | null;
+      defaultModelStrength?: number;
+      defaultClipStrength?: number;
+    }
+  ) => {
+    try {
+      await api.updateLoraMentionConfig({ loraName, ...payload });
+      await onRefresh();
+      if (onPushToast) {
+        if (payload.mentionEnabled !== undefined) {
+          onPushToast(
+            payload.mentionEnabled
+              ? `Enabled @mention for ${loraName}`
+              : `Disabled @mention for ${loraName}`,
+            'info'
+          );
+        } else if (payload.nickname !== undefined) {
+          onPushToast(
+            payload.nickname
+              ? `Saved nickname @${payload.nickname}`
+              : `Cleared nickname for ${loraName}`,
+            'success'
+          );
+        } else {
+          onPushToast('Updated LoRA @mention settings', 'success');
+        }
+      }
+    } catch (err: any) {
+      if (onPushToast) {
+        onPushToast(err.message || 'Failed to update @mention settings', 'error');
+      }
     }
   };
 
@@ -250,6 +293,142 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                 .join(' · ')}
             </div>
           )}
+        </div>
+
+        {/* Quick Gen @Mention Configuration Card */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                <AtSign className="w-4 h-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-display font-semibold text-zinc-100">
+                  Quick Gen @Mention Settings
+                </h2>
+                <p className="text-xs text-zinc-400">
+                  Enable this LoRA in the Quick Gen `@` autocomplete popup and define its mention nickname.
+                </p>
+              </div>
+            </div>
+
+            <label className="flex items-center gap-2.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={Boolean(selectedLora.mentionEnabled)}
+                onChange={(e) =>
+                  handleUpdateMentionConfig(selectedLora.filename, {
+                    mentionEnabled: e.target.checked,
+                    nickname: selectedLora.nickname,
+                    defaultModelStrength: selectedLora.defaultModelStrength ?? 1.0,
+                    defaultClipStrength: selectedLora.defaultClipStrength ?? 1.0,
+                  })
+                }
+                className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-zinc-900"
+              />
+              <span className="text-xs font-medium text-zinc-200">
+                Include in @Mention Menu
+              </span>
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-zinc-800/80">
+            {/* Nickname input */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-zinc-300">
+                LoRA Nickname
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 font-mono text-xs">
+                  @
+                </span>
+                <input
+                  type="text"
+                  defaultValue={selectedLora.nickname || ''}
+                  placeholder="e.g. cyberpunk, retro, watercolor"
+                  onBlur={(e) => {
+                    const clean = e.target.value.trim().replace(/^@+/, '');
+                    if (clean !== (selectedLora.nickname || '')) {
+                      handleUpdateMentionConfig(selectedLora.filename, {
+                        mentionEnabled: selectedLora.mentionEnabled,
+                        nickname: clean,
+                        defaultModelStrength: selectedLora.defaultModelStrength ?? 1.0,
+                        defaultClipStrength: selectedLora.defaultClipStrength ?? 1.0,
+                      });
+                    }
+                  }}
+                  className="w-full pl-7 pr-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none"
+                />
+              </div>
+              <p className="text-[11px] text-zinc-500">
+                Type this token after <span className="font-mono text-zinc-400">@</span> in Quick Gen to attach this LoRA.
+              </p>
+            </div>
+
+            {/* Default Model Strength */}
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-center text-xs">
+                <label className="font-medium text-zinc-300">Default Model Strength</label>
+                <span className="font-mono text-amber-300 tabular-nums">
+                  {(selectedLora.defaultModelStrength ?? 1.0).toFixed(2)}x
+                </span>
+              </div>
+              <input
+                type="number"
+                min="0.0"
+                max="2.0"
+                step="0.05"
+                defaultValue={selectedLora.defaultModelStrength ?? 1.0}
+                onBlur={(e) => {
+                  const val = parseFloat(e.target.value);
+                  if (!Number.isNaN(val) && val !== selectedLora.defaultModelStrength) {
+                    handleUpdateMentionConfig(selectedLora.filename, {
+                      mentionEnabled: selectedLora.mentionEnabled,
+                      nickname: selectedLora.nickname,
+                      defaultModelStrength: val,
+                      defaultClipStrength: selectedLora.defaultClipStrength ?? 1.0,
+                    });
+                  }
+                }}
+                className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs font-mono text-zinc-100 focus:outline-none"
+              />
+              <p className="text-[11px] text-zinc-500">
+                Applied to ComfyUI workflow when mentioned (0.0 to 2.0).
+              </p>
+            </div>
+
+            {/* Default CLIP Strength */}
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-center text-xs">
+                <label className="font-medium text-zinc-300">Default CLIP Strength</label>
+                <span className="font-mono text-amber-300 tabular-nums">
+                  {(selectedLora.defaultClipStrength ?? 1.0).toFixed(2)}x
+                </span>
+              </div>
+              <input
+                type="number"
+                min="0.0"
+                max="2.0"
+                step="0.05"
+                defaultValue={selectedLora.defaultClipStrength ?? 1.0}
+                onBlur={(e) => {
+                  const val = parseFloat(e.target.value);
+                  if (!Number.isNaN(val) && val !== selectedLora.defaultClipStrength) {
+                    handleUpdateMentionConfig(selectedLora.filename, {
+                      mentionEnabled: selectedLora.mentionEnabled,
+                      nickname: selectedLora.nickname,
+                      defaultModelStrength: selectedLora.defaultModelStrength ?? 1.0,
+                      defaultClipStrength: val,
+                    });
+                  }
+                }}
+                className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs font-mono text-zinc-100 focus:outline-none"
+              />
+              <p className="text-[11px] text-zinc-500">
+                Applied to CLIP conditioning when mentioned (0.0 to 2.0).
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Model Usage Impact Report Modal/Box */}
@@ -443,12 +622,16 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
               <table className="w-full text-left text-xs">
                 <thead className="bg-zinc-950/90 border-b border-zinc-800 text-zinc-400">
                   <tr>
+                    <th className="py-3 px-3 w-10 text-center font-medium" title="Include in Quick Gen @mention">
+                      @
+                    </th>
                     <th className="py-3 px-4 font-medium">LoRA Name & File</th>
-                    <th className="py-3 px-4 font-medium">Classification</th>
-                    <th className="py-3 px-4 font-medium">Linked Characters</th>
-                    <th className="py-3 px-4 font-medium text-right">Images</th>
-                    <th className="py-3 px-4 font-medium text-right">Avg Rating</th>
-                    <th className="py-3 px-4 font-medium text-right">Strength Range</th>
+                    <th className="py-3 px-3 font-medium">Nickname</th>
+                    <th className="py-3 px-3 font-medium">Classification</th>
+                    <th className="py-3 px-3 font-medium">Linked Characters</th>
+                    <th className="py-3 px-3 font-medium text-right">Images</th>
+                    <th className="py-3 px-3 font-medium text-right">Avg Rating</th>
+                    <th className="py-3 px-3 font-medium text-right">Default Str</th>
                     <th className="py-3 px-4 font-medium text-right">Status</th>
                   </tr>
                 </thead>
@@ -456,31 +639,116 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                   {filteredLoras.map((l) => (
                     <tr
                       key={l.filename}
-                      onClick={() => setSelectedLoraName(l.filename)}
-                      className="hover:bg-zinc-800/40 cursor-pointer transition-colors"
+                      className="hover:bg-zinc-800/40 transition-colors group"
                     >
-                      <td className="py-3 px-4">
-                        <div className="font-medium text-zinc-100">{l.name}</div>
+                      {/* Mention Checkbox */}
+                      <td
+                        className="py-3 px-3 text-center"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={Boolean(l.mentionEnabled)}
+                          onChange={(e) =>
+                            handleUpdateMentionConfig(l.filename, {
+                              mentionEnabled: e.target.checked,
+                              nickname: l.nickname,
+                              defaultModelStrength: l.defaultModelStrength ?? 1.0,
+                              defaultClipStrength: l.defaultClipStrength ?? 1.0,
+                            })
+                          }
+                          className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                          title={l.mentionEnabled ? 'Enabled in @mention' : 'Click to enable in @mention'}
+                        />
+                      </td>
+
+                      {/* LoRA Name & File */}
+                      <td
+                        className="py-3 px-4 cursor-pointer"
+                        onClick={() => setSelectedLoraName(l.filename)}
+                      >
+                        <div className="font-medium text-zinc-100 hover:text-indigo-300 transition-colors">
+                          {l.name}
+                        </div>
                         <div className="text-[11px] font-mono text-zinc-500">{l.filename}</div>
                       </td>
-                      <td className="py-3 px-4 capitalize text-zinc-300">{l.loraCategory}</td>
-                      <td className="py-3 px-4 text-zinc-300">
+
+                      {/* Inline Nickname Input */}
+                      <td
+                        className="py-3 px-3"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div className="relative max-w-[140px]">
+                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500 font-mono text-[11px]">
+                            @
+                          </span>
+                          <input
+                            type="text"
+                            defaultValue={l.nickname || ''}
+                            placeholder="nickname"
+                            onBlur={(e) => {
+                              const clean = e.target.value.trim().replace(/^@+/, '');
+                              if (clean !== (l.nickname || '')) {
+                                handleUpdateMentionConfig(l.filename, {
+                                  mentionEnabled: l.mentionEnabled,
+                                  nickname: clean,
+                                  defaultModelStrength: l.defaultModelStrength ?? 1.0,
+                                  defaultClipStrength: l.defaultClipStrength ?? 1.0,
+                                });
+                              }
+                            }}
+                            className="w-full pl-5 pr-2 py-1 bg-zinc-950/80 border border-zinc-800 focus:border-indigo-500 rounded text-xs font-mono text-zinc-200 placeholder-zinc-700 focus:outline-none"
+                          />
+                        </div>
+                      </td>
+
+                      {/* Classification */}
+                      <td
+                        className="py-3 px-3 capitalize text-zinc-300 cursor-pointer"
+                        onClick={() => setSelectedLoraName(l.filename)}
+                      >
+                        {l.loraCategory}
+                      </td>
+
+                      {/* Linked Characters */}
+                      <td
+                        className="py-3 px-3 text-zinc-300 cursor-pointer"
+                        onClick={() => setSelectedLoraName(l.filename)}
+                      >
                         {l.characters.length > 0
                           ? l.characters.map((c) => c.name).join(' · ')
                           : '—'}
                       </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-zinc-200">
+
+                      {/* Images */}
+                      <td
+                        className="py-3 px-3 text-right font-mono tabular-nums text-zinc-200 cursor-pointer"
+                        onClick={() => setSelectedLoraName(l.filename)}
+                      >
                         {l.imageCount}
                       </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-amber-400">
+
+                      {/* Avg Rating */}
+                      <td
+                        className="py-3 px-3 text-right font-mono tabular-nums text-amber-400 cursor-pointer"
+                        onClick={() => setSelectedLoraName(l.filename)}
+                      >
                         {l.averageRating > 0 ? `★ ${l.averageRating}` : '—'}
                       </td>
-                      <td className="py-3 px-4 text-right font-mono tabular-nums text-zinc-300">
-                        {l.minModelStrength !== null
-                          ? `${l.minModelStrength} – ${l.maxModelStrength}`
-                          : '—'}
+
+                      {/* Default Model Strength */}
+                      <td
+                        className="py-3 px-3 text-right font-mono tabular-nums text-zinc-300 cursor-pointer"
+                        onClick={() => setSelectedLoraName(l.filename)}
+                      >
+                        {(l.defaultModelStrength ?? 1.0).toFixed(2)}x
                       </td>
-                      <td className="py-3 px-4 text-right">
+
+                      {/* Status */}
+                      <td
+                        className="py-3 px-4 text-right cursor-pointer"
+                        onClick={() => setSelectedLoraName(l.filename)}
+                      >
                         {l.isInstalled ? (
                           <span className="text-emerald-400">Installed</span>
                         ) : (

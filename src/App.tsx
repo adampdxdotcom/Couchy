@@ -591,6 +591,7 @@ export default function App() {
               setFilters({ ...INITIAL_FILTERS, loras: [loraFilename] });
               setActiveTab('gallery');
             }}
+            onPushToast={pushToast}
           />
         )}
 
@@ -620,6 +621,7 @@ export default function App() {
       {showQuickGenBar && (
         <FloatingQuickGenBar
           characters={characters}
+          loras={loras}
           allImages={allImages}
           workflows={workflows}
           prefillPayload={quickGenPrefill}

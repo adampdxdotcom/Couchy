@@ -265,6 +265,18 @@ export const api = {
       body: JSON.stringify({ loraName, loraCategory, userNotes }),
     }),
 
+  updateLoraMentionConfig: (payload: {
+    loraName: string;
+    mentionEnabled?: boolean;
+    nickname?: string | null;
+    defaultModelStrength?: number;
+    defaultClipStrength?: number;
+  }) =>
+    requestJson<{ ok: boolean; items: LoraExplorerItem[] }>('/api/loras/mention-config', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+
   listModelInventory: () => requestJson<{ items: ModelInventoryItem[] }>('/api/models/inventory'),
 
   syncModelInventory: () =>

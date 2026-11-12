@@ -501,6 +501,19 @@ export function runMigrations(): void {
         CREATE INDEX IF NOT EXISTS idx_img_visual_tags_tag ON image_visual_tags(LOWER(tag));
       `,
     },
+    {
+      version: 8,
+      name: 'lora_mentions_and_nicknames',
+      sql: `
+        ALTER TABLE models ADD COLUMN nickname TEXT;
+        ALTER TABLE models ADD COLUMN mention_enabled INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE models ADD COLUMN default_model_strength REAL NOT NULL DEFAULT 1.0;
+        ALTER TABLE models ADD COLUMN default_clip_strength REAL NOT NULL DEFAULT 1.0;
+
+        CREATE INDEX IF NOT EXISTS idx_models_nickname ON models(LOWER(nickname));
+        CREATE INDEX IF NOT EXISTS idx_models_mention_enabled ON models(mention_enabled);
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');
