@@ -398,8 +398,29 @@ export interface GenerationBatchRecord {
   megapixels: number;
   width: number;
   height: number;
+  checkpointName?: string | null;
+  loraCount?: number;
   createdAt: string;
   items: GenerationItemRecord[];
+}
+
+export interface QueuedGhostCardItem {
+  itemId: number;
+  batchId: number;
+  itemIndex: number;
+  comfyuiPromptId: string | null;
+  prompt: string;
+  state: 'queued' | 'generating' | 'indexing';
+  progressPercent: number | null;
+  width: number;
+  height: number;
+  checkpointName: string | null;
+  workflowName: string | null;
+  loraCount: number;
+  characterId: number | null;
+  characterName: string | null;
+  outputImageId: number | null;
+  createdAt: string;
 }
 
 export interface LmStudioGuidingTemplate {
@@ -433,6 +454,7 @@ export interface ComfyUiLiveStatus {
   currentJobIndex?: number | null;
   totalRunJobs?: number | null;
   lastIndexedAt?: number;
+  ghostItems?: QueuedGhostCardItem[];
 }
 
 export interface AppToastMessage {

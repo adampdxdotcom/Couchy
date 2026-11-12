@@ -9,11 +9,16 @@ import {
   Star,
   Trash2,
 } from 'lucide-react';
-import type { CharacterProfile, ImageRecord } from '../../shared/types.ts';
+import type {
+  CharacterProfile,
+  ImageRecord,
+  QueuedGhostCardItem,
+} from '../../shared/types.ts';
 
 interface CharacterGallerySectionProps {
   title: string;
   images: ImageRecord[];
+  ghostItems?: QueuedGhostCardItem[];
   character: CharacterProfile;
   activePortraitId: number | null;
   onOpenImage: (img: ImageRecord) => void;
@@ -32,6 +37,7 @@ interface CharacterGallerySectionProps {
 export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = ({
   title,
   images,
+  ghostItems = [],
   character,
   activePortraitId,
   onOpenImage,
@@ -46,12 +52,21 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
   onToggleExpand,
   totalPoolCount,
 }) => {
+  const visibleGhostItems = ghostItems.filter(
+    (g) => !g.outputImageId || !images.some((img) => img.id === g.outputImageId)
+  );
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2.5">
         <h3 className="text-sm font-display font-semibold text-zinc-100">
           {title}
         </h3>
+        {visibleGhostItems.length > 0 && (
+          <span className="text-xs font-mono tabular-nums text-indigo-300">
+            · {visibleGhostItems.length} in queue
+          </span>
+        )}
         {isExpandable && onToggleExpand && (
           <button
             type="button"
@@ -78,12 +93,52 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
         )}
       </div>
 
-      {images.length === 0 ? (
+      {images.length === 0 && visibleGhostItems.length === 0 ? (
         emptyText ? (
           <p className="text-xs text-zinc-500">{emptyText}</p>
         ) : null
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
+          {visibleGhostItems.map((ghost) => {
+            const isQueuedOnly = ghost.state === 'queued' || ghost.progressPercent === null;
+            const displayPct = Math.min(100, Math.max(0, ghost.progressPercent ?? 0));
+            const titleText = ghost.prompt.trim() || `Generation #${ghost.itemIndex}`;
+
+            return (
+              <div
+                key={`ghost-${ghost.itemId}`}
+                aria-busy="true"
+                className="bg-zinc-900 rounded-lg overflow-hidden border border-zinc-800 flex flex-col justify-between select-none pointer-events-none"
+              >
+                <div className="relative aspect-square bg-zinc-950/90 overflow-hidden flex flex-col items-center justify-center p-3 text-center">
+                  {isQueuedOnly ? (
+                    <div className="flex flex-col items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-zinc-500 animate-pulse" />
+                      <span className="text-[11px] font-medium tracking-wider uppercase text-zinc-400">
+                        Queued
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-2 w-full max-w-[110px]">
+                      <span className="text-xl sm:text-2xl font-mono font-semibold tabular-nums text-indigo-300 tracking-tight">
+                        {displayPct}%
+                      </span>
+                      <div className="w-full h-1 bg-zinc-800/90 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-indigo-500 transition-all duration-300 ease-out rounded-full"
+                          style={{ width: `${displayPct}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="p-2 text-xs flex items-center justify-between gap-1.5">
+                  <span className="truncate text-zinc-300">{titleText}</span>
+                </div>
+              </div>
+            );
+          })}
+
           {images.map((img) => {
             const isPortrait =
               (activePortraitId !== null && activePortraitId === img.id) ||
@@ -93,7 +148,7 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
             return (
               <div
                 key={img.id}
-                className={`bg-zinc-900 rounded-lg overflow-hidden group flex flex-col justify-between transition-all duration-200 ${
+                className={`bg-zinc-900 rounded-lg overflow-hidden group flex flex-col justify-between transition-all duration-300 ${
                   isPortrait
                     ? 'border-2 border-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.35)] ring-1 ring-amber-400/50'
                     : 'border border-zinc-800 hover:border-zinc-700'

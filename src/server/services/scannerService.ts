@@ -617,10 +617,38 @@ export async function indexSingleImageFile(
         );
       }
 
-      // Directly link character with appearance if requested
-      if (characterId) {
+      // Auto-link any matching generation_item by seed so ghost cards hand off immediately when fsWatcher indexes the file
+      let effectiveCharacterId = characterId || null;
+      if (parsed.seed) {
+        const matchedGenItem = db
+          .prepare(
+            `SELECT gi.id, gb.character_id
+             FROM generation_items gi
+             JOIN generation_batches gb ON gb.id = gi.batch_id
+             WHERE gi.output_image_id IS NULL
+               AND gi.status IN ('pending', 'submitted', 'completed')
+               AND gi.seed = ?
+             ORDER BY gi.id DESC
+             LIMIT 1`
+          )
+          .get(String(parsed.seed)) as { id: number; character_id: number | null } | undefined;
+
+        if (matchedGenItem) {
+          db.prepare(
+            `UPDATE generation_items
+             SET status = 'completed', output_image_id = ?, completed_at = COALESCE(completed_at, datetime('now'))
+             WHERE id = ?`
+          ).run(imageId, matchedGenItem.id);
+          if (!effectiveCharacterId && matchedGenItem.character_id) {
+            effectiveCharacterId = matchedGenItem.character_id;
+          }
+        }
+      }
+
+      // Directly link character with appearance if requested or matched via generation batch
+      if (effectiveCharacterId) {
         const appearanceLabel = resolveAppearanceForCharacter(
-          characterId,
+          effectiveCharacterId,
           parsed.positivePrompt,
           parsed.loras
         );
@@ -633,7 +661,7 @@ export async function indexSingleImageFile(
             image_id = excluded.image_id,
             appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
             updated_at = datetime('now')`
-        ).run(imageId, contentHash, characterId, appearanceLabel);
+        ).run(imageId, contentHash, effectiveCharacterId, appearanceLabel);
       }
     });
 

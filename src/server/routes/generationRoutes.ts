@@ -19,7 +19,11 @@ import {
   updateLmStudioSettings,
 } from '../services/lmStudioService.ts';
 import { indexSingleImageFile, runDirectoryScan } from '../services/scannerService.ts';
-import { COUCHY_COMFY_CLIENT_ID, notifyImageIndexed } from '../services/comfyuiLiveMonitor.ts';
+import {
+  COUCHY_COMFY_CLIENT_ID,
+  invalidateComfyQueueCache,
+  notifyImageIndexed,
+} from '../services/comfyuiLiveMonitor.ts';
 import {
   normalizeResolutionSelectorRatio,
   type GenerationBatchRecord,
@@ -469,13 +473,32 @@ generationRouter.post('/submit-batch', async (req, res) => {
       resolvedMp
     );
     const loraSelections: GenerationLoraSelection[] = Array.isArray(loras) ? loras : [];
+    const activeLorasCount = loraSelections.filter((l) => Boolean(l.loraName?.trim())).length;
+
+    // Resolve checkpoint name from request or mapped workflow checkpoint node
+    let resolvedCheckpointName: string | null = checkpointName ? String(checkpointName).trim() : null;
+    if (!resolvedCheckpointName) {
+      try {
+        const wfInfo = getWorkflowMapping(Number(workflowId));
+        const ckptNode = wfInfo.nodes.find((n) => n.nodeId === wfInfo.mapping.checkpointNodeId);
+        const ckptVal =
+          ckptNode?.currentValues?.[wfInfo.mapping.checkpointField] ||
+          ckptNode?.currentValues?.unet_name ||
+          ckptNode?.currentValues?.ckpt_name;
+        if (typeof ckptVal === 'string' && ckptVal.trim()) {
+          resolvedCheckpointName = ckptVal.trim();
+        }
+      } catch {
+        // Fallback to workflow name if mapping lookup fails
+      }
+    }
 
     // 1. Create batch and items in SQLite
     const batchInfo = db
       .prepare(
         `INSERT INTO generation_batches
-          (character_id, workflow_id, theme_title, mode, total_count, aspect_ratio, megapixels, width, height)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (character_id, workflow_id, theme_title, mode, total_count, aspect_ratio, megapixels, width, height, checkpoint_name, lora_count)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         characterId ? Number(characterId) : null,
@@ -486,7 +509,9 @@ generationRouter.post('/submit-batch', async (req, res) => {
         resolvedAr,
         resolvedMp,
         computedWidth,
-        computedHeight
+        computedHeight,
+        resolvedCheckpointName,
+        activeLorasCount
       );
     const batchId = Number(batchInfo.lastInsertRowid);
 
@@ -581,6 +606,8 @@ generationRouter.post('/submit-batch', async (req, res) => {
         }
       })
     );
+
+    invalidateComfyQueueCache();
 
     const batches = listGenerationBatches(25);
     const createdBatch = batches.find((b) => b.id === batchId) || batches[0];

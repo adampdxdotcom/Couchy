@@ -514,6 +514,14 @@ export function runMigrations(): void {
         CREATE INDEX IF NOT EXISTS idx_models_mention_enabled ON models(mention_enabled);
       `,
     },
+    {
+      version: 9,
+      name: 'generation_batch_ghost_metadata',
+      sql: `
+        ALTER TABLE generation_batches ADD COLUMN checkpoint_name TEXT;
+        ALTER TABLE generation_batches ADD COLUMN lora_count INTEGER NOT NULL DEFAULT 0;
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

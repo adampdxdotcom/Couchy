@@ -4,6 +4,7 @@ import type {
   CharacterProfile,
   ImageRecord,
   LoraExplorerItem,
+  QueuedGhostCardItem,
   WorkflowLibraryItem,
 } from '../shared/types.ts';
 import { CharacterRosterView } from './character/CharacterRosterView.tsx';
@@ -17,6 +18,7 @@ import { MergeCharactersModal } from './character/MergeCharactersModal.tsx';
 interface CharacterExplorerViewProps {
   characters: CharacterProfile[];
   allImages: ImageRecord[];
+  ghostItems?: QueuedGhostCardItem[];
   loras: LoraExplorerItem[];
   workflows: WorkflowLibraryItem[];
   collections: { id: number; name: string }[];
@@ -36,6 +38,7 @@ interface CharacterExplorerViewProps {
 export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   characters,
   allImages,
+  ghostItems = [],
   loras,
   workflows,
   collections,
@@ -213,6 +216,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
         <CharacterGallerySection
           title={`All Confirmed Images (${confirmedImages.length})`}
           images={confirmedImages}
+          ghostItems={ghostItems.filter((g) => g.characterId === selectedCharacter.id)}
           character={selectedCharacter}
           activePortraitId={activePortraitId}
           onOpenImage={onOpenImage}

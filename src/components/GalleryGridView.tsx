@@ -23,11 +23,13 @@ import type {
   CharacterProfile,
   DependencyStatus,
   ImageRecord,
+  QueuedGhostCardItem,
 } from '../shared/types.ts';
 import type { GalleryViewLayout } from './GalleryFilterBar.tsx';
 
 interface GalleryGridViewProps {
   images: ImageRecord[];
+  ghostItems?: QueuedGhostCardItem[];
   layout: GalleryViewLayout;
   thumbScale: 'sm' | 'md' | 'lg';
   selectedIds: Set<number>;
@@ -87,6 +89,7 @@ export function renderDependencyLabel(status: DependencyStatus) {
  */
 export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   images,
+  ghostItems = [],
   layout,
   thumbScale,
   selectedIds,
@@ -178,8 +181,12 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
     );
   }
 
-  // Empty State when mounted ComfyUI output directory has no indexed images
-  if (images.length === 0) {
+  const visibleGhostItems = ghostItems.filter(
+    (g) => !g.outputImageId || !images.some((img) => img.id === g.outputImageId)
+  );
+
+  // Empty State when mounted ComfyUI output directory has no indexed images and no active queued jobs
+  if (images.length === 0 && visibleGhostItems.length === 0) {
     return (
       <div className="max-w-2xl mx-auto my-16 px-6 py-12 bg-zinc-900/70 border border-zinc-800/80 rounded-xl text-center space-y-5">
         <div className="w-12 h-12 rounded-xl bg-zinc-800/80 border border-zinc-700/60 flex items-center justify-center mx-auto text-indigo-400">
@@ -230,6 +237,11 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
           <span>
             Showing <strong className="font-mono tabular-nums text-zinc-200">{pagedImages.length}</strong> of{' '}
             <strong className="font-mono tabular-nums text-zinc-200">{images.length}</strong> indexed images
+            {visibleGhostItems.length > 0 && (
+              <span className="text-indigo-300 font-mono tabular-nums">
+                {' '}· {visibleGhostItems.length} in queue
+              </span>
+            )}
           </span>
           <span aria-hidden="true">·</span>
           <button
@@ -430,6 +442,95 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
 
       {/* Main Gallery Viewport */}
       <div className={getGridClasses()}>
+        {/* Queued & Actively Generating Ghost Preview Cards (Pinned to Page 1) */}
+        {currentPage === 1 &&
+          visibleGhostItems.map((ghost) => {
+            const isQueuedOnly = ghost.state === 'queued' || ghost.progressPercent === null;
+            const displayPct = Math.min(100, Math.max(0, ghost.progressPercent ?? 0));
+            const titleText = ghost.prompt.trim() || `Generation #${ghost.itemIndex}`;
+
+            return (
+              <article
+                key={`ghost-${ghost.itemId}`}
+                aria-busy="true"
+                className="relative bg-zinc-900 border border-zinc-800/80 rounded-xl overflow-hidden break-inside-avoid select-none pointer-events-none"
+              >
+                {/* Ghost Image Placeholder Area */}
+                <div
+                  style={
+                    layout === 'masonry'
+                      ? { aspectRatio: `${ghost.width} / ${ghost.height}` }
+                      : undefined
+                  }
+                  className={`relative bg-zinc-950/90 overflow-hidden flex flex-col items-center justify-center p-4 text-center ${
+                    layout === 'masonry' ? 'w-full' : 'aspect-square w-full'
+                  }`}
+                >
+                  {isQueuedOnly ? (
+                    <div className="flex flex-col items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-zinc-500 animate-pulse" />
+                      <span className="text-xs font-medium tracking-wider uppercase text-zinc-400">
+                        Queued
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center gap-2.5 w-full max-w-[140px]">
+                      <span className="text-2xl sm:text-3xl font-mono font-semibold tabular-nums text-indigo-300 tracking-tight">
+                        {displayPct}%
+                      </span>
+                      <div className="w-full h-1.5 bg-zinc-800/90 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-indigo-500 transition-all duration-300 ease-out rounded-full"
+                          style={{ width: `${displayPct}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Card Footer matching standard gallery card layout */}
+                {layout !== 'compact' && (
+                  <div className="p-3 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-xs font-medium text-zinc-100 truncate">{titleText}</h3>
+                    </div>
+
+                    {/* Unboxed Metadata Line */}
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400 font-mono tabular-nums">
+                      <span>
+                        {ghost.width}×{ghost.height}
+                      </span>
+                      <span aria-hidden="true">·</span>
+                      <span className="truncate max-w-[140px] font-sans">
+                        {ghost.checkpointName || 'No Checkpoint'}
+                      </span>
+                      {ghost.loraCount > 0 && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>
+                            {ghost.loraCount} LoRA{ghost.loraCount > 1 ? 's' : ''}
+                          </span>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Character & Dependency Line */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-[11px]">
+                      <div className="truncate text-zinc-300">
+                        {ghost.characterName ? (
+                          <span>{ghost.characterName}</span>
+                        ) : (
+                          <span className="text-zinc-500">Unassigned</span>
+                        )}
+                      </div>
+                      {renderDependencyLabel('available')}
+                    </div>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+
         {pagedImages.map((img) => {
           const isSelected = selectedIds.has(img.id);
           const confirmedChars = img.characters.filter((c) => c.status === 'confirmed');
@@ -438,7 +539,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
           return (
             <article
               key={img.id}
-              className={`group relative bg-zinc-900 border rounded-xl overflow-hidden transition-colors break-inside-avoid ${
+              className={`group relative bg-zinc-900 border rounded-xl overflow-hidden transition-all duration-300 break-inside-avoid ${
                 isSelected ? 'border-indigo-500 ring-1 ring-indigo-500' : 'border-zinc-800/80 hover:border-zinc-700'
               }`}
             >

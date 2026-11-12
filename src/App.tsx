@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api/client.ts';
 import { TopNavHeader, type WorkspaceTab } from './components/TopNavHeader.tsx';
 import { GalleryFilterBar, type GalleryViewLayout } from './components/GalleryFilterBar.tsx';
@@ -233,7 +233,21 @@ export default function App() {
     }
   }, [filters, allImages, loadFilteredImages]);
 
+  const allImageIdsRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    allImageIdsRef.current = new Set(allImages.map((img) => img.id));
+  }, [allImages]);
+
+  // Filter out ghost cards as soon as their indexed image is present in allImages
+  const activeGhostItems = useMemo(() => {
+    const raw = comfyStatus.ghostItems || [];
+    if (raw.length === 0) return [];
+    const knownIds = new Set(allImages.map((img) => img.id));
+    return raw.filter((g) => !g.outputImageId || !knownIds.has(g.outputImageId));
+  }, [comfyStatus.ghostItems, allImages]);
+
   const refreshAll = useCallback(async () => {
+    api.getComfyUiLiveStatus().then(setComfyStatus).catch(() => {});
     await loadMetadataAndEntities();
     if (!isDefaultFilters(filters)) {
       await loadFilteredImages();
@@ -253,25 +267,39 @@ export default function App() {
         if (cancelled) return;
         setComfyStatus(status);
 
+        const hasUnindexedGhost = (status.ghostItems || []).some(
+          (g) =>
+            g.state === 'indexing' &&
+            (!g.outputImageId || !allImageIdsRef.current.has(g.outputImageId))
+        );
+
         // Silently refresh gallery as soon as any newly generated image is indexed
-        if (status.lastIndexedAt && status.lastIndexedAt > lastIndexedAtRef.current) {
-          lastIndexedAtRef.current = status.lastIndexedAt;
+        if (
+          (status.lastIndexedAt && status.lastIndexedAt > lastIndexedAtRef.current) ||
+          hasUnindexedGhost
+        ) {
+          if (status.lastIndexedAt) {
+            lastIndexedAtRef.current = status.lastIndexedAt;
+          }
           refreshAll();
         }
 
-        const isBusy = status.runningCount > 0 || status.queuedCount > 0;
-        if (isBusy) {
+        const isBusy =
+          status.runningCount > 0 ||
+          status.queuedCount > 0 ||
+          (status.ghostItems && status.ghostItems.length > 0);
+        if (status.runningCount > 0 || status.queuedCount > 0) {
           setHasUnseenCompletion(false);
-        } else if (prevBusyRef.current && !isBusy) {
+        } else if (prevBusyRef.current && status.runningCount === 0 && status.queuedCount === 0) {
           // Run just completed: if the user is not actively viewing the tab, show "Couchy (Done)"
           if (document.hidden || !document.hasFocus()) {
             setHasUnseenCompletion(true);
           }
           refreshAll();
         }
-        prevBusyRef.current = isBusy;
+        prevBusyRef.current = status.runningCount > 0 || status.queuedCount > 0;
 
-        timer = setTimeout(poll, isBusy ? 1200 : 3500);
+        timer = setTimeout(poll, isBusy ? 1000 : 3500);
       } catch {
         if (!cancelled) {
           timer = setTimeout(poll, 5000);
@@ -529,6 +557,7 @@ export default function App() {
 
             <GalleryGridView
               images={images}
+              ghostItems={activeGhostItems}
               isLoading={isLoadingImages}
               layout={layout}
               thumbScale={thumbScale}
@@ -584,6 +613,7 @@ export default function App() {
           <CharacterExplorerView
             characters={characters}
             allImages={allImages}
+            ghostItems={activeGhostItems}
             loras={loras}
             workflows={workflows}
             collections={collections}
