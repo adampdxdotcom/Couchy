@@ -113,6 +113,34 @@ export interface QuickGenPrefill {
   timestamp: number;
 }
 
+/** Normalizes a LoRA filename/path to a lowercase base key without extension. */
+function normalizeLoraKey(name: string): string {
+  return name
+    .trim()
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()!
+    .replace(/\.(safetensors|pt|ckpt)$/i, '')
+    .toLowerCase();
+}
+
+/** Checks whether a LoRA filename belongs to the given CharacterProfile. */
+function isCharacterLora(
+  loraName: string,
+  character: CharacterProfile | null,
+  allLoras: LoraExplorerItem[]
+): boolean {
+  if (!character) return false;
+  const key = normalizeLoraKey(loraName);
+  if (character.loras.some((cl) => normalizeLoraKey(cl.loraName) === key)) {
+    return true;
+  }
+  const explorerMatch = allLoras.find(
+    (l) => normalizeLoraKey(l.filename) === key || normalizeLoraKey(l.name) === key
+  );
+  return Boolean(explorerMatch?.characters?.some((c) => c.id === character.id));
+}
+
 interface FloatingQuickGenBarProps {
   characters: CharacterProfile[];
   loras?: LoraExplorerItem[];
@@ -165,6 +193,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   const [batchCount, setBatchCount] = useState<number>(1);
   const [attachedCharacter, setAttachedCharacter] = useState<CharacterProfile | null>(null);
   const [attachedLoras, setAttachedLoras] = useState<GenerationLoraSelection[]>([]);
+  const [removedLoraKeys, setRemovedLoraKeys] = useState<Set<string>>(new Set());
   const [isHighlighted, setIsHighlighted] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
 
@@ -252,6 +281,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
     // Ensure the dock is expanded when reusing a prompt
     setIsMinimized(false);
+    setRemovedLoraKeys(new Set());
 
     if (prefillPayload.prompt !== undefined) {
       setPrompt(prefillPayload.prompt);
@@ -455,10 +485,17 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     if (entry.type === 'lora' && entry.loraItem) {
       const lora = entry.loraItem;
       const cleanLabel = getCleanLoraLabel(lora);
+      const loraKey = normalizeLoraKey(lora.filename);
+      setRemovedLoraKeys((prev) => {
+        if (!prev.has(loraKey)) return prev;
+        const next = new Set(prev);
+        next.delete(loraKey);
+        return next;
+      });
       // Add to attachedLoras list (or make visible if it was a hidden reused LoRA)
       setAttachedLoras((prev) => {
         const existingIdx = prev.findIndex(
-          (al) => al.loraName.toLowerCase() === lora.filename.toLowerCase()
+          (al) => normalizeLoraKey(al.loraName) === loraKey
         );
         if (existingIdx >= 0) {
           const updated = [...prev];
@@ -492,6 +529,13 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     } else if (entry.character) {
       const char = entry.character;
       setAttachedCharacter(char);
+      setRemovedLoraKeys((prev) => {
+        const next = new Set(prev);
+        for (const cl of char.loras) {
+          next.delete(normalizeLoraKey(cl.loraName));
+        }
+        return next;
+      });
 
       if (mentionTriggerRange) {
         const before = prompt.slice(0, mentionTriggerRange.start);
@@ -547,32 +591,38 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     setIsSubmitting(true);
 
     try {
-      // Merge character LoRAs with attached/reused LoRAs (preserving exact reused strengths)
-      const charLoras: GenerationLoraSelection[] = attachedCharacter
-        ? attachedCharacter.loras.map((l) => {
-            const matchingAttached = attachedLoras.find(
-              (al) => al.loraName.toLowerCase() === l.loraName.toLowerCase()
-            );
-            return {
-              loraName: l.loraName,
-              modelStrength: matchingAttached ? matchingAttached.modelStrength : 1.0,
-              clipStrength: matchingAttached ? matchingAttached.clipStrength : 1.0,
-              triggerWord: l.triggerWord || '',
-              appearanceLabel: l.appearanceLabel || '',
-            };
-          })
+      // Merge active character LoRAs with attached/reused LoRAs (excluding any explicitly removed pills)
+      const activeCharLoraRecords = attachedCharacter
+        ? attachedCharacter.loras.filter(
+            (l) => !removedLoraKeys.has(normalizeLoraKey(l.loraName))
+          )
         : [];
 
-      // Combine ensuring unique loraNames across character LoRAs and attached LoRAs (both pill-visible and background reused)
+      const charLoras: GenerationLoraSelection[] = activeCharLoraRecords.map((l) => {
+        const matchingAttached = attachedLoras.find(
+          (al) => normalizeLoraKey(al.loraName) === normalizeLoraKey(l.loraName)
+        );
+        return {
+          loraName: l.loraName,
+          modelStrength: matchingAttached ? matchingAttached.modelStrength : 1.0,
+          clipStrength: matchingAttached ? matchingAttached.clipStrength : 1.0,
+          triggerWord: l.triggerWord || '',
+          appearanceLabel: l.appearanceLabel || '',
+        };
+      });
+
+      // Combine ensuring unique loraNames across active character LoRAs and attached LoRAs
       const selectedLoras: GenerationLoraSelection[] = [...charLoras];
       for (const al of attachedLoras) {
-        if (!selectedLoras.some((sl) => sl.loraName.toLowerCase() === al.loraName.toLowerCase())) {
+        const alKey = normalizeLoraKey(al.loraName);
+        if (removedLoraKeys.has(alKey)) continue;
+        if (!selectedLoras.some((sl) => normalizeLoraKey(sl.loraName) === alKey)) {
           selectedLoras.push(al);
         }
       }
 
       const triggerWord =
-        attachedCharacter?.loras.find((l) => l.triggerWord?.trim())?.triggerWord?.trim() || '';
+        activeCharLoraRecords.find((l) => l.triggerWord?.trim())?.triggerWord?.trim() || '';
 
       let promptsToRun: string[] = [];
 
@@ -629,6 +679,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
       setPrompt('');
       setAttachedCharacter(null);
       setAttachedLoras([]);
+      setRemovedLoraKeys(new Set());
       setAgentEnabled(false);
       setAspectRatio('2:3 (Portrait Photo)');
       setBatchCount(1);
@@ -1047,7 +1098,28 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                 )}
                 <button
                   type="button"
-                  onClick={() => setAttachedCharacter(null)}
+                  onClick={() => {
+                    const charToRemove = attachedCharacter;
+                    setAttachedCharacter(null);
+                    if (charToRemove) {
+                      const removedKeys = new Set(
+                        charToRemove.loras.map((cl) => normalizeLoraKey(cl.loraName))
+                      );
+                      setRemovedLoraKeys((prev) => {
+                        const next = new Set(prev);
+                        removedKeys.forEach((k) => next.add(k));
+                        return next;
+                      });
+                      setAttachedLoras((prev) =>
+                        prev.filter(
+                          (al) =>
+                            !removedKeys.has(normalizeLoraKey(al.loraName)) &&
+                            !isCharacterLora(al.loraName, charToRemove, loras) &&
+                            al.showPill !== false
+                        )
+                      );
+                    }
+                  }}
                   className="text-indigo-300/70 hover:text-white cursor-pointer ml-0.5"
                   title="Remove character"
                 >
@@ -1073,11 +1145,23 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                     </span>
                     <button
                       type="button"
-                      onClick={() =>
-                        setAttachedLoras((prev) =>
-                          prev.filter((l) => l.loraName.toLowerCase() !== lora.loraName.toLowerCase())
-                        )
-                      }
+                      onClick={() => {
+                        const keyToRemove = normalizeLoraKey(lora.loraName);
+                        setRemovedLoraKeys((prev) => new Set(prev).add(keyToRemove));
+                        setAttachedLoras((prev) => {
+                          const remaining = prev.filter(
+                            (l) => normalizeLoraKey(l.loraName) !== keyToRemove
+                          );
+                          // If no visible pills and no character remain, clear any hidden reused LoRAs
+                          if (
+                            !attachedCharacter &&
+                            !remaining.some((l) => l.showPill !== false)
+                          ) {
+                            return [];
+                          }
+                          return remaining;
+                        });
+                      }}
                       className="text-amber-300/70 hover:text-white cursor-pointer ml-0.5"
                       title={`Remove ${label}`}
                     >

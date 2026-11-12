@@ -717,30 +717,20 @@ export function compileWorkflowForGeneration(params: {
   });
 
   if (powerLoraNodeId) {
-    const powerInputs = graph[powerLoraNodeId].inputs;
-    // Collect any pre-configured LoRAs saved inside the workflow's Power Lora Loader node
-    const savedEntries: { on: boolean; lora: string; strength: number }[] = [];
-    const existingKeys = Object.keys(powerInputs)
-      .filter((k) => /^lora_\d+$/i.test(k))
-      .sort((a, b) => {
-        const na = parseInt(a.replace(/\D+/g, ''), 10) || 0;
-        const nb = parseInt(b.replace(/\D+/g, ''), 10) || 0;
-        return na - nb;
-      });
-
-    for (const key of existingKeys) {
-      const val = powerInputs[key];
-      if (val && typeof val === 'object' && val.lora && val.on !== false) {
-        savedEntries.push({
-          on: true,
-          lora: String(val.lora),
-          strength: Number(val.strength ?? 1.0),
-        });
+    // Clear any pre-configured lora_N entries across all mapped Power Lora Loader nodes
+    for (const nodeId of mappedLoraNodes) {
+      const nodeInputs = graph[nodeId]?.inputs;
+      if (!nodeInputs) continue;
+      for (const key of Object.keys(nodeInputs)) {
+        if (/^lora_\d+$/i.test(key)) {
+          delete nodeInputs[key];
+        }
       }
-      delete powerInputs[key];
     }
 
-    // Merge saved workflow LoRAs with runtime activeLoras (avoiding duplicate filenames)
+    const powerInputs = graph[powerLoraNodeId].inputs;
+
+    // Populate strictly from runtime activeLoras so removed LoRAs are never resurrected from the template
     const combinedLoras: { on: boolean; lora: string; strength: number }[] = [];
     const seenLoraNames = new Set<string>();
 
@@ -753,14 +743,6 @@ export function compileWorkflowForGeneration(params: {
           lora: lora.loraName,
           strength: Number(lora.modelStrength ?? 1.0),
         });
-      }
-    }
-
-    for (const saved of savedEntries) {
-      const key = saved.lora.toLowerCase();
-      if (!seenLoraNames.has(key)) {
-        seenLoraNames.add(key);
-        combinedLoras.push(saved);
       }
     }
 
