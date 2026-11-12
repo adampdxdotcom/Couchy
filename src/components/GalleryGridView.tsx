@@ -464,15 +464,17 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
 
                 {/* Top Overlay Controls (Select & Favorite) */}
                 <div
-                  className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none"
+                  className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none z-10"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <button
                     type="button"
                     onClick={() => onToggleSelect(img.id)}
                     aria-label={`Select ${img.filename}`}
-                    className={`pointer-events-auto p-1.5 rounded-md bg-black/65 backdrop-blur-xs text-zinc-100 hover:bg-black/85 transition-opacity cursor-pointer ${
-                      isSelected ? 'opacity-100 text-indigo-400' : 'opacity-0 group-hover:opacity-100'
+                    className={`pointer-events-auto p-1.5 rounded-md bg-black/65 backdrop-blur-xs text-zinc-100 hover:bg-black/85 transition-opacity cursor-pointer mobile-show-actions ${
+                      isSelected
+                        ? 'opacity-100 text-indigo-400'
+                        : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'
                     }`}
                   >
                     {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
@@ -482,20 +484,20 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                     type="button"
                     onClick={() => onQuickFavorite(img.id, !img.isFavorite)}
                     aria-label="Toggle Favorite"
-                    className={`pointer-events-auto p-1.5 rounded-md bg-black/65 backdrop-blur-xs transition-opacity cursor-pointer ${
+                    className={`pointer-events-auto p-1.5 rounded-md bg-black/65 backdrop-blur-xs transition-opacity cursor-pointer mobile-show-actions ${
                       img.isFavorite
                         ? 'opacity-100 text-rose-400'
-                        : 'opacity-0 group-hover:opacity-100 text-zinc-300 hover:text-rose-400'
+                        : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-zinc-300 hover:text-rose-400'
                     }`}
                   >
                     <Heart className={`w-4 h-4 ${img.isFavorite ? 'fill-rose-400' : ''}`} />
                   </button>
                 </div>
 
-                {/* Bottom Gradient Scrim on Hover */}
-                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/45 to-transparent p-2.5 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-between text-xs">
+                {/* Bottom Gradient Scrim: Always visible on mobile, hover on desktop */}
+                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/45 to-transparent p-1.5 sm:p-2.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center justify-between text-xs mobile-show-actions z-10">
                   <div
-                    className="flex items-center gap-0.5"
+                    className="flex items-center gap-0.5 shrink-0"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {[1, 2, 3, 4, 5].map((star) => (

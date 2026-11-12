@@ -412,6 +412,21 @@ export default function App() {
     [characters, pushToast]
   );
 
+  const handleQuickFavorite = useCallback(
+    async (id: number, isFavorite: boolean) => {
+      const favoritedAt = isFavorite ? new Date().toISOString() : null;
+      setImages((prev) =>
+        prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
+      );
+      setAllImages((prev) =>
+        prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
+      );
+      await api.updateImageAnnotations(id, { isFavorite });
+      pushToast(isFavorite ? 'Added to Favorites' : 'Removed from Favorites', 'info');
+    },
+    [pushToast]
+  );
+
   const handleQuickReject = useCallback(
     async (id: number, nextRejected: boolean) => {
       setAllImages((prev) =>
@@ -538,17 +553,7 @@ export default function App() {
                 await api.updateImageAnnotations(id, { rating });
                 pushToast(rating > 0 ? `Rated image ★ ${rating}` : 'Cleared image rating', 'info');
               }}
-              onQuickFavorite={async (id, isFavorite) => {
-                const favoritedAt = isFavorite ? new Date().toISOString() : null;
-                setImages((prev) =>
-                  prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
-                );
-                setAllImages((prev) =>
-                  prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
-                );
-                await api.updateImageAnnotations(id, { isFavorite });
-                pushToast(isFavorite ? 'Added to Favorites' : 'Removed from Favorites', 'info');
-              }}
+              onQuickFavorite={handleQuickFavorite}
               onQuickReject={handleQuickReject}
               onBulkAction={async (payload) => {
                 const count = selectedIds.size;
@@ -597,6 +602,7 @@ export default function App() {
               await api.updateImageAnnotations(id, { rating });
               pushToast(rating > 0 ? `Rated image ★ ${rating}` : 'Cleared image rating', 'info');
             }}
+            onQuickFavorite={handleQuickFavorite}
             onQuickReject={handleQuickReject}
             onPushToast={pushToast}
           />

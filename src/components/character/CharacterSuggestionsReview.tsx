@@ -162,10 +162,10 @@ export const CharacterSuggestionsReview: React.FC<CharacterSuggestionsReviewProp
                     onSelectSuggestedId(img.id);
                   }}
                   aria-label={`Select suggested image ${img.filename}`}
-                  className={`absolute top-2 left-2 p-1.5 rounded-md bg-black/70 backdrop-blur-xs transition-opacity cursor-pointer ${
+                  className={`absolute top-2 left-2 p-1.5 rounded-md bg-black/70 backdrop-blur-xs transition-opacity cursor-pointer mobile-show-actions ${
                     isSelected
                       ? 'opacity-100 text-indigo-400'
-                      : 'opacity-80 group-hover:opacity-100 text-zinc-200'
+                      : 'opacity-100 sm:opacity-80 sm:group-hover:opacity-100 text-zinc-200'
                   }`}
                 >
                   {isSelected ? (

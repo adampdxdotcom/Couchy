@@ -27,3 +27,11 @@
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+/* Ensure hover actions are visible at all times on touch / mobile devices without a mouse */
+@media (hover: none) {
+  .mobile-show-actions {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+  }
+}

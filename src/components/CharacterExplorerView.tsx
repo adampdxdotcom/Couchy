@@ -24,6 +24,7 @@ interface CharacterExplorerViewProps {
   onOpenImage: (img: ImageRecord) => void;
   onFilterGalleryByCharacter: (charId: number) => void;
   onQuickRate: (id: number, rating: number) => void;
+  onQuickFavorite?: (id: number, nextFav: boolean) => void;
   onReusePrompt?: (img: ImageRecord) => void;
   onQuickReject?: (id: number, nextRejected: boolean) => void;
   onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
@@ -42,6 +43,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   onOpenImage,
   onFilterGalleryByCharacter,
   onQuickRate,
+  onQuickFavorite,
   onReusePrompt,
   onQuickReject,
   onPushToast,
@@ -197,6 +199,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
             activePortraitId={activePortraitId}
             onOpenImage={onOpenImage}
             onQuickRate={onQuickRate}
+            onQuickFavorite={onQuickFavorite}
             onSetPortrait={handleSetPortrait}
             onReusePrompt={onReusePrompt}
             onQuickReject={onQuickReject}
@@ -214,6 +217,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
           activePortraitId={activePortraitId}
           onOpenImage={onOpenImage}
           onQuickRate={onQuickRate}
+          onQuickFavorite={onQuickFavorite}
           onSetPortrait={handleSetPortrait}
           onReusePrompt={onReusePrompt}
           onQuickReject={onQuickReject}

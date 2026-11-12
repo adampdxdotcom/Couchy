@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronUp,
   Download,
+  Heart,
   RotateCcw,
   Star,
   Trash2,
@@ -17,6 +18,7 @@ interface CharacterGallerySectionProps {
   activePortraitId: number | null;
   onOpenImage: (img: ImageRecord) => void;
   onQuickRate: (id: number, rating: number) => void;
+  onQuickFavorite?: (id: number, nextFav: boolean) => void;
   onSetPortrait: (img: ImageRecord) => Promise<void>;
   onReusePrompt?: (img: ImageRecord) => void;
   onQuickReject?: (id: number, nextRejected: boolean) => void;
@@ -34,6 +36,7 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
   activePortraitId,
   onOpenImage,
   onQuickRate,
+  onQuickFavorite,
   onSetPortrait,
   onReusePrompt,
   onQuickReject,
@@ -106,21 +109,42 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
                     className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
                   />
 
-                  {/* Gold Portrait Badge on Image */}
-                  {isPortrait && (
-                    <div className="absolute top-2 left-2 z-10 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400 text-zinc-950 text-[10px] font-bold tracking-wider uppercase shadow-md pointer-events-none">
-                      <Star className="w-2.5 h-2.5 fill-zinc-950 text-zinc-950" />
-                      <span>Portrait</span>
-                    </div>
-                  )}
+                  {/* Top Overlay Controls (Portrait Badge & Favorite) */}
+                  <div
+                    className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none z-10"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {isPortrait ? (
+                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400 text-zinc-950 text-[10px] font-bold tracking-wider uppercase shadow-md pointer-events-none">
+                        <Star className="w-2.5 h-2.5 fill-zinc-950 text-zinc-950" />
+                        <span>Portrait</span>
+                      </div>
+                    ) : <div />}
+
+                    {onQuickFavorite && (
+                      <button
+                        type="button"
+                        onClick={() => onQuickFavorite(img.id, !img.isFavorite)}
+                        aria-label="Toggle Favorite"
+                        className={`pointer-events-auto p-1.5 rounded-md bg-black/65 backdrop-blur-xs transition-opacity cursor-pointer mobile-show-actions ${
+                          img.isFavorite
+                            ? 'opacity-100 text-rose-400'
+                            : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-zinc-300 hover:text-rose-400'
+                        }`}
+                        title={img.isFavorite ? 'Remove from Favorites' : 'Add to Favorites'}
+                      >
+                        <Heart className={`w-4 h-4 ${img.isFavorite ? 'fill-rose-400' : ''}`} />
+                      </button>
+                    )}
+                  </div>
 
                   {/* Bottom Floating Bar on Card: Rating Stars (Left) + Actions (Right) */}
                   <div
-                    className="absolute bottom-0 inset-x-0 p-2 sm:p-2.5 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex items-center justify-between opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10"
+                    className="absolute bottom-0 inset-x-0 p-1.5 sm:p-2.5 bg-gradient-to-t from-black/90 via-black/60 to-transparent flex items-center justify-between opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity z-10 mobile-show-actions"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div
-                      className="flex items-center gap-0.5"
+                      className="flex items-center gap-0.5 shrink-0"
                       onClick={(e) => e.stopPropagation()}
                     >
                       {[1, 2, 3, 4, 5].map((star) => (
@@ -140,7 +164,7 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
                         </button>
                       ))}
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 shrink-0">
                       {onReusePrompt && (
                         <button
                           type="button"
