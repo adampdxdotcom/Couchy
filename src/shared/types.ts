@@ -366,6 +366,7 @@ export interface GenerationLoraSelection {
   triggerWord?: string;
   appearanceLabel?: string;
   nickname?: string;
+  showPill?: boolean;
 }
 
 export interface GenerationItemRecord {

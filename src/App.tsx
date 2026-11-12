@@ -398,13 +398,16 @@ export default function App() {
       setQuickGenPrefill({
         prompt: promptText,
         character: matchedChar,
+        loras: img.loras || [],
         aspectRatio: targetRatio,
         batchCount: 1,
         timestamp: Date.now(),
       });
 
       const charLabel = matchedChar ? ` with ${matchedChar.name}` : '';
-      pushToast(`Reused prompt${charLabel} (${targetRatio}, 1 image) in Quick Gen`, 'success');
+      const loraCount = img.loras?.length || 0;
+      const loraLabel = loraCount > 0 ? ` + ${loraCount} LoRA(s)` : '';
+      pushToast(`Reused prompt${charLabel}${loraLabel} (${targetRatio}, 1 image) in Quick Gen`, 'success');
     },
     [characters, pushToast]
   );

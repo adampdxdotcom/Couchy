@@ -18,6 +18,7 @@ import { api } from '../api/client.ts';
 import type {
   CharacterProfile,
   GenerationLoraSelection,
+  ImageLoraRecord,
   ImageRecord,
   LoraExplorerItem,
   WorkflowLibraryItem,
@@ -27,6 +28,26 @@ import {
   resolveClosestAspectRatio,
   resolveDefaultWorkflow,
 } from '../shared/utils.ts';
+
+/**
+ * Returns the clean display label for a LoRA in Quick Gen:
+ * prefers the user-configured nickname (without @ prefix), falling back to clean name.
+ */
+function getCleanLoraLabel(
+  lora?: {
+    nickname?: string | null;
+    name?: string;
+    loraName?: string;
+    filename?: string;
+  } | null
+): string {
+  if (!lora) return 'LoRA';
+  const nick = (lora.nickname || '').trim().replace(/^@+/, '');
+  if (nick) return nick;
+  const cleanName = (lora.name || '').trim();
+  if (cleanName) return cleanName;
+  return (lora.loraName || lora.filename || 'LoRA').replace(/\.(safetensors|pt|ckpt)$/i, '');
+}
 
 /**
  * Downscales an uploaded/dropped image file in the browser so its pixel area is at most ~1MP (1,048,576 px),
@@ -86,6 +107,7 @@ async function downscaleImageFileTo1Mp(file: File): Promise<{
 export interface QuickGenPrefill {
   prompt: string;
   character?: CharacterProfile | null;
+  loras?: ImageLoraRecord[];
   aspectRatio?: string;
   batchCount?: number;
   timestamp: number;
@@ -146,8 +168,9 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   const [isHighlighted, setIsHighlighted] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
 
-  // Popover visibility states
+  // Popover visibility & filter tab states
   const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionTab, setMentionTab] = useState<'all' | 'characters' | 'loras'>('all');
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionTriggerRange, setMentionTriggerRange] = useState<{
     start: number;
@@ -234,6 +257,39 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     if (prefillPayload.character !== undefined) {
       setAttachedCharacter(prefillPayload.character);
     }
+    if (prefillPayload.loras !== undefined) {
+      const reusedSelections: GenerationLoraSelection[] = [];
+      const seenLoraNames = new Set<string>();
+
+      for (const imgLora of prefillPayload.loras) {
+        const rawKey = imgLora.loraName.toLowerCase();
+        if (seenLoraNames.has(rawKey)) continue;
+        seenLoraNames.add(rawKey);
+
+        const cleanBase = imgLora.loraName.replace(/\.(safetensors|pt|ckpt)$/i, '').toLowerCase();
+        const matchedExplorerLora = loras.find(
+          (l) =>
+            l.filename.toLowerCase() === rawKey ||
+            l.name.toLowerCase() === cleanBase
+        );
+
+        reusedSelections.push({
+          loraName: matchedExplorerLora?.filename || imgLora.loraName,
+          modelStrength: Number(
+            imgLora.modelStrength ?? matchedExplorerLora?.defaultModelStrength ?? 1.0
+          ),
+          clipStrength: Number(
+            imgLora.clipStrength ?? matchedExplorerLora?.defaultClipStrength ?? 1.0
+          ),
+          nickname: getCleanLoraLabel(matchedExplorerLora || { loraName: imgLora.loraName }),
+          showPill: Boolean(matchedExplorerLora?.mentionEnabled),
+        });
+      }
+      setAttachedLoras(reusedSelections);
+    } else {
+      setAttachedLoras([]);
+    }
+
     if (prefillPayload.aspectRatio) {
       setAspectRatio(prefillPayload.aspectRatio);
     }
@@ -256,43 +312,15 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     setIsHighlighted(true);
     const timer = setTimeout(() => setIsHighlighted(false), 1400);
     return () => clearTimeout(timer);
-  }, [prefillPayload]);
+  }, [prefillPayload, loras]);
 
-  // Build unified mention candidates:
-  // 1. Mention-enabled LoRAs with nicknames or matching filenames
-  // 2. Character entries
-  // 3. Confirmed character images
-  const mentionEntries = useMemo<MentionEntry[]>(() => {
+  // Build categorized mention candidates for All / Characters / LoRAs tabs
+  const { mentionEntries, mentionCounts } = useMemo(() => {
     const q = mentionQuery.trim().toLowerCase();
-    const entries: MentionEntry[] = [];
+    const charEntries: MentionEntry[] = [];
+    const loraEntries: MentionEntry[] = [];
 
-    // Filter candidate LoRAs (must have mentionEnabled true OR matching nickname)
-    const mentionableLoras = loras.filter((l) => l.mentionEnabled);
-    for (const lora of mentionableLoras) {
-      const nick = (lora.nickname || '').toLowerCase();
-      const loraName = lora.name.toLowerCase();
-      const loraFile = lora.filename.toLowerCase();
-
-      const matchesLora =
-        !q ||
-        (nick && nick.includes(q)) ||
-        loraName.includes(q) ||
-        loraFile.includes(q);
-
-      if (matchesLora) {
-        entries.push({
-          key: `lora-${lora.filename}`,
-          type: 'lora',
-          loraItem: lora,
-          title: lora.nickname ? `@${lora.nickname}` : lora.name,
-          subtitle: `LoRA · ${lora.loraCategory} · ${(lora.defaultModelStrength ?? 1.0).toFixed(1)}x`,
-          thumbnailUrl: null,
-          promptSnippet: lora.filename,
-        });
-      }
-    }
-
-    // Characters
+    // 1. Characters & confirmed character reference images
     for (const char of characters) {
       const charImages = allImages.filter((img) =>
         img.characters.some((c) => c.characterId === char.id && c.status === 'confirmed')
@@ -310,7 +338,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
         );
 
       if (matchesChar) {
-        entries.push({
+        charEntries.push({
           key: `char-${char.id}`,
           type: 'character',
           character: char,
@@ -328,7 +356,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             ? promptLine.slice(0, 42) + (promptLine.length > 42 ? '...' : '')
             : `${char.name} (${img.filename})`;
           if (!q || matchesChar || shortTitle.toLowerCase().includes(q)) {
-            entries.push({
+            charEntries.push({
               key: `img-${char.id}-${img.id}`,
               type: 'image',
               character: char,
@@ -342,8 +370,49 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
       }
     }
 
-    return entries;
-  }, [characters, loras, allImages, mentionQuery]);
+    // 2. Mention-enabled LoRAs (showing nickname without @ prefix, fallback to clean name)
+    const mentionableLoras = loras.filter((l) => l.mentionEnabled);
+    for (const lora of mentionableLoras) {
+      const nick = (lora.nickname || '').toLowerCase();
+      const loraName = lora.name.toLowerCase();
+      const loraFile = lora.filename.toLowerCase();
+
+      const matchesLora =
+        !q ||
+        (nick && nick.includes(q)) ||
+        loraName.includes(q) ||
+        loraFile.includes(q);
+
+      if (matchesLora) {
+        const displayLabel = getCleanLoraLabel(lora);
+        loraEntries.push({
+          key: `lora-${lora.filename}`,
+          type: 'lora',
+          loraItem: lora,
+          title: displayLabel,
+          subtitle: `LoRA · ${lora.loraCategory} · ${(lora.defaultModelStrength ?? 1.0).toFixed(1)}x`,
+          thumbnailUrl: null,
+          promptSnippet: displayLabel,
+        });
+      }
+    }
+
+    const allCombined = [...charEntries, ...loraEntries];
+    const counts = {
+      all: allCombined.length,
+      characters: charEntries.length,
+      loras: loraEntries.length,
+    };
+
+    const filteredByTab =
+      mentionTab === 'characters'
+        ? charEntries
+        : mentionTab === 'loras'
+        ? loraEntries
+        : allCombined;
+
+    return { mentionEntries: filteredByTab, mentionCounts: counts };
+  }, [characters, loras, allImages, mentionQuery, mentionTab]);
 
   // Keep activeIndex in bounds
   useEffect(() => {
@@ -383,10 +452,20 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
     if (entry.type === 'lora' && entry.loraItem) {
       const lora = entry.loraItem;
-      // Add to attachedLoras list (avoiding duplicate filenames)
+      const cleanLabel = getCleanLoraLabel(lora);
+      // Add to attachedLoras list (or make visible if it was a hidden reused LoRA)
       setAttachedLoras((prev) => {
-        if (prev.some((al) => al.loraName.toLowerCase() === lora.filename.toLowerCase())) {
-          return prev;
+        const existingIdx = prev.findIndex(
+          (al) => al.loraName.toLowerCase() === lora.filename.toLowerCase()
+        );
+        if (existingIdx >= 0) {
+          const updated = [...prev];
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            nickname: cleanLabel,
+            showPill: true,
+          };
+          return updated;
         }
         return [
           ...prev,
@@ -394,7 +473,8 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             loraName: lora.filename,
             modelStrength: lora.defaultModelStrength ?? 1.0,
             clipStrength: lora.defaultClipStrength ?? 1.0,
-            nickname: lora.nickname || lora.name,
+            nickname: cleanLabel,
+            showPill: true,
           },
         ];
       });
@@ -452,7 +532,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     return found ? found.short : '2:3';
   }, [aspectRatio]);
 
-  // Dispatch generation batch using defaults + character LoRAs & trigger word
+  // Dispatch generation batch using defaults + character LoRAs & all attached LoRAs
   const handleSubmit = async () => {
     const cleanPrompt = prompt.trim();
     if (!cleanPrompt || isSubmitting) return;
@@ -465,18 +545,23 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     setIsSubmitting(true);
 
     try {
-      // Merge character LoRAs with standalone mentioned LoRAs
+      // Merge character LoRAs with attached/reused LoRAs (preserving exact reused strengths)
       const charLoras: GenerationLoraSelection[] = attachedCharacter
-        ? attachedCharacter.loras.map((l) => ({
-            loraName: l.loraName,
-            modelStrength: 1.0,
-            clipStrength: 1.0,
-            triggerWord: l.triggerWord || '',
-            appearanceLabel: l.appearanceLabel || '',
-          }))
+        ? attachedCharacter.loras.map((l) => {
+            const matchingAttached = attachedLoras.find(
+              (al) => al.loraName.toLowerCase() === l.loraName.toLowerCase()
+            );
+            return {
+              loraName: l.loraName,
+              modelStrength: matchingAttached ? matchingAttached.modelStrength : 1.0,
+              clipStrength: matchingAttached ? matchingAttached.clipStrength : 1.0,
+              triggerWord: l.triggerWord || '',
+              appearanceLabel: l.appearanceLabel || '',
+            };
+          })
         : [];
 
-      // Combine ensuring unique loraNames
+      // Combine ensuring unique loraNames across character LoRAs and attached LoRAs (both pill-visible and background reused)
       const selectedLoras: GenerationLoraSelection[] = [...charLoras];
       for (const al of attachedLoras) {
         if (!selectedLoras.some((sl) => sl.loraName.toLowerCase() === al.loraName.toLowerCase())) {
@@ -631,7 +716,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
       {!isMinimized && (
         <>
-          {/* Two-Column @Character Mention Popover */}
+          {/* Two-Column @Character & @LoRA Mention Popover */}
           {mentionOpen && (
         <div className="mb-2 mx-2 md:mx-0 bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-3xl shadow-2xl overflow-hidden text-xs max-w-[calc(100vw-1rem)]">
           {/* Top Search Header */}
@@ -645,7 +730,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                   setMentionQuery(e.target.value);
                   setActiveIndex(0);
                 }}
-                placeholder="Search characters or trigger words..."
+                placeholder="Search characters, nicknames, or trigger words..."
                 className="w-full pl-8 pr-3 py-1.5 bg-zinc-900 border border-indigo-500/60 rounded-full text-zinc-100 placeholder-zinc-500 focus:outline-none"
               />
             </div>
@@ -653,15 +738,56 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               type="button"
               onClick={() => setMentionOpen(false)}
               className="p-1.5 text-zinc-400 hover:text-zinc-200 rounded-full hover:bg-zinc-900 cursor-pointer shrink-0"
-              title="Close character picker"
+              title="Close mention picker"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
+          {/* Filter Tabs: All | Characters | LoRAs */}
+          <div className="px-4 py-2 border-b border-zinc-800/80 bg-zinc-900/40 flex items-center gap-1.5">
+            {(
+              [
+                { id: 'all', label: 'All', count: mentionCounts.all },
+                { id: 'characters', label: 'Characters', count: mentionCounts.characters },
+                { id: 'loras', label: 'LoRAs', count: mentionCounts.loras },
+              ] as const
+            ).map((tab) => {
+              const isTabActive = mentionTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    setMentionTab(tab.id);
+                    setActiveIndex(0);
+                  }}
+                  className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
+                    isTabActive
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                  }`}
+                >
+                  <span>{tab.label}</span>
+                  <span
+                    className={`font-mono text-[10px] tabular-nums ${
+                      isTabActive ? 'text-indigo-200' : 'text-zinc-500'
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
           {mentionEntries.length === 0 ? (
             <div className="p-6 text-center text-zinc-400">
-              No matching characters or @mentioned LoRAs found. Enable LoRAs for @mention in the LoRA Explorer!
+              {mentionTab === 'loras'
+                ? 'No matching @mention LoRAs found. Enable LoRAs and set nicknames in the LoRA Explorer!'
+                : mentionTab === 'characters'
+                ? 'No matching characters found. Create a character in the Characters tab to @mention them.'
+                : 'No matching characters or @mentioned LoRAs found. Enable LoRAs for @mention in the LoRA Explorer!'}
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-12 max-h-[380px]">
@@ -730,10 +856,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                         </div>
                         <div>
                           <div className="text-sm font-semibold text-zinc-100">
-                            {highlightedEntry.title}
-                          </div>
-                          <div className="text-xs font-mono text-zinc-400 mt-0.5 truncate max-w-[220px]">
-                            {highlightedEntry.loraItem?.filename}
+                            {getCleanLoraLabel(highlightedEntry.loraItem || { name: highlightedEntry.title })}
                           </div>
                         </div>
                         <div className="text-[11px] text-zinc-400 flex items-center gap-2">
@@ -759,7 +882,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                     <div className="absolute bottom-2 left-2 right-2 px-2.5 py-1.5 rounded-xl bg-zinc-950/85 backdrop-blur-md border border-zinc-800/80 flex items-center justify-between text-[11px]">
                       <span className="font-medium text-zinc-200 truncate">
                         {highlightedEntry.type === 'lora'
-                          ? highlightedEntry.loraItem?.name
+                          ? getCleanLoraLabel(highlightedEntry.loraItem || { name: highlightedEntry.title })
                           : highlightedEntry.character?.name}
                       </span>
                       <span className="text-indigo-300 font-mono shrink-0 ml-2">
@@ -898,7 +1021,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
         )}
 
         {/* Attached Character and LoRA Pill Badges */}
-        {(attachedCharacter || attachedLoras.length > 0) && (
+        {(attachedCharacter || attachedLoras.some((l) => l.showPill !== false)) && (
           <div className="mb-2 flex flex-wrap items-center gap-2">
             {/* Character Badge */}
             {attachedCharacter && (
@@ -932,32 +1055,35 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             )}
 
             {/* Mentioned LoRA Badges */}
-            {attachedLoras.map((lora) => (
-              <div
-                key={lora.loraName}
-                className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full bg-amber-950/60 border border-amber-500/40 text-xs text-amber-200 shadow-sm"
-              >
-                <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span className="font-medium text-amber-100">
-                  {lora.nickname ? `@${lora.nickname}` : lora.loraName}
-                </span>
-                <span className="text-[11px] font-mono text-amber-300/90 tabular-nums">
-                  {lora.modelStrength.toFixed(1)}x
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setAttachedLoras((prev) =>
-                      prev.filter((l) => l.loraName.toLowerCase() !== lora.loraName.toLowerCase())
-                    )
-                  }
-                  className="text-amber-300/70 hover:text-white cursor-pointer ml-0.5"
-                  title={`Remove ${lora.nickname || lora.loraName}`}
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            ))}
+            {attachedLoras
+              .filter((lora) => lora.showPill !== false)
+              .map((lora) => {
+                const label = getCleanLoraLabel(lora);
+                return (
+                  <div
+                    key={lora.loraName}
+                    className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full bg-amber-950/60 border border-amber-500/40 text-xs text-amber-200 shadow-sm"
+                  >
+                    <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span className="font-medium text-amber-100">{label}</span>
+                    <span className="text-[11px] font-mono text-amber-300/90 tabular-nums">
+                      {lora.modelStrength.toFixed(1)}x
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAttachedLoras((prev) =>
+                          prev.filter((l) => l.loraName.toLowerCase() !== lora.loraName.toLowerCase())
+                        )
+                      }
+                      className="text-amber-300/70 hover:text-white cursor-pointer ml-0.5"
+                      title={`Remove ${label}`}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
           </div>
         )}
 
@@ -987,8 +1113,8 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             }}
             placeholder={
               lmStudioOnline
-                ? 'What do you want to create? (Type @ for character, or drop/paste an image)'
-                : 'What do you want to create? (Type @ to mention a character)'
+                ? 'What do you want to create? (Type @ for character/LoRA, or drop/paste an image)'
+                : 'What do you want to create? (Type @ to mention a character or LoRA)'
             }
             className={`w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-sm resize-none focus:outline-none leading-relaxed transition-[height,min-height] duration-200 overflow-y-auto ${
               isPromptExpanded ? 'min-h-[5.5rem] max-h-36 sm:max-h-48' : 'min-h-[1.5rem] max-h-24'
@@ -999,6 +1125,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               type="button"
               onClick={() => {
                 setPrompt('');
+                setAttachedLoras((prev) => prev.filter((l) => l.showPill !== false));
                 setMentionOpen(false);
                 setIsPromptFocused(false);
                 inputRef.current?.blur();
