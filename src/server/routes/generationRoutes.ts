@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import {
+  compileUpscaleWorkflow,
   compileWorkflowForGeneration,
   computeDimensionsFromMegapixels,
   getWorkflowMapping,
@@ -349,15 +350,158 @@ generationRouter.get('/batches', (_req, res) => {
 });
 
 /**
- * Polls ComfyUI /history/<promptId> for a submitted generation item and links output images.
+ * Copies generation metadata, LoRA stack, model dependencies, and workflow association
+ * from the 3MP base image onto the final upscaled image record in SQLite.
+ */
+function copyBaseImageMetadataToUpscaled(baseImageId: number, upscaledImageId: number): void {
+  if (!baseImageId || !upscaledImageId || baseImageId === upscaledImageId) return;
+  try {
+    const baseImg = db
+      .prepare('SELECT dependency_status FROM images WHERE id = ?')
+      .get(baseImageId) as { dependency_status: string } | undefined;
+    const baseMeta = db
+      .prepare('SELECT * FROM image_metadata WHERE image_id = ?')
+      .get(baseImageId) as any;
+
+    const tx = db.transaction(() => {
+      if (baseImg?.dependency_status) {
+        db.prepare('UPDATE images SET dependency_status = ? WHERE id = ?').run(
+          baseImg.dependency_status,
+          upscaledImageId
+        );
+      }
+
+      if (baseMeta) {
+        db.prepare(
+          `INSERT INTO image_metadata (
+            image_id, positive_prompt, negative_prompt, seed, steps, cfg, sampler, scheduler,
+            denoise, batch_size, batch_index, generation_date, checkpoint_name, checkpoint_hash,
+            vae_name, missing_fields_json, provenance_json, raw_metadata_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(image_id) DO UPDATE SET
+            positive_prompt = excluded.positive_prompt,
+            negative_prompt = excluded.negative_prompt,
+            seed = excluded.seed,
+            steps = excluded.steps,
+            cfg = excluded.cfg,
+            sampler = excluded.sampler,
+            scheduler = excluded.scheduler,
+            denoise = excluded.denoise,
+            batch_size = excluded.batch_size,
+            batch_index = excluded.batch_index,
+            generation_date = excluded.generation_date,
+            checkpoint_name = excluded.checkpoint_name,
+            checkpoint_hash = excluded.checkpoint_hash,
+            vae_name = excluded.vae_name,
+            missing_fields_json = excluded.missing_fields_json,
+            provenance_json = excluded.provenance_json,
+            raw_metadata_json = excluded.raw_metadata_json`
+        ).run(
+          upscaledImageId,
+          baseMeta.positive_prompt,
+          baseMeta.negative_prompt,
+          baseMeta.seed,
+          baseMeta.steps,
+          baseMeta.cfg,
+          baseMeta.sampler,
+          baseMeta.scheduler,
+          baseMeta.denoise,
+          baseMeta.batch_size,
+          baseMeta.batch_index,
+          baseMeta.generation_date,
+          baseMeta.checkpoint_name,
+          baseMeta.checkpoint_hash,
+          baseMeta.vae_name,
+          baseMeta.missing_fields_json,
+          baseMeta.provenance_json,
+          baseMeta.raw_metadata_json
+        );
+      }
+
+      const baseLoras = db
+        .prepare('SELECT * FROM image_loras WHERE image_id = ?')
+        .all(baseImageId) as any[];
+      if (baseLoras.length > 0) {
+        db.prepare('DELETE FROM image_loras WHERE image_id = ?').run(upscaledImageId);
+        const insLora = db.prepare(
+          `INSERT INTO image_loras
+            (image_id, model_id, lora_name, lora_path, lora_hash, model_strength, clip_strength, node_id, node_type, provenance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        for (const l of baseLoras) {
+          insLora.run(
+            upscaledImageId,
+            l.model_id,
+            l.lora_name,
+            l.lora_path,
+            l.lora_hash,
+            l.model_strength,
+            l.clip_strength,
+            l.node_id,
+            l.node_type,
+            l.provenance
+          );
+        }
+      }
+
+      const baseModels = db
+        .prepare('SELECT * FROM image_models WHERE image_id = ?')
+        .all(baseImageId) as any[];
+      if (baseModels.length > 0) {
+        db.prepare('DELETE FROM image_models WHERE image_id = ?').run(upscaledImageId);
+        const insModel = db.prepare(
+          `INSERT INTO image_models
+            (image_id, model_id, model_name, model_type, model_hash, status, node_id, node_type, provenance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        for (const m of baseModels) {
+          insModel.run(
+            upscaledImageId,
+            m.model_id,
+            m.model_name,
+            m.model_type,
+            m.model_hash,
+            m.status,
+            m.node_id,
+            m.node_type,
+            m.provenance
+          );
+        }
+      }
+
+      const baseWf = db
+        .prepare('SELECT * FROM image_workflows WHERE image_id = ?')
+        .get(baseImageId) as any;
+      if (baseWf) {
+        db.prepare(
+          `INSERT INTO image_workflows (image_id, workflow_id, format_type)
+           VALUES (?, ?, ?)
+           ON CONFLICT(image_id) DO UPDATE SET
+             workflow_id = excluded.workflow_id,
+             format_type = excluded.format_type`
+        ).run(upscaledImageId, baseWf.workflow_id, baseWf.format_type);
+      }
+    });
+
+    tx();
+  } catch (err) {
+    console.warn('Failed to copy base image metadata to upscaled image:', err);
+  }
+}
+
+/**
+ * Polls ComfyUI /history/<promptId> for a submitted generation item, triggers the
+ * automatic upscale workflow when targetMegapixels > 3.0, and links output images.
  */
 function pollGenerationItem(
   itemId: number,
   promptId: string,
   characterId: number | null,
-  attempt = 0
+  attempt = 0,
+  targetMegapixels?: number,
+  baseImageId?: number | null
 ): void {
-  if (attempt > 90) return;
+  if (attempt > 120) return;
   setTimeout(async () => {
     try {
       const res = await fetch(`${appConfig.comfyuiUrl}/history/${promptId}`);
@@ -376,6 +520,7 @@ function pollGenerationItem(
           }
 
           let matchedImageId: number | null = null;
+          let firstOutputSpec: { filename: string; subfolder: string } | null = null;
           const outputs = entry.outputs || {};
           let anyIndexed = false;
 
@@ -385,6 +530,9 @@ function pollGenerationItem(
                 const filename = imgSpec?.filename;
                 const subfolder = imgSpec?.subfolder || '';
                 if (!filename) continue;
+                if (!firstOutputSpec) {
+                  firstOutputSpec = { filename, subfolder };
+                }
 
                 const fullPath = path.join(appConfig.comfyuiOutputDir, subfolder, filename);
                 if (fs.existsSync(fullPath)) {
@@ -399,7 +547,6 @@ function pollGenerationItem(
                     anyIndexed = true;
                   }
                 } else {
-                  // Fallback: check if already in images table
                   const imgRow = db
                     .prepare(
                       'SELECT id, content_hash FROM images WHERE filename = ? ORDER BY id DESC LIMIT 1'
@@ -413,10 +560,62 @@ function pollGenerationItem(
             }
           }
 
+          // If this was the 3.0 MP base pass and user requested > 3.0 MP, chain the upscale workflow
+          if (targetMegapixels && targetMegapixels > 3.0 && firstOutputSpec) {
+            try {
+              const upscalePayload = compileUpscaleWorkflow({
+                imageFilename: firstOutputSpec.filename,
+                subfolder: firstOutputSpec.subfolder,
+                targetMegapixels,
+              });
+
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 8000);
+              const upRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: controller.signal,
+                body: JSON.stringify({
+                  prompt: upscalePayload,
+                  client_id: COUCHY_COMFY_CLIENT_ID,
+                }),
+              });
+              clearTimeout(timer);
+
+              if (upRes.ok) {
+                const upData = (await upRes.json()) as { prompt_id?: string };
+                const upscalePromptId = upData.prompt_id;
+                if (upscalePromptId) {
+                  db.prepare(
+                    `UPDATE generation_items
+                     SET comfyui_prompt_id = ?, output_image_id = COALESCE(?, output_image_id)
+                     WHERE id = ?`
+                  ).run(upscalePromptId, matchedImageId, itemId);
+                  invalidateComfyQueueCache();
+                  pollGenerationItem(
+                    itemId,
+                    upscalePromptId,
+                    characterId,
+                    0,
+                    undefined,
+                    matchedImageId
+                  );
+                  return;
+                }
+              }
+            } catch (upErr) {
+              console.warn('Automatic upscale pass failed, falling back to 3MP base image:', upErr);
+            }
+          }
+
+          // If this was the upscale pass completing, copy metadata/LoRAs from the base 3MP image
+          if (baseImageId && matchedImageId && baseImageId !== matchedImageId) {
+            copyBaseImageMetadataToUpscaled(baseImageId, matchedImageId);
+          }
+
           if (anyIndexed) {
             notifyImageIndexed();
           } else {
-            // Trigger background scan as safety net
             runDirectoryScan('incremental');
           }
 
@@ -424,13 +623,27 @@ function pollGenerationItem(
             `UPDATE generation_items
              SET status = 'completed', output_image_id = COALESCE(?, output_image_id), completed_at = datetime('now')
              WHERE id = ?`
-          ).run(matchedImageId, itemId);
+          ).run(matchedImageId ?? baseImageId ?? null, itemId);
           return;
         }
       }
-      pollGenerationItem(itemId, promptId, characterId, attempt + 1);
+      pollGenerationItem(
+        itemId,
+        promptId,
+        characterId,
+        attempt + 1,
+        targetMegapixels,
+        baseImageId
+      );
     } catch {
-      pollGenerationItem(itemId, promptId, characterId, attempt + 1);
+      pollGenerationItem(
+        itemId,
+        promptId,
+        characterId,
+        attempt + 1,
+        targetMegapixels,
+        baseImageId
+      );
     }
   }, 2500);
 }
@@ -492,12 +705,18 @@ generationRouter.post('/submit-batch', async (req, res) => {
         ? Number(megapixels)
         : null;
     const resolvedMp = Math.max(
-      0.1,
+      0.5,
       Math.min(10.0, explicitMp ?? wfDefaultMp ?? 3.0)
     );
+    // Base workflow runs natively up to 3.0 MP; targets above 3.0 MP render base at 3.0 MP before upscaling
+    const baseWorkflowMp = Math.min(3.0, resolvedMp);
     const { width: computedWidth, height: computedHeight } = computeDimensionsFromMegapixels(
       resolvedAr,
       resolvedMp
+    );
+    const { width: baseWidth, height: baseHeight } = computeDimensionsFromMegapixels(
+      resolvedAr,
+      baseWorkflowMp
     );
     const loraSelections: GenerationLoraSelection[] = Array.isArray(loras) ? loras : [];
     const activeLorasCount = loraSelections.filter((l) => Boolean(l.loraName?.trim())).length;
@@ -572,9 +791,9 @@ generationRouter.post('/submit-batch', async (req, res) => {
             negativePrompt: (negativePrompt || '').trim(),
             seed: item.seed,
             aspectRatio: resolvedAr,
-            megapixels: resolvedMp,
-            width: computedWidth,
-            height: computedHeight,
+            megapixels: baseWorkflowMp,
+            width: baseWidth,
+            height: baseHeight,
             loras: loraSelections,
             checkpointName: checkpointName || undefined,
           });
@@ -609,7 +828,9 @@ generationRouter.post('/submit-batch', async (req, res) => {
           pollGenerationItem(
             item.itemId,
             promptId,
-            characterId ? Number(characterId) : null
+            characterId ? Number(characterId) : null,
+            0,
+            resolvedMp > 3.0 ? resolvedMp : undefined
           );
         } catch (err: any) {
           db.prepare(

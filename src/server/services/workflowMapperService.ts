@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { db } from '../db.ts';
 import {
   normalizeResolutionSelectorRatio,
@@ -5,6 +8,10 @@ import {
   type WorkflowNodeMapping,
   type WorkflowNodeSlotInfo,
 } from '../../shared/types.ts';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const UPSCALE_WORKFLOW_PATH = path.resolve(__dirname, '../workflows/upscale_workflow.json');
 
 /**
  * Computes pixel width & height (multiples of 64) from an aspect ratio string (e.g. "2:3 (Portrait Photo)") and megapixels (0.1 - 10.0).
@@ -859,3 +866,45 @@ export function compileWorkflowForGeneration(params: {
 
   return graph;
 }
+
+/**
+ * Loads the internal upscale workflow template (`src/server/workflows/upscale_workflow.json`)
+ * and injects the generated 3MP output filename (`[output]`) and target megapixel count.
+ * Also converts any terminal `PreviewImage` node to `SaveImage` so ComfyUI writes the
+ * final upscaled file into the permanent `output/` directory for gallery indexing.
+ */
+export function compileUpscaleWorkflow(params: {
+  imageFilename: string;
+  subfolder?: string;
+  targetMegapixels: number;
+}): Record<string, any> {
+  const rawJson = fs.readFileSync(UPSCALE_WORKFLOW_PATH, 'utf-8');
+  const graph = JSON.parse(rawJson) as Record<string, any>;
+
+  const cleanSubfolder = (params.subfolder || '').trim().replace(/^\/+|\/+$/g, '');
+  const annotatedImage = cleanSubfolder
+    ? `${cleanSubfolder}/${params.imageFilename} [output]`
+    : `${params.imageFilename} [output]`;
+  const targetMp = Math.max(3.5, Math.min(10.0, Number(params.targetMegapixels) || 5.0));
+
+  for (const node of Object.values(graph)) {
+    if (!node || typeof node !== 'object') continue;
+    const classType = String(node.class_type || '');
+    const inputs = node.inputs && typeof node.inputs === 'object' ? node.inputs : {};
+
+    if (classType === 'LoadImage') {
+      inputs.image = annotatedImage;
+    } else if (classType === 'ImageScaleToTotalPixels' || 'megapixels' in inputs) {
+      inputs.megapixels = Number(targetMp.toFixed(2));
+    } else if (classType === 'PreviewImage') {
+      node.class_type = 'SaveImage';
+      inputs.filename_prefix = inputs.filename_prefix || 'Krea2_turbo_upscaled';
+      if (node._meta && typeof node._meta === 'object') {
+        node._meta.title = 'Save Image';
+      }
+    }
+  }
+
+  return graph;
+}
+

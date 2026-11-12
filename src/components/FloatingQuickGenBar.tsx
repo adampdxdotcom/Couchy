@@ -155,6 +155,13 @@ interface FloatingQuickGenBarProps {
 
 const BATCH_COUNT_OPTIONS = [1, 2, 4, 6, 8];
 
+/** Clamps and snaps any megapixel value to 0.5 MP increments between 0.5 and 10.0. */
+function snapToHalfMp(val: number | null | undefined, fallback = 3.0): number {
+  const n = Number(val);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.max(0.5, Math.min(10.0, Math.round(n * 2) / 2));
+}
+
 interface MentionEntry {
   key: string;
   type: 'character' | 'image' | 'lora';
@@ -190,6 +197,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     }
   }, [lmStudioOnline, agentEnabled]);
   const [aspectRatio, setAspectRatio] = useState('2:3 (Portrait Photo)');
+  const [megapixels, setMegapixels] = useState<number>(3.0);
   const [batchCount, setBatchCount] = useState<number>(1);
   const [attachedCharacter, setAttachedCharacter] = useState<CharacterProfile | null>(null);
   const [attachedLoras, setAttachedLoras] = useState<GenerationLoraSelection[]>([]);
@@ -573,10 +581,34 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     return resolveDefaultWorkflow(workflows);
   }, [attachedCharacter, workflows]);
 
+  const workflowDefaultMp = useMemo(
+    () => snapToHalfMp(resolvedWorkflow?.defaultMegapixels, 3.0),
+    [resolvedWorkflow?.defaultMegapixels]
+  );
+
+  const workflowDefaultAr = useMemo(
+    () => resolvedWorkflow?.defaultAspectRatio || '2:3 (Portrait Photo)',
+    [resolvedWorkflow?.defaultAspectRatio]
+  );
+
+  // Sync Quick Gen resolution & aspect ratio whenever the active workflow's defaults change
+  useEffect(() => {
+    setMegapixels(workflowDefaultMp);
+  }, [resolvedWorkflow?.id, workflowDefaultMp]);
+
+  useEffect(() => {
+    setAspectRatio(workflowDefaultAr);
+  }, [resolvedWorkflow?.id, workflowDefaultAr]);
+
   const resolvedShortRatio = useMemo(() => {
     const found = ASPECT_RATIO_OPTIONS.find((r) => r.value === aspectRatio);
     return found ? found.short : '2:3';
   }, [aspectRatio]);
+
+  const formattedMpLabel = useMemo(
+    () => (Number.isInteger(megapixels) ? `${megapixels}MP` : `${megapixels.toFixed(1)}MP`),
+    [megapixels]
+  );
 
   // Dispatch generation batch using defaults + character LoRAs & all attached LoRAs
   const handleSubmit = async () => {
@@ -649,6 +681,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
         mode: agentEnabled ? 'theme_set' : 'single',
         themeTitle: cleanPrompt.slice(0, 80),
         aspectRatio,
+        megapixels,
         prompts: promptsToRun,
         triggerWord,
         negativePrompt: '',
@@ -674,13 +707,14 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
         );
       }
 
-      // Reset prompt, character, attached LoRAs, and controls
+      // Reset prompt, character, attached LoRAs, and controls back to workflow defaults
       setPrompt('');
       setAttachedCharacter(null);
       setAttachedLoras([]);
       setRemovedLoraKeys(new Set());
       setAgentEnabled(false);
-      setAspectRatio('2:3 (Portrait Photo)');
+      setAspectRatio(workflowDefaultAr);
+      setMegapixels(workflowDefaultMp);
       setBatchCount(1);
       setMentionOpen(false);
       setShowSettingsMenu(false);
@@ -959,9 +993,9 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
         </div>
       )}
 
-      {/* Aspect Ratio & Batch Count Popover */}
+      {/* Aspect Ratio, Resolution & Batch Count Popover */}
       {showSettingsMenu && (
-        <div className="mb-2 mr-2 md:mr-0 ml-auto w-72 max-w-[calc(100vw-1rem)] bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-2xl p-3.5 shadow-2xl space-y-3 text-xs">
+        <div className="mb-2 mr-2 md:mr-0 ml-auto w-72 max-w-[calc(100vw-1rem)] bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-2xl p-3.5 shadow-2xl space-y-3.5 text-xs">
           <div>
             <span className="block text-[11px] font-medium text-zinc-400 mb-1.5">
               Aspect Ratio (Node #49)
@@ -982,6 +1016,46 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                   {opt.short}
                 </button>
               ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <span className="text-[11px] font-medium text-zinc-400">
+                Resolution (Node #49)
+              </span>
+              <div className="flex items-center gap-1.5">
+                {megapixels > 3.0 && (
+                  <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-[10px] font-mono text-amber-300">
+                    3MP + Upscale
+                  </span>
+                )}
+                <span className="font-mono font-semibold text-indigo-300 tabular-nums">
+                  {megapixels.toFixed(1)} MP
+                </span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={0.5}
+              max={10.0}
+              step={0.5}
+              value={megapixels}
+              onChange={(e) => setMegapixels(snapToHalfMp(parseFloat(e.target.value), workflowDefaultMp))}
+              className="w-full accent-indigo-500 cursor-pointer"
+            />
+            <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500 mt-0.5">
+              <span>0.5 MP</span>
+              <span
+                className={
+                  Math.abs(megapixels - workflowDefaultMp) < 0.01
+                    ? 'text-indigo-400'
+                    : 'text-zinc-500'
+                }
+              >
+                Default: {workflowDefaultMp.toFixed(1)} MP
+              </span>
+              <span>10.0 MP</span>
             </div>
           </div>
 
@@ -1301,7 +1375,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                 setMentionOpen(false);
               }}
               className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-full bg-zinc-800/90 hover:bg-zinc-700/90 text-zinc-200 text-xs font-medium transition-colors cursor-pointer min-w-0 truncate"
-              title="Configure Aspect Ratio & Number of Generations"
+              title="Configure Aspect Ratio, Resolution (MP) & Number of Generations"
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               <span className="truncate max-w-[65px] xs:max-w-[85px] sm:max-w-[110px]">
@@ -1310,6 +1384,13 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               <span className="inline-flex items-center gap-1 font-mono text-zinc-300 shrink-0">
                 <span className="inline-block w-2 h-3 border border-zinc-400 rounded-[2px]" />
                 <span>{resolvedShortRatio}</span>
+              </span>
+              <span
+                className={`font-mono shrink-0 ${
+                  megapixels > 3.0 ? 'text-amber-300' : 'text-indigo-300'
+                }`}
+              >
+                {formattedMpLabel}
               </span>
               <span className="font-mono text-zinc-100 shrink-0">x{batchCount}</span>
             </button>

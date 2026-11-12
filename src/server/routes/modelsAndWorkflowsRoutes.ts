@@ -16,6 +16,7 @@ import {
   startConfirmedModelDownload,
 } from '../services/modelManagerService.ts';
 import { getComfyUiLiveStatus } from '../services/comfyuiLiveMonitor.ts';
+import { getWorkflowMapping } from '../services/workflowMapperService.ts';
 import type { WorkflowLibraryItem } from '../../shared/types.ts';
 
 export const modelsAndWorkflowsRouter = Router();
@@ -324,20 +325,35 @@ modelsAndWorkflowsRouter.get('/workflows', (_req, res) => {
       charsByWf.set(workflowId, arr);
     }
 
-    const items: WorkflowLibraryItem[] = rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      description: r.description || '',
-      isSavedLibrary: Boolean(r.is_saved_library),
-      isDefault: Boolean(r.is_default),
-      hasVisualWorkflow: Boolean(r.has_visual),
-      hasApiWorkflow: Boolean(r.has_api),
-      workflowHash: r.workflow_hash,
-      imageCount: Number(r.imageCount || 0),
-      characters: charsByWf.get(r.id) || [],
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    }));
+    const items: WorkflowLibraryItem[] = rows.map((r) => {
+      let defaultMegapixels: number | null = null;
+      let defaultAspectRatio: string | null = null;
+      if (r.has_api || r.has_visual) {
+        try {
+          const wfMap = getWorkflowMapping(Number(r.id));
+          defaultMegapixels = wfMap.defaultMegapixels ?? null;
+          defaultAspectRatio = wfMap.defaultAspectRatio ?? null;
+        } catch {
+          // ignore
+        }
+      }
+      return {
+        id: r.id,
+        name: r.name,
+        description: r.description || '',
+        isSavedLibrary: Boolean(r.is_saved_library),
+        isDefault: Boolean(r.is_default),
+        hasVisualWorkflow: Boolean(r.has_visual),
+        hasApiWorkflow: Boolean(r.has_api),
+        workflowHash: r.workflow_hash,
+        imageCount: Number(r.imageCount || 0),
+        characters: charsByWf.get(r.id) || [],
+        defaultMegapixels,
+        defaultAspectRatio,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      };
+    });
 
     res.json({ items });
   } catch (err: any) {

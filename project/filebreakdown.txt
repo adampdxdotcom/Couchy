@@ -736,3 +736,13 @@ Responsible for:
   save/cancel, JSON export (`ExportPromptModal`), workflow import
   (`WorkflowCreateModal`), ComfyUI reproduction readiness validation and test
   submission, associated images preview, and `WorkflowReproductionHistory`.
+
+--------------------------------------------------------------------------------
+Folder: src/server/workflows
+--------------------------------------------------------------------------------
+
+File: src/server/workflows/upscale_workflow.json
+Responsible for:
+  Internal, non-user-facing ComfyUI API workflow JSON template used for
+  automatic post-generation upscaling when a user selects a target resolution
+  above 3.0 MP (3.5 MP – 10.0 MP).
