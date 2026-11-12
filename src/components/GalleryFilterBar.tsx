@@ -3,6 +3,8 @@ import {
   Search,
   SlidersHorizontal,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Download,
   BookmarkPlus,
   RotateCcw,
@@ -31,6 +33,11 @@ interface GalleryFilterBarProps {
   thumbScale: 'sm' | 'md' | 'lg';
   onThumbScaleChange: (scale: 'sm' | 'md' | 'lg') => void;
   totalMatching: number;
+  page: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+  infiniteScroll: boolean;
+  onInfiniteScrollChange: (enabled: boolean) => void;
   characters: CharacterProfile[];
   loras: LoraExplorerItem[];
   checkpoints: string[];
@@ -55,6 +62,11 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
   thumbScale,
   onThumbScaleChange,
   totalMatching,
+  page,
+  totalPages,
+  onPageChange,
+  infiniteScroll,
+  onInfiniteScrollChange,
   characters,
   loras,
   checkpoints,
@@ -117,15 +129,15 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
         isHiddenOnMobile ? 'hidden md:block' : 'block'
       }`}
     >
-      {/* Row 1: Locked Sticky Universal Search Header + Filter Toggle + Export */}
-      <div className="flex items-center justify-between gap-2.5 sm:gap-3">
+      {/* Row 1: Locked Sticky Universal Search Header + Filter Toggle + Export + Pagination & Infinite Scroll */}
+      <div className="flex flex-wrap lg:flex-nowrap items-center justify-between gap-2.5 sm:gap-3">
         <div className="relative flex-1 min-w-[200px]">
           <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             type="text"
             value={filters.query}
             onChange={(e) => onChange({ ...filters, query: e.target.value })}
-            placeholder='Search prompts, tags, loras, characters...'
+            placeholder="Search prompts, tags, loras, characters..."
             className="w-full pl-10 pr-9 py-2 text-sm bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
           />
           {filters.query && (
@@ -145,8 +157,8 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
           {totalMatching} {totalMatching === 1 ? 'image' : 'images'}
         </span>
 
-        {/* Action Controls: Filter Accordion Toggle, Reset & Export */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        {/* Action Controls: Filter Accordion Toggle, Reset, Export, Pagination & Infinite Scroll */}
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 shrink-0">
           <button
             type="button"
             onClick={() => setShowFilters((prev) => !prev)}
@@ -193,6 +205,80 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
             <Download className="w-3.5 h-3.5" />
             <span className="font-mono tabular-nums hidden xs:inline sm:inline">
               ZIP ({totalMatching})
+            </span>
+          </button>
+
+          <div className="h-5 w-px bg-zinc-800 hidden sm:block shrink-0" aria-hidden="true" />
+
+          {/* Pagination Controls (Grayed out when Infinite Scroll is active) */}
+          <div
+            className={`inline-flex items-center gap-1.5 font-mono text-xs tabular-nums transition-opacity ${
+              infiniteScroll ? 'opacity-40 pointer-events-none select-none' : ''
+            }`}
+            title={
+              infiniteScroll
+                ? 'Pagination disabled while Infinite Scroll is active'
+                : `Page ${page} of ${totalPages}`
+            }
+          >
+            <button
+              type="button"
+              disabled={infiniteScroll || page <= 1}
+              onClick={() => onPageChange(Math.max(1, page - 1))}
+              aria-label="Previous page"
+              className="inline-flex items-center gap-1 px-2.5 py-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 disabled:opacity-40 text-zinc-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer disabled:cursor-not-allowed"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline font-sans font-medium">Prev</span>
+            </button>
+
+            <span className="px-2 py-2 bg-zinc-900/60 border border-zinc-800/80 rounded-lg text-zinc-300 whitespace-nowrap">
+              <span className="hidden sm:inline">Page </span>
+              <span className="text-zinc-100 font-semibold">{page}</span>
+              <span className="text-zinc-500"> / </span>
+              <span>{totalPages}</span>
+            </span>
+
+            <button
+              type="button"
+              disabled={infiniteScroll || page >= totalPages}
+              onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+              aria-label="Next page"
+              className="inline-flex items-center gap-1 px-2.5 py-2 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 disabled:opacity-40 text-zinc-200 rounded-lg transition-colors whitespace-nowrap cursor-pointer disabled:cursor-not-allowed"
+            >
+              <span className="hidden xl:inline font-sans font-medium">Next</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Infinite Scroll Switch */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={infiniteScroll}
+            onClick={() => onInfiniteScrollChange(!infiniteScroll)}
+            title={
+              infiniteScroll
+                ? 'Infinite Scroll enabled (click to use pagination)'
+                : 'Enable Infinite Scroll'
+            }
+            className={`inline-flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap cursor-pointer ${
+              infiniteScroll
+                ? 'bg-indigo-600/20 border-indigo-500/80 text-indigo-200'
+                : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+            }`}
+          >
+            <span>Infinite</span>
+            <span
+              className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
+                infiniteScroll ? 'bg-indigo-600' : 'bg-zinc-700'
+              }`}
+            >
+              <span
+                className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                  infiniteScroll ? 'translate-x-3.5' : 'translate-x-0.5'
+                }`}
+              />
             </span>
           </button>
         </div>

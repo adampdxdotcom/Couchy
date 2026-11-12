@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   CheckSquare,
   Square,
@@ -30,6 +30,9 @@ import type { GalleryViewLayout } from './GalleryFilterBar.tsx';
 interface GalleryGridViewProps {
   images: ImageRecord[];
   ghostItems?: QueuedGhostCardItem[];
+  page: number;
+  pageSize?: number;
+  infiniteScroll: boolean;
   layout: GalleryViewLayout;
   thumbScale: 'sm' | 'md' | 'lg';
   selectedIds: Set<number>;
@@ -90,6 +93,9 @@ export function renderDependencyLabel(status: DependencyStatus) {
 export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   images,
   ghostItems = [],
+  page,
+  pageSize = 48,
+  infiniteScroll,
   layout,
   thumbScale,
   selectedIds,
@@ -110,15 +116,54 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   onOpenSystemSettings,
   isLoading = false,
 }) => {
-  const [page, setPage] = useState(1);
-  const pageSize = 48;
   const [bulkTagInput, setBulkTagInput] = useState('');
   const [bulkCharId, setBulkCharId] = useState('');
   const [bulkColId, setBulkColId] = useState('');
+  const [infiniteVisibleCount, setInfiniteVisibleCount] = useState<number>(pageSize);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   const totalPages = Math.max(1, Math.ceil(images.length / pageSize));
-  const currentPage = Math.min(page, totalPages);
-  const pagedImages = images.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const currentPage = Math.min(Math.max(1, page), totalPages);
+
+  // When switching into infinite scroll, keep at least the current page's depth visible
+  useEffect(() => {
+    if (infiniteScroll) {
+      setInfiniteVisibleCount((prev) => Math.max(prev, currentPage * pageSize));
+    } else {
+      setInfiniteVisibleCount(pageSize);
+    }
+  }, [infiniteScroll, currentPage, pageSize]);
+
+  // Reset infinite scroll slice to 1 batch (48) when the filtered image set is replaced/narrowed
+  useEffect(() => {
+    setInfiniteVisibleCount((prev) => {
+      if (images.length <= pageSize) return pageSize;
+      return Math.min(Math.max(pageSize, prev), images.length);
+    });
+  }, [images.length, pageSize]);
+
+  // IntersectionObserver to load +48 images per scroll batch when Infinite Scroll is active
+  useEffect(() => {
+    if (!infiniteScroll) return;
+    const node = sentinelRef.current;
+    if (!node) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setInfiniteVisibleCount((prev) => Math.min(images.length, prev + pageSize));
+        }
+      },
+      { rootMargin: '400px' }
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [infiniteScroll, images.length, pageSize, infiniteVisibleCount]);
+
+  const pagedImages = infiniteScroll
+    ? images.slice(0, Math.min(images.length, infiniteVisibleCount))
+    : images.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const getGridClasses = () => {
     if (layout === 'masonry') {
@@ -258,30 +303,6 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
             </>
           )}
         </div>
-
-        {totalPages > 1 && (
-          <div className="flex items-center gap-2 font-mono tabular-nums">
-            <button
-              type="button"
-              disabled={currentPage <= 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className="px-2.5 py-1 bg-zinc-900 border border-zinc-800 rounded disabled:opacity-40 text-zinc-200 cursor-pointer"
-            >
-              Prev
-            </button>
-            <span>
-              Page {currentPage} / {totalPages}
-            </span>
-            <button
-              type="button"
-              disabled={currentPage >= totalPages}
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              className="px-2.5 py-1 bg-zinc-900 border border-zinc-800 rounded disabled:opacity-40 text-zinc-200 cursor-pointer"
-            >
-              Next
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Multi-Select Floating Bulk Operations Bar */}
@@ -442,8 +463,8 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
 
       {/* Main Gallery Viewport */}
       <div className={getGridClasses()}>
-        {/* Queued & Actively Generating Ghost Preview Cards (Pinned to Page 1) */}
-        {currentPage === 1 &&
+        {/* Queued & Actively Generating Ghost Preview Cards (Pinned to top on Page 1 or Infinite Scroll) */}
+        {(currentPage === 1 || infiniteScroll) &&
           visibleGhostItems.map((ghost) => {
             const isQueuedOnly = ghost.state === 'queued' || ghost.progressPercent === null;
             const displayPct = Math.min(100, Math.max(0, ghost.progressPercent ?? 0));
@@ -715,6 +736,24 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
           );
         })}
       </div>
+
+      {/* Infinite Scroll Bottom Sentinel (+48 images per batch) */}
+      {infiniteScroll && pagedImages.length < images.length && (
+        <div
+          ref={sentinelRef}
+          className="py-6 flex flex-col items-center justify-center gap-2 text-xs text-zinc-400 font-mono tabular-nums"
+        >
+          <button
+            type="button"
+            onClick={() =>
+              setInfiniteVisibleCount((prev) => Math.min(images.length, prev + pageSize))
+            }
+            className="px-3.5 py-1.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 rounded-lg transition-colors cursor-pointer"
+          >
+            Showing {pagedImages.length} of {images.length} · Load next {Math.min(pageSize, images.length - pagedImages.length)}
+          </button>
+        </div>
+      )}
     </div>
   );
 };

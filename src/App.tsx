@@ -56,6 +56,15 @@ export default function App() {
   const [layout, setLayout] = useState<GalleryViewLayout>('standard');
   const [thumbScale, setThumbScale] = useState<'sm' | 'md' | 'lg'>('md');
   const [filters, setFilters] = useState<GalleryFilterState>(INITIAL_FILTERS);
+  const [galleryPage, setGalleryPage] = useState<number>(1);
+  const [infiniteScroll, setInfiniteScroll] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('couchy_gallery_infinite_scroll') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const galleryPageSize = 48;
 
   const [images, setImages] = useState<ImageRecord[]>([]);
   const [allImages, setAllImages] = useState<ImageRecord[]>([]);
@@ -237,6 +246,27 @@ export default function App() {
   useEffect(() => {
     allImageIdsRef.current = new Set(allImages.map((img) => img.id));
   }, [allImages]);
+
+  const totalGalleryPages = Math.max(1, Math.ceil(images.length / galleryPageSize));
+  const currentGalleryPage = Math.min(Math.max(1, galleryPage), totalGalleryPages);
+
+  const handleInfiniteScrollChange = useCallback((enabled: boolean) => {
+    setInfiniteScroll(enabled);
+    try {
+      localStorage.setItem('couchy_gallery_infinite_scroll', String(enabled));
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
+
+  const handleGalleryPageChange = useCallback(
+    (nextPage: number) => {
+      const clamped = Math.min(Math.max(1, nextPage), totalGalleryPages);
+      setGalleryPage(clamped);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+    [totalGalleryPages]
+  );
 
   // Filter out ghost cards as soon as their indexed image is present in allImages
   const activeGhostItems = useMemo(() => {
@@ -522,13 +552,24 @@ export default function App() {
           <>
             <GalleryFilterBar
               filters={filters}
-              onChange={setFilters}
-              onReset={() => setFilters(INITIAL_FILTERS)}
+              onChange={(nextFilters) => {
+                setGalleryPage(1);
+                setFilters(nextFilters);
+              }}
+              onReset={() => {
+                setGalleryPage(1);
+                setFilters(INITIAL_FILTERS);
+              }}
               layout={layout}
               onLayoutChange={setLayout}
               thumbScale={thumbScale}
               onThumbScaleChange={setThumbScale}
               totalMatching={images.length}
+              page={currentGalleryPage}
+              totalPages={totalGalleryPages}
+              onPageChange={handleGalleryPageChange}
+              infiniteScroll={infiniteScroll}
+              onInfiniteScrollChange={handleInfiniteScrollChange}
               characters={characters}
               loras={loras}
               checkpoints={checkpoints}
@@ -558,6 +599,9 @@ export default function App() {
             <GalleryGridView
               images={images}
               ghostItems={activeGhostItems}
+              page={currentGalleryPage}
+              pageSize={galleryPageSize}
+              infiniteScroll={infiniteScroll}
               isLoading={isLoadingImages}
               layout={layout}
               thumbScale={thumbScale}
@@ -620,6 +664,7 @@ export default function App() {
             onRefresh={refreshAll}
             onOpenImage={(img) => setInspectedImageId(img.id)}
             onFilterGalleryByCharacter={(charId) => {
+              setGalleryPage(1);
               setFilters({ ...INITIAL_FILTERS, characterIds: [charId] });
               setActiveTab('gallery');
             }}
