@@ -491,7 +491,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                     <div className="flex flex-col items-center gap-2">
                       <span className="w-2 h-2 rounded-full bg-zinc-500 animate-pulse" />
                       <span className="text-xs font-medium tracking-wider uppercase text-zinc-400">
-                        Queued
+                        Pending
                       </span>
                     </div>
                   ) : (

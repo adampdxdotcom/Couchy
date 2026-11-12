@@ -115,7 +115,7 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
                     <div className="flex flex-col items-center gap-1.5">
                       <span className="w-2 h-2 rounded-full bg-zinc-500 animate-pulse" />
                       <span className="text-[11px] font-medium tracking-wider uppercase text-zinc-400">
-                        Queued
+                        Pending
                       </span>
                     </div>
                   ) : (

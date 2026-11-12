@@ -3,8 +3,16 @@ import path from 'path';
 import crypto from 'crypto';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
-import { recomputeImageDependencyStatus } from './scannerService.ts';
-import { COUCHY_COMFY_CLIENT_ID } from './comfyuiLiveMonitor.ts';
+import {
+  indexSingleImageFile,
+  recomputeImageDependencyStatus,
+  runDirectoryScan,
+} from './scannerService.ts';
+import {
+  COUCHY_COMFY_CLIENT_ID,
+  invalidateComfyQueueCache,
+  notifyImageIndexed,
+} from './comfyuiLiveMonitor.ts';
 import { autoDetectWorkflowMapping, getWorkflowMapping } from './workflowMapperService.ts';
 import type {
   DependencyStatus,
@@ -614,8 +622,24 @@ export async function submitWorkflowReproduction(params: {
        WHERE id = ?`
     ).run(promptId, jobId);
 
+    invalidateComfyQueueCache();
+
+    // Lookup confirmed character on source image if present
+    let sourceCharacterId: number | null = null;
+    if (params.imageId) {
+      const charRow = db
+        .prepare(
+          `SELECT character_id FROM image_characters
+           WHERE image_id = ? AND status = 'confirmed' LIMIT 1`
+        )
+        .get(params.imageId) as { character_id?: number } | undefined;
+      if (charRow?.character_id) {
+        sourceCharacterId = Number(charRow.character_id);
+      }
+    }
+
     // Poll ComfyUI /history/<prompt_id> in the background
-    pollComfyUiExecution(jobId, promptId);
+    pollComfyUiExecution(jobId, promptId, sourceCharacterId);
 
     return db.prepare('SELECT * FROM reproduction_jobs WHERE id = ?').get(jobId);
   } catch (err: any) {
@@ -628,8 +652,13 @@ export async function submitWorkflowReproduction(params: {
   }
 }
 
-function pollComfyUiExecution(jobId: number, promptId: string, attempt = 0): void {
-  if (attempt > 60) return;
+function pollComfyUiExecution(
+  jobId: number,
+  promptId: string,
+  characterId: number | null = null,
+  attempt = 0
+): void {
+  if (attempt > 90) return;
   setTimeout(async () => {
     try {
       const res = await fetch(`${appConfig.comfyuiUrl}/history/${promptId}`);
@@ -646,17 +675,61 @@ function pollComfyUiExecution(jobId: number, promptId: string, attempt = 0): voi
             ).run(JSON.stringify(entry.status?.messages || 'Execution error'), jobId);
             return;
           }
+
+          const outputIds: number[] = [];
+          const outputs = entry.outputs || {};
+          let anyIndexed = false;
+
+          for (const nodeOut of Object.values(outputs) as any[]) {
+            if (Array.isArray(nodeOut?.images) && nodeOut.images.length > 0) {
+              for (const imgSpec of nodeOut.images) {
+                const filename = imgSpec?.filename;
+                const subfolder = imgSpec?.subfolder || '';
+                if (!filename) continue;
+
+                const fullPath = path.join(appConfig.comfyuiOutputDir, subfolder, filename);
+                if (fs.existsSync(fullPath)) {
+                  const resIndex = await indexSingleImageFile(
+                    fullPath,
+                    appConfig.comfyuiOutputDir,
+                    false,
+                    characterId
+                  );
+                  if (resIndex.imageId) {
+                    outputIds.push(resIndex.imageId);
+                    anyIndexed = true;
+                  }
+                } else {
+                  const imgRow = db
+                    .prepare('SELECT id FROM images WHERE filename = ? ORDER BY id DESC LIMIT 1')
+                    .get(filename) as { id: number } | undefined;
+                  if (imgRow) {
+                    outputIds.push(imgRow.id);
+                  }
+                }
+              }
+            }
+          }
+
+          if (anyIndexed) {
+            notifyImageIndexed();
+          } else {
+            runDirectoryScan('incremental');
+          }
+
           db.prepare(
             `UPDATE reproduction_jobs
-             SET status = 'completed', completed_at = datetime('now')
+             SET status = 'completed',
+                 output_image_ids_json = ?,
+                 completed_at = datetime('now')
              WHERE id = ?`
-          ).run(jobId);
+          ).run(JSON.stringify(outputIds), jobId);
           return;
         }
       }
-      pollComfyUiExecution(jobId, promptId, attempt + 1);
+      pollComfyUiExecution(jobId, promptId, characterId, attempt + 1);
     } catch {
-      pollComfyUiExecution(jobId, promptId, attempt + 1);
+      pollComfyUiExecution(jobId, promptId, characterId, attempt + 1);
     }
   }, 2500);
 }
