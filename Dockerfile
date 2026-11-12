@@ -18,6 +18,7 @@ FROM node:22-bookworm-slim AS runtime
 
 WORKDIR /app
 ENV NODE_ENV=production
+ENV HOME="/tmp"
 ENV PORT=8080
 ENV COMFYUI_URL="http://comfyui:8188"
 ENV COMFYUI_OUTPUT_DIR="/data/output"
@@ -25,13 +26,19 @@ ENV COMFYUI_MODELS_DIR="/data/models"
 ENV DATABASE_PATH="/app/data/gallery.db"
 ENV THUMBNAIL_PATH="/data/thumbnails"
 ENV BACKUP_PATH="/app/data/backups"
+ENV LOCAL_MODELS_DIR="/app/data/local_models"
+ENV UPLOADED_IMAGES_DIR="/app/data/uploaded"
 ENV DOWNLOADS_DIR="/downloads"
 
-# Create volume mount points
-RUN mkdir -p /data/output /data/models /data/thumbnails /app/data/backups /downloads
+# Create volume mount points and grant ownership to the unprivileged node user (1000:1000)
+RUN mkdir -p /data/output /data/models /data/thumbnails /data/uploaded \
+    /app/data/backups /app/data/local_models /app/data/uploaded /downloads \
+    && chown -R node:node /data /app /downloads
 
-COPY --from=builder /app /app
+COPY --chown=node:node --from=builder /app /app
+
+USER node
 
 EXPOSE 8080
 
-CMD ["npx", "tsx", "server.ts"]
+CMD ["./node_modules/.bin/tsx", "server.ts"]
