@@ -58,18 +58,18 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
 
 - **Interactive Agent Conversation Mode (`Agent` &rarr; `Conversation`)**:
   - When **Agent** is enabled, click the **Conversation** button to expand the Quick Gen dock into a 12–15 line inline conversation view (no separate chat window).
-  - Brainstorm lighting, framing, wardrobe, mood, and scene details back-and-forth with your local LLM (sending up to the last 10 messages of context per turn).
-  - Whenever the LLM has a ready-to-generate prompt, it presents a **Proposed Prompt** card with a one-click **Submit Prompt** button—or you can keep chatting to refine it further.
+  - Brainstorm lighting, framing, wardrobe, mood, and scene details back-and-forth with your local LLM (sending up to the last 10 messages of context per turn). Use **Clear** in the chat header at any time to reset the thread.
+  - Whenever the LLM has a ready-to-generate prompt, it presents a **Proposed Prompt** card with a one-click **Submit** button—or you can keep chatting to refine it further.
   - Multi-image batch generation is automatically locked to `x1` during Conversation mode. Submitting a proposed prompt dispatches the job to ComfyUI, clears the conversation, and returns the Quick Gen box to its compact default state.
   - The guiding system prompt for Conversation mode is fully editable (with a **Reset to Default** option) under **System &rarr; Agent**.
 
 - **Stacked Image Iterations, Conversation History & Branching**:
   - **Persistent Conversation Snapshots**: Every image generated in Conversation mode saves its conversation history snapshot and links iterations into a stacked **Image Series**.
-  - **Continue or Start a Stack from Any Image**: Click the **Conversation (`MessageSquare`)** icon on any gallery card or in the Image Inspector preview to reopen that iteration's saved conversation in Quick Gen—or start a new conversation stack seeded from any standalone image's prompt.
+  - **Continue or Start a Stack from Any Image**: Click the **Conversation (`MessageSquare`)** icon on any gallery card—or click **Continue Chat** / **Branch #N** inside the **Series Stack** section of the Image Inspector—to reopen that iteration's saved conversation in Quick Gen (or start a new stack seeded from a standalone image's prompt and character).
   - **Continue from Latest vs. Branch from Middle**:
-    - Continuing a conversation from the **latest** image in a series appends the new generation to that same stack.
-    - Continuing a conversation from an image in the **middle** of a stack (e.g., Step `#3` of `5`) splits off a **new stack** upon submission, copying the ancestor lineage (`#1..#3`) and their conversation edit history into the new series while leaving the original stack untouched.
-  - **Automatic Upscale Stacking**: Upscaling any image from the Inspector (`POST /api/images/:id/upscale`) automatically stacks the upscaled output onto the source image's series regardless of whether it originated in Conversation mode.
+    - **Continuing from the latest iteration** renders a translucent live **Pending** / `%` progress overlay directly on that existing stack's card in the Main Gallery and Character Gallery (plus a simplified `#N` **Pending** / `%` preview tile inside the Inspector's **Series Stack** strip) and appends the finished image to the same stack.
+    - **Branching from a middle iteration** (e.g., **Branch #3** of `5`) spawns a separate new gallery card during generation and splits off a **new series stack** upon completion, copying the ancestor lineage (`#1..#3`) and conversation edit history into the new stack while leaving the original stack untouched.
+  - **Automatic Upscale Stacking**: Upscaling any image from the Inspector (`POST /api/images/:id/upscale`) renders the same live **Pending** / `%` overlay on the source card (and preview tile in the **Series Stack** strip) and automatically appends the upscaled result onto the source stack regardless of whether it originated in Conversation mode.
   - **Exclusive Poster / Hearted Image**: Within an image stack, only one iteration can be hearted/favorited at a time. That hearted image acts as the stack's **Poster Image** in both the Main Gallery and Character Gallery; if no iteration is hearted, the most recent iteration is shown.
 
 - **Workflow, Aspect Ratio & Batch Size Selector**:
@@ -94,13 +94,13 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
   1. **Character Name** (clickable to jump directly to that character's gallery)
   2. **LoRA Pills** (showing clean nicknames/names for every active LoRA)
   3. **Image Details** (`width×height · aspect ratio · checkpoint`)
-- **Series Stack Badges**: Cards belonging to a multi-image iteration or upscale stack display a `Layers` badge with the stack count while collapsing the stack to a single gallery card (the hearted poster image, or the newest iteration if none is hearted).
+- **Series Stack Badges & Live Overlays**: Cards belonging to a multi-image iteration or upscale stack display a `Layers` badge with the stack count while collapsing the stack to a single gallery card (the hearted poster image, or the newest iteration if none is hearted). Active continuations or upscales display a translucent **Pending** / `%` progress overlay directly over the series card, while middle-stack branches spawn their own separate gallery card.
 - **Sticky Search & Collapsible Filters**: On mobile and desktop, search prompts and metadata with a top-locked bar. Tap the filter toggle to slide open controls for:
   - Star ratings ($1–5$ stars) and Favorites filter
   - Specific Character, Checkpoint, and LoRA filters
   - Aspect ratio and resolution dimensions
   - Sort orders: Newest, Oldest, Highest Rated, Recently Favorited, File Size, and Checkpoint
-- **Full-Screen Inspector & Series Thumbnail Strip**: Inspect embedded ComfyUI workflows, node parameters, prompt text chunks, and sampler steps, or run standalone `4x` ESRGAN upscales. When inspecting a stacked series, a horizontal **Series Stack thumbnail strip** docks at the bottom of the metadata column so you can switch between iterations in place, heart a poster image, or branch a conversation from any step.
+- **Full-Screen Inspector & Series Thumbnail Strip**: Click any image to open the Inspector (click the preview image itself to expand or exit full screen). The metadata sidebar shows **Assigned Character** (with portrait thumbnail), followed by **Workflow & Reproducibility** (with `Run Workflow` and `4x` ESRGAN `Upscale`), and—when viewing a stacked series or active job—the **Series Stack** thumbnail strip directly underneath with live `#N` **Pending** / `%` preview tiles, iteration switching, poster hearting, and **Continue Chat** / **Branch #N** controls above the prompts, parameters, LoRAs, visual keywords, and notes.
 
 ### 4. Workflows & Dynamic Node Mapper
 - **Import Any ComfyUI Workflow**: Import API or visual workflow JSON files directly.
