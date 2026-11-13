@@ -598,6 +598,7 @@ export default function App() {
 
             <GalleryGridView
               images={images}
+              loras={loras}
               ghostItems={activeGhostItems}
               page={currentGalleryPage}
               pageSize={galleryPageSize}

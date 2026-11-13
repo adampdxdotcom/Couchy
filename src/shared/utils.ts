@@ -108,6 +108,43 @@ export function resolveClosestAspectRatio(width: number, height: number): string
   return bestMatch;
 }
 
+/**
+ * Returns a short aspect ratio string (e.g. "2:3", "16:9", "1:1") for given pixel dimensions.
+ * Snaps to standard presets when within ~6% tolerance (accounting for 8/16px latent rounding),
+ * otherwise reduces by greatest common divisor.
+ */
+export function formatImageAspectRatio(width: number, height: number): string {
+  if (!width || !height || width <= 0 || height <= 0) return '';
+  const ratio = width / height;
+  const presets: { short: string; ratio: number }[] = [
+    { short: '1:1', ratio: 1.0 },
+    { short: '2:3', ratio: 2 / 3 },
+    { short: '3:2', ratio: 3 / 2 },
+    { short: '3:4', ratio: 3 / 4 },
+    { short: '4:3', ratio: 4 / 3 },
+    { short: '9:16', ratio: 9 / 16 },
+    { short: '16:9', ratio: 16 / 9 },
+    { short: '21:9', ratio: 21 / 9 },
+  ];
+
+  let bestShort = '';
+  let minDiff = Infinity;
+  for (const p of presets) {
+    const diff = Math.abs(Math.log(ratio / p.ratio));
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestShort = p.short;
+    }
+  }
+  if (minDiff < 0.06 && bestShort) {
+    return bestShort;
+  }
+
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+  const divisor = gcd(Math.round(width), Math.round(height));
+  return `${Math.round(width / divisor)}:${Math.round(height / divisor)}`;
+}
+
 // ==========================================
 // 2. Byte & Data Size Formatting
 // ==========================================

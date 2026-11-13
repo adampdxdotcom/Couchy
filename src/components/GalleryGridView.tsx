@@ -22,13 +22,32 @@ import {
 import type {
   CharacterProfile,
   DependencyStatus,
+  ImageLoraRecord,
   ImageRecord,
+  LoraExplorerItem,
   QueuedGhostCardItem,
 } from '../shared/types.ts';
+import { formatImageAspectRatio } from '../shared/utils.ts';
 import type { GalleryViewLayout } from './GalleryFilterBar.tsx';
+
+function formatLoraPillLabel(lora: ImageLoraRecord, explorerLoras: LoraExplorerItem[]): string {
+  const rawName = (lora.loraName || '').trim().replace(/^.*[\\/]/, '');
+  const cleanStem = rawName.replace(/\.(safetensors|pt|ckpt|bin)$/i, '');
+  const lowerRaw = rawName.toLowerCase();
+  const lowerStem = cleanStem.toLowerCase();
+
+  const match = explorerLoras.find(
+    (l) => l.filename.toLowerCase() === lowerRaw || l.name.toLowerCase() === lowerStem
+  );
+  const nick = (match?.nickname || '').trim().replace(/^@+/, '');
+  if (nick) return nick;
+  if (match?.name?.trim()) return match.name.trim();
+  return cleanStem || 'LoRA';
+}
 
 interface GalleryGridViewProps {
   images: ImageRecord[];
+  loras?: LoraExplorerItem[];
   ghostItems?: QueuedGhostCardItem[];
   page: number;
   pageSize?: number;
@@ -92,6 +111,7 @@ export function renderDependencyLabel(status: DependencyStatus) {
  */
 export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   images,
+  loras = [],
   ghostItems = [],
   page,
   pageSize = 48,
@@ -511,32 +531,26 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
 
                 {/* Card Footer matching standard gallery card layout */}
                 {layout !== 'compact' && (
-                  <div className="p-3 space-y-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="text-xs font-medium text-zinc-100 truncate">{titleText}</h3>
-                    </div>
-
-                    {/* Unboxed Metadata Line */}
+                  <div className="p-3 space-y-2">
+                    {/* Resolution, Ratio & Checkpoint Line */}
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400 font-mono tabular-nums">
                       <span>
                         {ghost.width}×{ghost.height}
                       </span>
-                      <span aria-hidden="true">·</span>
-                      <span className="truncate max-w-[140px] font-sans">
-                        {ghost.checkpointName || 'No Checkpoint'}
-                      </span>
-                      {ghost.loraCount > 0 && (
+                      {ghost.width > 0 && ghost.height > 0 && (
                         <>
                           <span aria-hidden="true">·</span>
-                          <span>
-                            {ghost.loraCount} LoRA{ghost.loraCount > 1 ? 's' : ''}
-                          </span>
+                          <span>{formatImageAspectRatio(ghost.width, ghost.height)}</span>
                         </>
                       )}
+                      <span aria-hidden="true">·</span>
+                      <span className="truncate max-w-[150px] font-sans">
+                        {ghost.checkpointName || 'No Checkpoint'}
+                      </span>
                     </div>
 
-                    {/* Character & Dependency Line */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-[11px]">
+                    {/* Character Line */}
+                    <div className="flex items-center justify-between gap-2 text-[11px]">
                       <div className="truncate text-zinc-300">
                         {ghost.characterName ? (
                           <span>{ghost.characterName}</span>
@@ -544,7 +558,6 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                           <span className="text-zinc-500">Unassigned</span>
                         )}
                       </div>
-                      {renderDependencyLabel('available')}
                     </div>
                   </div>
                 )}
@@ -682,14 +695,29 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                 </div>
               </div>
 
-              {/* Card Footer (Clean Zero-Pill Unboxed Metadata with · Separators) */}
+              {/* Card Footer */}
               {layout !== 'compact' && (
                 <div
                   onClick={() => onOpenInspector(img)}
-                  className="p-3 space-y-1.5 cursor-pointer"
+                  className="p-3 space-y-2 cursor-pointer"
                 >
+                  {/* Resolution, Ratio & Checkpoint Line */}
                   <div className="flex items-center justify-between gap-2">
-                    <h3 className="text-xs font-medium text-zinc-100 truncate">{img.filename}</h3>
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400 font-mono tabular-nums min-w-0">
+                      <span>
+                        {img.width}×{img.height}
+                      </span>
+                      {img.width > 0 && img.height > 0 && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>{formatImageAspectRatio(img.width, img.height)}</span>
+                        </>
+                      )}
+                      <span aria-hidden="true">·</span>
+                      <span className="truncate max-w-[150px] font-sans">
+                        {img.checkpointName || 'No Checkpoint'}
+                      </span>
+                    </div>
                     {img.rating > 0 && (
                       <span className="text-xs font-mono tabular-nums text-amber-400 shrink-0">
                         ★ {img.rating}
@@ -697,25 +725,26 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                     )}
                   </div>
 
-                  {/* Unboxed Metadata Line */}
-                  <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400 font-mono tabular-nums">
-                    <span>
-                      {img.width}×{img.height}
-                    </span>
-                    <span aria-hidden="true">·</span>
-                    <span className="truncate max-w-[140px] font-sans">
-                      {img.checkpointName || 'No Checkpoint'}
-                    </span>
-                    {img.loras.length > 0 && (
-                      <>
-                        <span aria-hidden="true">·</span>
-                        <span>{img.loras.length} LoRA{img.loras.length > 1 ? 's' : ''}</span>
-                      </>
-                    )}
-                  </div>
+                  {/* LoRA Pills */}
+                  {img.loras.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1">
+                      {img.loras.map((lora, idx) => {
+                        const label = formatLoraPillLabel(lora, loras);
+                        return (
+                          <span
+                            key={`${lora.loraName}-${idx}`}
+                            title={`${lora.loraName} (${lora.modelStrength.toFixed(1)}x)`}
+                            className="inline-flex items-center px-2 py-0.5 rounded-full bg-zinc-800/90 border border-zinc-700/80 text-[10px] font-medium text-zinc-200 truncate max-w-[150px]"
+                          >
+                            {label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
 
-                  {/* Character & Dependency Line */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5 text-[11px]">
+                  {/* Character Line */}
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
                     <div className="truncate text-zinc-300">
                       {confirmedChars.length > 0 ? (
                         <span>{confirmedChars.map((c) => c.characterName).join(' · ')}</span>
@@ -728,7 +757,6 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                         <span className="text-zinc-500">Unassigned</span>
                       )}
                     </div>
-                    {renderDependencyLabel(img.dependencyStatus)}
                   </div>
                 </div>
               )}
