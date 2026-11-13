@@ -1,5 +1,5 @@
 import React from 'react';
-import { Heart, Layers, MessageSquare } from 'lucide-react';
+import { Heart, Layers, LayoutGrid, MessageSquare } from 'lucide-react';
 import type { ImageRecord, ImageSeriesItem, QueuedGhostCardItem } from '../../shared/types.ts';
 
 interface SeriesIterationsStripProps {
@@ -12,6 +12,7 @@ interface SeriesIterationsStripProps {
   pendingGhosts?: QueuedGhostCardItem[];
   onSelectIteration: (imageId: number) => void;
   onContinueConversation?: () => void;
+  onOpenMiniGallery?: () => void;
 }
 
 /**
@@ -26,6 +27,7 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
   pendingGhosts = [],
   onSelectIteration,
   onContinueConversation,
+  onOpenMiniGallery,
 }) => {
   const hasPending = pendingGhosts.length > 0;
   if ((!items || items.length <= 1) && !hasPending) return null;
@@ -72,21 +74,35 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
           )}
         </div>
 
-        {onContinueConversation && (
-          <button
-            type="button"
-            onClick={onContinueConversation}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/40 text-amber-200 text-[11px] font-medium transition-colors cursor-pointer shrink-0"
-            title={
-              isMiddleStep
-                ? 'Branch a new conversation stack from this iteration (carries history up to this step)'
-                : 'Continue conversation from this latest iteration'
-            }
-          >
-            <MessageSquare className="w-3 h-3" />
-            <span>{isMiddleStep ? `Branch #${activeIdx + 1}` : 'Continue Chat'}</span>
-          </button>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {onOpenMiniGallery && (
+            <button
+              type="button"
+              onClick={onOpenMiniGallery}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 text-zinc-200 text-[11px] font-medium transition-colors cursor-pointer shrink-0"
+              title="Open Series Mini Gallery popup"
+            >
+              <LayoutGrid className="w-3 h-3 text-indigo-400" />
+              <span>Gallery</span>
+            </button>
+          )}
+
+          {onContinueConversation && (
+            <button
+              type="button"
+              onClick={onContinueConversation}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/40 text-amber-200 text-[11px] font-medium transition-colors cursor-pointer shrink-0"
+              title={
+                isMiddleStep
+                  ? 'Branch a new conversation stack from this iteration (carries history up to this step)'
+                  : 'Continue conversation from this latest iteration'
+              }
+            >
+              <MessageSquare className="w-3 h-3" />
+              <span>{isMiddleStep ? `Branch #${activeIdx + 1}` : 'Continue Chat'}</span>
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5">

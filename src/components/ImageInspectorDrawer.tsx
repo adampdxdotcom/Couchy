@@ -23,6 +23,7 @@ import { api } from '../api/client.ts';
 import { findAttachedGhostsForImage, formatBytes } from '../shared/utils.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
+import { SeriesMiniGalleryModal } from './inspector/SeriesMiniGalleryModal.tsx';
 import type {
   CharacterProfile,
   ImageRecord,
@@ -86,6 +87,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   const [reproStatusMsg, setReproStatusMsg] = useState<string | null>(null);
   const [reproStatusIsError, setReproStatusIsError] = useState(false);
   const [showRawWorkflow, setShowRawWorkflow] = useState(false);
+  const [showSeriesMiniGallery, setShowSeriesMiniGallery] = useState(false);
 
   const activeImage =
     detailData?.image && detailData.image.id === selectedIterationId
@@ -110,6 +112,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   useEffect(() => {
     setDetailData(null);
     setSelectedIterationId(image.id);
+    setShowSeriesMiniGallery(false);
   }, [image.id]);
 
   const refreshActiveDetail = (targetId = selectedIterationId) => {
@@ -155,18 +158,21 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     const handler = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) return;
       if (e.key === 'Escape') {
-        if (isFullScreen) {
+        if (showSeriesMiniGallery) {
+          setShowSeriesMiniGallery(false);
+        } else if (isFullScreen) {
           setIsFullScreen(false);
         } else {
           onClose();
         }
       }
+      if (showSeriesMiniGallery) return;
       if (e.key === 'ArrowLeft' && onPrev) onPrev();
       if (e.key === 'ArrowRight' && onNext) onNext();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose, onPrev, onNext, isFullScreen]);
+  }, [onClose, onPrev, onNext, isFullScreen, showSeriesMiniGallery]);
 
   const copyText = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -726,6 +732,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             onContinueConversation={
               onOpenConversation ? () => onOpenConversation(activeImage) : undefined
             }
+            onOpenMiniGallery={() => setShowSeriesMiniGallery(true)}
           />
 
           {/* 4. Positive & Negative Prompts with Provenance */}
@@ -1122,6 +1129,68 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
           </div>
         </div>
       </aside>
+
+      {showSeriesMiniGallery && (
+        <SeriesMiniGalleryModal
+          items={
+            activeImage.seriesItems && activeImage.seriesItems.length > 0
+              ? activeImage.seriesItems
+              : [
+                  {
+                    seriesId: activeImage.seriesId || 0,
+                    imageId: activeImage.id,
+                    stepOrder: 0,
+                    filename: activeImage.filename,
+                    thumbnailUrl: activeImage.thumbnailUrl,
+                    originalUrl: activeImage.originalUrl,
+                    width: activeImage.width,
+                    height: activeImage.height,
+                    isFavorite: activeImage.isFavorite,
+                    rating: activeImage.rating,
+                    createdAt: activeImage.createdAt,
+                    chatSnapshot: activeImage.chatSnapshot || [],
+                  },
+                ]
+          }
+          activeImageId={activeImage.id}
+          pendingGhosts={matchingPendingGhosts}
+          onClose={() => setShowSeriesMiniGallery(false)}
+          onSelectIteration={(nextId) => setSelectedIterationId(nextId)}
+          onToggleFavorite={async (targetId, nextFavorite) => {
+            await api.updateImageAnnotations(targetId, { isFavorite: nextFavorite });
+            refreshActiveDetail(selectedIterationId);
+            onUpdated();
+          }}
+          onRejectIteration={async (targetId) => {
+            const currentItems = activeImage.seriesItems || [];
+            const remaining = currentItems.filter((it) => it.imageId !== targetId);
+            await api.updateImageAnnotations(targetId, { isRejected: true });
+            const nextId =
+              targetId === selectedIterationId && remaining.length > 0
+                ? remaining[remaining.length - 1].imageId
+                : selectedIterationId;
+            if (nextId !== selectedIterationId) {
+              setSelectedIterationId(nextId);
+            } else {
+              refreshActiveDetail(nextId);
+            }
+            onUpdated();
+          }}
+          onOpenConversationForStep={
+            onOpenConversation
+              ? async (stepImageId) => {
+                  let targetRecord = activeImage;
+                  if (stepImageId !== activeImage.id) {
+                    const res = await api.getImageDetail(stepImageId, seriesContextId);
+                    targetRecord = res.image;
+                  }
+                  setShowSeriesMiniGallery(false);
+                  onOpenConversation(targetRecord);
+                }
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 };
