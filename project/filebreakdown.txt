@@ -26,9 +26,11 @@ Purpose:
   - ComfyUI & Reproduction: connection testing, live queue/progress polling,
     workflow reproduction validation/submission, and reproduction job history.
   - Backups: database backup listing/creation and annotation JSON restores.
-  - Generation Studio: prompt template CRUD, workflow node mapping retrieval
-    and saving, LM Studio status/config/guiding templates/prompt-set generation,
-    image interrogation, batch submission, and generation batch history.
+  - Images & Upscaling: single/batch generation, metadata edits, and
+    standalone image upscaling (`POST /api/images/:id/upscale`).
+  - Generation Studio: prompt template CRUD, LM Studio status/config/guiding
+    templates/prompt-set generation, image interrogation, batch submission, and
+    generation batch history.
   - Visual Keyword Tagger (WD14 ONNX): tagger status/config updates, queue
     control actions, and per-image visual tag rescanning or removal.
 
@@ -129,10 +131,51 @@ Responsible for:
 
 File: src/components/generation/WorkflowSelectionPanel.tsx
 Responsible for:
-  Step 03 panel in Generation Studio for selecting the active ComfyUI workflow,
-  overriding or resetting the workflow's diffusion/checkpoint model (`unet_name`),
-  viewing the detected/custom node mapping summary (Prompt, Trigger, LoRA,
-  Resolution, Seed, Model), and opening the Node Mapper / JSON Import modal.
+  Step 03 panel in Generation Studio locked to the primary System Workflow,
+  allowing users to override or reset the workflow's diffusion/checkpoint model
+  (`Node #30_10`, `unet_name`).
+
+--------------------------------------------------------------------------------
+Folder: src/components/quickgen
+--------------------------------------------------------------------------------
+
+File: src/components/quickgen/QuickGenAttachmentsBar.tsx
+Responsible for:
+  Displays active attached character and @mentioned LoRA pill badges in the
+  Quick Gen dock (`showPill !== false`), with individual removal buttons.
+
+File: src/components/quickgen/QuickGenMentionPopover.tsx
+Responsible for:
+  Two-column @Character and @LoRA mention picker popover with live search,
+  filter tabs (`All`, `Characters`, `LoRAs`) with counts, keyboard-synced match
+  list, preview pane, and "Add to prompt" action.
+
+File: src/components/quickgen/QuickGenSettingsPopover.tsx
+Responsible for:
+  Popover controls for Node #49 Aspect Ratio grid, 0.5–10.0 MP target resolution
+  slider (with inline `3MP + Upscale` indicator above 3.0 MP), and batch count
+  (`x1`–`x8`) selector.
+
+File: src/components/quickgen/quickGenUtils.ts
+Responsible for:
+  Pure Quick Gen utilities and shared types (`QuickGenPrefill`, `MentionEntry`,
+  `MentionTab`, `BATCH_COUNT_OPTIONS`). Provides LoRA label/key normalization
+  (`getCleanLoraLabel`, `normalizeLoraKey`, `isCharacterLora`), `snapToHalfMp`,
+  client-side `<canvas>` 1MP image downscaling (`downscaleImageFileTo1Mp`), and
+  @mention candidate indexing (`buildMentionEntries`).
+
+File: src/components/quickgen/useQuickGenMentions.ts
+Responsible for:
+  Custom React hook managing @mention autocomplete state (`@token` cursor
+  detection, filtered `mentionEntries`/`mentionCounts`, Arrow/Enter/Tab/Escape
+  keyboard navigation, and prompt/attachment insertion).
+
+File: src/components/quickgen/useQuickGenSubmit.ts
+Responsible for:
+  Custom React hook managing Quick Gen dock state, primary workflow default
+  syncing, prompt reuse prefill hydration, image interrogation via LM Studio,
+  character/LoRA pill removal tracking (`removedLoraKeys`), batch submission,
+  and timer cleanup on unmount.
 
 --------------------------------------------------------------------------------
 Folder: src/components/system
@@ -206,10 +249,8 @@ Responsible for:
 
 File: src/components/workflows/WorkflowModals.tsx
 Responsible for:
-  Contains two workflow dialogs: `ExportPromptModal` (prompts the user to save
-  unsaved edits before downloading workflow JSON) and `WorkflowCreateModal`
-  (form for importing `.json` files or pasting API/visual workflow JSONs into
-  the library and optionally setting a workflow as default).
+  Contains the `ExportPromptModal` dialog prompting the user to save unsaved
+  workflow edits before downloading the workflow JSON.
 
 File: src/components/workflows/WorkflowReproductionHistory.tsx
 Responsible for:
@@ -217,12 +258,6 @@ Responsible for:
   the gallery/inspector, including job ID, workflow/source image, ComfyUI
   prompt ID, readiness status, execution state (`completed`, `failed`, or
   queued), submission timestamp, and a manual refresh button.
-
-File: src/components/workflows/WorkflowSidebarList.tsx
-Responsible for:
-  Sidebar list of stored workflows (both saved library and auto-extracted),
-  displaying selection state, default badge and "Set Default" button, image
-  counts, API/visual JSON availability, workflow hash, and linked characters.
 
 --------------------------------------------------------------------------------
 Folder: src (root files)
@@ -303,13 +338,13 @@ Responsible for:
 File: src/server/routes/generationRoutes.ts
 Responsible for:
   Express router handling `/api/generation/*` endpoints. Provides reusable
-  prompt template CRUD, workflow node mapping inspection/auto-detection/saving,
-  LM Studio connection checks/settings/guiding-template CRUD and photo-set prompt
-  generation, image-to-prompt interrogation (handling base64 image payloads),
-  generation batch history listing, and `/submit-batch` orchestration (creating
-  batch/item records, compiling workflow graphs per shot, concurrently
-  submitting prompts to ComfyUI `/prompt`, and polling ComfyUI `/history` to
-  index generated outputs and update completion states).
+  prompt template CRUD, LM Studio connection checks/settings/guiding-template
+  CRUD and photo-set prompt generation, image-to-prompt interrogation (handling
+  base64 image payloads), generation batch history listing, and `/submit-batch`
+  orchestration (creating batch/item records, deterministically compiling
+  primary workflow graphs per shot including inline `> 3.0 MP` upscale switch
+  handling, concurrently submitting prompts to ComfyUI `/prompt`, and tracking
+  completion via `comfyuiPoller.ts`).
 
 File: src/server/routes/imagesRoutes.ts
 Responsible for:
@@ -317,11 +352,12 @@ Responsible for:
   querying (`POST /query`), single-image full detail hydration with parsed raw
   metadata and workflow JSONs (`GET /:id`), immutable-cached 384px WebP
   thumbnail serving with on-demand generation (`GET /:id/thumbnail`), unaltered
-  original file streaming and download (`GET /:id/file`), content-hash-keyed
-  annotation updates (ratings, favorites, reject/archive, notes, tags,
-  collections, appearance labels), transactional bulk image actions (`POST /bulk`),
-  streaming ZIP archive export (`POST /export-zip`), and single-image WD14
-  visual tag rescanning/removal.
+  original file streaming and download (`GET /:id/file`), standalone ComfyUI
+  image upscaling (`POST /:id/upscale`), content-hash-keyed annotation updates
+  (ratings, favorites, reject/archive, notes, tags, collections, appearance
+  labels), transactional bulk image actions (`POST /bulk`), streaming ZIP
+  archive export (`POST /export-zip`), and single-image WD14 visual tag
+  rescanning/removal.
 
 File: src/server/routes/modelsAndWorkflowsRoutes.ts
 Responsible for:
@@ -377,15 +413,24 @@ Responsible for:
   `generation_items`, `reproduction_jobs`, and external direct ComfyUI queue
   entries.
 
+File: src/server/services/comfyuiPoller.ts
+Responsible for:
+  Unified ComfyUI `/history/:promptId` polling utility (`pollComfyPromptCompletion`).
+  Standardizes recursive completion/error polling, output image file indexing,
+  derived-image metadata callbacks prior to gallery refresh notifications,
+  incremental scans, and timeout handling across Generation Studio batches,
+  workflow reproductions, and standalone image upscales.
+
 File: src/server/services/comfyuiService.ts
 Responsible for:
-  ComfyUI integration, model inventory synchronization, and workflow reproduction
-  service. Tests ComfyUI `/system_stats` connectivity, recursively scans local
-  model folders and ComfyUI `/object_info` to compute SHA-256/AutoV2 hashes and
-  sync the `models` inventory, converts standard visual workflows to API prompt
-  graphs, validates reproduction readiness (checking missing models/custom nodes
-  without silent substitution), injects edited positive prompts, dispatches
-  reproduction jobs to `/prompt`, and polls `/history` to index outputs.
+  ComfyUI integration, model inventory synchronization, workflow reproduction,
+  and standalone image upscaling service. Tests ComfyUI `/system_stats`
+  connectivity, recursively scans local model folders and ComfyUI `/object_info`
+  to compute SHA-256/AutoV2 hashes and sync the `models` inventory, validates
+  reproduction readiness without silent substitution, injects edited positive
+  prompts, submits reproduction and single-image upscale jobs to `/prompt`, and
+  tracks outputs via `comfyuiPoller.ts` (copying source metadata/tags/LoRAs to
+  derived upscaled images).
 
 File: src/server/services/galleryQueryService.ts
 Responsible for:
@@ -444,15 +489,17 @@ Responsible for:
   background queue processing with pause/resume/rescan controls, and per-image
   visual tag storage and removal.
 
-File: src/server/services/workflowMapperService.ts
+File: src/server/services/workflowCompilerService.ts
 Responsible for:
-  Workflow node-mapping and generation-time API graph compiler. Computes target
-  width/height from aspect ratios and megapixels, inspects workflow node slots
-  for the Node Mapper UI, auto-detects and persists mappings for prompt, trigger
-  word, negative prompt, seed, steps, CFG, sampler, resolution/latent, model,
-  and LoRA nodes (including rgthree `Power Lora Loader` and `Krea2_turbo` nodes),
-  and compiles per-item executable ComfyUI API graphs with prompt, seed,
-  resolution, checkpoint/UNET, and active LoRA stack overrides.
+  Deterministic ComfyUI workflow graph compiler for the primary System Workflow
+  (`primary_workflow.json`) and standalone upscale workflow
+  (`upscale_workflow.json`). Computes target pixel dimensions, loads live
+  executable graphs and node defaults (`Node #49` ResolutionSelector and
+  `Node #30_10` UNETLoader), injects prompts (`Node #30_19` / fallback
+  positive `CLIPTextEncode`), and compiles per-shot API graphs with seed,
+  steps, aspect ratio, megapixels (clamping base generation at `3.0 MP` and
+  enabling `Node #51`/`#52` inline 4x ESRGAN upscale for `> 3.0 MP`),
+  diffusion model (`Node #30_10`), and active LoRA stack (`Node #50` / `#30_23`).
 
 --------------------------------------------------------------------------------
 Folder: src/shared
@@ -468,8 +515,8 @@ Responsible for:
   `ImageCharacterLink`, `ImageTagItem`, `VisualTagItem`, `ImageCollectionItem`),
   characters (`CharacterProfile`), LoRA Explorer and model inventory items
   (`LoraExplorerItem`, `ModelInventoryItem`), workflows and reproduction
-  validation (`WorkflowLibraryItem`, `ReproductionValidationResult`,
-  `WorkflowNodeSlotInfo`, `WorkflowNodeMapping`), gallery filters/presets
+  validation (`WorkflowLibraryItem`, `ReproductionValidationResult`), gallery
+  filters/presets
   (`GalleryFilterState`, `SavedSearchPreset`), Generation Studio batches and
   LM Studio integration (`PromptTemplate`, `GenerationLoraSelection`,
   `GenerationItemRecord`, `GenerationBatchRecord`, `QueuedGhostCardItem`,
@@ -626,15 +673,13 @@ Responsible for:
 
 File: src/components/FloatingQuickGenBar.tsx
 Responsible for:
-  Collapsible cross-tab bottom Quick Generation dock. Supports prompt entry,
-  `@character` and `@lora` autocomplete mention popover (with All/Characters/
-  LoRAs tabs and preview pane), removable character and LoRA pill badges
-  (tracking `removedLoraKeys` so removed pills or unlinked character LoRAs are
-  excluded on submission), one-click prompt/character/LoRA reuse prefill, 1MP
-  client-side image downscaling and drag/drop/paste/upload interrogation via
-  LM Studio (Vision or WD14+LLM), LM Studio Photo Set Agent toggle, aspect ratio
-  (`Node #49`) and batch count (`x1`–`x8`) selector popover, and ComfyUI batch
-  submission.
+  Lean shell component for the collapsible cross-tab bottom Quick Generation
+  dock. Handles minimize/expand toggle, outside-click dismissal, drag/drop/paste
+  and file-input triggers, prompt textarea, bottom action toolbar (`+`, image
+  interrogation, Agent toggle, compact settings pill, submit button), and
+  composes `src/components/quickgen/*` subcomponents (`QuickGenMentionPopover`,
+  `QuickGenSettingsPopover`, `QuickGenAttachmentsBar`) and hooks
+  (`useQuickGenMentions`, `useQuickGenSubmit`).
 
 File: src/components/GalleryFilterBar.tsx
 Responsible for:
@@ -665,10 +710,10 @@ File: src/components/GenerationStudioView.tsx
 Responsible for:
   Top-level orchestrator for the Generation Studio & Photo Set Director
   workspace tab. Coordinates Step 01 (`CharacterLoraStackPanel`), Step 02
-  (`ResolutionSelectorPanel`), Step 03 (`WorkflowSelectionPanel` +
-  `NodeMapperModal`), and Step 04 (`PromptTemplateEditor` with Verbatim vs. LM
-  Studio Photo Set Theme modes), along with the editable Outgoing Prompt Queue
-  Preview (per-shot prompt editing) and `BatchQueueHistory`.
+  (`ResolutionSelectorPanel`), Step 03 (`WorkflowSelectionPanel`), and Step 04
+  (`PromptTemplateEditor` with Verbatim vs. LM Studio Photo Set Theme modes),
+  along with the editable Outgoing Prompt Queue Preview (per-shot prompt
+  editing) and `BatchQueueHistory`.
 
 File: src/components/ImageInspectorDrawer.tsx
 Responsible for:
@@ -678,10 +723,11 @@ Responsible for:
   download bar; the right pane provides star rating, favorite/reject toggles,
   character assignment and suggestion confirmation/rejection, editable positive
   prompt (with provenance and copy buttons), negative prompt, generation
-  parameters grid, extracted LoRA chain with click-to-filter, one-click ComfyUI
-  workflow reproduction ("Run Workflow"), WD14 visual keyword tags (filter,
-  re-tag, remove), user tags, collections, auto-saved user notes, and a raw
-  workflow JSON viewer.
+  parameters grid, extracted LoRA chain with click-to-filter, standalone ComfyUI
+  upscale controls (target MP and upscale method via `upscale_workflow.json`),
+  one-click ComfyUI workflow reproduction ("Run Workflow"), WD14 visual keyword
+  tags (filter, re-tag, remove), user tags, collections, auto-saved user notes,
+  and a raw workflow JSON viewer.
 
 File: src/components/LoraAndModelManagerView.tsx
 Responsible for:
@@ -694,16 +740,6 @@ Responsible for:
   images with one-click locate & download, plus full SHA-256/AutoV2 inventory
   table), and (3) Civitai & Hugging Face model search and user-confirmed
   downloader modal with active download queue status.
-
-File: src/components/NodeMapperModal.tsx
-Responsible for:
-  Modal dialog for inspecting and adapting ComfyUI workflows for Generation
-  Studio. Contains two tabs: "Node Slot Mapper" (auto-detects or manually binds
-  nodes and input fields for User Prompt, LoRA Trigger Word, Seed/KSampler,
-  Resolution Selector aspect ratio & megapixels, Diffusion/Checkpoint model,
-  Enable LoRA boolean switch, and multi-LoRA loader nodes like `Power Lora
-  Loader`) and "Import Preferred API Workflow" (validates and imports ComfyUI
-  API-format `.json` files or pasted JSON).
 
 File: src/components/SystemAndBackupView.tsx
 Responsible for:
@@ -721,28 +757,35 @@ File: src/components/TopNavHeader.tsx
 Responsible for:
   Sticky 3-zone top application header. Zone 1 renders the mobile hamburger menu
   toggle (with slide-down drawer) and `Couchy` brand button; Zone 2 renders
-  desktop workspace tab links (`gallery`, `characters`, `generation`, `loras`,
-  `workflows`, `system`); Zone 3 renders the unified status and notification
+  desktop workspace tab links (`Gallery`, `Characters`, `Generation`, `LoRAs`,
+  `Workflow`, `System`); Zone 3 renders the unified status and notification
   dropdown pill (displaying 3-second toast overrides, live ComfyUI step progress
   fill and job counts, LM Studio online/model status, and the last 10
   notification messages).
 
 File: src/components/WorkflowLibraryView.tsx
 Responsible for:
-  Top-level orchestrator for the Workflows workspace tab. Combines
-  `WorkflowSidebarList`, a dual-mode workflow editor (`WorkflowGraphInspector`
-  for structured node/model/`PowerLoraLoaderEditor` settings vs. live-validated
-  Raw JSON editor) with dirty-state tracking, default workflow toggling,
-  save/cancel, JSON export (`ExportPromptModal`), workflow import
-  (`WorkflowCreateModal`), ComfyUI reproduction readiness validation and test
+  Centered **System Workflow** editor view for the `Workflow` workspace tab.
+  Combines a dual-mode editor (`WorkflowGraphInspector` for structured
+  node/model/`PowerLoraLoaderEditor` settings vs. live-validated Raw JSON
+  editor) with dirty-state tracking, save/cancel, JSON export
+  (`ExportPromptModal`), ComfyUI reproduction readiness validation and test
   submission, associated images preview, and `WorkflowReproductionHistory`.
 
 --------------------------------------------------------------------------------
 Folder: src/server/workflows
 --------------------------------------------------------------------------------
 
+File: src/server/workflows/primary_workflow.json
+Responsible for:
+  Primary Krea2_turbo ComfyUI API workflow JSON (`System Workflow`) used for
+  seed/upgrade initialization and deterministic generation compilation, including
+  inline 4x ESRGAN upscale routing (`Node #51` `ComfySwitchNode`, `Node #52`
+  `ImageScaleToTotalPixels`, `Node #53` `ImageUpscaleWithModel`, `Node #54`
+  `UpscaleModelLoader`, `Node #29` `SaveImage`).
+
 File: src/server/workflows/upscale_workflow.json
 Responsible for:
-  Internal, non-user-facing ComfyUI API workflow JSON template used for
-  automatic post-generation upscaling when a user selects a target resolution
-  above 3.0 MP (3.5 MP – 10.0 MP).
+  Standalone ComfyUI API workflow JSON template used for on-demand single-image
+  upscaling from `ImageInspectorDrawer` (`POST /api/images/:id/upscale`) and
+  legacy fallback two-pass upscaling above 3.0 MP.
