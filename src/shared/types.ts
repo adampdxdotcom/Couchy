@@ -325,42 +325,6 @@ export interface PromptTemplate {
   updatedAt: string;
 }
 
-export interface WorkflowNodeSlotInfo {
-  nodeId: string;
-  classType: string;
-  title: string;
-  inputFields: string[];
-  currentValues: Record<string, any>;
-}
-
-export interface WorkflowNodeMapping {
-  workflowId: number;
-  isCustomMapped: boolean;
-  positivePromptNodeId: string | null;
-  positivePromptField: string;
-  negativePromptNodeId: string | null;
-  negativePromptField: string;
-  triggerWordNodeId: string | null;
-  triggerWordField: string;
-  seedNodeId: string | null;
-  seedField: string;
-  stepsNodeId: string | null;
-  cfgNodeId: string | null;
-  samplerNodeId: string | null;
-  latentNodeId: string | null;
-  aspectRatioField: string;
-  megapixelsField: string;
-  widthField: string;
-  heightField: string;
-  batchSizeField: string;
-  checkpointNodeId: string | null;
-  checkpointField: string;
-  enableLoraNodeId: string | null;
-  enableLoraField: string;
-  loraNodeIds: string[];
-  updatedAt?: string;
-}
-
 export interface GenerationLoraSelection {
   loraName: string;
   modelStrength: number;

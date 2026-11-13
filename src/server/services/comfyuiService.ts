@@ -5,20 +5,17 @@ import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import {
   copyImageMetadataToDerivedImage,
-  indexSingleImageFile,
   recomputeImageDependencyStatus,
-  runDirectoryScan,
 } from './scannerService.ts';
 import {
   COUCHY_COMFY_CLIENT_ID,
   invalidateComfyQueueCache,
-  notifyImageIndexed,
 } from './comfyuiLiveMonitor.ts';
 import {
-  autoDetectWorkflowMapping,
   compileUpscaleWorkflow,
-  getWorkflowMapping,
-} from './workflowMapperService.ts';
+  injectPositivePromptIntoGraph,
+} from './workflowCompilerService.ts';
+import { pollComfyPromptCompletion } from './comfyuiPoller.ts';
 import type {
   DependencyStatus,
   ModelInventoryItem,
@@ -524,67 +521,14 @@ export async function submitWorkflowReproduction(params: {
   );
 
   if (typeof params.positivePrompt === 'string') {
-    const nextPrompt = params.positivePrompt.trim();
-    let injected = false;
-
-    // 1. Try explicit or auto-detected workflow node mapping
-    if (validation.workflowId) {
-      try {
-        const { mapping } = getWorkflowMapping(validation.workflowId);
-        if (mapping.positivePromptNodeId && promptPayload[mapping.positivePromptNodeId]?.inputs) {
-          const posNodeInputs = promptPayload[mapping.positivePromptNodeId].inputs;
-          const posField =
-            mapping.positivePromptField && mapping.positivePromptField in posNodeInputs
-              ? mapping.positivePromptField
-              : 'value' in posNodeInputs
-              ? 'value'
-              : 'text';
-          posNodeInputs[posField] = nextPrompt;
-          injected = true;
-        }
-      } catch {
-        // fallback below
-      }
-    }
-
-    if (!injected) {
-      const autoMap = autoDetectWorkflowMapping(validation.workflowId || 0, promptPayload);
-      if (autoMap.positivePromptNodeId && promptPayload[autoMap.positivePromptNodeId]?.inputs) {
-        const posNodeInputs = promptPayload[autoMap.positivePromptNodeId].inputs;
-        const posField =
-          autoMap.positivePromptField && autoMap.positivePromptField in posNodeInputs
-            ? autoMap.positivePromptField
-            : 'value' in posNodeInputs
-            ? 'value'
-            : 'text';
-        posNodeInputs[posField] = nextPrompt;
-        injected = true;
-      }
-    }
-
-    // 2. Fallback: match node containing the original extracted positive_prompt from image_metadata
-    if (!injected && params.imageId) {
+    let origPrompt: string | null = null;
+    if (params.imageId) {
       const metaRow = db
         .prepare('SELECT positive_prompt FROM image_metadata WHERE image_id = ?')
         .get(params.imageId) as { positive_prompt?: string | null } | undefined;
-      const origPrompt = (metaRow?.positive_prompt || '').trim();
-      if (origPrompt) {
-        for (const node of Object.values(promptPayload)) {
-          if (!node || typeof node !== 'object' || !node.inputs) continue;
-          for (const field of ['value', 'text', 'text_g', 'text_l', 'prompt', 'positive', 'string']) {
-            if (
-              typeof node.inputs[field] === 'string' &&
-              node.inputs[field].trim() === origPrompt
-            ) {
-              node.inputs[field] = nextPrompt;
-              injected = true;
-              break;
-            }
-          }
-          if (injected) break;
-        }
-      }
+      origPrompt = metaRow?.positive_prompt ?? null;
     }
+    injectPositivePromptIntoGraph(promptPayload, params.positivePrompt, origPrompt);
   }
 
   const resolvedWorkflowId = validation.workflowId || params.workflowId || 0;
@@ -643,8 +587,28 @@ export async function submitWorkflowReproduction(params: {
       }
     }
 
-    // Poll ComfyUI /history/<prompt_id> in the background
-    pollComfyUiExecution(jobId, promptId, sourceCharacterId);
+    // Poll ComfyUI /history/<prompt_id> in the background via unified poller
+    pollComfyPromptCompletion({
+      promptId,
+      characterId: sourceCharacterId,
+      maxAttempts: 90,
+      onSuccess: ({ outputImageIds }) => {
+        db.prepare(
+          `UPDATE reproduction_jobs
+           SET status = 'completed',
+               output_image_ids_json = ?,
+               completed_at = datetime('now')
+           WHERE id = ?`
+        ).run(JSON.stringify(outputImageIds), jobId);
+      },
+      onError: (errMsg) => {
+        db.prepare(
+          `UPDATE reproduction_jobs
+           SET status = 'failed', execution_error = ?, completed_at = datetime('now')
+           WHERE id = ?`
+        ).run(errMsg, jobId);
+      },
+    });
 
     return db.prepare('SELECT * FROM reproduction_jobs WHERE id = ?').get(jobId);
   } catch (err: any) {
@@ -655,88 +619,6 @@ export async function submitWorkflowReproduction(params: {
     ).run(err?.message || 'Submission failed', jobId);
     throw err;
   }
-}
-
-function pollComfyUiExecution(
-  jobId: number,
-  promptId: string,
-  characterId: number | null = null,
-  attempt = 0
-): void {
-  if (attempt > 90) return;
-  setTimeout(async () => {
-    try {
-      const res = await fetch(`${appConfig.comfyuiUrl}/history/${promptId}`);
-      if (res.ok) {
-        const hist = (await res.json()) as Record<string, any>;
-        const entry = hist[promptId];
-        if (entry) {
-          const statusStr = entry.status?.status_str;
-          if (statusStr === 'error') {
-            db.prepare(
-              `UPDATE reproduction_jobs
-               SET status = 'failed', execution_error = ?, completed_at = datetime('now')
-               WHERE id = ?`
-            ).run(JSON.stringify(entry.status?.messages || 'Execution error'), jobId);
-            return;
-          }
-
-          const outputIds: number[] = [];
-          const outputs = entry.outputs || {};
-          let anyIndexed = false;
-
-          for (const nodeOut of Object.values(outputs) as any[]) {
-            if (Array.isArray(nodeOut?.images) && nodeOut.images.length > 0) {
-              for (const imgSpec of nodeOut.images) {
-                const filename = imgSpec?.filename;
-                const subfolder = imgSpec?.subfolder || '';
-                if (!filename) continue;
-
-                const fullPath = path.join(appConfig.comfyuiOutputDir, subfolder, filename);
-                if (fs.existsSync(fullPath)) {
-                  const resIndex = await indexSingleImageFile(
-                    fullPath,
-                    appConfig.comfyuiOutputDir,
-                    false,
-                    characterId
-                  );
-                  if (resIndex.imageId) {
-                    outputIds.push(resIndex.imageId);
-                    anyIndexed = true;
-                  }
-                } else {
-                  const imgRow = db
-                    .prepare('SELECT id FROM images WHERE filename = ? ORDER BY id DESC LIMIT 1')
-                    .get(filename) as { id: number } | undefined;
-                  if (imgRow) {
-                    outputIds.push(imgRow.id);
-                  }
-                }
-              }
-            }
-          }
-
-          if (anyIndexed) {
-            notifyImageIndexed();
-          } else {
-            runDirectoryScan('incremental');
-          }
-
-          db.prepare(
-            `UPDATE reproduction_jobs
-             SET status = 'completed',
-                 output_image_ids_json = ?,
-                 completed_at = datetime('now')
-             WHERE id = ?`
-          ).run(JSON.stringify(outputIds), jobId);
-          return;
-        }
-      }
-      pollComfyUiExecution(jobId, promptId, characterId, attempt + 1);
-    } catch {
-      pollComfyUiExecution(jobId, promptId, characterId, attempt + 1);
-    }
-  }, 2500);
 }
 
 /**
@@ -823,72 +705,34 @@ export async function submitImageUpscale(params: {
   const data = (await promptRes.json()) as { prompt_id?: string };
   const promptId = data.prompt_id || `upscale-${Date.now()}`;
 
+  const charRow = db
+    .prepare(
+      `SELECT character_id FROM image_characters
+       WHERE image_id = ? AND status = 'confirmed' LIMIT 1`
+    )
+    .get(params.imageId) as { character_id?: number } | undefined;
+  const sourceCharacterId = charRow?.character_id ? Number(charRow.character_id) : null;
+
   invalidateComfyQueueCache();
-  pollUpscaleExecution(params.imageId, promptId);
+  pollComfyPromptCompletion({
+    promptId,
+    characterId: sourceCharacterId,
+    onSuccess: ({ outputImageIds }) => {
+      for (const derivedId of outputImageIds) {
+        if (derivedId !== params.imageId) {
+          copyImageMetadataToDerivedImage(params.imageId, derivedId);
+        }
+      }
+    },
+    onError: (errMsg) => {
+      console.warn(`Image upscale failed for image #${params.imageId}:`, errMsg);
+    },
+  });
 
   return {
     promptId,
     targetMegapixels: targetMp,
     sourceFilename: imgRow.filename,
   };
-}
-
-function pollUpscaleExecution(sourceImageId: number, promptId: string, attempt = 0): void {
-  if (attempt > 120) return;
-  setTimeout(async () => {
-    try {
-      const res = await fetch(`${appConfig.comfyuiUrl}/history/${promptId}`);
-      if (res.ok) {
-        const hist = (await res.json()) as Record<string, any>;
-        const entry = hist[promptId];
-        if (entry) {
-          if (entry.status?.status_str === 'error') return;
-
-          const charRow = db
-            .prepare(
-              `SELECT character_id FROM image_characters
-               WHERE image_id = ? AND status = 'confirmed' LIMIT 1`
-            )
-            .get(sourceImageId) as { character_id?: number } | undefined;
-          const characterId = charRow?.character_id ? Number(charRow.character_id) : null;
-
-          let anyIndexed = false;
-          const outputs = entry.outputs || {};
-          for (const nodeOut of Object.values(outputs) as any[]) {
-            if (!Array.isArray(nodeOut?.images)) continue;
-            for (const imgSpec of nodeOut.images) {
-              const filename = imgSpec?.filename;
-              const subfolder = imgSpec?.subfolder || '';
-              if (!filename) continue;
-
-              const fullPath = path.join(appConfig.comfyuiOutputDir, subfolder, filename);
-              if (fs.existsSync(fullPath)) {
-                const resIndex = await indexSingleImageFile(
-                  fullPath,
-                  appConfig.comfyuiOutputDir,
-                  false,
-                  characterId
-                );
-                if (resIndex.imageId) {
-                  copyImageMetadataToDerivedImage(sourceImageId, resIndex.imageId);
-                  anyIndexed = true;
-                }
-              }
-            }
-          }
-
-          if (anyIndexed) {
-            notifyImageIndexed();
-          } else {
-            runDirectoryScan('incremental');
-          }
-          return;
-        }
-      }
-      pollUpscaleExecution(sourceImageId, promptId, attempt + 1);
-    } catch {
-      pollUpscaleExecution(sourceImageId, promptId, attempt + 1);
-    }
-  }, 2500);
 }
 

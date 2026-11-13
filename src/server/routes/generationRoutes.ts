@@ -1,5 +1,3 @@
-import fs from 'fs';
-import path from 'path';
 import { Router } from 'express';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
@@ -8,9 +6,8 @@ import {
   compileWorkflowForGeneration,
   computeDimensionsFromMegapixels,
   findInlineUpscaleNodes,
-  getWorkflowMapping,
-  saveWorkflowMapping,
-} from '../services/workflowMapperService.ts';
+  getWorkflowDefaults,
+} from '../services/workflowCompilerService.ts';
 import {
   checkLmStudioStatus,
   deleteLmStudioGuidingTemplate,
@@ -20,16 +17,12 @@ import {
   saveLmStudioGuidingTemplate,
   updateLmStudioSettings,
 } from '../services/lmStudioService.ts';
-import {
-  copyImageMetadataToDerivedImage,
-  indexSingleImageFile,
-  runDirectoryScan,
-} from '../services/scannerService.ts';
+import { copyImageMetadataToDerivedImage } from '../services/scannerService.ts';
 import {
   COUCHY_COMFY_CLIENT_ID,
   invalidateComfyQueueCache,
-  notifyImageIndexed,
 } from '../services/comfyuiLiveMonitor.ts';
+import { pollComfyPromptCompletion } from '../services/comfyuiPoller.ts';
 import {
   normalizeResolutionSelectorRatio,
   type GenerationBatchRecord,
@@ -143,32 +136,6 @@ generationRouter.delete('/templates/:id', (req, res) => {
     .prepare('SELECT * FROM prompt_templates ORDER BY is_default DESC, updated_at DESC')
     .all() as any[];
   res.json({ ok: true, items: allRows.map(mapTemplateRow) });
-});
-
-/**
- * GET /api/generation/workflows/:id/mapping
- */
-generationRouter.get('/workflows/:id/mapping', (req, res) => {
-  try {
-    const workflowId = Number(req.params.id);
-    const result = getWorkflowMapping(workflowId);
-    res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-/**
- * POST /api/generation/workflows/:id/mapping
- */
-generationRouter.post('/workflows/:id/mapping', (req, res) => {
-  try {
-    const workflowId = Number(req.params.id);
-    const mapping = saveWorkflowMapping(workflowId, req.body || {});
-    res.json({ mapping });
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
-  }
 });
 
 /**
@@ -355,162 +322,76 @@ generationRouter.get('/batches', (_req, res) => {
 });
 
 /**
- * Polls ComfyUI /history/<promptId> for a submitted generation item, triggers the
- * automatic upscale workflow when targetMegapixels > 3.0, and links output images.
+ * Tracks a submitted generation item via the unified ComfyUI poller, chaining
+ * `upscale_workflow.json` only if a legacy workflow without inline upscale ran >3MP.
  */
-function pollGenerationItem(
+function trackGenerationItem(
   itemId: number,
   promptId: string,
   characterId: number | null,
-  attempt = 0,
-  targetMegapixels?: number,
+  fallbackUpscaleMp?: number,
   baseImageId?: number | null
 ): void {
-  if (attempt > 120) return;
-  setTimeout(async () => {
-    try {
-      const res = await fetch(`${appConfig.comfyuiUrl}/history/${promptId}`);
-      if (res.ok) {
-        const hist = (await res.json()) as Record<string, any>;
-        const entry = hist[promptId];
-        if (entry) {
-          const statusStr = entry.status?.status_str;
-          if (statusStr === 'error') {
-            db.prepare(
-              `UPDATE generation_items
-               SET status = 'failed', error_message = ?, completed_at = datetime('now')
-               WHERE id = ?`
-            ).run(JSON.stringify(entry.status?.messages || 'ComfyUI execution error'), itemId);
-            return;
-          }
+  pollComfyPromptCompletion({
+    promptId,
+    characterId,
+    onSuccess: async ({ firstImageId, firstOutputSpec }) => {
+      if (fallbackUpscaleMp && fallbackUpscaleMp > 3.0 && firstOutputSpec) {
+        try {
+          const upscalePayload = compileUpscaleWorkflow({
+            imageFilename: firstOutputSpec.filename,
+            subfolder: firstOutputSpec.subfolder,
+            targetMegapixels: fallbackUpscaleMp,
+          });
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 8000);
+          const upRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+              prompt: upscalePayload,
+              client_id: COUCHY_COMFY_CLIENT_ID,
+            }),
+          });
+          clearTimeout(timer);
 
-          let matchedImageId: number | null = null;
-          let firstOutputSpec: { filename: string; subfolder: string } | null = null;
-          const outputs = entry.outputs || {};
-          let anyIndexed = false;
-
-          for (const nodeOut of Object.values(outputs) as any[]) {
-            if (Array.isArray(nodeOut?.images) && nodeOut.images.length > 0) {
-              for (const imgSpec of nodeOut.images) {
-                const filename = imgSpec?.filename;
-                const subfolder = imgSpec?.subfolder || '';
-                if (!filename) continue;
-                if (!firstOutputSpec) {
-                  firstOutputSpec = { filename, subfolder };
-                }
-
-                const fullPath = path.join(appConfig.comfyuiOutputDir, subfolder, filename);
-                if (fs.existsSync(fullPath)) {
-                  const resIndex = await indexSingleImageFile(
-                    fullPath,
-                    appConfig.comfyuiOutputDir,
-                    false,
-                    characterId
-                  );
-                  if (resIndex.imageId) {
-                    matchedImageId = resIndex.imageId;
-                    anyIndexed = true;
-                  }
-                } else {
-                  const imgRow = db
-                    .prepare(
-                      'SELECT id, content_hash FROM images WHERE filename = ? ORDER BY id DESC LIMIT 1'
-                    )
-                    .get(filename) as { id: number; content_hash: string } | undefined;
-                  if (imgRow) {
-                    matchedImageId = imgRow.id;
-                  }
-                }
-              }
+          if (upRes.ok) {
+            const upData = (await upRes.json()) as { prompt_id?: string };
+            if (upData.prompt_id) {
+              db.prepare(
+                `UPDATE generation_items
+                 SET comfyui_prompt_id = ?, output_image_id = COALESCE(?, output_image_id)
+                 WHERE id = ?`
+              ).run(upData.prompt_id, firstImageId, itemId);
+              invalidateComfyQueueCache();
+              trackGenerationItem(itemId, upData.prompt_id, characterId, undefined, firstImageId);
+              return;
             }
           }
-
-          // If this was the 3.0 MP base pass and user requested > 3.0 MP, chain the upscale workflow
-          if (targetMegapixels && targetMegapixels > 3.0 && firstOutputSpec) {
-            try {
-              const upscalePayload = compileUpscaleWorkflow({
-                imageFilename: firstOutputSpec.filename,
-                subfolder: firstOutputSpec.subfolder,
-                targetMegapixels,
-              });
-
-              const controller = new AbortController();
-              const timer = setTimeout(() => controller.abort(), 8000);
-              const upRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                signal: controller.signal,
-                body: JSON.stringify({
-                  prompt: upscalePayload,
-                  client_id: COUCHY_COMFY_CLIENT_ID,
-                }),
-              });
-              clearTimeout(timer);
-
-              if (upRes.ok) {
-                const upData = (await upRes.json()) as { prompt_id?: string };
-                const upscalePromptId = upData.prompt_id;
-                if (upscalePromptId) {
-                  db.prepare(
-                    `UPDATE generation_items
-                     SET comfyui_prompt_id = ?, output_image_id = COALESCE(?, output_image_id)
-                     WHERE id = ?`
-                  ).run(upscalePromptId, matchedImageId, itemId);
-                  invalidateComfyQueueCache();
-                  pollGenerationItem(
-                    itemId,
-                    upscalePromptId,
-                    characterId,
-                    0,
-                    undefined,
-                    matchedImageId
-                  );
-                  return;
-                }
-              }
-            } catch (upErr) {
-              console.warn('Automatic upscale pass failed, falling back to 3MP base image:', upErr);
-            }
-          }
-
-          // If this was the upscale pass completing, copy metadata/LoRAs from the base 3MP image
-          if (baseImageId && matchedImageId && baseImageId !== matchedImageId) {
-            copyImageMetadataToDerivedImage(baseImageId, matchedImageId);
-          }
-
-          if (anyIndexed) {
-            notifyImageIndexed();
-          } else {
-            runDirectoryScan('incremental');
-          }
-
-          db.prepare(
-            `UPDATE generation_items
-             SET status = 'completed', output_image_id = COALESCE(?, output_image_id), completed_at = datetime('now')
-             WHERE id = ?`
-          ).run(matchedImageId ?? baseImageId ?? null, itemId);
-          return;
+        } catch (upErr) {
+          console.warn('Automatic upscale pass failed, falling back to 3MP base image:', upErr);
         }
       }
-      pollGenerationItem(
-        itemId,
-        promptId,
-        characterId,
-        attempt + 1,
-        targetMegapixels,
-        baseImageId
-      );
-    } catch {
-      pollGenerationItem(
-        itemId,
-        promptId,
-        characterId,
-        attempt + 1,
-        targetMegapixels,
-        baseImageId
-      );
-    }
-  }, 2500);
+
+      if (baseImageId && firstImageId && baseImageId !== firstImageId) {
+        copyImageMetadataToDerivedImage(baseImageId, firstImageId);
+      }
+
+      db.prepare(
+        `UPDATE generation_items
+         SET status = 'completed', output_image_id = COALESCE(?, output_image_id), completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(firstImageId ?? baseImageId ?? null, itemId);
+    },
+    onError: (errMsg) => {
+      db.prepare(
+        `UPDATE generation_items
+         SET status = 'failed', error_message = ?, completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(errMsg, itemId);
+    },
+  });
 }
 
 /**
@@ -544,24 +425,17 @@ generationRouter.post('/submit-batch', async (req, res) => {
       return res.status(400).json({ error: 'At least one positive prompt is required.' });
     }
 
-    // Inspect mapped workflow defaults (megapixels, aspect ratio, checkpoint)
+    // Read System Workflow defaults (megapixels, aspect ratio, diffusion model)
     let wfDefaultMp: number | null = null;
     let wfDefaultAr: string | null = null;
     let wfDefaultCkpt: string | null = null;
     try {
-      const wfInfo = getWorkflowMapping(Number(workflowId));
-      wfDefaultMp = wfInfo.defaultMegapixels ?? null;
-      wfDefaultAr = wfInfo.defaultAspectRatio ?? null;
-      const ckptNode = wfInfo.nodes.find((n) => n.nodeId === wfInfo.mapping.checkpointNodeId);
-      const ckptVal =
-        ckptNode?.currentValues?.[wfInfo.mapping.checkpointField] ||
-        ckptNode?.currentValues?.unet_name ||
-        ckptNode?.currentValues?.ckpt_name;
-      if (typeof ckptVal === 'string' && ckptVal.trim()) {
-        wfDefaultCkpt = ckptVal.trim();
-      }
+      const wfDefaults = getWorkflowDefaults(Number(workflowId));
+      wfDefaultMp = wfDefaults.defaultMegapixels ?? null;
+      wfDefaultAr = wfDefaults.defaultAspectRatio ?? null;
+      wfDefaultCkpt = wfDefaults.defaultCheckpoint ?? null;
     } catch {
-      // Fallback if mapping lookup fails
+      // Fallback if defaults lookup fails
     }
 
     const resolvedAr = normalizeResolutionSelectorRatio(aspectRatio || wfDefaultAr || undefined);
@@ -686,11 +560,10 @@ generationRouter.post('/submit-batch', async (req, res) => {
           ).run(promptId, item.itemId);
 
           // Primary workflow handles >3MP inline via Switch #51; only fall back to two-pass upscale if absent
-          pollGenerationItem(
+          trackGenerationItem(
             item.itemId,
             promptId,
             characterId ? Number(characterId) : null,
-            0,
             resolvedMp > 3.0 && !hasInlineUpscale ? resolvedMp : undefined
           );
         } catch (err: any) {

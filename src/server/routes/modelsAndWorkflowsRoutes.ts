@@ -19,7 +19,7 @@ import {
   startConfirmedModelDownload,
 } from '../services/modelManagerService.ts';
 import { getComfyUiLiveStatus } from '../services/comfyuiLiveMonitor.ts';
-import { getExecutableApiGraph, getWorkflowMapping } from '../services/workflowMapperService.ts';
+import { getExecutableApiGraph, getWorkflowDefaults } from '../services/workflowCompilerService.ts';
 import type { WorkflowLibraryItem } from '../../shared/types.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -337,9 +337,9 @@ modelsAndWorkflowsRouter.get('/workflows', (_req, res) => {
       let defaultAspectRatio: string | null = null;
       if (r.has_api || r.has_visual) {
         try {
-          const wfMap = getWorkflowMapping(Number(r.id));
-          defaultMegapixels = wfMap.defaultMegapixels ?? null;
-          defaultAspectRatio = wfMap.defaultAspectRatio ?? null;
+          const wfDefaults = getWorkflowDefaults(Number(r.id));
+          defaultMegapixels = wfDefaults.defaultMegapixels ?? null;
+          defaultAspectRatio = wfDefaults.defaultAspectRatio ?? null;
         } catch {
           // ignore
         }
