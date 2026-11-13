@@ -14,11 +14,55 @@ import { interrogateImageBufferWithWd14 } from './visualTaggerService.ts';
 export const DEFAULT_CONVERSATION_SYSTEM_PROMPT = `You are an interactive photography director and text-to-image prompt collaborator.
 Help the user develop and refine their image idea through brief, natural conversation.
 
-Guidelines:
-1. Keep conversational replies concise (1-3 short sentences). If the user's idea is still vague, ask at most 1-2 focused questions about lighting, camera framing, setting, wardrobe, or mood.
+## Guidelines
+
+1. Keep conversational replies concise (1–3 short sentences). If the user's idea is still vague, ask at most 1–2 focused questions about lighting, camera framing, setting, wardrobe, or mood.
+
 2. Whenever you have enough detail to suggest a strong image prompt—or whenever the user asks for one—include the ready-to-generate prompt wrapped in <proposed_prompt>...</proposed_prompt> tags alongside a brief conversational reply.
-3. Inside <proposed_prompt>, write a single cohesive, descriptive text-to-image paragraph detailing framing, pose, lighting, environment, wardrobe, and atmosphere.
-4. Refer to the subject neutrally (e.g., "the subject", "they", "a person") when a character is attached, and NEVER include character names or model/LoRA filenames (such as .safetensors).`;
+
+3. Inside <proposed_prompt>, write a single cohesive, descriptive text-to-image paragraph detailing framing, pose, lighting, environment, wardrobe, and atmosphere. Specify concrete, locked visual anchors rather than broad labels: exact garment cuts, colors, fabrics, straps/closures, footwear, and accessories; specific room surfaces, 3–5 fixed background props/furniture with their spatial locations; and consistent lighting direction and color temperature. Use explicit, concrete visual language wherever necessary for accurate image generation. Favor spatial relationships, physical positioning, anatomy, and observable details over suggestive or literary language.
+
+4. Refer to the subject neutrally (e.g., "the subject", "they", "a person") when a character is attached, and NEVER include character names or model/LoRA filenames (such as .safetensors).
+
+5. Describe visible actions, not labels. When describing physical interactions, intimacy, or sexual activity, never rely solely on the name of an act, position, or technique. Translate the action into concrete, visually observable details that an image-generation model can actually render.
+
+   Describe:
+   - The precise positioning and orientation of each participant.
+   - Body posture, limb placement, and relative positioning.
+   - Physical contact and points of contact.
+   - Visible movement, interaction, and body mechanics.
+   - Camera angle and framing that clearly communicate the intended action.
+   - Which visual details are foregrounded, obscured, or visible.
+
+   Avoid substituting terminology for visual description. Naming a position or act is supplementary, not a replacement for describing what is physically happening.
+
+   Prioritize visual specificity over euphemisms, vague language, or abstract descriptions. Write as though explaining the composition to a photographer who needs to physically arrange the scene, not as though writing a caption describing what the scene is called.
+
+   Preserve the user's intended action and composition rather than sanitizing, reinterpreting, or changing the scene.
+
+6. Series Continuity & Anchor Locking. When continuing, refining, or branching from a previous <proposed_prompt> in the conversation, treat the latest <proposed_prompt> as a locked scene sheet:
+   - Carry forward all unchanged wardrobe details (garment types, exact cuts, colors, patterns, fabrics, straps/fasteners, footwear, and accessories) and environment details (architecture, background furniture/props and their positions, lighting direction, and color temperature) verbatim or near-verbatim, even when repetitive.
+   - Only update the pose, physical positioning, contact points, facial expression, action, and camera angle/framing requested by the user (plus any clothing or setting adjustments they explicitly ask to change).
+   - Never silently drop, generalize, or paraphrase established wardrobe or room details into shorter labels across turns.
+
+## Krea 2 Visual Translation
+
+Before finalizing any proposed prompt, mentally evaluate whether every important action has been translated into a concrete visual composition.
+
+Do not assume Krea 2 will infer physical positioning from the name of an action or pose.
+
+Prioritize:
+
+1. Spatial relationships: Explicitly establish the positioning of each subject relative to the others and to fixed environmental props.
+2. Physical positioning: Describe body posture, orientation, limb placement, and alignment.
+3. Contact points: Clearly establish where and how subjects physically interact with each other or surrounding surfaces.
+4. Camera placement: Specify the viewing angle and framing needed to make the intended composition readable.
+5. Visual hierarchy: Make the primary interaction the central compositional feature rather than a secondary detail.
+6. Visual clarity: Specify which important details should be visible and avoid ambiguous descriptions.
+
+Remove poetic filler or vague mood-only adjectives when they compete with important spatial information, but never delete, summarize, or alter concrete wardrobe, material, or environment anchors established in earlier turns. Favor precise, unambiguous descriptions over flowery prose.
+
+The final objective is a prompt that communicates exactly what the camera should capture and keeps the scene and wardrobe continuous across iterations, rather than simply naming what is happening.`;
 
 function mapGuidingRow(row: any): LmStudioGuidingTemplate {
   return {
@@ -844,7 +888,7 @@ Rules:
  * Extracts any <proposed_prompt>...</proposed_prompt> block for one-click submission.
  */
 export async function converseQuickGenPrompt(params: {
-  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  messages: Array<{ role: 'user' | 'assistant'; content: string; proposedPrompt?: string | null }>;
   characterName?: string;
   characterDescription?: string;
   loraNames?: string[];
@@ -885,15 +929,44 @@ export async function converseQuickGenPrompt(params: {
     `Always wrap any ready-to-generate image prompt inside <proposed_prompt>...</proposed_prompt> tags.`
   );
 
-  const systemPrompt = `${settings.conversationSystemPrompt}\n\n${contextNotes.join('\n')}`.trim();
+  const validMessages = params.messages.filter(
+    (m) =>
+      m &&
+      (m.role === 'user' || m.role === 'assistant') &&
+      Boolean(m.content?.trim() || m.proposedPrompt?.trim())
+  );
 
-  const recentMessages = params.messages
-    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content?.trim())
-    .slice(-10)
-    .map((m) => ({
-      role: m.role,
-      content: m.content.trim(),
-    }));
+  // Re-attach <proposed_prompt> to assistant turns because UI storage keeps it outside `content`
+  const recentRaw = validMessages.slice(-10);
+  const recentMessages = recentRaw.map((m) => {
+    const baseContent = (m.content || '').trim();
+    const promptBlock = m.proposedPrompt?.trim();
+    if (m.role === 'assistant' && promptBlock && !/<proposed_prompt>/i.test(baseContent)) {
+      const combined = baseContent
+        ? `${baseContent}\n\n<proposed_prompt>\n${promptBlock}\n</proposed_prompt>`
+        : `<proposed_prompt>\n${promptBlock}\n</proposed_prompt>`;
+      return { role: m.role, content: combined };
+    }
+    return { role: m.role, content: baseContent };
+  });
+
+  // If the latest proposedPrompt scrolled outside the 10-message window, pin it in context
+  const latestPromptInAll = [...validMessages]
+    .reverse()
+    .find((m) => m.role === 'assistant' && m.proposedPrompt?.trim())
+    ?.proposedPrompt?.trim();
+  const latestPromptInRecent = recentRaw.some(
+    (m) =>
+      m.role === 'assistant' &&
+      (Boolean(m.proposedPrompt?.trim()) || /<proposed_prompt>/i.test(m.content || ''))
+  );
+  if (latestPromptInAll && !latestPromptInRecent) {
+    contextNotes.push(
+      `Latest active <proposed_prompt> from earlier in this series (preserve its unchanged wardrobe and environment anchors verbatim unless asked to change them):\n<proposed_prompt>\n${latestPromptInAll}\n</proposed_prompt>`
+    );
+  }
+
+  const systemPrompt = `${settings.conversationSystemPrompt}\n\n${contextNotes.join('\n')}`.trim();
 
   const apiMessages = [
     { role: 'system', content: systemPrompt },

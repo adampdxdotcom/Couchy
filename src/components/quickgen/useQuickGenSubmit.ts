@@ -315,7 +315,11 @@ export function useQuickGenSubmit({
     try {
       const { selectedLoras } = resolveActiveLoraStack();
       const res = await api.chatQuickGenPrompt({
-        messages: nextHistory.map((m) => ({ role: m.role, content: m.content })),
+        messages: nextHistory.map((m) => ({
+          role: m.role,
+          content: m.content,
+          proposedPrompt: m.proposedPrompt ?? undefined,
+        })),
         characterName: attachedCharacter?.name || undefined,
         characterDescription: attachedCharacter?.description || undefined,
         loraNames: selectedLoras.map((l) => l.loraName),

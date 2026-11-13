@@ -465,7 +465,7 @@ export const api = {
     }),
 
   chatQuickGenPrompt: (payload: {
-    messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+    messages: Array<{ role: 'user' | 'assistant'; content: string; proposedPrompt?: string | null }>;
     characterName?: string;
     characterDescription?: string;
     loraNames?: string[];
