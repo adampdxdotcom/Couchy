@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, RefreshCw, Sparkles } from 'lucide-react';
 import { api } from '../api/client.ts';
-import { NodeMapperModal } from './NodeMapperModal.tsx';
 import type {
   CharacterProfile,
   GenerationBatchRecord,
@@ -13,7 +12,6 @@ import type {
   ModelInventoryItem,
   PromptTemplate,
   WorkflowLibraryItem,
-  WorkflowNodeMapping,
 } from '../shared/types.ts';
 import {
   interpolatePrompt as interpolatePromptClient,
@@ -60,19 +58,12 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
   const [megapixels, setMegapixels] = useState<number>(3.0);
   const [generationCount, setGenerationCount] = useState<number>(4);
 
-  // 3. Workflow & Diffusion Model State
-  const defaultWorkflowId = useMemo(() => {
-    return resolveDefaultWorkflow(workflows)?.id ?? null;
-  }, [workflows]);
+  // 3. System Workflow & Diffusion Model State
+  const primaryWorkflow = useMemo(() => resolveDefaultWorkflow(workflows), [workflows]);
+  const selectedWorkflowId = primaryWorkflow?.id ?? null;
 
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState<number | null>(defaultWorkflowId);
   const [selectedCheckpoint, setSelectedCheckpoint] = useState<string>('');
   const [workflowDefaultCheckpoint, setWorkflowDefaultCheckpoint] = useState<string>('');
-  const [workflowMapping, setWorkflowMapping] = useState<WorkflowNodeMapping | null>(null);
-  const [mapperModalState, setMapperModalState] = useState<{
-    open: boolean;
-    tab: 'map' | 'import';
-  }>({ open: false, tab: 'map' });
 
   // 4. Prompt Mode & Template State
   const [generationMode, setGenerationMode] = useState<'single' | 'theme_set'>('single');
@@ -175,33 +166,26 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
         .filter(Boolean)
         .join(', ');
       setTriggerWord(triggerWords);
-
-      if (selectedCharacter.workflows.length > 0) {
-        const charWfId = selectedCharacter.workflows[0].workflowId;
-        const found = workflows.find((w) => w.id === charWfId);
-        if (found) setSelectedWorkflowId(found.id);
-      }
     } else {
       setActiveLoras([]);
       setTriggerWord('');
     }
-  }, [selectedCharacter, workflows]);
+  }, [selectedCharacter]);
 
-  // Inspect workflow mapping and extract default checkpoint & resolution
-  const loadWorkflowMapping = useCallback(async (wfId: number) => {
-    try {
-      const res = await api.getWorkflowMapping(wfId);
-      setWorkflowMapping(res.mapping);
-      if (typeof res.defaultMegapixels === 'number' && res.defaultMegapixels > 0) {
-        setMegapixels(res.defaultMegapixels);
+  // Sync default resolution & diffusion model from the primary System Workflow
+  const loadSystemWorkflowDefaults = useCallback(
+    async (wf: WorkflowLibraryItem) => {
+      if (typeof wf.defaultMegapixels === 'number' && wf.defaultMegapixels > 0) {
+        setMegapixels(wf.defaultMegapixels);
       }
-      if (typeof res.defaultAspectRatio === 'string' && res.defaultAspectRatio.trim()) {
-        setAspectRatio(res.defaultAspectRatio);
+      if (typeof wf.defaultAspectRatio === 'string' && wf.defaultAspectRatio.trim()) {
+        setAspectRatio(wf.defaultAspectRatio);
       }
-      const wfDetail = await api.getWorkflow(wfId);
-      const rawStr = wfDetail.workflow?.api_workflow_json || wfDetail.workflow?.visual_workflow_json;
-      if (rawStr) {
-        try {
+      try {
+        const wfDetail = await api.getWorkflow(wf.id);
+        const rawStr =
+          wfDetail.workflow?.api_workflow_json || wfDetail.workflow?.visual_workflow_json;
+        if (rawStr) {
           const parsed = JSON.parse(rawStr);
           let defaultCkpt = '';
           for (const node of Object.values(parsed) as any[]) {
@@ -212,20 +196,19 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
           }
           setWorkflowDefaultCheckpoint(defaultCkpt);
           if (!selectedCheckpoint) setSelectedCheckpoint(defaultCkpt);
-        } catch {
-          // ignore
         }
+      } catch (err) {
+        console.warn('Failed to load system workflow defaults:', err);
       }
-    } catch (err) {
-      console.warn('Failed to load workflow mapping:', err);
-    }
-  }, [selectedCheckpoint]);
+    },
+    [selectedCheckpoint]
+  );
 
   useEffect(() => {
-    if (selectedWorkflowId) {
-      loadWorkflowMapping(selectedWorkflowId);
+    if (primaryWorkflow) {
+      loadSystemWorkflowDefaults(primaryWorkflow);
     }
-  }, [selectedWorkflowId, loadWorkflowMapping]);
+  }, [primaryWorkflow, loadSystemWorkflowDefaults]);
 
   const loraTriggerSummary = useMemo(() => {
     return activeLoras
@@ -431,17 +414,12 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
             onChangeGenerationCount={setGenerationCount}
           />
 
-          {/* STEP 3: Workflow & Diffusion Model */}
+          {/* STEP 3: Diffusion Model (Node #30_10) */}
           <WorkflowSelectionPanel
-            workflows={workflows}
-            selectedWorkflowId={selectedWorkflowId}
-            onSelectWorkflowId={setSelectedWorkflowId}
             selectedCheckpoint={selectedCheckpoint}
             onChangeCheckpoint={setSelectedCheckpoint}
             workflowDefaultCheckpoint={workflowDefaultCheckpoint}
             availableDiffusionModels={availableDiffusionModels}
-            workflowMapping={workflowMapping}
-            onOpenMapperModal={(tab) => setMapperModalState({ open: true, tab })}
           />
 
           {/* STEP 4: Prompt Mode & LM Studio Set Agent */}
@@ -563,25 +541,6 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
           />
         </div>
       </div>
-
-      {/* Workflow Node Mapper & API JSON Importer Modal */}
-      {mapperModalState.open && (
-        <NodeMapperModal
-          workflowId={selectedWorkflowId}
-          workflows={workflows}
-          initialTab={mapperModalState.tab}
-          onClose={() => setMapperModalState({ ...mapperModalState, open: false })}
-          onSavedMapping={(wfId, newMapping) => {
-            if (wfId === selectedWorkflowId) {
-              setWorkflowMapping(newMapping);
-            }
-          }}
-          onWorkflowCreated={async (newWfId) => {
-            await onRefreshAll();
-            setSelectedWorkflowId(newWfId);
-          }}
-        />
-      )}
     </div>
   );
 };

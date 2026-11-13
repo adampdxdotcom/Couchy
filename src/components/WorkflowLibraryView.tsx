@@ -4,11 +4,9 @@ import {
   Code,
   Download,
   Play,
-  Plus,
   RotateCcw,
   Save,
   Sliders,
-  Star,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
@@ -27,15 +25,11 @@ import {
   filterClipModels,
   resolveDefaultWorkflow,
 } from '../shared/utils.ts';
-import { WorkflowSidebarList } from './workflows/WorkflowSidebarList.tsx';
 import {
   WorkflowReproductionHistory,
   type WorkflowReproJob,
 } from './workflows/WorkflowReproductionHistory.tsx';
-import {
-  ExportPromptModal,
-  WorkflowCreateModal,
-} from './workflows/WorkflowModals.tsx';
+import { ExportPromptModal } from './workflows/WorkflowModals.tsx';
 import { WorkflowGraphInspector } from './workflows/WorkflowGraphInspector.tsx';
 import {
   applyPowerLoraEntriesToInputs,
@@ -76,7 +70,6 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
   // Editable Draft State
   const [draftName, setDraftName] = useState('');
   const [draftDesc, setDraftDesc] = useState('');
-  const [draftIsDefault, setDraftIsDefault] = useState(false);
   const [draftGraph, setDraftGraph] = useState<Record<string, any> | null>(null);
   const [rawJsonText, setRawJsonText] = useState('');
   const [rawJsonError, setRawJsonError] = useState<string | null>(null);
@@ -85,25 +78,16 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
   const [baselineSnapshot, setBaselineSnapshot] = useState<{
     name: string;
     desc: string;
-    isDefault: boolean;
     jsonStr: string;
   } | null>(null);
 
   const [isSaving, setIsSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
   const [showExportPromptModal, setShowExportPromptModal] = useState(false);
-  const [showCreateModal, setShowCreateModal] = useState(false);
 
   // Validation & Test Run state
   const [validation, setValidation] = useState<ReproductionValidationResult | null>(null);
   const [reproJobs, setReproJobs] = useState<WorkflowReproJob[]>([]);
-
-  // Create Modal Draft Fields
-  const [newName, setNewName] = useState('');
-  const [newDesc, setNewDesc] = useState('');
-  const [newIsDefault, setNewIsDefault] = useState(false);
-  const [newApiJson, setNewApiJson] = useState('');
-  const [newVisualJson, setNewVisualJson] = useState('');
 
   // Auto-select default or first workflow on initial load
   useEffect(() => {
@@ -143,7 +127,6 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
       setSelectedWfDetail(wfRow);
       setDraftName(wfRow.name || '');
       setDraftDesc(wfRow.description || '');
-      setDraftIsDefault(Boolean(wfRow.is_default));
 
       const rawStr = wfRow.api_workflow_json || wfRow.visual_workflow_json || '{}';
       let parsedGraph: Record<string, any> = {};
@@ -167,7 +150,6 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
       setBaselineSnapshot({
         name: wfRow.name || '',
         desc: wfRow.description || '',
-        isDefault: Boolean(wfRow.is_default),
         jsonStr: formattedJson,
       });
     } catch (err: any) {
@@ -186,10 +168,9 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
     return (
       draftName.trim() !== baselineSnapshot.name.trim() ||
       draftDesc.trim() !== baselineSnapshot.desc.trim() ||
-      draftIsDefault !== baselineSnapshot.isDefault ||
       rawJsonText.trim() !== baselineSnapshot.jsonStr.trim()
     );
-  }, [draftName, draftDesc, draftIsDefault, rawJsonText, baselineSnapshot]);
+  }, [draftName, draftDesc, rawJsonText, baselineSnapshot]);
 
   // Update a single node input inside draftGraph and sync rawJsonText
   const handleNodeFieldChange = (nodeId: string, fieldKey: string, value: any) => {
@@ -250,7 +231,6 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
     if (!baselineSnapshot) return;
     setDraftName(baselineSnapshot.name);
     setDraftDesc(baselineSnapshot.desc);
-    setDraftIsDefault(baselineSnapshot.isDefault);
     setRawJsonText(baselineSnapshot.jsonStr);
     setRawJsonError(null);
     try {
@@ -300,7 +280,7 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
         id: selectedWfDetail.id,
         name: draftName.trim() || selectedWfDetail.name,
         description: draftDesc.trim(),
-        isDefault: draftIsDefault,
+        isDefault: Boolean(selectedWfDetail.is_default),
         apiWorkflowJson: isVisualOnly ? selectedWfDetail.api_workflow_json : finalJsonString,
         visualWorkflowJson: isVisualOnly ? finalJsonString : selectedWfDetail.visual_workflow_json,
       });
@@ -342,71 +322,6 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
     }
   };
 
-  const handleSetDefaultWorkflow = async (wfId: number, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    try {
-      await api.setDefaultWorkflow(wfId);
-      await onRefresh();
-      if (selectedWfDetail?.id === wfId) {
-        setDraftIsDefault(true);
-      }
-      onPushToast?.('Primary default workflow updated', 'success');
-    } catch (err: any) {
-      onPushToast?.(`Failed to set default: ${err.message}`, 'error');
-    }
-  };
-
-  const handleImportFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const text = String(evt.target?.result || '');
-        const parsed = JSON.parse(text);
-        if (parsed.nodes && Array.isArray(parsed.nodes)) {
-          setNewVisualJson(JSON.stringify(parsed, null, 2));
-        } else {
-          setNewApiJson(JSON.stringify(parsed, null, 2));
-        }
-        if (!newName.trim()) {
-          setNewName(file.name.replace(/\.json$/i, ''));
-        }
-      } catch {
-        onPushToast?.('Selected file is not valid JSON', 'error');
-      }
-    };
-    reader.readAsText(file);
-  };
-
-  const handleSaveNewWorkflow = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newName.trim()) return;
-
-    try {
-      const res = await api.saveWorkflow({
-        name: newName.trim(),
-        description: newDesc.trim(),
-        isDefault: newIsDefault,
-        apiWorkflowJson: newApiJson.trim() || undefined,
-        visualWorkflowJson: newVisualJson.trim() || undefined,
-      });
-
-      setShowCreateModal(false);
-      setNewName('');
-      setNewDesc('');
-      setNewIsDefault(false);
-      setNewApiJson('');
-      setNewVisualJson('');
-
-      await onRefresh();
-      if (res.workflow?.id) setSelectedWfId(res.workflow.id);
-      onPushToast?.(`Created workflow "${newName}"`, 'success');
-    } catch (err: any) {
-      onPushToast?.(`Failed to create workflow: ${err.message}`, 'error');
-    }
-  };
-
   const handleValidateWorkflow = async (wfId: number) => {
     try {
       const res = await api.validateReproduction({ workflowId: wfId });
@@ -431,151 +346,87 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
     }
   };
 
+  const displayWorkflowTitle = (draftName || selectedWfDetail?.name || 'System Workflow')
+    .replace(/\s*\(Default\)\s*/gi, '')
+    .trim();
+
   return (
-    <div className="px-6 py-6 max-w-7xl mx-auto space-y-8">
+    <div className="px-6 py-6 max-w-4xl mx-auto space-y-6">
       {/* Top Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-display font-semibold text-zinc-100">
-            Independent Workflow Library & Node Settings Editor
-          </h1>
-          <p className="text-xs text-zinc-400 mt-0.5">
-            Select any workflow to configure its nodes, assign diffusion models and multiple LoRAs
-            from discovered local files, mark your primary Default workflow, or export JSON.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setShowCreateModal(true)}
-          className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg cursor-pointer whitespace-nowrap shrink-0"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Import / Save Workflow JSON</span>
-        </button>
+      <div className="text-center space-y-1">
+        <h1 className="text-xl font-display font-semibold text-zinc-100">System Workflow</h1>
+        <p className="text-xs text-zinc-400">
+          Configure the primary Krea2_turbo workflow nodes, assign diffusion models and LoRAs from
+          discovered local files, or export JSON.
+        </p>
       </div>
 
-      {/* Main Grid: Workflows List (Left) & Right Column Editor */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Workflows Sidebar */}
-        <div className="lg:col-span-5">
-          <WorkflowSidebarList
-            workflows={workflows}
-            selectedWfId={selectedWfId}
-            onSelectWorkflow={setSelectedWfId}
-            onSetDefault={handleSetDefaultWorkflow}
-          />
-        </div>
-
-        {/* Right Column: Active Workflow Inspector & Settings */}
-        <div className="lg:col-span-7">
-          {selectedWfDetail ? (
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-5 text-xs">
-              {/* Action Bar */}
-              <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-zinc-800">
-                <div className="space-y-0.5 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="text-base font-display font-semibold text-zinc-100 truncate">
-                      {draftName || selectedWfDetail.name}
-                    </h3>
-                    {draftIsDefault && (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-300">
-                        <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                        <span>Default Workflow</span>
-                      </span>
-                    )}
-                    {isDirty && (
-                      <span className="text-[11px] font-medium text-amber-400">
-                        · Unsaved Changes
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-zinc-400 font-mono text-[11px]">
-                    ID #{selectedWfDetail.id} · SHA256: {selectedWfDetail.workflow_hash.slice(0, 16)}…
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2 shrink-0">
-                  {!draftIsDefault && (
-                    <button
-                      type="button"
-                      onClick={() => handleSetDefaultWorkflow(selectedWfDetail.id)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-amber-300 font-medium rounded-lg cursor-pointer whitespace-nowrap shrink-0"
-                    >
-                      <Star className="w-3.5 h-3.5" />
-                      <span>Mark as Default</span>
-                    </button>
+      {/* Centered Active Workflow Controls */}
+      <div>
+        {selectedWfDetail ? (
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-5 text-xs">
+            {/* Action Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-zinc-800">
+              <div className="space-y-0.5 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-base font-display font-semibold text-zinc-100 truncate">
+                    {displayWorkflowTitle}
+                  </h3>
+                  {isDirty && (
+                    <span className="text-[11px] font-medium text-amber-400">
+                      · Unsaved Changes
+                    </span>
                   )}
-
-                  <button
-                    type="button"
-                    disabled={!isDirty || isSaving}
-                    onClick={handleCancelEdits}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-zinc-200 font-medium rounded-lg cursor-pointer whitespace-nowrap shrink-0"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>Cancel</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={isSaving || Boolean(rawJsonError)}
-                    onClick={handleSaveWorkflow}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-medium rounded-lg cursor-pointer whitespace-nowrap shrink-0"
-                  >
-                    <Save className="w-3.5 h-3.5" />
-                    <span>{isSaving ? 'Saving…' : 'Save'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleExportClick}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg cursor-pointer whitespace-nowrap shrink-0"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export</span>
-                  </button>
                 </div>
+                <p className="text-zinc-400 font-mono text-[11px]">
+                  ID #{selectedWfDetail.id} · SHA256: {selectedWfDetail.workflow_hash.slice(0, 16)}…
+                </p>
               </div>
 
-              {statusMsg && (
-                <div className="px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-indigo-300 font-mono text-[11px] flex items-center justify-between">
-                  <span>{statusMsg}</span>
-                  <button
-                    type="button"
-                    onClick={() => setStatusMsg(null)}
-                    className="text-zinc-500 hover:text-zinc-300 cursor-pointer"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              )}
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={!isDirty || isSaving}
+                  onClick={handleCancelEdits}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-zinc-200 font-medium rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Cancel</span>
+                </button>
 
-              {/* Workflow Name & Description */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 bg-zinc-950 border border-zinc-800 rounded-lg">
-                <div>
-                  <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                    Workflow Name
-                  </label>
-                  <input
-                    type="text"
-                    value={draftName}
-                    onChange={(e) => setDraftName(e.target.value)}
-                    className="w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-100 text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-medium text-zinc-400 mb-1">
-                    Description
-                  </label>
-                  <input
-                    type="text"
-                    value={draftDesc}
-                    onChange={(e) => setDraftDesc(e.target.value)}
-                    placeholder="Describe this workflow's purpose..."
-                    className="w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-100 text-xs"
-                  />
-                </div>
+                <button
+                  type="button"
+                  disabled={isSaving || Boolean(rawJsonError)}
+                  onClick={handleSaveWorkflow}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-medium rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>{isSaving ? 'Saving…' : 'Save'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleExportClick}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export</span>
+                </button>
               </div>
+            </div>
+
+            {statusMsg && (
+              <div className="px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-indigo-300 font-mono text-[11px] flex items-center justify-between">
+                <span>{statusMsg}</span>
+                <button
+                  type="button"
+                  onClick={() => setStatusMsg(null)}
+                  className="text-zinc-500 hover:text-zinc-300 cursor-pointer"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
 
               {/* Mode Switcher & Test Run */}
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -714,11 +565,9 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
             </div>
           ) : (
             <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-10 text-center text-xs text-zinc-500">
-              Select a workflow on the left to inspect and edit its node settings, assign models and
-              LoRAs, or export its JSON.
+              Loading system workflow configuration…
             </div>
           )}
-        </div>
       </div>
 
       {/* Historical Execution History Table */}
@@ -727,37 +576,19 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
       {/* Export Unsaved Changes Confirmation Modal */}
       <ExportPromptModal
         isOpen={showExportPromptModal}
-        draftName={draftName}
+        draftName={displayWorkflowTitle}
         onClose={() => setShowExportPromptModal(false)}
         onExportWithoutSaving={() => {
           setShowExportPromptModal(false);
-          triggerWorkflowJsonDownload(rawJsonText, draftName);
+          triggerWorkflowJsonDownload(rawJsonText, displayWorkflowTitle);
         }}
         onSaveAndExport={async () => {
           const saved = await handleSaveWorkflow();
           if (saved) {
             setShowExportPromptModal(false);
-            triggerWorkflowJsonDownload(rawJsonText, draftName);
+            triggerWorkflowJsonDownload(rawJsonText, displayWorkflowTitle);
           }
         }}
-      />
-
-      {/* Import / Save New Workflow Modal */}
-      <WorkflowCreateModal
-        isOpen={showCreateModal}
-        newName={newName}
-        onChangeName={setNewName}
-        newDesc={newDesc}
-        onChangeDesc={setNewDesc}
-        newIsDefault={newIsDefault}
-        onChangeIsDefault={setNewIsDefault}
-        newApiJson={newApiJson}
-        onChangeApiJson={setNewApiJson}
-        newVisualJson={newVisualJson}
-        onChangeVisualJson={setNewVisualJson}
-        onFileUpload={handleImportFileUpload}
-        onClose={() => setShowCreateModal(false)}
-        onSubmit={handleSaveNewWorkflow}
       />
     </div>
   );

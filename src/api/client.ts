@@ -17,8 +17,6 @@ import type {
   VisualTagItem,
   VisualTaggerStatus,
   WorkflowLibraryItem,
-  WorkflowNodeMapping,
-  WorkflowNodeSlotInfo,
 } from '../shared/types.ts';
 
 /**
@@ -402,22 +400,6 @@ export const api = {
     requestJson<{ ok: boolean; items: PromptTemplate[] }>(
       `/api/generation/templates/${id}`,
       { method: 'DELETE' }
-    ),
-
-  getWorkflowMapping: (workflowId: number) =>
-    requestJson<{
-      mapping: WorkflowNodeMapping;
-      nodes: WorkflowNodeSlotInfo[];
-      hasValidApiGraph: boolean;
-      defaultCheckpoint?: string | null;
-      defaultMegapixels?: number | null;
-      defaultAspectRatio?: string | null;
-    }>(`/api/generation/workflows/${workflowId}/mapping`),
-
-  saveWorkflowMapping: (workflowId: number, payload: Partial<WorkflowNodeMapping>) =>
-    requestJson<{ mapping: WorkflowNodeMapping }>(
-      `/api/generation/workflows/${workflowId}/mapping`,
-      { method: 'POST', body: JSON.stringify(payload) }
     ),
 
   getLmStudioStatus: (baseUrl?: string) =>

@@ -122,7 +122,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
     { id: 'characters', label: 'Characters', icon: Users },
     { id: 'generation', label: 'Generation Studio', icon: Sparkles },
     { id: 'loras', label: 'LoRAs & Models', icon: Layers },
-    { id: 'workflows', label: 'Workflows', icon: Network },
+    { id: 'workflows', label: 'Workflow', icon: Network },
     { id: 'system', label: 'System & Backup', icon: Settings },
   ];
 

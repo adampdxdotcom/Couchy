@@ -1,5 +1,8 @@
 import { Router } from 'express';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { db } from '../db.ts';
 import { listLoraExplorerItems } from '../services/galleryQueryService.ts';
 import { updateLoraCategory } from '../services/characterService.ts';
@@ -16,8 +19,12 @@ import {
   startConfirmedModelDownload,
 } from '../services/modelManagerService.ts';
 import { getComfyUiLiveStatus } from '../services/comfyuiLiveMonitor.ts';
-import { getWorkflowMapping } from '../services/workflowMapperService.ts';
+import { getExecutableApiGraph, getWorkflowMapping } from '../services/workflowMapperService.ts';
 import type { WorkflowLibraryItem } from '../../shared/types.ts';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PRIMARY_WORKFLOW_PATH = path.resolve(__dirname, '../workflows/primary_workflow.json');
 
 export const modelsAndWorkflowsRouter = Router();
 
@@ -365,10 +372,14 @@ modelsAndWorkflowsRouter.get('/workflows', (_req, res) => {
  * GET /api/workflows/:id
  */
 modelsAndWorkflowsRouter.get('/workflows/:id', (req, res) => {
-  const wf = db.prepare('SELECT * FROM workflows WHERE id = ?').get(Number(req.params.id));
+  const wf = db.prepare('SELECT * FROM workflows WHERE id = ?').get(Number(req.params.id)) as any;
   if (!wf) {
     res.status(404).json({ error: 'Workflow not found' });
     return;
+  }
+  const liveGraph = getExecutableApiGraph(wf);
+  if (wf.workflow_hash === 'default-krea2-turbo-workflow' && liveGraph) {
+    wf.api_workflow_json = JSON.stringify(liveGraph, null, 2);
   }
   res.json({ workflow: wf });
 });
@@ -460,6 +471,19 @@ modelsAndWorkflowsRouter.post('/workflows', (req, res) => {
         ).run(nextName, nextDesc, nextVisual, nextApi, nextDefault, wfId);
       });
       tx();
+
+      if (
+        current.workflow_hash === 'default-krea2-turbo-workflow' &&
+        typeof nextApi === 'string' &&
+        nextApi.trim()
+      ) {
+        try {
+          const parsed = JSON.parse(nextApi);
+          fs.writeFileSync(PRIMARY_WORKFLOW_PATH, JSON.stringify(parsed, null, 2) + '\n', 'utf-8');
+        } catch {
+          // ignore disk sync failure
+        }
+      }
 
       res.json({ workflow: db.prepare('SELECT * FROM workflows WHERE id = ?').get(wfId) });
       return;
