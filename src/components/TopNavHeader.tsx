@@ -123,7 +123,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
     { id: 'generation', label: 'Generation Studio', icon: Sparkles },
     { id: 'loras', label: 'LoRAs & Models', icon: Layers },
     { id: 'workflows', label: 'Workflow', icon: Network },
-    { id: 'system', label: 'System & Backup', icon: Settings },
+    { id: 'system', label: 'System', icon: Settings },
   ];
 
   const isComfyBusy = comfyStatus.runningCount > 0 || comfyStatus.queuedCount > 0;

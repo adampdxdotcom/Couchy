@@ -41,7 +41,7 @@ export const ComfyUiConnectionSection: React.FC<ComfyUiConnectionSectionProps> =
   return (
     <form
       onSubmit={onSaveConfig}
-      className="lg:col-span-6 bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4"
+      className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4"
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">

@@ -20,7 +20,7 @@ export const DatabaseBackupSection: React.FC<DatabaseBackupSectionProps> = ({
   onRestoreAnnotationsFile,
 }) => {
   return (
-    <div className="lg:col-span-6 bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Database className="w-4 h-4 text-indigo-400" />

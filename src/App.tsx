@@ -13,7 +13,7 @@ import { CharacterExplorerView } from './components/CharacterExplorerView.tsx';
 import { GenerationStudioView } from './components/GenerationStudioView.tsx';
 import { LoraAndModelManagerView } from './components/LoraAndModelManagerView.tsx';
 import { WorkflowLibraryView } from './components/WorkflowLibraryView.tsx';
-import { SystemAndBackupView } from './components/SystemAndBackupView.tsx';
+import { SystemAndBackupView, type SystemSubTab } from './components/SystemAndBackupView.tsx';
 import { FloatingQuickGenBar, type QuickGenPrefill } from './components/FloatingQuickGenBar.tsx';
 import { resolveClosestAspectRatio } from './shared/utils.ts';
 import type {
@@ -53,6 +53,7 @@ const INITIAL_FILTERS: GalleryFilterState = {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('gallery');
+  const [systemSubTab, setSystemSubTab] = useState<SystemSubTab>('tagger');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [layout, setLayout] = useState<GalleryViewLayout>('standard');
   const [thumbScale, setThumbScale] = useState<'sm' | 'md' | 'lg'>('md');
@@ -745,7 +746,10 @@ export default function App() {
               collections={collections}
               mountedOutputDir={healthData?.config?.comfyuiOutputDir || '/data/output'}
               onTriggerScan={handleTriggerScan}
-              onOpenSystemSettings={() => setActiveTab('system')}
+              onOpenSystemSettings={() => {
+                setSystemSubTab('comfyui');
+                setActiveTab('system');
+              }}
             />
           </>
         )}
@@ -793,7 +797,10 @@ export default function App() {
             allImages={allImages}
             onRefreshAll={refreshAll}
             onOpenImage={(img) => setInspectedImageId(img.id)}
-            onOpenSystemSettings={() => setActiveTab('system')}
+            onOpenSystemSettings={() => {
+              setSystemSubTab('lm_studio');
+              setActiveTab('system');
+            }}
           />
         )}
 
@@ -828,8 +835,8 @@ export default function App() {
         {activeTab === 'system' && (
           <SystemAndBackupView
             healthData={healthData}
-            collections={collections}
             onRefreshAll={refreshAll}
+            initialSubTab={systemSubTab}
           />
         )}
       </main>

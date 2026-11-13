@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Bot, Database, RefreshCw, Server, Tags } from 'lucide-react';
 import { api } from '../api/client.ts';
 import type {
   LmStudioGuidingTemplate,
@@ -12,21 +13,40 @@ import { ComfyUiConnectionSection } from './system/ComfyUiConnectionSection.tsx'
 import { DatabaseBackupSection } from './system/DatabaseBackupSection.tsx';
 import { CollectionsAndScannerSection } from './system/CollectionsAndScannerSection.tsx';
 
+export type SystemSubTab = 'tagger' | 'lm_studio' | 'comfyui' | 'backup' | 'scanner';
+
+const SYSTEM_SUB_TABS: {
+  id: SystemSubTab;
+  label: string;
+  icon: React.FC<{ className?: string }>;
+}[] = [
+  { id: 'tagger', label: 'Search', icon: Tags },
+  { id: 'lm_studio', label: 'Agent', icon: Bot },
+  { id: 'comfyui', label: 'ComfyUI', icon: Server },
+  { id: 'backup', label: 'Database', icon: Database },
+  { id: 'scanner', label: 'Metadata', icon: RefreshCw },
+];
+
 interface SystemAndBackupViewProps {
   healthData: any;
-  collections: { id: number; name: string; description: string; imageCount: number }[];
   onRefreshAll: () => Promise<void>;
+  initialSubTab?: SystemSubTab;
 }
 
 /**
- * ComfyUI Connection Settings, LM Studio Guiding Prompt Templates Manager,
- * Directory Scanner Controls, Collections Manager, and Database Backup & Restore Console.
+ * System Workspace: organizes Workspace Preferences, Visual Tagger, LM Studio Templates,
+ * ComfyUI Connection, Database Backups, and Filesystem Scanner into focused sub-tabs.
  */
 export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   healthData,
-  collections,
   onRefreshAll,
+  initialSubTab = 'tagger',
 }) => {
+  const [activeSubTab, setActiveSubTab] = useState<SystemSubTab>(initialSubTab);
+
+  useEffect(() => {
+    setActiveSubTab(initialSubTab);
+  }, [initialSubTab]);
   const [comfyuiUrl, setComfyuiUrl] = useState(
     healthData?.config?.comfyuiUrl || 'http://comfyui:8188'
   );
@@ -386,14 +406,14 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   };
 
   return (
-    <div className="px-6 py-6 max-w-7xl mx-auto space-y-8 text-xs">
+    <div className="px-6 py-6 max-w-7xl mx-auto space-y-5 text-xs">
       {backupMsg && (
         <div className="p-3.5 bg-indigo-500/15 border border-indigo-500/40 rounded-xl text-indigo-200">
           {backupMsg}
         </div>
       )}
 
-      {/* Workspace UI Preferences */}
+      {/* Compact Global Workspace UI Toggles */}
       <WorkspacePreferencesSection
         quickGenBoxEnabled={quickGenBoxEnabled}
         saveUploadedPromptImages={saveUploadedPromptImages}
@@ -402,46 +422,77 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
         onToggleSaveUploadedPromptImages={handleToggleSaveUploadedPromptImages}
       />
 
-      {/* Opt-In Visual Keyword Tagging (WD14 ONNX Search Indexer) */}
-      <VisualTaggerSection
-        taggerStatus={taggerStatus}
-        isUpdatingTagger={isUpdatingTagger}
-        onToggleVisualTagger={handleToggleVisualTagger}
-        onTaggerConfigChange={handleTaggerConfigChange}
-        onTaggerControl={handleTaggerControl}
-      />
+      {/* System Sub-Tab Navigation */}
+      <div
+        role="tablist"
+        aria-label="System settings sections"
+        className="bg-zinc-900/90 border border-zinc-800 rounded-xl p-1.5 flex flex-wrap gap-1.5"
+      >
+        {SYSTEM_SUB_TABS.map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeSubTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => setActiveSubTab(tab.id)}
+              className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                isActive
+                  ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/40'
+                  : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/70 border border-transparent'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5 shrink-0" />
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
+      </div>
 
-      {/* LM Studio Agent & Guiding Prompt Templates Manager */}
-      <LmStudioTemplatesSection
-        lmStatus={lmStatus}
-        lmBaseUrl={lmBaseUrl}
-        setLmBaseUrl={setLmBaseUrl}
-        lmSelectedModel={lmSelectedModel}
-        setLmSelectedModel={setLmSelectedModel}
-        isTestingLm={isTestingLm}
-        onTestLmStudio={handleTestLmStudio}
-        conversationSystemPrompt={conversationSystemPrompt}
-        setConversationSystemPrompt={setConversationSystemPrompt}
-        onSaveConversationPrompt={handleSaveConversationPrompt}
-        onResetConversationPrompt={handleResetConversationPrompt}
-        guidingTemplates={guidingTemplates}
-        selectedGuidingId={selectedGuidingId}
-        onSelectGuidingTemplate={handleSelectGuidingTemplate}
-        guidingName={guidingName}
-        setGuidingName={setGuidingName}
-        guidingIsDefault={guidingIsDefault}
-        setGuidingIsDefault={setGuidingIsDefault}
-        guidingSystemPrompt={guidingSystemPrompt}
-        setGuidingSystemPrompt={setGuidingSystemPrompt}
-        guidingUserTemplate={guidingUserTemplate}
-        setGuidingUserTemplate={setGuidingUserTemplate}
-        guidingFeedback={guidingFeedback}
-        onSaveGuidingTemplate={handleSaveGuidingTemplate}
-        onDeleteGuidingTemplate={handleDeleteGuidingTemplate}
-      />
+      {/* Active Sub-Tab Panel */}
+      {activeSubTab === 'tagger' && (
+        <VisualTaggerSection
+          taggerStatus={taggerStatus}
+          isUpdatingTagger={isUpdatingTagger}
+          onToggleVisualTagger={handleToggleVisualTagger}
+          onTaggerConfigChange={handleTaggerConfigChange}
+          onTaggerControl={handleTaggerControl}
+        />
+      )}
 
-      {/* ComfyUI Connection & Database Backup Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      {activeSubTab === 'lm_studio' && (
+        <LmStudioTemplatesSection
+          lmStatus={lmStatus}
+          lmBaseUrl={lmBaseUrl}
+          setLmBaseUrl={setLmBaseUrl}
+          lmSelectedModel={lmSelectedModel}
+          setLmSelectedModel={setLmSelectedModel}
+          isTestingLm={isTestingLm}
+          onTestLmStudio={handleTestLmStudio}
+          conversationSystemPrompt={conversationSystemPrompt}
+          setConversationSystemPrompt={setConversationSystemPrompt}
+          onSaveConversationPrompt={handleSaveConversationPrompt}
+          onResetConversationPrompt={handleResetConversationPrompt}
+          guidingTemplates={guidingTemplates}
+          selectedGuidingId={selectedGuidingId}
+          onSelectGuidingTemplate={handleSelectGuidingTemplate}
+          guidingName={guidingName}
+          setGuidingName={setGuidingName}
+          guidingIsDefault={guidingIsDefault}
+          setGuidingIsDefault={setGuidingIsDefault}
+          guidingSystemPrompt={guidingSystemPrompt}
+          setGuidingSystemPrompt={setGuidingSystemPrompt}
+          guidingUserTemplate={guidingUserTemplate}
+          setGuidingUserTemplate={setGuidingUserTemplate}
+          guidingFeedback={guidingFeedback}
+          onSaveGuidingTemplate={handleSaveGuidingTemplate}
+          onDeleteGuidingTemplate={handleDeleteGuidingTemplate}
+        />
+      )}
+
+      {activeSubTab === 'comfyui' && (
         <ComfyUiConnectionSection
           comfyuiUrl={comfyuiUrl}
           setComfyuiUrl={setComfyuiUrl}
@@ -458,22 +509,24 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
           onTestComfyUi={handleTestComfyUi}
           onSaveConfig={handleSaveConfig}
         />
+      )}
 
+      {activeSubTab === 'backup' && (
         <DatabaseBackupSection
           integrityOk={integrityOk}
           backups={backups}
           onCreateBackup={handleCreateBackup}
           onRestoreAnnotationsFile={handleRestoreAnnotationsFile}
         />
-      </div>
+      )}
 
-      {/* Virtual Collections & Filesystem Scanner Row */}
-      <CollectionsAndScannerSection
-        collections={collections}
-        scanHistory={scanHistory}
-        onRefreshAll={onRefreshAll}
-        onReloadSystemDetails={loadSystemDetails}
-      />
+      {activeSubTab === 'scanner' && (
+        <CollectionsAndScannerSection
+          scanHistory={scanHistory}
+          onRefreshAll={onRefreshAll}
+          onReloadSystemDetails={loadSystemDetails}
+        />
+      )}
     </div>
   );
 };

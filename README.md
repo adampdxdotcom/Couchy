@@ -48,7 +48,7 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
     - **Text-Only Model Loaded in LM Studio**: Runs the image through the local `wd-vit-tagger-v3` ONNX visual tagger first, then feeds the extracted tags into the local text LLM to write a natural prose prompt.
     - Automatically disabled with a helpful tooltip whenever LM Studio is offline.
   - **Character-Aware Physical Trait Stripping**: If a character is already attached in the Quick Gen Box when you drop or upload a photo, Couchy automatically strips conflicting physical identity traits—such as hair color, eye color, permanent facial features (freckles, moles), skin tone, race/ethnicity, and body proportions—while keeping hairstyle structure, transient facial expressions/emotions (e.g., smiling, blushing), pose, clothing/NSFW state, lighting, and framing so the character's LoRA defines their appearance cleanly.
-  - **Optional Reference Archiving**: Enable *"Save Uploaded Prompt Images"* in **System & Backup** to automatically save a copy of each 1MP downscaled reference image to `data/uploaded`.
+  - **Optional Reference Archiving**: Enable *"Save Uploaded Prompt Images"* in **System** to automatically save a copy of each 1MP downscaled reference image to `data/uploaded`.
 
 - **Local LLM Photo Set Agent (`Agent` Toggle)**:
   - Toggle the **Agent** button to have your local LLM expand a single prompt or high-level narrative instruction into a cohesive multi-image sequence across your selected batch count:
@@ -61,7 +61,7 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
   - Brainstorm lighting, framing, wardrobe, mood, and scene details back-and-forth with your local LLM (sending up to the last 10 messages of context per turn).
   - Whenever the LLM has a ready-to-generate prompt, it presents a **Proposed Prompt** card with a one-click **Submit Prompt** button—or you can keep chatting to refine it further.
   - Multi-image batch generation is automatically locked to `x1` during Conversation mode. Submitting a proposed prompt dispatches the job to ComfyUI, clears the conversation, and returns the Quick Gen box to its compact default state.
-  - The guiding system prompt for Conversation mode is fully editable (with a **Reset to Default** option) under **System &rarr; LM Studio Prompt Director & Guiding Templates**.
+  - The guiding system prompt for Conversation mode is fully editable (with a **Reset to Default** option) under **System &rarr; Agent**.
 
 - **Stacked Image Iterations, Conversation History & Branching**:
   - **Persistent Conversation Snapshots**: Every image generated in Conversation mode saves its conversation history snapshot and links iterations into a stacked **Image Series**.
@@ -116,7 +116,7 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
 - Runs locally on CPU or NVIDIA GPU to auto-detect visual tags, clothing, poses, and stylistic elements without sending data outside your network.
 
 ### 7. Mobile-Optimized Interface
-- Responsive top navigation bar featuring a slide-down mobile hamburger menu for quick access to all workspaces (**Gallery**, **Characters**, **Generation Studio**, **LoRAs & Models**, **Workflows**, **System & Backup**).
+- Responsive top navigation bar featuring a slide-down mobile hamburger menu for quick access to all workspaces (**Gallery**, **Characters**, **Generation Studio**, **LoRAs & Models**, **Workflows**, **System**).
 - Real-time ComfyUI progress bar and job queue status in the header.
 
 ---
@@ -253,7 +253,7 @@ docker compose logs -f comfyui-gallery
 
 ## Backup, Restore & Maintenance
 
-1. **Database Snapshots**: In the web UI, go to **System & Backup** to create a verified SQLite database snapshot (`gallery-backup-*.db`) using `PRAGMA integrity_check`.
+1. **Database Snapshots**: In the web UI, go to **System &rarr; Database** to create a verified SQLite database snapshot (`gallery-backup-*.db`) using `PRAGMA integrity_check`.
 2. **Annotation Export**: Export all user-created annotations (ratings, character tags, favorites, notes) to a portable JSON file.
 3. **Automatic Migrations**: When updating Couchy via `git pull && docker compose up -d --build`, database schema migrations run automatically on startup without risking existing records.
 

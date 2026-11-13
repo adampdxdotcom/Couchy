@@ -16,20 +16,20 @@ export const WorkspacePreferencesSection: React.FC<WorkspacePreferencesSectionPr
   onToggleSaveUploadedPromptImages,
 }) => {
   return (
-    <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h2 className="text-sm font-display font-semibold text-zinc-100">
+    <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3.5 flex items-center justify-between gap-4">
+        <div className="space-y-0.5 min-w-0">
+          <h2 className="text-xs font-display font-semibold text-zinc-100">
             Floating Quick Generation Box
           </h2>
-          <p className="text-zinc-400">
-            Show a floating prompt bar across all tabs with <code className="text-zinc-200">@character</code> mentions, aspect ratio &amp; batch count controls, and LM Studio Agent support.
+          <p className="text-[11px] text-zinc-400 leading-snug">
+            Cross-tab prompt dock with <code className="text-zinc-200">@character</code> mentions &amp; Agent support.
           </p>
         </div>
 
-        <label className="inline-flex items-center gap-3 cursor-pointer select-none">
-          <span className="text-zinc-300 font-medium">
-            {quickGenBoxEnabled ? 'Enabled' : 'Disabled'}
+        <label className="inline-flex items-center gap-2.5 cursor-pointer select-none shrink-0">
+          <span className="text-[11px] text-zinc-300 font-medium">
+            {quickGenBoxEnabled ? 'On' : 'Off'}
           </span>
           <input
             type="checkbox"
@@ -41,23 +41,19 @@ export const WorkspacePreferencesSection: React.FC<WorkspacePreferencesSectionPr
         </label>
       </div>
 
-      <div className="pt-4 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h2 className="text-sm font-display font-semibold text-zinc-100">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3.5 flex items-center justify-between gap-4">
+        <div className="space-y-0.5 min-w-0">
+          <h2 className="text-xs font-display font-semibold text-zinc-100">
             Save Uploaded Prompt Images (1MP)
           </h2>
-          <p className="text-zinc-400">
-            Automatically save the 1MP downscaled copy of images dropped, pasted, or uploaded into the Quick Gen Bar for prompt interrogation into{' '}
-            <code className="font-mono text-zinc-200">
-              {uploadedImagesDir}
-            </code>
-            .
+          <p className="text-[11px] text-zinc-400 leading-snug truncate" title={`Archive interrogated 1MP copies into ${uploadedImagesDir}`}>
+            Archive interrogated 1MP images to <code className="font-mono text-zinc-200">{uploadedImagesDir}</code>.
           </p>
         </div>
 
-        <label className="inline-flex items-center gap-3 cursor-pointer select-none">
-          <span className="text-zinc-300 font-medium">
-            {saveUploadedPromptImages ? 'Enabled' : 'Disabled'}
+        <label className="inline-flex items-center gap-2.5 cursor-pointer select-none shrink-0">
+          <span className="text-[11px] text-zinc-300 font-medium">
+            {saveUploadedPromptImages ? 'On' : 'Off'}
           </span>
           <input
             type="checkbox"

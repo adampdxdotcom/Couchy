@@ -60,7 +60,7 @@ FRONTEND: TOP-LEVEL VIEWS & INSPECTOR
 - `src/components/GenerationStudioView.tsx` — 4-step Photo Set Director orchestrator, outgoing shot queue preview, and batch history.
 - `src/components/LoraAndModelManagerView.tsx` — LoRA Explorer (`@mention`/nickname/category), Missing Dependencies/Inventory, model downloader.
 - `src/components/WorkflowLibraryView.tsx` — Centered System Workflow editor (`Workflow` tab), JSON/graph inspector, validation, history.
-- `src/components/SystemAndBackupView.tsx` — System settings coordinator for workspace, tagger, LM Studio, ComfyUI, backups, scanner.
+- `src/components/SystemAndBackupView.tsx` — System settings coordinator with 5 focused sub-tabs (Tagger, LM Studio, ComfyUI, Backups, Scanner).
 - `src/components/FloatingQuickGenBar.tsx` — Collapsible cross-tab Quick Gen dock shell composing `src/components/quickgen/*`.
 
 FRONTEND: QUICK GEN (`src/components/quickgen`)
@@ -100,4 +100,4 @@ FRONTEND: WORKFLOWS & SYSTEM (`src/components/workflows`, `src/components/system
 - `src/components/system/LmStudioTemplatesSection.tsx` — LM Studio URL/model config and Guiding Prompt Template CRUD.
 - `src/components/system/ComfyUiConnectionSection.tsx` — ComfyUI URL, mount directories, backup interval config, and connectivity test.
 - `src/components/system/DatabaseBackupSection.tsx` — SQLite integrity status, manual snapshots, and JSON annotation export/restore.
-- `src/components/system/CollectionsAndScannerSection.tsx` — Virtual collections manager, incremental/full scan triggers, and scan job history.
+- `src/components/system/CollectionsAndScannerSection.tsx` — Incremental/full filesystem scanner triggers, metadata rebuild, and scan job history.

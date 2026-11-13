@@ -10,8 +10,8 @@ interface SeriesIterationsStripProps {
 }
 
 /**
- * Horizontal thumbnail strip docked at the bottom of the Inspector metadata column
- * for navigating stacked iterations in an image series.
+ * Horizontal thumbnail strip displayed in the Inspector metadata column
+ * under Workflow & Reproducibility for navigating stacked iterations in an image series.
  */
 export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
   items,
@@ -25,7 +25,7 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
   const isMiddleStep = activeIdx >= 0 && activeIdx < items.length - 1;
 
   return (
-    <div className="sticky bottom-0 z-10 bg-zinc-950/95 backdrop-blur-md border-t border-zinc-800 px-4 sm:px-5 py-3 space-y-2">
+    <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 space-y-2.5 min-w-0">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <Layers className="w-3.5 h-3.5 text-indigo-400 shrink-0" />

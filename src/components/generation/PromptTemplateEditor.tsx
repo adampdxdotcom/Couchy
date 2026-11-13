@@ -261,7 +261,7 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
                       className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 cursor-pointer"
                     >
                       <Settings2 className="w-3 h-3" />
-                      <span>Edit Templates in System & Backup</span>
+                      <span>Edit Templates in System</span>
                     </button>
                   </>
                 )}
