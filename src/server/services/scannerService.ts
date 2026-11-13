@@ -8,6 +8,7 @@ import { appConfig } from '../config.ts';
 import { parseImageMetadata, parseImageMetadataFromChunks } from './pngMetadataParser.ts';
 import { runAssistedCharacterIdentificationForImage } from './characterService.ts';
 import { notifyImageIndexed } from './comfyuiLiveMonitor.ts';
+import { attachGenerationItemOutputToSeries } from './seriesService.ts';
 import { startVisualTaggerQueue } from './visualTaggerService.ts';
 import type { DependencyStatus } from '../../shared/types.ts';
 
@@ -437,7 +438,7 @@ export async function indexSingleImageFile(
     const { thumbPath, width, height, format } = await ensureWebpThumbnail(fullPath, contentHash);
     const parsed = parseImageMetadata(fullPath);
 
-    let imageId: number;
+    let imageId = 0;
     let outcome: 'added' | 'modified' = 'added';
 
     // Check if an image with the same content_hash was moved/renamed from another relative_path
@@ -619,6 +620,7 @@ export async function indexSingleImageFile(
 
       // Auto-link any matching generation_item by seed so ghost cards hand off immediately when fsWatcher indexes the file
       let effectiveCharacterId = characterId || null;
+      let matchedGenItemId: number | null = null;
       if (parsed.seed) {
         const matchedGenItem = db
           .prepare(
@@ -634,6 +636,7 @@ export async function indexSingleImageFile(
           .get(String(parsed.seed)) as { id: number; character_id: number | null } | undefined;
 
         if (matchedGenItem) {
+          matchedGenItemId = matchedGenItem.id;
           db.prepare(
             `UPDATE generation_items
              SET status = 'completed', output_image_id = ?, completed_at = COALESCE(completed_at, datetime('now'))
@@ -663,9 +666,18 @@ export async function indexSingleImageFile(
             updated_at = datetime('now')`
         ).run(imageId, contentHash, effectiveCharacterId, appearanceLabel);
       }
+
+      return matchedGenItemId;
     });
 
-    tx();
+    const matchedGenItemId = tx();
+    if (matchedGenItemId && imageId) {
+      try {
+        attachGenerationItemOutputToSeries(matchedGenItemId, imageId);
+      } catch (seriesErr) {
+        console.warn('Failed to attach scanned generation image to series:', seriesErr);
+      }
+    }
     recomputeImageDependencyStatus(imageId!);
     runAssistedCharacterIdentificationForImage(imageId!);
 

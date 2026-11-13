@@ -66,9 +66,7 @@ imagesRouter.get('/:id', (req, res) => {
 
     const requestedSeriesId = req.query.seriesId ? Number(req.query.seriesId) : null;
     const rawHydrated = hydrateImageRecords([row])[0];
-    const hydrated = requestedSeriesId
-      ? enrichSingleImageWithSeries(rawHydrated, requestedSeriesId)
-      : rawHydrated;
+    const hydrated = enrichSingleImageWithSeries(rawHydrated, requestedSeriesId);
     const wf = db
       .prepare(
         `SELECT w.* FROM image_workflows iw

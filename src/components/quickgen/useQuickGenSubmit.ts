@@ -383,9 +383,9 @@ export function useQuickGenSubmit({
         triggerWord,
         negativePrompt: '',
         loras: selectedLoras,
-        seriesId: conversationEnabled ? activeSeriesId : null,
-        branchFromImageId: conversationEnabled ? branchFromImageId : null,
-        chatSnapshot: conversationEnabled ? chatMessages : undefined,
+        seriesId: activeSeriesId,
+        branchFromImageId: branchFromImageId,
+        chatSnapshot: chatMessages.length > 0 ? chatMessages : undefined,
       });
 
       const submittedCount = res.batch.items.filter((i) => i.status === 'submitted').length;

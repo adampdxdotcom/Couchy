@@ -87,8 +87,11 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   const [reproStatusIsError, setReproStatusIsError] = useState(false);
   const [showRawWorkflow, setShowRawWorkflow] = useState(false);
 
-  const activeImage = detailData?.image || image;
-  const seriesContextId = image.seriesId ?? detailData?.image?.seriesId ?? null;
+  const activeImage =
+    detailData?.image && detailData.image.id === selectedIterationId
+      ? detailData.image
+      : image;
+  const seriesContextId = image.seriesId ?? activeImage.seriesId ?? null;
   const currentMegapixels =
     activeImage.width > 0 && activeImage.height > 0
       ? (activeImage.width * activeImage.height) / 1_000_000
@@ -103,8 +106,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     getSuggestedUpscaleMp(currentMegapixels)
   );
 
-  // Sync selectedIterationId when outer image prop changes
+  // Sync selectedIterationId and clear stale detail snapshot when outer image prop changes
   useEffect(() => {
+    setDetailData(null);
     setSelectedIterationId(image.id);
   }, [image.id]);
 

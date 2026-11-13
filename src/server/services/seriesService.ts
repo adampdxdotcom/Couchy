@@ -111,12 +111,31 @@ export function attachGeneratedImageToSeries(params: {
       }[];
 
       if (existingItems.length > 0) {
+        // Idempotency guard: if this generated image is already attached to this series, leave it intact
+        if (existingItems.some((it) => it.image_id === imageId)) {
+          return targetSeriesId;
+        }
+
         const branchIdx = sourceId
           ? existingItems.findIndex((it) => it.image_id === sourceId)
           : existingItems.length - 1;
 
         // Branching from the middle of a stack: split off a new series with history up to branchIdx
         if (branchIdx >= 0 && branchIdx < existingItems.length - 1) {
+          // Idempotency guard: avoid creating a duplicate split series if already split by another worker
+          const existingSplit = db
+            .prepare(
+              `SELECT a.series_id
+               FROM image_series_items a
+               JOIN image_series_items b ON b.series_id = a.series_id
+               WHERE a.image_id = ? AND b.image_id = ? AND b.step_order = a.step_order + 1
+               LIMIT 1`
+            )
+            .get(sourceId, imageId) as { series_id: number } | undefined;
+          if (existingSplit) {
+            return existingSplit.series_id;
+          }
+
           const newSeriesInfo = db
             .prepare(`INSERT INTO image_series (poster_image_id) VALUES (NULL)`)
             .run();
@@ -155,6 +174,20 @@ export function attachGeneratedImageToSeries(params: {
 
     // Case 2: Starting a series from a standalone image (via Conversation or Upscale)
     if (sourceId) {
+      // Idempotency guard: reuse existing [sourceId, imageId] series if already created
+      const existingPair = db
+        .prepare(
+          `SELECT a.series_id
+           FROM image_series_items a
+           JOIN image_series_items b ON b.series_id = a.series_id
+           WHERE a.image_id = ? AND b.image_id = ? AND b.step_order = a.step_order + 1
+           LIMIT 1`
+        )
+        .get(sourceId, imageId) as { series_id: number } | undefined;
+      if (existingPair) {
+        return existingPair.series_id;
+      }
+
       const favRow = db
         .prepare(
           `SELECT r.is_favorite
@@ -182,6 +215,13 @@ export function attachGeneratedImageToSeries(params: {
 
     // Case 3: Brand new Conversation image with no prior source image
     if (chatSnapshotJson && chatSnapshotJson.trim()) {
+      const existingStandaloneSeries = db
+        .prepare(`SELECT series_id FROM image_series_items WHERE image_id = ? LIMIT 1`)
+        .get(imageId) as { series_id: number } | undefined;
+      if (existingStandaloneSeries) {
+        return existingStandaloneSeries.series_id;
+      }
+
       const newSeriesInfo = db
         .prepare(`INSERT INTO image_series (poster_image_id) VALUES (NULL)`)
         .run();
@@ -197,6 +237,44 @@ export function attachGeneratedImageToSeries(params: {
   });
 
   return tx();
+}
+
+/**
+ * Resolves batch series metadata for a generation_item and idempotently attaches
+ * its output image to the target/branched series.
+ */
+export function attachGenerationItemOutputToSeries(itemId: number, imageId: number): number | null {
+  if (!itemId || !imageId || imageId <= 0) return null;
+  const batchMeta = db
+    .prepare(
+      `SELECT gb.series_id, gb.branch_from_image_id, gb.chat_snapshot_json
+       FROM generation_items gi
+       JOIN generation_batches gb ON gb.id = gi.batch_id
+       WHERE gi.id = ?`
+    )
+    .get(itemId) as
+    | {
+        series_id: number | null;
+        branch_from_image_id: number | null;
+        chat_snapshot_json: string | null;
+      }
+    | undefined;
+
+  if (
+    !batchMeta ||
+    (!batchMeta.series_id &&
+      !batchMeta.branch_from_image_id &&
+      !(batchMeta.chat_snapshot_json && batchMeta.chat_snapshot_json.trim()))
+  ) {
+    return null;
+  }
+
+  return attachGeneratedImageToSeries({
+    imageId,
+    seriesId: batchMeta.series_id,
+    branchFromImageId: batchMeta.branch_from_image_id,
+    chatSnapshotJson: batchMeta.chat_snapshot_json,
+  });
 }
 
 /**

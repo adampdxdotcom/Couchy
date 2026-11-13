@@ -24,7 +24,7 @@ import {
   invalidateComfyQueueCache,
 } from '../services/comfyuiLiveMonitor.ts';
 import { pollComfyPromptCompletion } from '../services/comfyuiPoller.ts';
-import { attachGeneratedImageToSeries } from '../services/seriesService.ts';
+import { attachGenerationItemOutputToSeries } from '../services/seriesService.ts';
 import {
   normalizeResolutionSelectorRatio,
   type GenerationBatchRecord,
@@ -411,34 +411,7 @@ function trackGenerationItem(
 
       if (resolvedOutputImageId) {
         try {
-          const batchMeta = db
-            .prepare(
-              `SELECT gb.series_id, gb.branch_from_image_id, gb.chat_snapshot_json
-               FROM generation_items gi
-               JOIN generation_batches gb ON gb.id = gi.batch_id
-               WHERE gi.id = ?`
-            )
-            .get(itemId) as
-            | {
-                series_id: number | null;
-                branch_from_image_id: number | null;
-                chat_snapshot_json: string | null;
-              }
-            | undefined;
-
-          if (
-            batchMeta &&
-            (batchMeta.series_id ||
-              batchMeta.branch_from_image_id ||
-              (batchMeta.chat_snapshot_json && batchMeta.chat_snapshot_json.trim()))
-          ) {
-            attachGeneratedImageToSeries({
-              imageId: resolvedOutputImageId,
-              seriesId: batchMeta.series_id,
-              branchFromImageId: batchMeta.branch_from_image_id,
-              chatSnapshotJson: batchMeta.chat_snapshot_json,
-            });
-          }
+          attachGenerationItemOutputToSeries(itemId, resolvedOutputImageId);
         } catch (seriesErr) {
           console.warn('Failed to attach generated image to series:', seriesErr);
         }

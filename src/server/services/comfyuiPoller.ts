@@ -29,7 +29,7 @@ export function pollComfyPromptCompletion(options: PollComfyPromptOptions): void
   const {
     promptId,
     characterId = null,
-    maxAttempts = 120,
+    maxAttempts = 480,
     intervalMs = 2500,
     onSuccess,
     onError,
@@ -65,6 +65,7 @@ export function pollComfyPromptCompletion(options: PollComfyPromptOptions): void
             for (const nodeOut of Object.values(outputs) as any[]) {
               if (!Array.isArray(nodeOut?.images) || nodeOut.images.length === 0) continue;
               for (const imgSpec of nodeOut.images) {
+                if (imgSpec?.type === 'temp') continue;
                 const filename = imgSpec?.filename;
                 const subfolder = imgSpec?.subfolder || '';
                 if (!filename) continue;
@@ -101,7 +102,7 @@ export function pollComfyPromptCompletion(options: PollComfyPromptOptions): void
               firstOutputSpec,
             });
 
-            if (anyIndexed) {
+            if (anyIndexed || outputImageIds.length > 0) {
               notifyImageIndexed();
             } else {
               runDirectoryScan('incremental');
