@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import {
+  copyImageMetadataToDerivedImage,
   indexSingleImageFile,
   recomputeImageDependencyStatus,
   runDirectoryScan,
@@ -13,7 +14,11 @@ import {
   invalidateComfyQueueCache,
   notifyImageIndexed,
 } from './comfyuiLiveMonitor.ts';
-import { autoDetectWorkflowMapping, getWorkflowMapping } from './workflowMapperService.ts';
+import {
+  autoDetectWorkflowMapping,
+  compileUpscaleWorkflow,
+  getWorkflowMapping,
+} from './workflowMapperService.ts';
 import type {
   DependencyStatus,
   ModelInventoryItem,
@@ -733,3 +738,157 @@ function pollComfyUiExecution(
     }
   }, 2500);
 }
+
+/**
+ * Uploads an existing indexed gallery image to ComfyUI and executes the internal
+ * upscale workflow (`src/server/workflows/upscale_workflow.json`) at targetMegapixels.
+ */
+export async function submitImageUpscale(params: {
+  imageId: number;
+  targetMegapixels: number;
+}): Promise<{ promptId: string; targetMegapixels: number; sourceFilename: string }> {
+  const imgRow = db
+    .prepare('SELECT id, relative_path, filename, is_missing FROM images WHERE id = ?')
+    .get(params.imageId) as
+    | { id: number; relative_path: string; filename: string; is_missing: number }
+    | undefined;
+
+  if (!imgRow) {
+    throw new Error('Image not found.');
+  }
+
+  const origPath = path.resolve(appConfig.comfyuiOutputDir, imgRow.relative_path);
+  if (imgRow.is_missing || !fs.existsSync(origPath)) {
+    throw new Error('Original image file is missing on disk.');
+  }
+
+  const conn = await testComfyUiConnection();
+  if (!conn.online) {
+    throw new Error('ComfyUI is offline. Verify connection settings before upscaling.');
+  }
+
+  const targetMp = Math.max(0.5, Math.min(10.0, Number(params.targetMegapixels) || 6.0));
+
+  // Upload the source image to ComfyUI's input/ directory so LoadImage resolves reliably
+  let loadFilename = imgRow.filename;
+  let loadSubfolder = path.dirname(imgRow.relative_path) === '.' ? '' : path.dirname(imgRow.relative_path);
+  let loadSourceType: 'input' | 'output' = 'output';
+
+  try {
+    const fileBuf = fs.readFileSync(origPath);
+    const form = new FormData();
+    form.append('image', new Blob([fileBuf]), path.basename(origPath));
+    form.append('overwrite', 'true');
+    form.append('type', 'input');
+
+    const uploadRes = await fetch(`${appConfig.comfyuiUrl}/upload/image`, {
+      method: 'POST',
+      body: form,
+    });
+    if (uploadRes.ok) {
+      const upJson = (await uploadRes.json()) as { name?: string; subfolder?: string };
+      if (upJson?.name) {
+        loadFilename = upJson.name;
+        loadSubfolder = upJson.subfolder || '';
+        loadSourceType = 'input';
+      }
+    }
+  } catch {
+    // Fall back to direct [output] reference if /upload/image fails
+  }
+
+  const baseStem = path.basename(imgRow.filename, path.extname(imgRow.filename));
+  const upscalePayload = compileUpscaleWorkflow({
+    imageFilename: loadFilename,
+    subfolder: loadSubfolder,
+    sourceType: loadSourceType,
+    targetMegapixels: targetMp,
+    filenamePrefix: `${baseStem}_upscaled`,
+  });
+
+  const promptRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt: upscalePayload,
+      client_id: COUCHY_COMFY_CLIENT_ID,
+    }),
+  });
+
+  if (!promptRes.ok) {
+    const errText = await promptRes.text();
+    throw new Error(`ComfyUI rejected upscale workflow (${promptRes.status}): ${errText}`);
+  }
+
+  const data = (await promptRes.json()) as { prompt_id?: string };
+  const promptId = data.prompt_id || `upscale-${Date.now()}`;
+
+  invalidateComfyQueueCache();
+  pollUpscaleExecution(params.imageId, promptId);
+
+  return {
+    promptId,
+    targetMegapixels: targetMp,
+    sourceFilename: imgRow.filename,
+  };
+}
+
+function pollUpscaleExecution(sourceImageId: number, promptId: string, attempt = 0): void {
+  if (attempt > 120) return;
+  setTimeout(async () => {
+    try {
+      const res = await fetch(`${appConfig.comfyuiUrl}/history/${promptId}`);
+      if (res.ok) {
+        const hist = (await res.json()) as Record<string, any>;
+        const entry = hist[promptId];
+        if (entry) {
+          if (entry.status?.status_str === 'error') return;
+
+          const charRow = db
+            .prepare(
+              `SELECT character_id FROM image_characters
+               WHERE image_id = ? AND status = 'confirmed' LIMIT 1`
+            )
+            .get(sourceImageId) as { character_id?: number } | undefined;
+          const characterId = charRow?.character_id ? Number(charRow.character_id) : null;
+
+          let anyIndexed = false;
+          const outputs = entry.outputs || {};
+          for (const nodeOut of Object.values(outputs) as any[]) {
+            if (!Array.isArray(nodeOut?.images)) continue;
+            for (const imgSpec of nodeOut.images) {
+              const filename = imgSpec?.filename;
+              const subfolder = imgSpec?.subfolder || '';
+              if (!filename) continue;
+
+              const fullPath = path.join(appConfig.comfyuiOutputDir, subfolder, filename);
+              if (fs.existsSync(fullPath)) {
+                const resIndex = await indexSingleImageFile(
+                  fullPath,
+                  appConfig.comfyuiOutputDir,
+                  false,
+                  characterId
+                );
+                if (resIndex.imageId) {
+                  copyImageMetadataToDerivedImage(sourceImageId, resIndex.imageId);
+                  anyIndexed = true;
+                }
+              }
+            }
+          }
+
+          if (anyIndexed) {
+            notifyImageIndexed();
+          } else {
+            runDirectoryScan('incremental');
+          }
+          return;
+        }
+      }
+      pollUpscaleExecution(sourceImageId, promptId, attempt + 1);
+    } catch {
+      pollUpscaleExecution(sourceImageId, promptId, attempt + 1);
+    }
+  }, 2500);
+}
+

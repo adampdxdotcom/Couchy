@@ -836,3 +836,176 @@ export function startFilesystemWatcher(): void {
     db.prepare('UPDATE images SET is_missing = 1 WHERE relative_path = ?').run(rel);
   });
 }
+
+/**
+ * Copies generation metadata, LoRA stack, model dependencies, workflow link,
+ * and confirmed character associations from a source image onto a derived (e.g. upscaled) image.
+ */
+export function copyImageMetadataToDerivedImage(
+  sourceImageId: number,
+  derivedImageId: number
+): void {
+  if (!sourceImageId || !derivedImageId || sourceImageId === derivedImageId) return;
+  try {
+    const baseImg = db
+      .prepare('SELECT dependency_status FROM images WHERE id = ?')
+      .get(sourceImageId) as { dependency_status: string } | undefined;
+    const derivedImg = db
+      .prepare('SELECT content_hash FROM images WHERE id = ?')
+      .get(derivedImageId) as { content_hash: string } | undefined;
+    const baseMeta = db
+      .prepare('SELECT * FROM image_metadata WHERE image_id = ?')
+      .get(sourceImageId) as any;
+
+    const tx = db.transaction(() => {
+      if (baseImg?.dependency_status) {
+        db.prepare('UPDATE images SET dependency_status = ? WHERE id = ?').run(
+          baseImg.dependency_status,
+          derivedImageId
+        );
+      }
+
+      if (baseMeta) {
+        db.prepare(
+          `INSERT INTO image_metadata (
+            image_id, positive_prompt, negative_prompt, seed, steps, cfg, sampler, scheduler,
+            denoise, batch_size, batch_index, generation_date, checkpoint_name, checkpoint_hash,
+            vae_name, missing_fields_json, provenance_json, raw_metadata_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(image_id) DO UPDATE SET
+            positive_prompt = excluded.positive_prompt,
+            negative_prompt = excluded.negative_prompt,
+            seed = excluded.seed,
+            steps = excluded.steps,
+            cfg = excluded.cfg,
+            sampler = excluded.sampler,
+            scheduler = excluded.scheduler,
+            denoise = excluded.denoise,
+            batch_size = excluded.batch_size,
+            batch_index = excluded.batch_index,
+            generation_date = excluded.generation_date,
+            checkpoint_name = excluded.checkpoint_name,
+            checkpoint_hash = excluded.checkpoint_hash,
+            vae_name = excluded.vae_name,
+            missing_fields_json = excluded.missing_fields_json,
+            provenance_json = excluded.provenance_json,
+            raw_metadata_json = excluded.raw_metadata_json`
+        ).run(
+          derivedImageId,
+          baseMeta.positive_prompt,
+          baseMeta.negative_prompt,
+          baseMeta.seed,
+          baseMeta.steps,
+          baseMeta.cfg,
+          baseMeta.sampler,
+          baseMeta.scheduler,
+          baseMeta.denoise,
+          baseMeta.batch_size,
+          baseMeta.batch_index,
+          baseMeta.generation_date,
+          baseMeta.checkpoint_name,
+          baseMeta.checkpoint_hash,
+          baseMeta.vae_name,
+          baseMeta.missing_fields_json,
+          baseMeta.provenance_json,
+          baseMeta.raw_metadata_json
+        );
+      }
+
+      const baseLoras = db
+        .prepare('SELECT * FROM image_loras WHERE image_id = ?')
+        .all(sourceImageId) as any[];
+      if (baseLoras.length > 0) {
+        db.prepare('DELETE FROM image_loras WHERE image_id = ?').run(derivedImageId);
+        const insLora = db.prepare(
+          `INSERT INTO image_loras
+            (image_id, model_id, lora_name, lora_path, lora_hash, model_strength, clip_strength, node_id, node_type, provenance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        for (const l of baseLoras) {
+          insLora.run(
+            derivedImageId,
+            l.model_id,
+            l.lora_name,
+            l.lora_path,
+            l.lora_hash,
+            l.model_strength,
+            l.clip_strength,
+            l.node_id,
+            l.node_type,
+            l.provenance
+          );
+        }
+      }
+
+      const baseModels = db
+        .prepare('SELECT * FROM image_models WHERE image_id = ?')
+        .all(sourceImageId) as any[];
+      if (baseModels.length > 0) {
+        db.prepare('DELETE FROM image_models WHERE image_id = ?').run(derivedImageId);
+        const insModel = db.prepare(
+          `INSERT INTO image_models
+            (image_id, model_id, model_name, model_type, model_hash, status, node_id, node_type, provenance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        for (const m of baseModels) {
+          insModel.run(
+            derivedImageId,
+            m.model_id,
+            m.model_name,
+            m.model_type,
+            m.model_hash,
+            m.status,
+            m.node_id,
+            m.node_type,
+            m.provenance
+          );
+        }
+      }
+
+      const baseWf = db
+        .prepare('SELECT * FROM image_workflows WHERE image_id = ?')
+        .get(sourceImageId) as any;
+      if (baseWf) {
+        db.prepare(
+          `INSERT INTO image_workflows (image_id, workflow_id, format_type)
+           VALUES (?, ?, ?)
+           ON CONFLICT(image_id) DO UPDATE SET
+             workflow_id = excluded.workflow_id,
+             format_type = excluded.format_type`
+        ).run(derivedImageId, baseWf.workflow_id, baseWf.format_type);
+      }
+
+      if (derivedImg?.content_hash) {
+        const baseChars = db
+          .prepare("SELECT * FROM image_characters WHERE image_id = ? AND status = 'confirmed'")
+          .all(sourceImageId) as any[];
+        for (const ch of baseChars) {
+          db.prepare(
+            `INSERT INTO image_characters
+              (image_id, image_content_hash, character_id, status, source, confidence, match_reason, appearance_label)
+             VALUES (?, ?, ?, 'confirmed', ?, ?, ?, ?)
+             ON CONFLICT(image_content_hash, character_id) DO UPDATE SET
+               status = 'confirmed',
+               image_id = excluded.image_id,
+               appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
+               updated_at = datetime('now')`
+          ).run(
+            derivedImageId,
+            derivedImg.content_hash,
+            ch.character_id,
+            ch.source || 'upscale',
+            ch.confidence ?? 1.0,
+            ch.match_reason || 'Inherited from upscaled source image',
+            ch.appearance_label || 'Default'
+          );
+        }
+      }
+    });
+
+    tx();
+  } catch (err) {
+    console.warn('Failed to copy source metadata to derived image:', err);
+  }
+}
+

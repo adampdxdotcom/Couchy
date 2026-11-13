@@ -17,7 +17,7 @@
         0
       ],
       "image": [
-        "1",
+        "17",
         0
       ]
     },
@@ -39,24 +39,10 @@
       "ver": "0.43.0"
     }
   },
-  "6": {
-    "inputs": {
-      "images": [
-        "9",
-        0
-      ]
-    },
-    "class_type": "PreviewImage",
-    "_meta": {
-      "title": "Preview Image",
-      "cnr_id": "comfy-core",
-      "ver": "0.43.0"
-    }
-  },
   "9": {
     "inputs": {
       "upscale_method": "nearest-exact",
-      "megapixels": 5,
+      "megapixels": 10,
       "resolution_steps": 1,
       "image": [
         "2",
@@ -66,6 +52,92 @@
     "class_type": "ImageScaleToTotalPixels",
     "_meta": {
       "title": "Scale Image to Total Pixels",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "11": {
+    "inputs": {
+      "expression": "a * b > 3000000",
+      "values.a": [
+        "12",
+        0
+      ],
+      "values.b": [
+        "12",
+        1
+      ]
+    },
+    "class_type": "ComfyMathExpression",
+    "_meta": {
+      "title": "Math Expression",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "12": {
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "13": {
+    "inputs": {
+      "upscale_method": "nearest-exact",
+      "megapixels": 3,
+      "resolution_steps": 1,
+      "image": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "Scale Image to Total Pixels",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "17": {
+    "inputs": {
+      "switch": [
+        "11",
+        2
+      ],
+      "on_false": [
+        "1",
+        0
+      ],
+      "on_true": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "If/Else Switch",
+      "cnr_id": "comfy-core",
+      "ver": "0.43.0"
+    }
+  },
+  "18": {
+    "inputs": {
+      "images": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image",
       "cnr_id": "comfy-core",
       "ver": "0.43.0"
     }

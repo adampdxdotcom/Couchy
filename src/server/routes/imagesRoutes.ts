@@ -11,6 +11,7 @@ const createZipArchive = ((archiverPkg as any).default || archiverPkg) as (
 import { appConfig } from '../config.ts';
 import { hydrateImageRecords, queryGalleryImages } from '../services/galleryQueryService.ts';
 import { ensureWebpThumbnail } from '../services/scannerService.ts';
+import { submitImageUpscale } from '../services/comfyuiService.ts';
 import type { GalleryFilterState } from '../../shared/types.ts';
 
 export const imagesRouter = Router();
@@ -413,3 +414,19 @@ imagesRouter.delete('/:id/visual-tags/:tag', async (req, res) => {
     res.status(500).json({ error: err?.message || 'Failed to remove visual keyword' });
   }
 });
+
+/**
+ * POST /api/images/:id/upscale
+ * Sends an existing gallery image through the internal upscale_workflow.json pipeline.
+ */
+imagesRouter.post('/:id/upscale', async (req, res) => {
+  try {
+    const imageId = Number(req.params.id);
+    const targetMegapixels = Number(req.body?.targetMegapixels) || 6.0;
+    const result = await submitImageUpscale({ imageId, targetMegapixels });
+    res.json({ ok: true, ...result });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to queue image upscale' });
+  }
+});
+

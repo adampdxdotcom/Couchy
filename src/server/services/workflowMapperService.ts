@@ -876,29 +876,59 @@ export function compileWorkflowForGeneration(params: {
 export function compileUpscaleWorkflow(params: {
   imageFilename: string;
   subfolder?: string;
+  sourceType?: 'input' | 'output';
   targetMegapixels: number;
+  filenamePrefix?: string;
 }): Record<string, any> {
   const rawJson = fs.readFileSync(UPSCALE_WORKFLOW_PATH, 'utf-8');
   const graph = JSON.parse(rawJson) as Record<string, any>;
 
   const cleanSubfolder = (params.subfolder || '').trim().replace(/^\/+|\/+$/g, '');
+  const sourceSuffix = params.sourceType === 'input' ? '[input]' : '[output]';
   const annotatedImage = cleanSubfolder
-    ? `${cleanSubfolder}/${params.imageFilename} [output]`
-    : `${params.imageFilename} [output]`;
-  const targetMp = Math.max(3.5, Math.min(10.0, Number(params.targetMegapixels) || 5.0));
+    ? `${cleanSubfolder}/${params.imageFilename} ${sourceSuffix}`
+    : `${params.imageFilename} ${sourceSuffix}`;
+  const targetMp = Math.max(0.5, Math.min(10.0, Number(params.targetMegapixels) || 5.0));
 
-  for (const node of Object.values(graph)) {
+  // Identify ImageUpscaleWithModel node IDs so we only overwrite the downstream scale node
+  const upscaleModelNodeIds = new Set<string>();
+  const scaleNodeIds: string[] = [];
+  for (const [nodeId, node] of Object.entries(graph)) {
+    if (!node || typeof node !== 'object') continue;
+    const classType = String(node.class_type || '');
+    if (classType === 'ImageUpscaleWithModel') {
+      upscaleModelNodeIds.add(nodeId);
+    } else if (classType === 'ImageScaleToTotalPixels') {
+      scaleNodeIds.push(nodeId);
+    }
+  }
+
+  // Prefer the scale node fed by ImageUpscaleWithModel; fall back to any non-3MP or final scale node
+  const targetScaleNodeId =
+    scaleNodeIds.find((id) => {
+      const imgInput = graph[id]?.inputs?.image;
+      return Array.isArray(imgInput) && upscaleModelNodeIds.has(String(imgInput[0]));
+    }) ||
+    scaleNodeIds.find((id) => Number(graph[id]?.inputs?.megapixels) !== 3) ||
+    scaleNodeIds[scaleNodeIds.length - 1] ||
+    null;
+
+  for (const [nodeId, node] of Object.entries(graph)) {
     if (!node || typeof node !== 'object') continue;
     const classType = String(node.class_type || '');
     const inputs = node.inputs && typeof node.inputs === 'object' ? node.inputs : {};
 
     if (classType === 'LoadImage') {
       inputs.image = annotatedImage;
-    } else if (classType === 'ImageScaleToTotalPixels' || 'megapixels' in inputs) {
+    } else if (
+      nodeId === targetScaleNodeId ||
+      (!targetScaleNodeId && classType !== 'ImageScaleToTotalPixels' && 'megapixels' in inputs)
+    ) {
       inputs.megapixels = Number(targetMp.toFixed(2));
-    } else if (classType === 'PreviewImage') {
+    } else if (classType === 'PreviewImage' || classType === 'SaveImage') {
       node.class_type = 'SaveImage';
-      inputs.filename_prefix = inputs.filename_prefix || 'Krea2_turbo_upscaled';
+      inputs.filename_prefix =
+        params.filenamePrefix || inputs.filename_prefix || 'Krea2_turbo_upscaled';
       if (node._meta && typeof node._meta === 'object') {
         node._meta.title = 'Save Image';
       }

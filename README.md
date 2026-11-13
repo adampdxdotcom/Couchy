@@ -60,6 +60,7 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
   - Click the workflow/ratio pill (e.g., `Krea2_turbo · 2:3 · x1`) to open the quick settings popover:
     - **Aspect Ratio Presets**: `1:1`, `9:16`, `16:9`, `3:4`, `4:3`, `2:3`, and `3:2` (mapped directly to your workflow's resolution/aspect node).
     - **Number of Generations**: `x1`, `x2`, `x4`, `x6`, or `x8` images per batch.
+    - **Resolution**: From .5mp up to 10mp selectable. Up to 3mp is native resolution, anything higher is upscaled from 3mp with a 4x upscaler, and then downscaled.
   - Automatically displays and uses the attached character's preferred workflow if configured, or falls back to your default ComfyUI workflow.
 
 - **One-Click "Reuse Prompt" Integration**:

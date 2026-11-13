@@ -545,4 +545,15 @@ export const api = {
       `/api/images/${imageId}/visual-tags/${encodeURIComponent(tag)}`,
       { method: 'DELETE' }
     ),
+
+  upscaleImage: (imageId: number, targetMegapixels: number) =>
+    requestJson<{
+      ok: boolean;
+      promptId: string;
+      targetMegapixels: number;
+      sourceFilename: string;
+    }>(`/api/images/${imageId}/upscale`, {
+      method: 'POST',
+      body: JSON.stringify({ targetMegapixels }),
+    }),
 };

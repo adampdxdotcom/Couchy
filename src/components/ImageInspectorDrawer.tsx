@@ -17,6 +17,7 @@ import {
   Minimize2,
   RefreshCw,
   Trash2,
+  ArrowUpRight,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
@@ -72,19 +73,36 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [isRescanningVisualTags, setIsRescanningVisualTags] = useState(false);
 
-  // Workflow Run state
+  // Workflow Run & Upscale state
   const [isRunningWorkflow, setIsRunningWorkflow] = useState(false);
+  const [isUpscalingImage, setIsUpscalingImage] = useState(false);
   const [reproStatusMsg, setReproStatusMsg] = useState<string | null>(null);
   const [reproStatusIsError, setReproStatusIsError] = useState(false);
   const [showRawWorkflow, setShowRawWorkflow] = useState(false);
 
   const activeImage = detailData?.image || image;
+  const currentMegapixels =
+    activeImage.width > 0 && activeImage.height > 0
+      ? (activeImage.width * activeImage.height) / 1_000_000
+      : 1.0;
+
+  const getSuggestedUpscaleMp = (mp: number): number => {
+    const doubled = Math.round(mp * 4) / 2;
+    return Math.max(4.0, Math.min(10.0, doubled));
+  };
+
+  const [upscaleTargetMp, setUpscaleTargetMp] = useState<number>(() =>
+    getSuggestedUpscaleMp(currentMegapixels)
+  );
 
   useEffect(() => {
     setEditablePositivePrompt(image.positivePrompt || '');
     setNotes(image.notes);
     setReproStatusMsg(null);
     setReproStatusIsError(false);
+    const imgMp =
+      image.width > 0 && image.height > 0 ? (image.width * image.height) / 1_000_000 : 1.0;
+    setUpscaleTargetMp(getSuggestedUpscaleMp(imgMp));
     api
       .getImageDetail(image.id)
       .then((res) => {
@@ -96,7 +114,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
         });
       })
       .catch(() => {});
-  }, [image.id, image.notes, image.positivePrompt]);
+  }, [image.id, image.notes, image.positivePrompt, image.width, image.height]);
 
   // Keyboard navigation (Escape, Left, Right)
   useEffect(() => {
@@ -147,6 +165,35 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
       setIsRunningWorkflow(false);
     }
   };
+
+  const handleUpscaleImage = async () => {
+    setIsUpscalingImage(true);
+    setReproStatusMsg(null);
+    setReproStatusIsError(false);
+    try {
+      const res = await api.upscaleImage(image.id, upscaleTargetMp);
+      setReproStatusIsError(false);
+      setReproStatusMsg(
+        `Upscale queued at ${res.targetMegapixels.toFixed(1)} MP (Prompt ID: ${res.promptId})`
+      );
+      onUpdated();
+    } catch (err: any) {
+      setReproStatusIsError(true);
+      setReproStatusMsg(err.message || 'Failed to queue image upscale');
+    } finally {
+      setIsUpscalingImage(false);
+    }
+  };
+
+  const estimatedUpscaleDims = (() => {
+    const w = activeImage.width || 1024;
+    const h = activeImage.height || 1024;
+    const ratio = w / h;
+    const targetPixels = upscaleTargetMp * 1_000_000;
+    const estW = Math.round(Math.sqrt(targetPixels * ratio));
+    const estH = Math.round(Math.sqrt(targetPixels / ratio));
+    return { estW, estH };
+  })();
 
   return (
     <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex flex-col lg:flex-row overflow-hidden">
@@ -656,22 +703,25 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
           </div>
 
           {/* Section 5: Workflow & Reproducibility (Moved below Extracted LoRAs) */}
-          <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-2.5 min-w-0">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 space-y-3 min-w-0">
             <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <h4 className="text-sm font-display font-semibold text-zinc-100">
-                  Workflow & Reproducibility
+                  Workflow &amp; Reproducibility
                 </h4>
-                <p className="text-zinc-400 mt-0.5">
+                <p className="text-zinc-400 mt-0.5 text-[11px]">
                   Visual Graph: {image.hasVisualWorkflow ? 'Embedded' : 'None'} · API Graph:{' '}
-                  {image.hasApiWorkflow ? 'Embedded' : 'None'}
+                  {image.hasApiWorkflow ? 'Embedded' : 'None'} · Current:{' '}
+                  <span className="font-mono text-zinc-300 tabular-nums">
+                    {currentMegapixels.toFixed(1)} MP
+                  </span>
                 </p>
               </div>
               {(image.hasVisualWorkflow || image.hasApiWorkflow) && (
                 <button
                   type="button"
                   onClick={handleRunWorkflow}
-                  disabled={isRunningWorkflow}
+                  disabled={isRunningWorkflow || isUpscalingImage}
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium rounded-lg cursor-pointer shrink-0 transition-colors"
                 >
                   {isRunningWorkflow ? (
@@ -682,6 +732,67 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   <span>{isRunningWorkflow ? 'Running...' : 'Run Workflow'}</span>
                 </button>
               )}
+            </div>
+
+            {/* Upscale Existing Image Control */}
+            <div className="pt-3 border-t border-zinc-800/80 space-y-2">
+              <div className="flex items-center justify-between gap-2 text-[11px]">
+                <span className="font-display font-semibold text-zinc-200 uppercase tracking-wider">
+                  Upscale Image
+                </span>
+                <span className="font-mono text-zinc-300 tabular-nums">
+                  {currentMegapixels.toFixed(1)} MP &rarr;{' '}
+                  <span className="text-indigo-300 font-semibold">
+                    {upscaleTargetMp.toFixed(1)} MP
+                  </span>{' '}
+                  <span className="text-zinc-500">
+                    (~{estimatedUpscaleDims.estW}×{estimatedUpscaleDims.estH})
+                  </span>
+                </span>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <input
+                    type="range"
+                    min={1.0}
+                    max={10.0}
+                    step={0.5}
+                    value={upscaleTargetMp}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value);
+                      if (Number.isFinite(val)) {
+                        setUpscaleTargetMp(Math.max(1.0, Math.min(10.0, Math.round(val * 2) / 2)));
+                      }
+                    }}
+                    className="w-full accent-indigo-500 cursor-pointer"
+                  />
+                  <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500 mt-0.5">
+                    <span>1.0 MP</span>
+                    {currentMegapixels > 3.0 && (
+                      <span className="text-amber-300/90">
+                        Source &gt;3MP auto-clamped to 3MP before 4&times; ESRGAN
+                      </span>
+                    )}
+                    <span>10.0 MP</span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleUpscaleImage}
+                  disabled={isUpscalingImage || isRunningWorkflow}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 disabled:opacity-50 text-zinc-100 font-medium rounded-lg cursor-pointer shrink-0 transition-colors"
+                  title="Send this image through the internal 4x-ESRGAN upscale workflow"
+                >
+                  {isUpscalingImage ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <ArrowUpRight className="w-3.5 h-3.5 text-indigo-400" />
+                  )}
+                  <span>{isUpscalingImage ? 'Upscaling...' : 'Upscale'}</span>
+                </button>
+              </div>
             </div>
 
             {reproStatusMsg && (
