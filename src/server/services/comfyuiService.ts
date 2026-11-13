@@ -722,6 +722,7 @@ export async function submitImageUpscale(params: {
     characterId: sourceCharacterId,
     characterName: charRow?.character_name || null,
     prompt: `Upscale ${imgRow.filename} to ${targetMp.toFixed(1)} MP`,
+    isUpscale: true,
   });
 
   invalidateComfyQueueCache();

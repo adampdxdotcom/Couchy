@@ -24,12 +24,18 @@ import {
 import type {
   CharacterProfile,
   DependencyStatus,
+  GalleryFilterState,
   ImageLoraRecord,
   ImageRecord,
   LoraExplorerItem,
   QueuedGhostCardItem,
 } from '../shared/types.ts';
-import { findAttachedGhostsForImage, formatImageAspectRatio } from '../shared/utils.ts';
+import {
+  filterAndSortGhostItems,
+  findAttachedGhostsForImage,
+  formatImageAspectRatio,
+  isGhostOutputInImages,
+} from '../shared/utils.ts';
 import type { GalleryViewLayout } from './GalleryFilterBar.tsx';
 import { PendingGhostOverlay } from './gallery/PendingGhostOverlay.tsx';
 
@@ -52,6 +58,7 @@ interface GalleryGridViewProps {
   images: ImageRecord[];
   loras?: LoraExplorerItem[];
   ghostItems?: QueuedGhostCardItem[];
+  filters?: GalleryFilterState;
   page: number;
   pageSize?: number;
   infiniteScroll: boolean;
@@ -118,6 +125,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   images,
   loras = [],
   ghostItems = [],
+  filters,
   page,
   pageSize = 48,
   infiniteScroll,
@@ -253,23 +261,27 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
     );
   }
 
-  const visibleGhostItems = ghostItems.filter(
-    (g) => !g.outputImageId || !images.some((img) => img.id === g.outputImageId)
-  );
+  const visibleGhostItems = ghostItems.filter((g) => !isGhostOutputInImages(g, images));
 
-  // Separate ghosts targeting an existing visible card/series from standalone / branch cards
+  // Separate ghosts targeting an existing series card (across all matching pages) from standalone / branch cards
   const attachedGhostsByCardId = new Map<number, QueuedGhostCardItem>();
   const attachedGhostIds = new Set<number>();
-  for (const img of pagedImages) {
+  for (const img of images) {
     const matches = findAttachedGhostsForImage(img, visibleGhostItems);
     if (matches.length > 0) {
-      attachedGhostsByCardId.set(img.id, matches[0]);
       for (const m of matches) {
         attachedGhostIds.add(m.itemId);
       }
     }
   }
-  const standaloneGhostItems = visibleGhostItems.filter((g) => !attachedGhostIds.has(g.itemId));
+  for (const img of pagedImages) {
+    const matches = findAttachedGhostsForImage(img, visibleGhostItems);
+    if (matches.length > 0) {
+      attachedGhostsByCardId.set(img.id, matches[0]);
+    }
+  }
+  const rawStandaloneGhosts = visibleGhostItems.filter((g) => !attachedGhostIds.has(g.itemId));
+  const standaloneGhostItems = filterAndSortGhostItems(rawStandaloneGhosts, filters);
 
   // Empty State when mounted ComfyUI output directory has no indexed images and no active queued jobs
   if (images.length === 0 && visibleGhostItems.length === 0) {

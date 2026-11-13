@@ -10,6 +10,7 @@ interface QueuePromptMeta {
   height: number;
   checkpointName: string | null;
   loraCount: number;
+  loraNames: string[];
   firstSeenMs: number;
 }
 
@@ -21,6 +22,7 @@ interface QueueSeriesRegistration {
   prompt?: string;
   width?: number;
   height?: number;
+  isUpscale?: boolean;
   registeredAtMs: number;
 }
 
@@ -81,12 +83,24 @@ export function registerQueuedPromptSeriesTarget(
   });
 }
 
+function toIsoUtc(raw: string | null | undefined): string {
+  const s = (raw || '').trim();
+  if (!s) return new Date().toISOString();
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(s)) {
+    return `${s.replace(' ', 'T')}Z`;
+  }
+  return s;
+}
+
 /**
  * Determines whether a queued job appends to an existing series/image or branches off into a new card.
+ * Excludes `outputImageId` when evaluating existing steps so an appended completion never flashes as a branch split.
  */
 function resolveSeriesTargetForJob(
   explicitSeriesId: number | null,
-  branchFromImageId: number | null
+  branchFromImageId: number | null,
+  outputImageId: number | null = null,
+  isUpscale = false
 ): { targetSeriesId: number | null; targetImageId: number | null; isBranchSplit: boolean } {
   let targetSeriesId = explicitSeriesId && explicitSeriesId > 0 ? Number(explicitSeriesId) : null;
   const sourceId = branchFromImageId && branchFromImageId > 0 ? Number(branchFromImageId) : null;
@@ -112,9 +126,20 @@ function resolveSeriesTargetForJob(
   }
 
   if (targetSeriesId) {
-    const existingItems = db
-      .prepare(`SELECT image_id FROM image_series_items WHERE series_id = ? ORDER BY step_order ASC`)
-      .all(targetSeriesId) as { image_id: number }[];
+    if (isUpscale) {
+      return {
+        targetSeriesId,
+        targetImageId: sourceId,
+        isBranchSplit: false,
+      };
+    }
+
+    const existingItems = (
+      db
+        .prepare(`SELECT image_id FROM image_series_items WHERE series_id = ? ORDER BY step_order ASC`)
+        .all(targetSeriesId) as { image_id: number }[]
+    ).filter((it) => !outputImageId || it.image_id !== Number(outputImageId));
+
     if (existingItems.length > 0) {
       const branchIdx = sourceId
         ? existingItems.findIndex((it) => it.image_id === sourceId)
@@ -194,6 +219,7 @@ export function extractMetadataFromPromptGraph(graph: any): Omit<QueuePromptMeta
   let height = 1536;
   let checkpointName: string | null = null;
   let loraCount = 0;
+  const loraNames: string[] = [];
 
   if (graph && typeof graph === 'object' && !Array.isArray(graph)) {
     for (const node of Object.values(graph) as any[]) {
@@ -217,14 +243,16 @@ export function extractMetadataFromPromptGraph(graph: any): Omit<QueuePromptMeta
         }
       }
 
-      // Count active LoRAs
+      // Count active LoRAs and record filenames
       if (ctLower.includes('lora')) {
         if (typeof inputs.lora_name === 'string' && inputs.lora_name !== 'None' && inputs.lora_name.trim()) {
           loraCount++;
+          loraNames.push(inputs.lora_name.trim());
         }
         for (const [k, v] of Object.entries(inputs)) {
           if (k.startsWith('lora_') && v && typeof v === 'object' && (v as any).on && (v as any).lora) {
             loraCount++;
+            loraNames.push(String((v as any).lora).trim());
           }
         }
       }
@@ -242,7 +270,7 @@ export function extractMetadataFromPromptGraph(graph: any): Omit<QueuePromptMeta
     }
   }
 
-  return { prompt, width, height, checkpointName, loraCount };
+  return { prompt, width, height, checkpointName, loraCount, loraNames };
 }
 
 let wsInstance: WebSocket | null = null;
@@ -516,9 +544,12 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
         Boolean(r.output_image_id),
         r.item_id === oldestSubmittedItemId
       );
+      const queueMeta = pid ? state.queuePromptMetaMap.get(pid) : undefined;
+      const outputImgId = r.output_image_id ? Number(r.output_image_id) : null;
       const seriesTarget = resolveSeriesTargetForJob(
         r.series_id ? Number(r.series_id) : null,
-        r.branch_from_image_id ? Number(r.branch_from_image_id) : null
+        r.branch_from_image_id ? Number(r.branch_from_image_id) : null,
+        outputImgId
       );
 
       ghostItems.push({
@@ -534,13 +565,14 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
         checkpointName: r.checkpoint_name || r.workflow_name || null,
         workflowName: r.workflow_name || null,
         loraCount: Number(r.lora_count || 0),
+        loraNames: queueMeta?.loraNames || undefined,
         characterId: r.character_id ? Number(r.character_id) : null,
         characterName: r.character_name || null,
-        outputImageId: r.output_image_id ? Number(r.output_image_id) : null,
+        outputImageId: outputImgId,
         targetSeriesId: seriesTarget.targetSeriesId,
         targetImageId: seriesTarget.targetImageId,
         isBranchSplit: seriesTarget.isBranchSplit,
-        createdAt: r.created_at,
+        createdAt: toIsoUtc(r.created_at),
       });
     }
 
@@ -651,10 +683,11 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
           queueMeta?.checkpointName || rj.img_checkpoint || rj.workflow_name || null,
         workflowName: rj.workflow_name || null,
         loraCount: Number(queueMeta?.loraCount ?? rj.img_lora_count ?? 0),
+        loraNames: queueMeta?.loraNames || undefined,
         characterId: rj.char_id ? Number(rj.char_id) : null,
         characterName: rj.char_name || null,
         outputImageId,
-        createdAt: rj.submitted_at,
+        createdAt: toIsoUtc(rj.submitted_at),
       });
     }
 
@@ -671,7 +704,12 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
       const queueMeta = state.queuePromptMetaMap.get(pid);
       const regMeta = state.queuePromptSeriesMap.get(pid);
       const seriesTarget = regMeta
-        ? resolveSeriesTargetForJob(regMeta.targetSeriesId ?? null, regMeta.sourceImageId)
+        ? resolveSeriesTargetForJob(
+            regMeta.targetSeriesId ?? null,
+            regMeta.sourceImageId,
+            null,
+            Boolean(regMeta.isUpscale)
+          )
         : { targetSeriesId: null, targetImageId: null, isBranchSplit: false };
 
       const { cardState, progressPercent } = resolvePromptProgressState(
@@ -700,6 +738,7 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
         checkpointName: queueMeta?.checkpointName || (regMeta ? '4x-ESRGAN Upscale' : 'ComfyUI Workflow'),
         workflowName: regMeta ? '4x-ESRGAN Upscale' : 'ComfyUI Workflow',
         loraCount: queueMeta?.loraCount || 0,
+        loraNames: queueMeta?.loraNames || undefined,
         characterId: regMeta?.characterId ?? null,
         characterName: regMeta?.characterName ?? null,
         outputImageId: null,
@@ -709,6 +748,15 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
         createdAt: new Date(queueMeta?.firstSeenMs || regMeta?.registeredAtMs || Date.now()).toISOString(),
       });
     }
+
+    // Order combined pending/generating cards newest-first across all job sources
+    ghostItems.sort((a, b) => {
+      const ta = Date.parse(a.createdAt) || 0;
+      const tb = Date.parse(b.createdAt) || 0;
+      if (tb !== ta) return tb - ta;
+      if (b.batchId !== a.batchId) return b.batchId - a.batchId;
+      return b.itemIndex - a.itemIndex;
+    });
 
     return ghostItems;
   } catch {

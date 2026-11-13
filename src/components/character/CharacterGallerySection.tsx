@@ -16,7 +16,11 @@ import type {
   ImageRecord,
   QueuedGhostCardItem,
 } from '../../shared/types.ts';
-import { findAttachedGhostsForImage } from '../../shared/utils.ts';
+import {
+  filterAndSortGhostItems,
+  findAttachedGhostsForImage,
+  isGhostOutputInImages,
+} from '../../shared/utils.ts';
 import { PendingGhostOverlay } from '../gallery/PendingGhostOverlay.tsx';
 
 interface CharacterGallerySectionProps {
@@ -58,9 +62,7 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
   onToggleExpand,
   totalPoolCount,
 }) => {
-  const visibleGhostItems = ghostItems.filter(
-    (g) => !g.outputImageId || !images.some((img) => img.id === g.outputImageId)
-  );
+  const visibleGhostItems = ghostItems.filter((g) => !isGhostOutputInImages(g, images));
 
   const attachedGhostsByCardId = new Map<number, QueuedGhostCardItem>();
   const attachedGhostIds = new Set<number>();
@@ -73,7 +75,9 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
       }
     }
   }
-  const standaloneGhostItems = visibleGhostItems.filter((g) => !attachedGhostIds.has(g.itemId));
+  const standaloneGhostItems = filterAndSortGhostItems(
+    visibleGhostItems.filter((g) => !attachedGhostIds.has(g.itemId))
+  );
 
   return (
     <div className="space-y-3">

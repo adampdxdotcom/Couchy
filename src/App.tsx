@@ -691,6 +691,7 @@ export default function App() {
               images={images}
               loras={loras}
               ghostItems={activeGhostItems}
+              filters={filters}
               page={currentGalleryPage}
               pageSize={galleryPageSize}
               infiniteScroll={infiniteScroll}

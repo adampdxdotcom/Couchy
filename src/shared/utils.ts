@@ -2,7 +2,12 @@
  * Shared utility functions, formatting helpers, and UI constants.
  */
 
-import type { ImageRecord, ModelInventoryItem, QueuedGhostCardItem } from './types';
+import type {
+  GalleryFilterState,
+  ImageRecord,
+  ModelInventoryItem,
+  QueuedGhostCardItem,
+} from './types';
 
 // ==========================================
 // 1. Aspect Ratio Presets & Normalization
@@ -314,6 +319,21 @@ export function resolveDefaultWorkflow<
 // ==========================================
 
 /**
+ * Returns true once a ghost's output image is already present as a card or series iteration in `images`.
+ */
+export function isGhostOutputInImages(
+  ghost: Pick<QueuedGhostCardItem, 'outputImageId'>,
+  images: Pick<ImageRecord, 'id' | 'seriesItems'>[]
+): boolean {
+  if (!ghost.outputImageId) return false;
+  return images.some(
+    (img) =>
+      img.id === ghost.outputImageId ||
+      Boolean(img.seriesItems?.some((si) => si.imageId === ghost.outputImageId))
+  );
+}
+
+/**
  * Finds active queued/generating ghost items that will stack onto the given image or series card.
  * Middle-stack branches (`isBranchSplit`) start their own new stack/card and never attach to an existing card.
  */
@@ -324,9 +344,6 @@ export function findAttachedGhostsForImage(
   if (!ghostItems || ghostItems.length === 0) return [];
   return ghostItems.filter((g) => {
     if (g.isBranchSplit) return false;
-    if (g.outputImageId && (g.outputImageId === img.id || img.seriesItems?.some((si) => si.imageId === g.outputImageId))) {
-      return false;
-    }
     if (g.targetSeriesId && img.seriesId && g.targetSeriesId === img.seriesId) {
       return true;
     }
@@ -335,5 +352,125 @@ export function findAttachedGhostsForImage(
       if (img.seriesItems?.some((si) => si.imageId === g.targetImageId)) return true;
     }
     return false;
+  });
+}
+
+function normalizeStem(raw: string): string {
+  return (raw || '')
+    .trim()
+    .replace(/^.*[\\/]/, '')
+    .replace(/\.(safetensors|pt|ckpt|bin)$/i, '')
+    .toLowerCase();
+}
+
+/**
+ * Applies active Gallery filter and sort rules to standalone pending/queued ghost cards
+ * (newest-first by default, matching the active gallery sort/filters).
+ */
+export function filterAndSortGhostItems(
+  ghosts: QueuedGhostCardItem[],
+  filters?: GalleryFilterState
+): QueuedGhostCardItem[] {
+  const filtered = filters
+    ? ghosts.filter((g) => {
+        // Pending jobs have no user annotations or archive/reject flags yet
+        if (
+          filters.favoritesOnly ||
+          filters.minRating > 0 ||
+          filters.tagIds.length > 0 ||
+          filters.collectionId !== null ||
+          filters.rejectedMode === 'only' ||
+          filters.archivedMode === 'only' ||
+          filters.dependencyStatus === 'incomplete' ||
+          filters.dependencyStatus === 'unknown'
+        ) {
+          return false;
+        }
+
+        if (filters.characterIds.length > 0) {
+          if (g.characterId == null || !filters.characterIds.includes(g.characterId)) {
+            return false;
+          }
+        }
+
+        if (filters.checkpoint) {
+          const targetCkpt = normalizeStem(filters.checkpoint);
+          const ghostCkpt = normalizeStem(g.checkpointName || '');
+          if (!ghostCkpt || ghostCkpt !== targetCkpt) {
+            return false;
+          }
+        }
+
+        if (filters.loras.length > 0) {
+          if (g.loraCount === 0) return false;
+          if (g.loraNames && g.loraNames.length > 0) {
+            const ghostLoraKeys = new Set(g.loraNames.map(normalizeStem));
+            const matches =
+              filters.loraMatchMode === 'ANY'
+                ? filters.loras.some((l) => ghostLoraKeys.has(normalizeStem(l)))
+                : filters.loras.every((l) => ghostLoraKeys.has(normalizeStem(l)));
+            if (!matches) return false;
+          }
+        }
+
+        if (filters.query && filters.query.trim()) {
+          const q = filters.query.trim().replace(/^["']|["']$/g, '').toLowerCase();
+          const haystack = [
+            g.prompt,
+            g.characterName || '',
+            g.checkpointName || '',
+            g.workflowName || '',
+            ...(g.loraNames || []),
+          ]
+            .join(' ')
+            .toLowerCase();
+          if (!haystack.includes(q)) return false;
+        }
+
+        if (filters.dateFrom) {
+          const createdMs = Date.parse(g.createdAt);
+          const fromMs = Date.parse(filters.dateFrom);
+          if (!Number.isNaN(createdMs) && !Number.isNaN(fromMs) && createdMs < fromMs) {
+            return false;
+          }
+        }
+        if (filters.dateTo) {
+          const createdMs = Date.parse(g.createdAt);
+          const toMs = Date.parse(`${filters.dateTo}T23:59:59.999Z`);
+          if (!Number.isNaN(createdMs) && !Number.isNaN(toMs) && createdMs > toMs) {
+            return false;
+          }
+        }
+
+        return true;
+      })
+    : [...ghosts];
+
+  const sortBy = filters?.sortBy || 'newest';
+  const compareNewest = (a: QueuedGhostCardItem, b: QueuedGhostCardItem) => {
+    const ta = Date.parse(a.createdAt) || 0;
+    const tb = Date.parse(b.createdAt) || 0;
+    if (tb !== ta) return tb - ta;
+    if (b.batchId !== a.batchId) return b.batchId - a.batchId;
+    return b.itemIndex - a.itemIndex;
+  };
+
+  return filtered.sort((a, b) => {
+    switch (sortBy) {
+      case 'oldest':
+        return -compareNewest(a, b);
+      case 'checkpoint':
+        return (
+          (a.checkpointName || 'zzz').localeCompare(b.checkpointName || 'zzz') ||
+          compareNewest(a, b)
+        );
+      case 'filename':
+        return (a.prompt || '').localeCompare(b.prompt || '') || compareNewest(a, b);
+      case 'most_used_lora':
+        return b.loraCount - a.loraCount || compareNewest(a, b);
+      case 'newest':
+      default:
+        return compareNewest(a, b);
+    }
   });
 }

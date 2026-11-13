@@ -403,6 +403,7 @@ export interface QueuedGhostCardItem {
   checkpointName: string | null;
   workflowName: string | null;
   loraCount: number;
+  loraNames?: string[];
   characterId: number | null;
   characterName: string | null;
   outputImageId: number | null;
