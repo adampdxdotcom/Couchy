@@ -10,6 +10,7 @@ import {
 } from '../services/workflowCompilerService.ts';
 import {
   checkLmStudioStatus,
+  converseQuickGenPrompt,
   deleteLmStudioGuidingTemplate,
   generatePhotoSetPromptsWithAgent,
   interrogateImageToPrompt,
@@ -230,6 +231,28 @@ generationRouter.post('/lmstudio/generate-prompts', async (req, res) => {
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/generation/lmstudio/chat
+ * Interactive multi-turn Quick Gen Conversation mode via LM Studio.
+ */
+generationRouter.post('/lmstudio/chat', async (req, res) => {
+  try {
+    const { messages, characterName, characterDescription, loraNames } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'Please enter a message to start the conversation.' });
+    }
+    const result = await converseQuickGenPrompt({
+      messages,
+      characterName: characterName ? String(characterName) : undefined,
+      characterDescription: characterDescription ? String(characterDescription) : undefined,
+      loraNames: Array.isArray(loraNames) ? loraNames.map(String) : [],
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to converse with LM Studio.' });
   }
 });
 

@@ -3,9 +3,22 @@ import path from 'path';
 import crypto from 'crypto';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
-import type { LmStudioGuidingTemplate, LmStudioStatus } from '../../shared/types.ts';
+import type {
+  LmStudioGuidingTemplate,
+  LmStudioStatus,
+  QuickGenChatMessage,
+} from '../../shared/types.ts';
 import { interpolatePrompt } from '../../shared/utils.ts';
 import { interrogateImageBufferWithWd14 } from './visualTaggerService.ts';
+
+export const DEFAULT_CONVERSATION_SYSTEM_PROMPT = `You are an interactive photography director and text-to-image prompt collaborator.
+Help the user develop and refine their image idea through brief, natural conversation.
+
+Guidelines:
+1. Keep conversational replies concise (1-3 short sentences). If the user's idea is still vague, ask at most 1-2 focused questions about lighting, camera framing, setting, wardrobe, or mood.
+2. Whenever you have enough detail to suggest a strong image prompt—or whenever the user asks for one—include the ready-to-generate prompt wrapped in <proposed_prompt>...</proposed_prompt> tags alongside a brief conversational reply.
+3. Inside <proposed_prompt>, write a single cohesive, descriptive text-to-image paragraph detailing framing, pose, lighting, environment, wardrobe, and atmosphere.
+4. Refer to the subject neutrally (e.g., "the subject", "they", "a person") when a character is attached, and NEVER include character names or model/LoRA filenames (such as .safetensors).`;
 
 function mapGuidingRow(row: any): LmStudioGuidingTemplate {
   return {
@@ -110,6 +123,7 @@ export function getLmStudioSettings(): {
   baseUrl: string;
   selectedModel: string;
   systemPrompt: string;
+  conversationSystemPrompt: string;
 } {
   const row = db.prepare('SELECT * FROM lm_studio_settings WHERE id = 1').get() as any;
   if (!row) {
@@ -118,12 +132,15 @@ export function getLmStudioSettings(): {
       selectedModel: '',
       systemPrompt:
         'You are a creative photography director and Stable Diffusion / Flux prompt engineer.',
+      conversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
     };
   }
   return {
     baseUrl: row.base_url || appConfig.lmStudioUrl,
     selectedModel: row.selected_model || '',
     systemPrompt: row.system_prompt || '',
+    conversationSystemPrompt:
+      row.conversation_system_prompt?.trim() || DEFAULT_CONVERSATION_SYSTEM_PROMPT,
   };
 }
 
@@ -134,27 +151,34 @@ export function updateLmStudioSettings(payload: {
   baseUrl?: string;
   selectedModel?: string;
   systemPrompt?: string;
+  conversationSystemPrompt?: string;
 }): {
   baseUrl: string;
   selectedModel: string;
   systemPrompt: string;
+  conversationSystemPrompt: string;
 } {
   const current = getLmStudioSettings();
   const nextUrl = (payload.baseUrl ?? current.baseUrl).replace(/\/+$/, '');
   const nextModel = payload.selectedModel ?? current.selectedModel;
   const nextPrompt = payload.systemPrompt ?? current.systemPrompt;
+  const nextConversationPrompt =
+    payload.conversationSystemPrompt !== undefined
+      ? payload.conversationSystemPrompt.trim() || DEFAULT_CONVERSATION_SYSTEM_PROMPT
+      : current.conversationSystemPrompt;
 
   db.prepare(
     `UPDATE lm_studio_settings
-     SET base_url = ?, selected_model = ?, system_prompt = ?, updated_at = datetime('now')
+     SET base_url = ?, selected_model = ?, system_prompt = ?, conversation_system_prompt = ?, updated_at = datetime('now')
      WHERE id = 1`
-  ).run(nextUrl, nextModel, nextPrompt);
+  ).run(nextUrl, nextModel, nextPrompt, nextConversationPrompt);
 
   appConfig.lmStudioUrl = nextUrl;
   return {
     baseUrl: nextUrl,
     selectedModel: nextModel,
     systemPrompt: nextPrompt,
+    conversationSystemPrompt: nextConversationPrompt,
   };
 }
 
@@ -196,6 +220,8 @@ export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStu
       baseUrl,
       selectedModel,
       systemPrompt: settings.systemPrompt,
+      conversationSystemPrompt: settings.conversationSystemPrompt,
+      defaultConversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
       availableModels,
       guidingTemplates,
       error: null,
@@ -206,6 +232,8 @@ export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStu
       baseUrl,
       selectedModel: settings.selectedModel,
       systemPrompt: settings.systemPrompt,
+      conversationSystemPrompt: settings.conversationSystemPrompt,
+      defaultConversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
       availableModels: [],
       guidingTemplates,
       error: err?.message || 'LM Studio server unreachable at ' + baseUrl,
@@ -810,4 +838,129 @@ Rules:
     clearTimeout(timer);
   }
 }
+
+/**
+ * Interactive multi-turn Quick Gen Conversation handler via LM Studio /v1/chat/completions.
+ * Extracts any <proposed_prompt>...</proposed_prompt> block for one-click submission.
+ */
+export async function converseQuickGenPrompt(params: {
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  characterName?: string;
+  characterDescription?: string;
+  loraNames?: string[];
+}): Promise<{
+  reply: string;
+  proposedPrompt: string | null;
+  modelUsed: string;
+}> {
+  const status = await checkLmStudioStatus();
+  if (!status.online) {
+    throw new Error('LM Studio is offline. Start LM Studio to use Conversation mode.');
+  }
+
+  const settings = getLmStudioSettings();
+  const baseUrl = settings.baseUrl.replace(/\/+$/, '');
+  const chatEndpoint = baseUrl.endsWith('/v1')
+    ? `${baseUrl}/chat/completions`
+    : `${baseUrl}/v1/chat/completions`;
+  const modelToUse = status.selectedModel || settings.selectedModel || 'local-model';
+
+  const contextNotes: string[] = [];
+  if (params.characterName?.trim()) {
+    contextNotes.push(
+      `An active character LoRA is attached. Refer to the subject neutrally as "the subject" or "they" inside <proposed_prompt> and do NOT include the character's name or physical identity traits already baked into the LoRA.`
+    );
+  }
+  if (params.loraNames && params.loraNames.length > 0) {
+    const cleanLoraLabels = params.loraNames
+      .map((l) => l.replace(/\.(?:safetensors|ckpt|pt|bin)$/i, '').trim())
+      .filter(Boolean);
+    if (cleanLoraLabels.length > 0) {
+      contextNotes.push(
+        `Active style/helper LoRAs attached: ${cleanLoraLabels.join(', ')} (do NOT write LoRA filenames in the prompt).`
+      );
+    }
+  }
+  contextNotes.push(
+    `Always wrap any ready-to-generate image prompt inside <proposed_prompt>...</proposed_prompt> tags.`
+  );
+
+  const systemPrompt = `${settings.conversationSystemPrompt}\n\n${contextNotes.join('\n')}`.trim();
+
+  const apiMessages = [
+    { role: 'system', content: systemPrompt },
+    ...params.messages
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content?.trim())
+      .map((m) => ({
+        role: m.role,
+        content: m.content.trim(),
+      })),
+  ];
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 35000);
+  try {
+    const res = await fetch(chatEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: modelToUse,
+        messages: apiMessages,
+        temperature: 0.7,
+        max_tokens: 900,
+      }),
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`LM Studio returned HTTP ${res.status}: ${errText}`);
+    }
+
+    const data = (await res.json()) as any;
+    const rawContent: string = data?.choices?.[0]?.message?.content?.trim() || '';
+    const withoutThink = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+    let proposedPrompt: string | null = null;
+    let replyText = withoutThink;
+
+    // 1. Primary extraction: <proposed_prompt>...</proposed_prompt>
+    const tagMatch = withoutThink.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
+    if (tagMatch && tagMatch[1]?.trim()) {
+      proposedPrompt = sanitizeAgentPrompt(
+        tagMatch[1].replace(/^["']|["']$/g, '').trim(),
+        params.characterName
+      );
+      replyText = withoutThink
+        .replace(/<proposed_prompt>[\s\S]*?(?:<\/proposed_prompt>|$)/gi, '')
+        .trim();
+    } else {
+      // 2. Fallback: ```prompt ... ``` fenced block if model omitted XML tags
+      const fenceMatch = withoutThink.match(/```(?:prompt|text)?\s*([\s\S]{25,}?)```/i);
+      if (fenceMatch && fenceMatch[1]?.trim()) {
+        proposedPrompt = sanitizeAgentPrompt(
+          fenceMatch[1].replace(/^["']|["']$/g, '').trim(),
+          params.characterName
+        );
+        replyText = withoutThink.replace(fenceMatch[0], '').trim();
+      }
+    }
+
+    if (!replyText && proposedPrompt) {
+      replyText = 'Here is a prompt based on our conversation. You can submit it or keep chatting to refine it:';
+    } else if (!replyText) {
+      replyText = 'Could you share a bit more about the scene, lighting, or mood you have in mind?';
+    }
+
+    return {
+      reply: replyText,
+      proposedPrompt,
+      modelUsed: data?.model || modelToUse,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 

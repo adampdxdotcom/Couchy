@@ -399,11 +399,20 @@ export interface LmStudioGuidingTemplate {
   updatedAt: string;
 }
 
+export interface QuickGenChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  proposedPrompt?: string | null;
+}
+
 export interface LmStudioStatus {
   online: boolean;
   baseUrl: string;
   selectedModel: string;
   systemPrompt: string;
+  conversationSystemPrompt: string;
+  defaultConversationSystemPrompt?: string;
   availableModels: string[];
   guidingTemplates: LmStudioGuidingTemplate[];
   error: string | null;

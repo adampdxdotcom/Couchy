@@ -411,6 +411,7 @@ export const api = {
     baseUrl?: string;
     selectedModel?: string;
     systemPrompt?: string;
+    conversationSystemPrompt?: string;
   }) =>
     requestJson<LmStudioStatus>('/api/generation/lmstudio/config', {
       method: 'POST',
@@ -458,6 +459,21 @@ export const api = {
       sentUserPrompt: string;
       warning?: string;
     }>('/api/generation/lmstudio/generate-prompts', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  chatQuickGenPrompt: (payload: {
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+    characterName?: string;
+    characterDescription?: string;
+    loraNames?: string[];
+  }) =>
+    requestJson<{
+      reply: string;
+      proposedPrompt: string | null;
+      modelUsed: string;
+    }>('/api/generation/lmstudio/chat', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

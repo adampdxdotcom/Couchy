@@ -83,6 +83,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   const [lmStatus, setLmStatus] = useState<LmStudioStatus | null>(null);
   const [lmBaseUrl, setLmBaseUrl] = useState('http://localhost:1234/v1');
   const [lmSelectedModel, setLmSelectedModel] = useState('');
+  const [conversationSystemPrompt, setConversationSystemPrompt] = useState('');
   const [isTestingLm, setIsTestingLm] = useState(false);
 
   const [guidingTemplates, setGuidingTemplates] = useState<LmStudioGuidingTemplate[]>([]);
@@ -109,6 +110,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       setLmStatus(lmRes);
       setLmBaseUrl(lmRes.baseUrl || 'http://localhost:1234/v1');
       setLmSelectedModel(lmRes.selectedModel || lmRes.availableModels[0] || '');
+      setConversationSystemPrompt(lmRes.conversationSystemPrompt || '');
 
       const tpls = lmRes.guidingTemplates || [];
       setGuidingTemplates(tpls);
@@ -217,6 +219,34 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       setGuidingFeedback(`LM Studio test failed: ${err.message}`);
     } finally {
       setIsTestingLm(false);
+    }
+  };
+
+  const handleSaveConversationPrompt = async () => {
+    try {
+      const updated = await api.updateLmStudioConfig({
+        conversationSystemPrompt: conversationSystemPrompt.trim(),
+      });
+      setLmStatus(updated);
+      setConversationSystemPrompt(updated.conversationSystemPrompt);
+      setGuidingFeedback('Quick Gen Conversation System Prompt saved.');
+      setTimeout(() => setGuidingFeedback(null), 3000);
+    } catch (err: any) {
+      setGuidingFeedback(`Error saving conversation prompt: ${err.message}`);
+    }
+  };
+
+  const handleResetConversationPrompt = async () => {
+    try {
+      const updated = await api.updateLmStudioConfig({
+        conversationSystemPrompt: '',
+      });
+      setLmStatus(updated);
+      setConversationSystemPrompt(updated.conversationSystemPrompt);
+      setGuidingFeedback('Quick Gen Conversation System Prompt reset to default.');
+      setTimeout(() => setGuidingFeedback(null), 3000);
+    } catch (err: any) {
+      setGuidingFeedback(`Error resetting conversation prompt: ${err.message}`);
     }
   };
 
@@ -390,6 +420,10 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
         setLmSelectedModel={setLmSelectedModel}
         isTestingLm={isTestingLm}
         onTestLmStudio={handleTestLmStudio}
+        conversationSystemPrompt={conversationSystemPrompt}
+        setConversationSystemPrompt={setConversationSystemPrompt}
+        onSaveConversationPrompt={handleSaveConversationPrompt}
+        onResetConversationPrompt={handleResetConversationPrompt}
         guidingTemplates={guidingTemplates}
         selectedGuidingId={selectedGuidingId}
         onSelectGuidingTemplate={handleSelectGuidingTemplate}

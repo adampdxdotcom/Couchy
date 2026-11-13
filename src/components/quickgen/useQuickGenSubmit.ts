@@ -4,6 +4,7 @@ import type {
   CharacterProfile,
   GenerationLoraSelection,
   LoraExplorerItem,
+  QuickGenChatMessage,
   WorkflowLibraryItem,
 } from '../../shared/types.ts';
 import { resolveClosestAspectRatio, resolveDefaultWorkflow } from '../../shared/utils.ts';
@@ -28,7 +29,7 @@ interface UseQuickGenSubmitParams {
 
 /**
  * Manages Quick Gen form state, workflow default syncing, reuse prefill hydration,
- * image interrogation, attachment removal, and batch submission.
+ * image interrogation, attachment removal, Agent Conversation turns, and batch submission.
  */
 export function useQuickGenSubmit({
   loras,
@@ -41,6 +42,10 @@ export function useQuickGenSubmit({
 }: UseQuickGenSubmitParams) {
   const [prompt, setPrompt] = useState('');
   const [agentEnabled, setAgentEnabled] = useState(false);
+  const [conversationEnabled, setConversationEnabled] = useState(false);
+  const [chatMessages, setChatMessages] = useState<QuickGenChatMessage[]>([]);
+  const [isChatting, setIsChatting] = useState(false);
+
   const [aspectRatio, setAspectRatio] = useState('2:3 (Portrait Photo)');
   const [megapixels, setMegapixels] = useState<number>(3.0);
   const [batchCount, setBatchCount] = useState<number>(1);
@@ -65,12 +70,20 @@ export function useQuickGenSubmit({
     };
   }, []);
 
-  // Auto-disable agent mode if LM Studio goes offline
+  // Auto-disable agent and conversation mode if LM Studio goes offline
   useEffect(() => {
-    if (!lmStudioOnline && agentEnabled) {
-      setAgentEnabled(false);
+    if (!lmStudioOnline) {
+      if (agentEnabled) setAgentEnabled(false);
+      if (conversationEnabled) setConversationEnabled(false);
     }
-  }, [lmStudioOnline, agentEnabled]);
+  }, [lmStudioOnline, agentEnabled, conversationEnabled]);
+
+  // Turn off conversation mode if Agent is turned off
+  useEffect(() => {
+    if (!agentEnabled && conversationEnabled) {
+      setConversationEnabled(false);
+    }
+  }, [agentEnabled, conversationEnabled]);
 
   const pulseHighlight = (durationMs = 1400) => {
     if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
@@ -110,6 +123,40 @@ export function useQuickGenSubmit({
   useEffect(() => {
     setAspectRatio(workflowDefaultAr);
   }, [resolvedWorkflow?.id, workflowDefaultAr]);
+
+  // Build active LoRAs and trigger word from current character + attached LoRAs
+  const resolveActiveLoraStack = () => {
+    const activeCharLoraRecords = attachedCharacter
+      ? attachedCharacter.loras.filter((l) => !removedLoraKeys.has(normalizeLoraKey(l.loraName)))
+      : [];
+
+    const charLoras: GenerationLoraSelection[] = activeCharLoraRecords.map((l) => {
+      const matchingAttached = attachedLoras.find(
+        (al) => normalizeLoraKey(al.loraName) === normalizeLoraKey(l.loraName)
+      );
+      return {
+        loraName: l.loraName,
+        modelStrength: matchingAttached ? matchingAttached.modelStrength : 1.0,
+        clipStrength: matchingAttached ? matchingAttached.clipStrength : 1.0,
+        triggerWord: l.triggerWord || '',
+        appearanceLabel: l.appearanceLabel || '',
+      };
+    });
+
+    const selectedLoras: GenerationLoraSelection[] = [...charLoras];
+    for (const al of attachedLoras) {
+      const alKey = normalizeLoraKey(al.loraName);
+      if (removedLoraKeys.has(alKey)) continue;
+      if (!selectedLoras.some((sl) => normalizeLoraKey(sl.loraName) === alKey)) {
+        selectedLoras.push(al);
+      }
+    }
+
+    const triggerWord =
+      activeCharLoraRecords.find((l) => l.triggerWord?.trim())?.triggerWord?.trim() || '';
+
+    return { selectedLoras, triggerWord };
+  };
 
   // Handle incoming reuse / prefill requests once per unique timestamp
   useEffect(() => {
@@ -230,8 +277,52 @@ export function useQuickGenSubmit({
     });
   };
 
-  const handleSubmit = async (onAfterReset?: () => void) => {
-    const cleanPrompt = prompt.trim();
+  /** Sends a conversational turn to LM Studio when Conversation mode is active. */
+  const handleSendChatTurn = async () => {
+    const cleanInput = prompt.trim();
+    if (!cleanInput || isChatting || isSubmitting) return;
+
+    const userMsg: QuickGenChatMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: cleanInput,
+    };
+    const nextHistory = [...chatMessages, userMsg];
+    setChatMessages(nextHistory);
+    setPrompt('');
+    setIsChatting(true);
+
+    try {
+      const { selectedLoras } = resolveActiveLoraStack();
+      const res = await api.chatQuickGenPrompt({
+        messages: nextHistory.map((m) => ({ role: m.role, content: m.content })),
+        characterName: attachedCharacter?.name || undefined,
+        characterDescription: attachedCharacter?.description || undefined,
+        loraNames: selectedLoras.map((l) => l.loraName),
+      });
+
+      const assistantMsg: QuickGenChatMessage = {
+        id: `assistant-${Date.now()}`,
+        role: 'assistant',
+        content: res.reply,
+        proposedPrompt: res.proposedPrompt,
+      };
+      setChatMessages((prev) => [...prev, assistantMsg]);
+      focusInputAtEnd(30, false);
+    } catch (err: any) {
+      onPushToast(err?.message || 'Failed to converse with LM Studio.', 'error');
+    } finally {
+      setIsChatting(false);
+    }
+  };
+
+  /** Dispatches a generation batch to ComfyUI and resets the Quick Gen dock back to defaults. */
+  const dispatchBatchToComfy = async (
+    rawPromptText: string,
+    expandWithAgentSet: boolean,
+    onAfterReset?: () => void
+  ) => {
+    const cleanPrompt = rawPromptText.trim();
     if (!cleanPrompt || isSubmitting) return;
 
     if (!resolvedWorkflow) {
@@ -241,37 +332,10 @@ export function useQuickGenSubmit({
 
     setIsSubmitting(true);
     try {
-      const activeCharLoraRecords = attachedCharacter
-        ? attachedCharacter.loras.filter((l) => !removedLoraKeys.has(normalizeLoraKey(l.loraName)))
-        : [];
-
-      const charLoras: GenerationLoraSelection[] = activeCharLoraRecords.map((l) => {
-        const matchingAttached = attachedLoras.find(
-          (al) => normalizeLoraKey(al.loraName) === normalizeLoraKey(l.loraName)
-        );
-        return {
-          loraName: l.loraName,
-          modelStrength: matchingAttached ? matchingAttached.modelStrength : 1.0,
-          clipStrength: matchingAttached ? matchingAttached.clipStrength : 1.0,
-          triggerWord: l.triggerWord || '',
-          appearanceLabel: l.appearanceLabel || '',
-        };
-      });
-
-      const selectedLoras: GenerationLoraSelection[] = [...charLoras];
-      for (const al of attachedLoras) {
-        const alKey = normalizeLoraKey(al.loraName);
-        if (removedLoraKeys.has(alKey)) continue;
-        if (!selectedLoras.some((sl) => normalizeLoraKey(sl.loraName) === alKey)) {
-          selectedLoras.push(al);
-        }
-      }
-
-      const triggerWord =
-        activeCharLoraRecords.find((l) => l.triggerWord?.trim())?.triggerWord?.trim() || '';
+      const { selectedLoras, triggerWord } = resolveActiveLoraStack();
 
       let promptsToRun: string[] = [];
-      if (agentEnabled) {
+      if (expandWithAgentSet) {
         const agentRes = await api.generateSetPromptsWithAgent({
           characterName: attachedCharacter?.name || '',
           characterDescription: attachedCharacter?.description || '',
@@ -291,7 +355,7 @@ export function useQuickGenSubmit({
       const res = await api.submitGenerationBatch({
         characterId: attachedCharacter?.id || null,
         workflowId: resolvedWorkflow.id,
-        mode: agentEnabled ? 'theme_set' : 'single',
+        mode: expandWithAgentSet ? 'theme_set' : 'single',
         themeTitle: cleanPrompt.slice(0, 80),
         aspectRatio,
         megapixels,
@@ -320,11 +384,14 @@ export function useQuickGenSubmit({
         );
       }
 
+      // Reset Quick Gen box & conversation back to default state
       setPrompt('');
+      setChatMessages([]);
+      setConversationEnabled(false);
+      setAgentEnabled(false);
       setAttachedCharacter(null);
       setAttachedLoras([]);
       setRemovedLoraKeys(new Set());
-      setAgentEnabled(false);
       setAspectRatio(workflowDefaultAr);
       setMegapixels(workflowDefaultMp);
       setBatchCount(1);
@@ -340,11 +407,33 @@ export function useQuickGenSubmit({
     }
   };
 
+  /** Primary Enter / Arrow button handler: chats if in Conversation mode, otherwise dispatches batch. */
+  const handleSubmit = async (onAfterReset?: () => void) => {
+    if (conversationEnabled) {
+      await handleSendChatTurn();
+      return;
+    }
+    await dispatchBatchToComfy(prompt, agentEnabled, onAfterReset);
+  };
+
+  /** Submits a proposed prompt from Conversation mode and resets the Quick Gen dock. */
+  const handleSubmitProposedPrompt = async (
+    proposedPromptText: string,
+    onAfterReset?: () => void
+  ) => {
+    await dispatchBatchToComfy(proposedPromptText, false, onAfterReset);
+  };
+
   return {
     prompt,
     setPrompt,
     agentEnabled,
     setAgentEnabled,
+    conversationEnabled,
+    setConversationEnabled,
+    chatMessages,
+    setChatMessages,
+    isChatting,
     aspectRatio,
     setAspectRatio,
     megapixels,
@@ -370,5 +459,6 @@ export function useQuickGenSubmit({
     handleRemoveCharacter,
     handleRemoveLora,
     handleSubmit,
+    handleSubmitProposedPrompt,
   };
 }

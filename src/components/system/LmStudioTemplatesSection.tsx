@@ -1,8 +1,10 @@
 import React from 'react';
 import {
   Bot,
+  MessageSquare,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   Trash2,
 } from 'lucide-react';
@@ -19,6 +21,10 @@ interface LmStudioTemplatesSectionProps {
   setLmSelectedModel: (val: string) => void;
   isTestingLm: boolean;
   onTestLmStudio: () => Promise<void>;
+  conversationSystemPrompt: string;
+  setConversationSystemPrompt: (val: string) => void;
+  onSaveConversationPrompt: () => Promise<void>;
+  onResetConversationPrompt: () => Promise<void>;
   guidingTemplates: LmStudioGuidingTemplate[];
   selectedGuidingId: number | null;
   onSelectGuidingTemplate: (id: number) => void;
@@ -43,6 +49,10 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
   setLmSelectedModel,
   isTestingLm,
   onTestLmStudio,
+  conversationSystemPrompt,
+  setConversationSystemPrompt,
+  onSaveConversationPrompt,
+  onResetConversationPrompt,
   guidingTemplates,
   selectedGuidingId,
   onSelectGuidingTemplate,
@@ -68,7 +78,7 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
               LM Studio Agent &amp; Guiding Prompt Templates (Database)
             </h2>
             <p className="text-zinc-400">
-              Configure your local LM Studio endpoint and manage the saved System &amp; User Guiding Prompts used when generating multi-image photo sets on a theme.
+              Configure your local LM Studio endpoint, Quick Gen Conversation prompt, and saved Guiding Prompt Templates for themed photo sets.
             </p>
           </div>
         </div>
@@ -135,6 +145,56 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
               className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-zinc-100"
             />
           )}
+        </div>
+      </div>
+
+      {/* Quick Gen Conversation Mode Guiding Prompt */}
+      <div className="pt-3 border-t border-zinc-800/80 space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
+            <label className="font-medium text-zinc-200">
+              Quick Gen Conversation System Prompt
+            </label>
+          </div>
+          <span className="text-[11px] text-zinc-400 font-mono">
+            Used when Agent &rarr; Conversation is active in Quick Gen
+          </span>
+        </div>
+
+        <textarea
+          rows={6}
+          value={conversationSystemPrompt}
+          onChange={(e) => setConversationSystemPrompt(e.target.value)}
+          className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 font-mono text-xs focus:outline-none focus:border-indigo-500"
+        />
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-[11px] text-zinc-400">
+            Keep{' '}
+            <code className="text-zinc-200">&lt;proposed_prompt&gt;...&lt;/proposed_prompt&gt;</code>{' '}
+            in the instructions so the Quick Gen conversation knows when to render a one-click{' '}
+            <span className="text-zinc-200 font-medium">Submit</span> button.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onResetConversationPrompt}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium rounded-lg cursor-pointer"
+              title="Reset Conversation System Prompt to factory default"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset Default</span>
+            </button>
+            <button
+              type="button"
+              onClick={onSaveConversationPrompt}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>Save Conversation Prompt</span>
+            </button>
+          </div>
         </div>
       </div>
 

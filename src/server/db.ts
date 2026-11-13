@@ -529,6 +529,13 @@ export function runMigrations(): void {
         ALTER TABLE generation_batches ADD COLUMN lora_count INTEGER NOT NULL DEFAULT 0;
       `,
     },
+    {
+      version: 10,
+      name: 'lm_studio_conversation_system_prompt',
+      sql: `
+        ALTER TABLE lm_studio_settings ADD COLUMN conversation_system_prompt TEXT NOT NULL DEFAULT '';
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');
@@ -574,20 +581,36 @@ export function runMigrations(): void {
     );
   }
 
+  const defaultConversationPrompt = `You are an interactive photography director and text-to-image prompt collaborator.
+Help the user develop and refine their image idea through brief, natural conversation.
+
+Guidelines:
+1. Keep conversational replies concise (1-3 short sentences). If the user's idea is still vague, ask at most 1-2 focused questions about lighting, camera framing, setting, wardrobe, or mood.
+2. Whenever you have enough detail to suggest a strong image prompt—or whenever the user asks for one—include the ready-to-generate prompt wrapped in <proposed_prompt>...</proposed_prompt> tags alongside a brief conversational reply.
+3. Inside <proposed_prompt>, write a single cohesive, descriptive text-to-image paragraph detailing framing, pose, lighting, environment, wardrobe, and atmosphere.
+4. Refer to the subject neutrally (e.g., "the subject", "they", "a person") when a character is attached, and NEVER include character names or model/LoRA filenames (such as .safetensors).`;
+
   // Seed default LM Studio settings if row 1 does not exist
-  const existingLm = db.prepare('SELECT id FROM lm_studio_settings WHERE id = 1').get();
+  const existingLm = db
+    .prepare('SELECT id, conversation_system_prompt FROM lm_studio_settings WHERE id = 1')
+    .get() as { id: number; conversation_system_prompt?: string } | undefined;
   if (!existingLm) {
     db.prepare(`
-      INSERT INTO lm_studio_settings (id, base_url, selected_model, system_prompt)
-      VALUES (1, ?, '', ?)
+      INSERT INTO lm_studio_settings (id, base_url, selected_model, system_prompt, conversation_system_prompt)
+      VALUES (1, ?, '', ?, ?)
     `).run(
       appConfig.lmStudioUrl,
       `You are a creative photography director and Stable Diffusion / Flux prompt engineer.
 Given a Photo Set Theme and Base Scene Style, generate an array of distinct, cohesive image generation prompts for a full photo set.
 Refer to the subject neutrally (e.g. "they", "them", "the subject", "a person") without including specific character names or LoRA/model filenames.
 Vary the camera framing (close-up portrait, medium candid, wide environmental shot, over-the-shoulder, dynamic angle), poses, lighting nuances, and micro-actions within the theme.
-Return ONLY a JSON array of prompt strings.`
+Return ONLY a JSON array of prompt strings.`,
+      defaultConversationPrompt
     );
+  } else if (!existingLm.conversation_system_prompt || !existingLm.conversation_system_prompt.trim()) {
+    db.prepare(
+      'UPDATE lm_studio_settings SET conversation_system_prompt = ? WHERE id = 1'
+    ).run(defaultConversationPrompt);
   }
 
   // Seed multiple saved LM Studio Guiding Prompt Templates if none exist
