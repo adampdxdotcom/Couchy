@@ -743,7 +743,6 @@ export default function App() {
           workflows={workflows}
           prefillPayload={quickGenPrefill}
           onRefreshAll={refreshAll}
-          onOpenGenerationTab={() => setActiveTab('generation')}
           onPushToast={pushToast}
           lmStudioOnline={lmStudioStatus.online}
         />
