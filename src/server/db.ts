@@ -1,5 +1,12 @@
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import { appConfig } from './config.ts';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PRIMARY_WORKFLOW_PATH = path.resolve(__dirname, './workflows/primary_workflow.json');
 
 /**
  * Initialize SQLite database in WAL mode with foreign keys enabled
@@ -671,307 +678,18 @@ Rules:
     // ignore if table doesn't have matching rows
   }
 
-  // Ensure the Krea2_turbo Base Default Workflow exists and is mapped
-  const krea2TurboApiWorkflow = {
-    '29': {
-      inputs: {
-        filename_prefix: 'Krea2_turbo',
-        images: ['30_8', 0],
-      },
-      class_type: 'SaveImage',
-      _meta: {
-        title: 'Save Image',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '49': {
-      inputs: {
-        aspect_ratio: '2:3 (Portrait Photo)',
-        megapixels: 3,
-        multiple: 8,
-      },
-      class_type: 'ResolutionSelector',
-      _meta: {
-        title: 'Resolution Selector',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '50': {
-      inputs: {
-        PowerLoraLoaderHeaderWidget: {
-          type: 'PowerLoraLoaderHeaderWidget',
-        },
-        '➕ Add Lora': '',
-        model: ['30_10', 0],
-        clip: ['30_11', 0],
-      },
-      class_type: 'Power Lora Loader (rgthree)',
-      _meta: {
-        title: 'Power Lora Loader (rgthree)',
-        cnr_id: 'rgthree-comfy',
-        ver: '1.0.0',
-      },
-    },
-    '30_11': {
-      inputs: {
-        clip_name: 'qwen3vl_4b_fp8_scaled.safetensors',
-        type: 'krea2',
-        device: 'default',
-      },
-      class_type: 'CLIPLoader',
-      _meta: {
-        title: 'Load CLIP',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_12': {
-      inputs: {
-        vae_name: 'qwen_image_vae.safetensors',
-      },
-      class_type: 'VAELoader',
-      _meta: {
-        title: 'Load VAE',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_18': {
-      inputs: {
-        value:
-          'You are an expert prompt engineer for text-to-image models. Your task is to expand the user\'s prompt into a highly effective image-generation prompt.\n\nThink step by step about the request before writing the answer:\n- What is the subject and mood?\n- What visual styles, mediums, and lighting options would fit? Consider two or three alternatives and pick the one that best serves the caption.\n- What composition, framing, and grounded details will help the text-to-image model?\n\nThen output a single expanded prompt paragraph.\n\nFollow these rules strictly:\n1. **Faithfulness First:** Preserve all original subjects, actions, colors, and spatial relationships. Do not add new objects, props, characters, or animals unless the user clearly implies them.\n2. **Practical T2I Structure:** Write a prompt that a text-to-image model can parse cleanly. Group subjects with their own attributes and actions. Use grounded phrasing for poses, interactions, and spatial layout.\n3. **Style Planning Stays Internal:** Use your internal reasoning to choose style, medium, framing, and lighting. Do not emit planning tags or wrappers in the visible answer body.\n4. **Text Rendering:** If the user requests visible text, quotes, labels, or typography, specify the exact text clearly and wrap requested words in quotes.\n5. **Avoid Over-Specification:** Do not invent highly specific clothing, colors, materials, or scene details unless the input supports them.\n6. **Structure:** Write one cohesive paragraph after the thinking block. No bullets, JSON, or markdown.\n7. **Respect Existing Detail:** If the user\'s prompt is already detailed, lightly polish and finalize rather than heavily expanding — preserve their phrasing and direction.\n8. **Respect the Human Form:** Treat depictions of people with dignity. Assume clothing covers genitals and intimate anatomy.\n9. **Preserve User Medium:** When the user explicitly requests a medium (e.g. "photo of", "photograph of", "illustration of", "painting of", "sketch of", "3D render of"), honor it. Do not pivot to a different medium to avoid difficulty — match the user\'s stated intent.\n\nUser\'s Input:\n\n',
-      },
-      class_type: 'PrimitiveStringMultiline',
-      _meta: {
-        title: 'Text String (System Prompt)',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_19': {
-      inputs: {
-        value: 'Your example prompt.',
-      },
-      class_type: 'PrimitiveStringMultiline',
-      _meta: {
-        title: 'Text String (User Prompt)',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_23': {
-      inputs: {
-        value: true,
-      },
-      class_type: 'PrimitiveBoolean',
-      _meta: {
-        title: 'Boolean (Enable LoRA?)',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_24': {
-      inputs: {
-        value: false,
-      },
-      class_type: 'PrimitiveBoolean',
-      _meta: {
-        title: 'Boolean (Refine Prompt?)',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_10': {
-      inputs: {
-        unet_name: 'lustifyNSFWCheckpoint_v10Krea2.safetensors',
-        weight_dtype: 'default',
-      },
-      class_type: 'UNETLoader',
-      _meta: {
-        title: 'Load Diffusion Model',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_5': {
-      inputs: {
-        width: ['49', 0],
-        height: ['49', 1],
-        batch_size: 1,
-      },
-      class_type: 'EmptyLatentImage',
-      _meta: {
-        title: 'Empty Latent Image',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_17': {
-      inputs: {
-        string_a: ['30_18', 0],
-        string_b: ['30_19', 0],
-        delimiter: '',
-      },
-      class_type: 'StringConcatenate',
-      _meta: {
-        title: 'Concatenate Text',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_16': {
-      inputs: {
-        prompt: ['30_17', 0],
-        max_length: 512,
-        sampling_mode: 'on',
-        'sampling_mode.temperature': 0.7,
-        'sampling_mode.top_k': 64,
-        'sampling_mode.top_p': 0.95,
-        'sampling_mode.min_p': 0.05,
-        'sampling_mode.repetition_penalty': 1.05,
-        'sampling_mode.seed': 0,
-        'sampling_mode.presence_penalty': 0,
-        thinking: false,
-        use_default_template: true,
-        mtp: 'auto',
-        clip: ['30_11', 0],
-      },
-      class_type: 'TextGenerate',
-      _meta: {
-        title: 'Generate Text',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_22': {
-      inputs: {
-        switch: ['30_23', 0],
-        on_false: ['30_10', 0],
-        on_true: ['50', 0],
-      },
-      class_type: 'ComfySwitchNode',
-      _meta: {
-        title: 'Switch (Model)',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_21': {
-      inputs: {
-        switch: ['30_24', 0],
-        on_false: ['30_19', 0],
-        on_true: ['30_16', 0],
-      },
-      class_type: 'ComfySwitchNode',
-      _meta: {
-        title: 'If/Else Switch',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_20': {
-      inputs: {
-        source: ['30_21', 0],
-      },
-      class_type: 'PreviewAny',
-      _meta: {
-        title: 'Preview as Text',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_27': {
-      inputs: {
-        string_a: ['30_20', 0],
-        string_b: 'xmelx',
-        delimiter: ', ',
-      },
-      class_type: 'StringConcatenate',
-      _meta: {
-        title: 'Concatenate Text (LoRA Trigger Word)',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_28': {
-      inputs: {
-        switch: ['30_23', 0],
-        on_false: ['30_20', 0],
-        on_true: ['30_27', 0],
-      },
-      class_type: 'ComfySwitchNode',
-      _meta: {
-        title: 'If/Else Switch',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_6': {
-      inputs: {
-        text: ['30_28', 0],
-        clip: ['50', 1],
-      },
-      class_type: 'CLIPTextEncode',
-      _meta: {
-        title: 'CLIP Text Encode (Prompt)',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_13': {
-      inputs: {
-        conditioning: ['30_6', 0],
-      },
-      class_type: 'ConditioningZeroOut',
-      _meta: {
-        title: 'Conditioning Zero Out',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_3': {
-      inputs: {
-        seed: 316273020560949,
-        steps: 8,
-        cfg: 1,
-        sampler_name: 'euler',
-        scheduler: 'simple',
-        denoise: 1,
-        model: ['30_22', 0],
-        positive: ['30_6', 0],
-        negative: ['30_13', 0],
-        latent_image: ['30_5', 0],
-      },
-      class_type: 'KSampler',
-      _meta: {
-        title: 'KSampler',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-    '30_8': {
-      inputs: {
-        samples: ['30_3', 0],
-        vae: ['30_12', 0],
-      },
-      class_type: 'VAEDecode',
-      _meta: {
-        title: 'VAE Decode',
-        cnr_id: 'comfy-core',
-        ver: '0.43.0',
-      },
-    },
-  };
+  // Load primary Krea2_turbo workflow directly from src/server/workflows/primary_workflow.json
+  const krea2TurboApiWorkflow: Record<string, any> = JSON.parse(
+    fs.readFileSync(PRIMARY_WORKFLOW_PATH, 'utf-8')
+  );
 
-  // Replace old placeholder default workflow if present or insert Krea2_turbo as primary default workflow
+  // Replace old placeholder default workflow if present or insert/upgrade Krea2_turbo primary workflow
   const legacyDefault = db
     .prepare("SELECT id FROM workflows WHERE workflow_hash = 'default-couchy-character-lora-workflow'")
     .get() as { id: number } | undefined;
   const kreaDefault = db
-    .prepare("SELECT id FROM workflows WHERE workflow_hash = 'default-krea2-turbo-workflow'")
-    .get() as { id: number } | undefined;
+    .prepare("SELECT id, api_workflow_json FROM workflows WHERE workflow_hash = 'default-krea2-turbo-workflow'")
+    .get() as { id: number; api_workflow_json?: string } | undefined;
 
   let kreaWorkflowId: number | null = kreaDefault?.id ?? null;
 
@@ -982,7 +700,7 @@ Rules:
       WHERE id = ?
     `).run(
       'Krea2_turbo Studio Workflow (Default)',
-      'Base default Krea2_turbo workflow with Power Lora Loader (rgthree), Trigger Word StringConcatenate (#30_27), PrimitiveStringMultiline Prompt (#30_19), ResolutionSelector (#49), UNETLoader (#30_10), and KSampler (#30_3).',
+      'Primary Krea2_turbo workflow with conditional inline 4x-ESRGAN upscaling (>3.0 MP via Switch #51 & Scale #52), Power Lora Loader (#50), ResolutionSelector (#49), and KSampler (#30_3).',
       JSON.stringify(krea2TurboApiWorkflow, null, 2),
       legacyDefault.id
     );
@@ -993,10 +711,40 @@ Rules:
       VALUES (?, ?, 1, ?, 'default-krea2-turbo-workflow')
     `).run(
       'Krea2_turbo Studio Workflow (Default)',
-      'Base default Krea2_turbo workflow with Power Lora Loader (rgthree), Trigger Word StringConcatenate (#30_27), PrimitiveStringMultiline Prompt (#30_19), ResolutionSelector (#49), UNETLoader (#30_10), and KSampler (#30_3).',
+      'Primary Krea2_turbo workflow with conditional inline 4x-ESRGAN upscaling (>3.0 MP via Switch #51 & Scale #52), Power Lora Loader (#50), ResolutionSelector (#49), and KSampler (#30_3).',
       JSON.stringify(krea2TurboApiWorkflow, null, 2)
     );
     kreaWorkflowId = Number(info.lastInsertRowid);
+  } else if (kreaDefault.api_workflow_json) {
+    // Upgrade older default-krea2-turbo-workflow DB rows that predate inline upscale nodes #51-#54
+    try {
+      const currentGraph = JSON.parse(kreaDefault.api_workflow_json) as Record<string, any>;
+      if (!currentGraph['51'] || currentGraph['51']?.class_type !== 'ComfySwitchNode') {
+        const upgradedGraph = JSON.parse(JSON.stringify(krea2TurboApiWorkflow)) as Record<string, any>;
+        if (currentGraph['49']?.inputs && upgradedGraph['49']?.inputs) {
+          if (currentGraph['49'].inputs.aspect_ratio) {
+            upgradedGraph['49'].inputs.aspect_ratio = currentGraph['49'].inputs.aspect_ratio;
+          }
+          if (typeof currentGraph['49'].inputs.megapixels === 'number') {
+            upgradedGraph['49'].inputs.megapixels = currentGraph['49'].inputs.megapixels;
+          }
+        }
+        if (currentGraph['30_10']?.inputs?.unet_name && upgradedGraph['30_10']?.inputs) {
+          upgradedGraph['30_10'].inputs.unet_name = currentGraph['30_10'].inputs.unet_name;
+        }
+        db.prepare(`
+          UPDATE workflows
+          SET description = ?, api_workflow_json = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(
+          'Primary Krea2_turbo workflow with conditional inline 4x-ESRGAN upscaling (>3.0 MP via Switch #51 & Scale #52), Power Lora Loader (#50), ResolutionSelector (#49), and KSampler (#30_3).',
+          JSON.stringify(upgradedGraph, null, 2),
+          kreaDefault.id
+        );
+      }
+    } catch {
+      // ignore parse failures
+    }
   }
 
   if (kreaWorkflowId) {
@@ -1021,12 +769,14 @@ Rules:
     }
   }
 
-  // Ensure any existing default workflow record has lustifyNSFWCheckpoint_v10Krea2.safetensors in Node 30_10
+  // Ensure any existing default workflow record has a valid diffusion model in Node 30_10
   const defaultWf = db
     .prepare(
       "SELECT id, api_workflow_json FROM workflows WHERE workflow_hash = 'default-krea2-turbo-workflow' OR id = 1 LIMIT 1"
     )
     .get() as { id: number; api_workflow_json: string } | undefined;
+  const fallbackUnet =
+    krea2TurboApiWorkflow['30_10']?.inputs?.unet_name || 'krea_muse_INT8-ConvRot.safetensors';
   if (defaultWf?.api_workflow_json) {
     try {
       const parsed = JSON.parse(defaultWf.api_workflow_json);
@@ -1034,7 +784,7 @@ Rules:
         parsed['30_10']?.inputs &&
         (!parsed['30_10'].inputs.unet_name || !parsed['30_10'].inputs.unet_name.trim())
       ) {
-        parsed['30_10'].inputs.unet_name = 'lustifyNSFWCheckpoint_v10Krea2.safetensors';
+        parsed['30_10'].inputs.unet_name = fallbackUnet;
         db.prepare('UPDATE workflows SET api_workflow_json = ? WHERE id = ?').run(
           JSON.stringify(parsed, null, 2),
           defaultWf.id
@@ -1054,12 +804,13 @@ Rules:
     db.prepare('UPDATE workflows SET is_default = 1 WHERE id = ?').run(targetDefaultId);
   }
 
-  // Ensure default model is registered in models table
+  // Ensure primary default diffusion model is registered in models table
+  const unetStem = fallbackUnet.replace(/\.(safetensors|ckpt|pt|bin)$/i, '');
   db.prepare(`
     INSERT INTO models (name, filename, model_type, is_installed, source_type)
-    VALUES ('lustifyNSFWCheckpoint_v10Krea2', 'lustifyNSFWCheckpoint_v10Krea2.safetensors', 'diffusion', 1, 'workflow_default')
+    VALUES (?, ?, 'diffusion', 1, 'workflow_default')
     ON CONFLICT(filename) DO UPDATE SET model_type = 'diffusion', is_installed = 1
-  `).run();
+  `).run(unetStem, fallbackUnet);
 }
 
 

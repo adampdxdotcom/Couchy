@@ -7,6 +7,7 @@ import {
   compileUpscaleWorkflow,
   compileWorkflowForGeneration,
   computeDimensionsFromMegapixels,
+  findInlineUpscaleNodes,
   getWorkflowMapping,
   saveWorkflowMapping,
 } from '../services/workflowMapperService.ts';
@@ -572,15 +573,9 @@ generationRouter.post('/submit-batch', async (req, res) => {
       0.5,
       Math.min(10.0, explicitMp ?? wfDefaultMp ?? 3.0)
     );
-    // Base workflow runs natively up to 3.0 MP; targets above 3.0 MP render base at 3.0 MP before upscaling
-    const baseWorkflowMp = Math.min(3.0, resolvedMp);
     const { width: computedWidth, height: computedHeight } = computeDimensionsFromMegapixels(
       resolvedAr,
       resolvedMp
-    );
-    const { width: baseWidth, height: baseHeight } = computeDimensionsFromMegapixels(
-      resolvedAr,
-      baseWorkflowMp
     );
     const loraSelections: GenerationLoraSelection[] = Array.isArray(loras) ? loras : [];
     const activeLorasCount = loraSelections.filter((l) => Boolean(l.loraName?.trim())).length;
@@ -655,12 +650,13 @@ generationRouter.post('/submit-batch', async (req, res) => {
             negativePrompt: (negativePrompt || '').trim(),
             seed: item.seed,
             aspectRatio: resolvedAr,
-            megapixels: baseWorkflowMp,
-            width: baseWidth,
-            height: baseHeight,
+            megapixels: resolvedMp,
+            width: computedWidth,
+            height: computedHeight,
             loras: loraSelections,
             checkpointName: checkpointName || undefined,
           });
+          const hasInlineUpscale = Boolean(findInlineUpscaleNodes(apiPayload));
 
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 8000);
@@ -689,12 +685,13 @@ generationRouter.post('/submit-batch', async (req, res) => {
              WHERE id = ?`
           ).run(promptId, item.itemId);
 
+          // Primary workflow handles >3MP inline via Switch #51; only fall back to two-pass upscale if absent
           pollGenerationItem(
             item.itemId,
             promptId,
             characterId ? Number(characterId) : null,
             0,
-            resolvedMp > 3.0 ? resolvedMp : undefined
+            resolvedMp > 3.0 && !hasInlineUpscale ? resolvedMp : undefined
           );
         } catch (err: any) {
           db.prepare(

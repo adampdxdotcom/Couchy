@@ -91,7 +91,7 @@
   },
   "13": {
     "inputs": {
-      "upscale_method": "nearest-exact",
+      "upscale_method": "lanczos",
       "megapixels": 3,
       "resolution_steps": 1,
       "image": [

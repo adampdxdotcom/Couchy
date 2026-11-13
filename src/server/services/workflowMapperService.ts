@@ -12,6 +12,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const UPSCALE_WORKFLOW_PATH = path.resolve(__dirname, '../workflows/upscale_workflow.json');
+const PRIMARY_WORKFLOW_PATH = path.resolve(__dirname, '../workflows/primary_workflow.json');
 
 /**
  * Computes pixel width & height (multiples of 64) from an aspect ratio string (e.g. "2:3 (Portrait Photo)") and megapixels (0.1 - 10.0).
@@ -41,9 +42,23 @@ export function computeDimensionsFromMegapixels(
 
 /**
  * Resolves the executable API workflow JSON object for a given workflow row.
+ * For the built-in primary workflow, reads src/server/workflows/primary_workflow.json live.
  */
 export function getExecutableApiGraph(workflowRow: any): Record<string, any> | null {
   if (!workflowRow) return null;
+  if (
+    workflowRow.workflow_hash === 'default-krea2-turbo-workflow' &&
+    fs.existsSync(PRIMARY_WORKFLOW_PATH)
+  ) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(PRIMARY_WORKFLOW_PATH, 'utf-8'));
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed.nodes)) {
+        return parsed;
+      }
+    } catch {
+      // fall through to DB column
+    }
+  }
   if (workflowRow.api_workflow_json) {
     try {
       const parsed = JSON.parse(workflowRow.api_workflow_json);
@@ -184,27 +199,51 @@ export function autoDetectWorkflowMapping(
   let enableLoraNodeId: string | null = null;
   let enableLoraField = 'value';
 
-  // 1. Scan for dedicated ResolutionSelector / Megapixel + Aspect Ratio nodes first (e.g. Node #49)
+  // 1. Scan for dedicated ResolutionSelector (#49) first, then fall back to generic Megapixel / Aspect Ratio nodes (excluding ImageScaleToTotalPixels)
   for (const [nodeId, node] of Object.entries(apiGraph)) {
     if (!node || typeof node !== 'object') continue;
     const classType = String(node.class_type || '');
     const inputs = node.inputs || {};
-    const inputKeys = Object.keys(inputs);
-
-    const detectedArField = inputKeys.find((k) =>
-      ['aspect_ratio', 'ratio', 'aspect', 'dimensions'].includes(k.toLowerCase())
-    );
-    const detectedMpField = inputKeys.find((k) =>
-      ['megapixels', 'megapixel', 'mp', 'total_megapixels', 'target_megapixels'].includes(
-        k.toLowerCase()
-      )
-    );
-
-    if (classType === 'ResolutionSelector' || detectedArField || detectedMpField) {
+    if (classType === 'ResolutionSelector') {
+      const inputKeys = Object.keys(inputs);
+      const detectedArField = inputKeys.find((k) =>
+        ['aspect_ratio', 'ratio', 'aspect', 'dimensions'].includes(k.toLowerCase())
+      );
+      const detectedMpField = inputKeys.find((k) =>
+        ['megapixels', 'megapixel', 'mp', 'total_megapixels', 'target_megapixels'].includes(
+          k.toLowerCase()
+        )
+      );
       latentNodeId = nodeId;
       if (detectedArField) aspectRatioField = detectedArField;
       if (detectedMpField) megapixelsField = detectedMpField;
       break;
+    }
+  }
+
+  if (!latentNodeId) {
+    for (const [nodeId, node] of Object.entries(apiGraph)) {
+      if (!node || typeof node !== 'object') continue;
+      const classType = String(node.class_type || '');
+      if (classType === 'ImageScaleToTotalPixels') continue;
+      const inputs = node.inputs || {};
+      const inputKeys = Object.keys(inputs);
+
+      const detectedArField = inputKeys.find((k) =>
+        ['aspect_ratio', 'ratio', 'aspect', 'dimensions'].includes(k.toLowerCase())
+      );
+      const detectedMpField = inputKeys.find((k) =>
+        ['megapixels', 'megapixel', 'mp', 'total_megapixels', 'target_megapixels'].includes(
+          k.toLowerCase()
+        )
+      );
+
+      if (detectedArField || detectedMpField) {
+        latentNodeId = nodeId;
+        if (detectedArField) aspectRatioField = detectedArField;
+        if (detectedMpField) megapixelsField = detectedMpField;
+        break;
+      }
     }
   }
 
@@ -634,11 +673,46 @@ export function saveWorkflowMapping(
 }
 
 /**
+ * Detects an inline conditional upscale branch inside a generation workflow
+ * (e.g. primary_workflow.json Switch #51 -> ImageScaleToTotalPixels #52 <- ImageUpscaleWithModel #53).
+ */
+export function findInlineUpscaleNodes(
+  apiGraph: Record<string, any>
+): { switchNodeId: string; scaleNodeId: string } | null {
+  if (
+    apiGraph['51']?.class_type === 'ComfySwitchNode' &&
+    apiGraph['52']?.class_type === 'ImageScaleToTotalPixels' &&
+    Array.isArray(apiGraph['51']?.inputs?.on_true) &&
+    String(apiGraph['51'].inputs.on_true[0]) === '52'
+  ) {
+    return { switchNodeId: '51', scaleNodeId: '52' };
+  }
+
+  for (const [nodeId, node] of Object.entries(apiGraph)) {
+    if (!node || typeof node !== 'object' || node.class_type !== 'ComfySwitchNode') continue;
+    const onTrue = node.inputs?.on_true;
+    if (!Array.isArray(onTrue) || onTrue.length < 1) continue;
+    const scaleId = String(onTrue[0]);
+    const scaleNode = apiGraph[scaleId];
+    if (scaleNode?.class_type !== 'ImageScaleToTotalPixels') continue;
+    const upstreamImg = scaleNode.inputs?.image;
+    if (
+      Array.isArray(upstreamImg) &&
+      apiGraph[String(upstreamImg[0])]?.class_type === 'ImageUpscaleWithModel'
+    ) {
+      return { switchNodeId: nodeId, scaleNodeId: scaleId };
+    }
+  }
+  return null;
+}
+
+/**
  * Compiles an executable ComfyUI API prompt payload by injecting:
  * - Node #30_19 (User Prompt value)
  * - Node #30_27 (LoRA Trigger Word string_b)
  * - Node #50 (Power Lora Loader (rgthree) lora_1, lora_2, ...) & Node #30_23 (Enable LoRA boolean)
- * - Node #49 (ResolutionSelector aspect_ratio & megapixels)
+ * - Node #49 (ResolutionSelector aspect_ratio & base megapixels <= 3.0)
+ * - Node #51 / #52 (Inline Upscale Switch & ImageScaleToTotalPixels when target > 3.0 MP)
  * - Node #30_3 (KSampler random 64-bit integer seed 1..10^15)
  * - Node #30_10 (UNETLoader unet_name / CheckpointLoader ckpt_name)
  */
@@ -716,7 +790,14 @@ export function compileWorkflowForGeneration(params: {
     graph[mapping.seedNodeId].inputs[mapping.seedField || 'seed'] = numericSeed;
   }
 
-  // 5. Resolution Selector Node (e.g. Node #49 inputs["aspect_ratio"] and inputs["megapixels"])
+  // 5. Resolution Selector (#49 capped at 3.0 MP) & Inline Upscale Switch (#51/#52 for > 3.0 MP)
+  const requestedMp = Math.max(0.5, Math.min(10.0, Number(params.megapixels) || 3.0));
+  const shouldUpscale = requestedMp > 3.0;
+  const baseMp = Math.min(3.0, requestedMp);
+  const baseDims = shouldUpscale
+    ? computeDimensionsFromMegapixels(params.aspectRatio, baseMp)
+    : { width: params.width, height: params.height };
+
   if (mapping.latentNodeId && graph[mapping.latentNodeId]?.inputs) {
     const latentInputs = graph[mapping.latentNodeId].inputs;
     const arField = mapping.aspectRatioField || 'aspect_ratio';
@@ -729,19 +810,27 @@ export function compileWorkflowForGeneration(params: {
       !('width' in latentInputs && 'height' in latentInputs)
     ) {
       latentInputs[arField] = normalizedAr;
-      latentInputs[mpField] = Number(params.megapixels.toFixed(2));
+      latentInputs[mpField] = Number(baseMp.toFixed(2));
     }
 
     const wField = mapping.widthField || 'width';
     const hField = mapping.heightField || 'height';
     if (wField in latentInputs && typeof latentInputs[wField] === 'number') {
-      latentInputs[wField] = params.width;
+      latentInputs[wField] = baseDims.width;
     }
     if (hField in latentInputs && typeof latentInputs[hField] === 'number') {
-      latentInputs[hField] = params.height;
+      latentInputs[hField] = baseDims.height;
     }
     if (mapping.batchSizeField && typeof latentInputs[mapping.batchSizeField] === 'number') {
       latentInputs[mapping.batchSizeField] = 1;
+    }
+  }
+
+  const inlineUpscale = findInlineUpscaleNodes(graph);
+  if (inlineUpscale) {
+    graph[inlineUpscale.switchNodeId].inputs.switch = shouldUpscale;
+    if (shouldUpscale) {
+      graph[inlineUpscale.scaleNodeId].inputs.megapixels = Number(requestedMp.toFixed(2));
     }
   }
 
