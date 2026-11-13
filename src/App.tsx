@@ -85,6 +85,7 @@ export default function App() {
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [inspectedImageId, setInspectedImageId] = useState<number | null>(null);
+  const [selectedCharacterId, setSelectedCharacterId] = useState<number | null>(null);
   const [quickGenPrefill, setQuickGenPrefill] = useState<QuickGenPrefill | null>(null);
 
   // Header ComfyUI Live Status & Toast Message History (Last 10 messages + 3s toast override)
@@ -531,6 +532,9 @@ export default function App() {
       <TopNavHeader
         activeTab={activeTab}
         onSelectTab={(tab) => {
+          if (tab === 'characters') {
+            setSelectedCharacterId(null);
+          }
           setActiveTab(tab);
           setIsMobileMenuOpen(false);
         }}
@@ -618,6 +622,11 @@ export default function App() {
               onSelectAll={() => setSelectedIds(new Set(images.map((i) => i.id)))}
               onClearSelection={() => setSelectedIds(new Set())}
               onOpenInspector={(img) => setInspectedImageId(img.id)}
+              onOpenCharacterGallery={(charId) => {
+                setSelectedCharacterId(charId);
+                setActiveTab('characters');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
               onReusePrompt={handleReusePrompt}
               onQuickRate={async (id, rating) => {
                 setImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
@@ -662,6 +671,8 @@ export default function App() {
             loras={loras}
             workflows={workflows}
             collections={collections}
+            selectedCharacterId={selectedCharacterId}
+            onSelectCharacterId={setSelectedCharacterId}
             onRefresh={refreshAll}
             onOpenImage={(img) => setInspectedImageId(img.id)}
             onFilterGalleryByCharacter={(charId) => {

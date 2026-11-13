@@ -22,6 +22,8 @@ interface CharacterExplorerViewProps {
   loras: LoraExplorerItem[];
   workflows: WorkflowLibraryItem[];
   collections: { id: number; name: string }[];
+  selectedCharacterId?: number | null;
+  onSelectCharacterId?: (id: number | null) => void;
   onRefresh: () => Promise<void>;
   onOpenImage: (img: ImageRecord) => void;
   onFilterGalleryByCharacter: (charId: number) => void;
@@ -42,6 +44,8 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   loras,
   workflows,
   collections,
+  selectedCharacterId: controlledCharId,
+  onSelectCharacterId,
   onRefresh,
   onOpenImage,
   onFilterGalleryByCharacter,
@@ -51,7 +55,12 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   onQuickReject,
   onPushToast,
 }) => {
-  const [selectedCharId, setSelectedCharId] = useState<number | null>(null);
+  const [internalCharId, setInternalCharId] = useState<number | null>(null);
+  const selectedCharId = controlledCharId !== undefined ? controlledCharId : internalCharId;
+  const setSelectedCharId = (nextId: number | null) => {
+    setInternalCharId(nextId);
+    onSelectCharacterId?.(nextId);
+  };
   const [isHighestRatedExpanded, setIsHighestRatedExpanded] = useState(false);
   const [optimisticPortraitId, setOptimisticPortraitId] = useState<number | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);

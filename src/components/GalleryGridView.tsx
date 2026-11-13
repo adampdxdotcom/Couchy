@@ -59,6 +59,7 @@ interface GalleryGridViewProps {
   onSelectAll: () => void;
   onClearSelection: () => void;
   onOpenInspector: (image: ImageRecord) => void;
+  onOpenCharacterGallery?: (characterId: number) => void;
   onReusePrompt?: (image: ImageRecord) => void;
   onQuickRate: (id: number, rating: number) => void;
   onQuickFavorite: (id: number, nextFav: boolean) => void;
@@ -123,6 +124,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   onSelectAll,
   onClearSelection,
   onOpenInspector,
+  onOpenCharacterGallery,
   onReusePrompt,
   onQuickRate,
   onQuickFavorite,
@@ -531,7 +533,15 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
 
                 {/* Card Footer matching standard gallery card layout */}
                 {layout !== 'compact' && (
-                  <div className="p-3 space-y-2">
+                  <div className="p-3 space-y-1.5">
+                    {ghost.characterName && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-zinc-100 truncate">
+                          {ghost.characterName}
+                        </span>
+                      </div>
+                    )}
+
                     {/* Resolution, Ratio & Checkpoint Line */}
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400 font-mono tabular-nums">
                       <span>
@@ -547,17 +557,6 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                       <span className="truncate max-w-[150px] font-sans">
                         {ghost.checkpointName || 'No Checkpoint'}
                       </span>
-                    </div>
-
-                    {/* Character Line */}
-                    <div className="flex items-center justify-between gap-2 text-[11px]">
-                      <div className="truncate text-zinc-300">
-                        {ghost.characterName ? (
-                          <span>{ghost.characterName}</span>
-                        ) : (
-                          <span className="text-zinc-500">Unassigned</span>
-                        )}
-                      </div>
                     </div>
                   </div>
                 )}
@@ -699,31 +698,57 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
               {layout !== 'compact' && (
                 <div
                   onClick={() => onOpenInspector(img)}
-                  className="p-3 space-y-2 cursor-pointer"
+                  className="p-3 space-y-1.5 cursor-pointer"
                 >
-                  {/* Resolution, Ratio & Checkpoint Line */}
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400 font-mono tabular-nums min-w-0">
-                      <span>
-                        {img.width}×{img.height}
-                      </span>
-                      {img.width > 0 && img.height > 0 && (
-                        <>
-                          <span aria-hidden="true">·</span>
-                          <span>{formatImageAspectRatio(img.width, img.height)}</span>
-                        </>
+                  {/* Top Row: Character Name (if present) */}
+                  {(confirmedChars.length > 0 || suggestedChars.length > 0) && (
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5 min-w-0 truncate">
+                        {confirmedChars.length > 0 ? (
+                          confirmedChars.map((c, idx) => (
+                            <React.Fragment key={c.characterId}>
+                              {idx > 0 && (
+                                <span className="text-zinc-500 text-xs" aria-hidden="true">
+                                  ·
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenCharacterGallery?.(c.characterId);
+                                }}
+                                className="text-sm font-semibold text-zinc-100 hover:text-indigo-400 transition-colors truncate cursor-pointer text-left"
+                                title={`Open ${c.characterName}'s gallery`}
+                              >
+                                {c.characterName}
+                              </button>
+                            </React.Fragment>
+                          ))
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpenCharacterGallery?.(suggestedChars[0].characterId);
+                            }}
+                            className="inline-flex items-center gap-1 text-sm font-semibold text-amber-300 hover:text-amber-200 transition-colors truncate cursor-pointer text-left"
+                            title={`Open ${suggestedChars[0].characterName}'s gallery`}
+                          >
+                            <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                            <span className="truncate">
+                              Suggested: {suggestedChars[0].characterName}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+                      {img.rating > 0 && (
+                        <span className="text-xs font-mono tabular-nums text-amber-400 shrink-0">
+                          ★ {img.rating}
+                        </span>
                       )}
-                      <span aria-hidden="true">·</span>
-                      <span className="truncate max-w-[150px] font-sans">
-                        {img.checkpointName || 'No Checkpoint'}
-                      </span>
                     </div>
-                    {img.rating > 0 && (
-                      <span className="text-xs font-mono tabular-nums text-amber-400 shrink-0">
-                        ★ {img.rating}
-                      </span>
-                    )}
-                  </div>
+                  )}
 
                   {/* LoRA Pills */}
                   {img.loras.length > 0 && (
@@ -743,20 +768,30 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                     </div>
                   )}
 
-                  {/* Character Line */}
-                  <div className="flex items-center justify-between gap-2 text-[11px]">
-                    <div className="truncate text-zinc-300">
-                      {confirmedChars.length > 0 ? (
-                        <span>{confirmedChars.map((c) => c.characterName).join(' · ')}</span>
-                      ) : suggestedChars.length > 0 ? (
-                        <span className="inline-flex items-center gap-1 text-amber-300">
-                          <Sparkles className="w-3 h-3" />
-                          <span>Suggested: {suggestedChars[0].characterName}</span>
-                        </span>
-                      ) : (
-                        <span className="text-zinc-500">Unassigned</span>
+                  {/* Image Details: Resolution, Ratio & Checkpoint Line */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400 font-mono tabular-nums min-w-0">
+                      <span>
+                        {img.width}×{img.height}
+                      </span>
+                      {img.width > 0 && img.height > 0 && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span>{formatImageAspectRatio(img.width, img.height)}</span>
+                        </>
                       )}
+                      <span aria-hidden="true">·</span>
+                      <span className="truncate max-w-[150px] font-sans">
+                        {img.checkpointName || 'No Checkpoint'}
+                      </span>
                     </div>
+                    {confirmedChars.length === 0 &&
+                      suggestedChars.length === 0 &&
+                      img.rating > 0 && (
+                        <span className="text-xs font-mono tabular-nums text-amber-400 shrink-0">
+                          ★ {img.rating}
+                        </span>
+                      )}
                   </div>
                 </div>
               )}
