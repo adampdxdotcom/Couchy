@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
+import { logger } from '../logger.ts';
 import {
   compileUpscaleWorkflow,
   compileWorkflowForGeneration,
@@ -419,9 +420,10 @@ function trackGenerationItem(
         try {
           attachGenerationItemOutputToSeries(itemId, resolvedOutputImageId);
         } catch (seriesErr) {
-          console.warn('Failed to attach generated image to series:', seriesErr);
+          logger.warn('ComfyUI', `Failed to attach generated image #${resolvedOutputImageId} to series`, seriesErr);
         }
       }
+      logger.info('ComfyUI', `Completed generation item #${itemId} (${promptId}) -> image #${resolvedOutputImageId ?? 'none'}`);
     },
     onError: (errMsg) => {
       db.prepare(
@@ -623,8 +625,13 @@ generationRouter.post('/submit-batch', async (req, res) => {
             characterId ? Number(characterId) : null,
             resolvedMp > 3.0 && !hasInlineUpscale ? resolvedMp : undefined
           );
+          logger.info(
+            'ComfyUI',
+            `Submitted batch #${batchId} item #${item.itemId} (${promptId}) [${computedWidth}x${computedHeight}]`
+          );
         } catch (err: any) {
           const errMsg = err?.message || 'Failed to submit to ComfyUI';
+          logger.error('ComfyUI', `Failed to submit batch #${batchId} item #${item.itemId}`, errMsg);
           db.prepare(
             `UPDATE generation_items
              SET status = 'failed', error_message = ?, completed_at = datetime('now')

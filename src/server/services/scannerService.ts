@@ -5,6 +5,7 @@ import sharp from 'sharp';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
+import { logger } from '../logger.ts';
 import { parseImageMetadata, parseImageMetadataFromChunks } from './pngMetadataParser.ts';
 import { runAssistedCharacterIdentificationForImage } from './characterService.ts';
 import { notifyImageIndexed } from './comfyuiLiveMonitor.ts';
@@ -217,10 +218,11 @@ export function purgeCorruptZeroDimensionImages(): number {
     for (const row of corruptRows) {
       deleteCorruptImageRecord(row.id);
     }
+    logger.warn('Scanner', `Purged ${corruptRows.length} corrupt 0x0/0-byte image record(s) from SQLite`);
     notifyImageIndexed();
     return corruptRows.length;
   } catch (err) {
-    console.warn('Failed to purge corrupt 0x0 image records:', err);
+    logger.warn('Scanner', 'Failed to purge corrupt 0x0 image records', err);
     return 0;
   }
 }
@@ -452,6 +454,7 @@ export async function indexSingleImageFile(
       if (existingByPath?.id) {
         deleteCorruptImageRecord(existingByPath.id);
       }
+      logger.warn('Scanner', `Rejected 0-byte image file: ${relativePath}`);
       return { outcome: 'error', imageId: null, contentHash: null };
     }
 
@@ -510,7 +513,7 @@ export async function indexSingleImageFile(
       if (existingByPath?.id) {
         deleteCorruptImageRecord(existingByPath.id);
       }
-      console.warn(`Skipping corrupt or unreadable image file (${width}x${height}): ${fullPath}`);
+      logger.warn('Scanner', `Rejected corrupt or unreadable image file (${width}x${height}): ${relativePath}`);
       return { outcome: 'error', imageId: null, contentHash: null };
     }
 
@@ -766,7 +769,7 @@ export async function indexSingleImageFile(
 
     return { outcome, imageId: imageId!, contentHash };
   } catch (err) {
-    console.error('Error indexing image file:', fullPath, err);
+    logger.error('Scanner', `Error indexing image file: ${fullPath}`, err);
     return { outcome: 'error', imageId: null, contentHash: null };
   }
 }
@@ -871,9 +874,14 @@ export async function runDirectoryScan(
       ).run(files.length, added, modified, deleted, JSON.stringify(errors), jobId);
 
       if (added > 0 || modified > 0 || deleted > 0) {
+        logger.info(
+          'Scanner',
+          `Directory scan (${scanType}) completed: +${added} added, ~${modified} modified, -${deleted} missing`
+        );
         notifyImageIndexed();
       }
     } catch (err: any) {
+      logger.error('Scanner', `Directory scan (${scanType}) failed`, err);
       errors.push(err?.message || 'Unexpected scanner error');
       db.prepare(
         `UPDATE scan_jobs

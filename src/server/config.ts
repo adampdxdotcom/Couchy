@@ -44,6 +44,7 @@ export interface AppConfig {
   localModelsDir: string;
   downloadsDir: string;
   uploadedImagesDir: string;
+  logsDir: string;
   civitaiApiKey: string;
   hfApiToken: string;
   scheduledBackupHours: number;
@@ -65,6 +66,7 @@ export const appConfig: AppConfig = {
   localModelsDir: resolveStoragePath(process.env.LOCAL_MODELS_DIR, '/app/data/local_models', 'data/local_models'),
   downloadsDir: resolveStoragePath(process.env.DOWNLOADS_DIR, '/downloads', 'model-downloads'),
   uploadedImagesDir: resolveStoragePath(process.env.UPLOADED_IMAGES_DIR, '/data/uploaded', 'data/uploaded'),
+  logsDir: resolveStoragePath(process.env.LOGS_DIR, '/app/data/logs', 'data/logs'),
   civitaiApiKey: process.env.CIVITAI_API_KEY || '',
   hfApiToken: process.env.HF_API_TOKEN || '',
   scheduledBackupHours: 0,

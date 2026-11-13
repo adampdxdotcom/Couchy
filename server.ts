@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { appConfig } from './src/server/config.ts';
+import { logger } from './src/server/logger.ts';
 import { runMigrations } from './src/server/db.ts';
 import {
   backfillMissingImagePrompts,
@@ -60,10 +61,11 @@ async function startServer() {
   }
 
   app.listen(appConfig.port, '0.0.0.0', () => {
-    console.log(`Couchy running on http://0.0.0.0:${appConfig.port}`);
-    console.log(`Watching ComfyUI Output Directory: ${appConfig.comfyuiOutputDir}`);
-    console.log(`WebP Thumbnail Cache (384px long-side): ${appConfig.thumbnailPath}`);
-    console.log(`Local Models Directory: ${appConfig.localModelsDir}`);
+    logger.info('Server', `Couchy running on http://0.0.0.0:${appConfig.port}`);
+    logger.info('Server', `Watching ComfyUI Output Directory: ${appConfig.comfyuiOutputDir}`);
+    logger.info('Server', `WebP Thumbnail Cache (384px long-side): ${appConfig.thumbnailPath}`);
+    logger.info('Server', `Local Models Directory: ${appConfig.localModelsDir}`);
+    logger.info('Server', `Rotating Log File: ${logger.logFilePath}`);
 
     // Trigger initial thumbnail migration, model inventory sync, and incremental scan in the background
     setImmediate(async () => {
@@ -76,13 +78,13 @@ async function startServer() {
           startVisualTaggerQueue().catch(() => {});
         }
       } catch (err) {
-        console.error('Background startup scan error:', err);
+        logger.error('Server', 'Background startup scan error', err);
       }
     });
   });
 }
 
 startServer().catch((err) => {
-  console.error('Failed to start Couchy server:', err);
+  logger.error('Server', 'Failed to start Couchy server', err);
   process.exit(1);
 });

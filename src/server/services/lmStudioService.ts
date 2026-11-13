@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
+import { logger } from '../logger.ts';
 import type {
   LmStudioGuidingTemplate,
   LmStudioStatus,
@@ -1071,6 +1072,7 @@ export async function converseQuickGenPrompt(params: {
 
     if (!res.ok) {
       const errText = await res.text();
+      logger.error('LMStudio', `Conversation HTTP ${res.status}`, errText);
       throw new Error(`LM Studio returned HTTP ${res.status}: ${errText}`);
     }
 
@@ -1149,6 +1151,13 @@ export async function converseQuickGenPrompt(params: {
     } else if (!replyText) {
       replyText = 'Could you share a bit more about the scene, lighting, or mood you have in mind?';
     }
+
+    logger.info(
+      'LMStudio',
+      `Conversation turn completed (${data?.model || modelToUse}) | proposedPrompt=${Boolean(
+        proposedPrompt
+      )} | selectedLoras=${selectedLoras.length > 0 ? selectedLoras.join(', ') : 'none'}`
+    );
 
     return {
       reply: replyText,

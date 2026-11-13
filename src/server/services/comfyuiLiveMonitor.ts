@@ -1,5 +1,6 @@
 import { appConfig } from '../config.ts';
 import { db } from '../db.ts';
+import { logger } from '../logger.ts';
 import { preserveFailedGenerationConversation } from './seriesService.ts';
 import type {
   ComfyUiExecutionErrorNotice,
@@ -109,6 +110,7 @@ export function recordComfyExecutionError(params: {
     timestamp: Date.now(),
     recovery,
   };
+  logger.error('ComfyUI', `Execution failed (${promptId || 'unknown'}): ${state.lastError.message}`);
 }
 
 /**
