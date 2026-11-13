@@ -859,6 +859,7 @@ export default function App() {
       {inspectedImage && (
         <ImageInspectorDrawer
           image={inspectedImage}
+          ghostItems={activeGhostItems}
           onClose={() => setInspectedImageId(null)}
           onPrev={
             inspectedIdx > 0 ? () => setInspectedImageId(images[inspectedIdx - 1].id) : undefined

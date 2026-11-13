@@ -10,6 +10,7 @@ import {
 import {
   COUCHY_COMFY_CLIENT_ID,
   invalidateComfyQueueCache,
+  registerQueuedPromptSeriesTarget,
 } from './comfyuiLiveMonitor.ts';
 import {
   compileUpscaleWorkflow,
@@ -708,11 +709,20 @@ export async function submitImageUpscale(params: {
 
   const charRow = db
     .prepare(
-      `SELECT character_id FROM image_characters
-       WHERE image_id = ? AND status = 'confirmed' LIMIT 1`
+      `SELECT ic.character_id, c.name AS character_name
+       FROM image_characters ic
+       JOIN characters c ON c.id = ic.character_id
+       WHERE ic.image_id = ? AND ic.status = 'confirmed' LIMIT 1`
     )
-    .get(params.imageId) as { character_id?: number } | undefined;
+    .get(params.imageId) as { character_id?: number; character_name?: string } | undefined;
   const sourceCharacterId = charRow?.character_id ? Number(charRow.character_id) : null;
+
+  registerQueuedPromptSeriesTarget(promptId, {
+    sourceImageId: params.imageId,
+    characterId: sourceCharacterId,
+    characterName: charRow?.character_name || null,
+    prompt: `Upscale ${imgRow.filename} to ${targetMp.toFixed(1)} MP`,
+  });
 
   invalidateComfyQueueCache();
   pollComfyPromptCompletion({

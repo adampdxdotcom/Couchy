@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   X,
   Star,
@@ -20,16 +20,18 @@ import {
   User,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
-import { formatBytes } from '../shared/utils.ts';
+import { findAttachedGhostsForImage, formatBytes } from '../shared/utils.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
 import type {
   CharacterProfile,
   ImageRecord,
+  QueuedGhostCardItem,
 } from '../shared/types.ts';
 
 interface ImageInspectorDrawerProps {
   image: ImageRecord;
+  ghostItems?: QueuedGhostCardItem[];
   onClose: () => void;
   onPrev?: () => void;
   onNext?: () => void;
@@ -48,6 +50,7 @@ interface ImageInspectorDrawerProps {
  */
 export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   image,
+  ghostItems = [],
   onClose,
   onPrev,
   onNext,
@@ -126,11 +129,22 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
       .catch(() => {});
   };
 
+  const matchingPendingGhosts = findAttachedGhostsForImage(activeImage, ghostItems);
+  const prevPendingCountRef = useRef<number>(matchingPendingGhosts.length);
+
   useEffect(() => {
     setReproStatusMsg(null);
     setReproStatusIsError(false);
     refreshActiveDetail(selectedIterationId);
-  }, [selectedIterationId, image.id, image.seriesId]);
+  }, [selectedIterationId, image.id, image.seriesId, image.seriesCount]);
+
+  // Refresh active detail immediately when a pending series iteration completes and leaves the queue
+  useEffect(() => {
+    if (prevPendingCountRef.current > 0 && matchingPendingGhosts.length < prevPendingCountRef.current) {
+      refreshActiveDetail(selectedIterationId);
+    }
+    prevPendingCountRef.current = matchingPendingGhosts.length;
+  }, [matchingPendingGhosts.length, selectedIterationId]);
 
   // Keyboard navigation (Escape, Left, Right)
   useEffect(() => {
@@ -698,10 +712,12 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             )}
           </div>
 
-          {/* 3. Series Preview (when stacked iterations exist) */}
+          {/* 3. Series Preview (when stacked iterations or pending generations exist) */}
           <SeriesIterationsStrip
             items={activeImage.seriesItems || []}
             activeImageId={activeImage.id}
+            activeImage={activeImage}
+            pendingGhosts={matchingPendingGhosts}
             onSelectIteration={(nextId) => setSelectedIterationId(nextId)}
             onContinueConversation={
               onOpenConversation ? () => onOpenConversation(activeImage) : undefined

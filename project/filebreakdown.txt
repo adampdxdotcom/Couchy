@@ -53,7 +53,8 @@ FRONTEND: TOP-LEVEL VIEWS & INSPECTOR
 - `src/App.tsx` — Root workspace coordinator, tab routing, live queue polling, global gallery/metadata state.
 - `src/components/TopNavHeader.tsx` — Sticky 3-zone header (`Gallery`, `Characters`, `Generation`, `LoRAs`, `Workflow`, `System`) & notification pill.
 - `src/components/GalleryFilterBar.tsx` — Sticky boolean search bar, expandable multi-criteria filter drawer, layout/sort controls, presets.
-- `src/components/GalleryGridView.tsx` — Standard/Masonry/Compact gallery grid, series stack badges, live ghost cards, infinite scroll, bulk bar.
+- `src/components/GalleryGridView.tsx` — Standard/Masonry/Compact gallery grid, series stack badges, translucent pending overlays, live ghost cards, infinite scroll, bulk bar.
+- `src/components/gallery/PendingGhostOverlay.tsx` — Translucent Pending/progress overlay rendered on series stack cards during active generations/upscales.
 - `src/components/ImageInspectorDrawer.tsx` — Split-pane lightbox & metadata/LoRA/tag inspector with standalone Upscale & Conversation actions.
 - `src/components/inspector/SeriesIterationsStrip.tsx` — Bottom-docked series thumbnail strip in the Inspector for switching & branching iterations.
 - `src/components/CharacterExplorerView.tsx` — Container switching between character roster and individual character profile views.

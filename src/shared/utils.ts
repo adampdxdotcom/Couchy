@@ -2,7 +2,7 @@
  * Shared utility functions, formatting helpers, and UI constants.
  */
 
-import type { ModelInventoryItem } from './types';
+import type { ImageRecord, ModelInventoryItem, QueuedGhostCardItem } from './types';
 
 // ==========================================
 // 1. Aspect Ratio Presets & Normalization
@@ -307,4 +307,33 @@ export function resolveDefaultWorkflow<
     workflows[0] ||
     null
   );
+}
+
+// ==========================================
+// 6. Live Ghost Item & Series Matching
+// ==========================================
+
+/**
+ * Finds active queued/generating ghost items that will stack onto the given image or series card.
+ * Middle-stack branches (`isBranchSplit`) start their own new stack/card and never attach to an existing card.
+ */
+export function findAttachedGhostsForImage(
+  img: Pick<ImageRecord, 'id' | 'seriesId' | 'seriesItems'>,
+  ghostItems: QueuedGhostCardItem[] = []
+): QueuedGhostCardItem[] {
+  if (!ghostItems || ghostItems.length === 0) return [];
+  return ghostItems.filter((g) => {
+    if (g.isBranchSplit) return false;
+    if (g.outputImageId && (g.outputImageId === img.id || img.seriesItems?.some((si) => si.imageId === g.outputImageId))) {
+      return false;
+    }
+    if (g.targetSeriesId && img.seriesId && g.targetSeriesId === img.seriesId) {
+      return true;
+    }
+    if (g.targetImageId) {
+      if (g.targetImageId === img.id) return true;
+      if (img.seriesItems?.some((si) => si.imageId === g.targetImageId)) return true;
+    }
+    return false;
+  });
 }

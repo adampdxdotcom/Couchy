@@ -406,6 +406,9 @@ export interface QueuedGhostCardItem {
   characterId: number | null;
   characterName: string | null;
   outputImageId: number | null;
+  targetSeriesId?: number | null;
+  targetImageId?: number | null;
+  isBranchSplit?: boolean;
   createdAt: string;
 }
 

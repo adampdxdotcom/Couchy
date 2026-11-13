@@ -29,8 +29,9 @@ import type {
   LoraExplorerItem,
   QueuedGhostCardItem,
 } from '../shared/types.ts';
-import { formatImageAspectRatio } from '../shared/utils.ts';
+import { findAttachedGhostsForImage, formatImageAspectRatio } from '../shared/utils.ts';
 import type { GalleryViewLayout } from './GalleryFilterBar.tsx';
+import { PendingGhostOverlay } from './gallery/PendingGhostOverlay.tsx';
 
 function formatLoraPillLabel(lora: ImageLoraRecord, explorerLoras: LoraExplorerItem[]): string {
   const rawName = (lora.loraName || '').trim().replace(/^.*[\\/]/, '');
@@ -255,6 +256,20 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   const visibleGhostItems = ghostItems.filter(
     (g) => !g.outputImageId || !images.some((img) => img.id === g.outputImageId)
   );
+
+  // Separate ghosts targeting an existing visible card/series from standalone / branch cards
+  const attachedGhostsByCardId = new Map<number, QueuedGhostCardItem>();
+  const attachedGhostIds = new Set<number>();
+  for (const img of pagedImages) {
+    const matches = findAttachedGhostsForImage(img, visibleGhostItems);
+    if (matches.length > 0) {
+      attachedGhostsByCardId.set(img.id, matches[0]);
+      for (const m of matches) {
+        attachedGhostIds.add(m.itemId);
+      }
+    }
+  }
+  const standaloneGhostItems = visibleGhostItems.filter((g) => !attachedGhostIds.has(g.itemId));
 
   // Empty State when mounted ComfyUI output directory has no indexed images and no active queued jobs
   if (images.length === 0 && visibleGhostItems.length === 0) {
@@ -489,9 +504,9 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
 
       {/* Main Gallery Viewport */}
       <div className={getGridClasses()}>
-        {/* Queued & Actively Generating Ghost Preview Cards (Pinned to top on Page 1 or Infinite Scroll) */}
+        {/* Queued & Actively Generating Ghost Preview Cards (New & Branched stacks) */}
         {(currentPage === 1 || infiniteScroll) &&
-          visibleGhostItems.map((ghost) => {
+          standaloneGhostItems.map((ghost) => {
             const isQueuedOnly = ghost.state === 'queued' || ghost.progressPercent === null;
             const displayPct = Math.min(100, Math.max(0, ghost.progressPercent ?? 0));
             const titleText = ghost.prompt.trim() || `Generation #${ghost.itemIndex}`;
@@ -572,6 +587,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
           const isSelected = selectedIds.has(img.id);
           const confirmedChars = img.characters.filter((c) => c.status === 'confirmed');
           const suggestedChars = img.characters.filter((c) => c.status === 'suggested');
+          const attachedGhost = attachedGhostsByCardId.get(img.id) || null;
 
           return (
             <article
@@ -600,9 +616,14 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                   } transition-transform duration-200 group-hover:scale-[1.02]`}
                 />
 
+                {/* Translucent Pending / Progress Overlay when appending or upscaling this series */}
+                {attachedGhost && (
+                  <PendingGhostOverlay ghost={attachedGhost} compact={layout === 'compact'} />
+                )}
+
                 {/* Top Overlay Controls (Select, Series Badge & Favorite) */}
                 <div
-                  className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none z-10"
+                  className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none z-30"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div className="flex items-center gap-1.5">
@@ -619,13 +640,21 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                       {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                     </button>
 
-                    {(img.seriesCount || 1) > 1 && (
+                    {((img.seriesCount || 1) > 1 || attachedGhost) && (
                       <span
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-black/75 backdrop-blur-xs border border-indigo-500/40 text-[11px] font-mono font-semibold text-indigo-200 shadow-sm pointer-events-none"
-                        title={`${img.seriesCount} images stacked in this series`}
+                        className={`inline-flex items-center gap-1 px-2 py-1 rounded-md bg-black/75 backdrop-blur-xs border text-[11px] font-mono font-semibold text-indigo-200 shadow-sm pointer-events-none ${
+                          attachedGhost ? 'border-indigo-400/70' : 'border-indigo-500/40'
+                        }`}
+                        title={
+                          attachedGhost
+                            ? 'Generating new iteration onto this series stack'
+                            : `${img.seriesCount} images stacked in this series`
+                        }
                       >
-                        <Layers className="w-3 h-3 text-indigo-400" />
-                        <span>{img.seriesCount}</span>
+                        <Layers className={`w-3 h-3 text-indigo-400 ${attachedGhost ? 'animate-pulse' : ''}`} />
+                        <span>
+                          {attachedGhost ? `${img.seriesCount || 1} +1` : img.seriesCount}
+                        </span>
                       </span>
                     )}
                   </div>

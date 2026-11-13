@@ -16,6 +16,8 @@ import type {
   ImageRecord,
   QueuedGhostCardItem,
 } from '../../shared/types.ts';
+import { findAttachedGhostsForImage } from '../../shared/utils.ts';
+import { PendingGhostOverlay } from '../gallery/PendingGhostOverlay.tsx';
 
 interface CharacterGallerySectionProps {
   title: string;
@@ -60,6 +62,19 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
     (g) => !g.outputImageId || !images.some((img) => img.id === g.outputImageId)
   );
 
+  const attachedGhostsByCardId = new Map<number, QueuedGhostCardItem>();
+  const attachedGhostIds = new Set<number>();
+  for (const img of images) {
+    const matches = findAttachedGhostsForImage(img, visibleGhostItems);
+    if (matches.length > 0) {
+      attachedGhostsByCardId.set(img.id, matches[0]);
+      for (const m of matches) {
+        attachedGhostIds.add(m.itemId);
+      }
+    }
+  }
+  const standaloneGhostItems = visibleGhostItems.filter((g) => !attachedGhostIds.has(g.itemId));
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2.5">
@@ -103,7 +118,7 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
         ) : null
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
-          {visibleGhostItems.map((ghost) => {
+          {standaloneGhostItems.map((ghost) => {
             const isQueuedOnly = ghost.state === 'queued' || ghost.progressPercent === null;
             const displayPct = Math.min(100, Math.max(0, ghost.progressPercent ?? 0));
             const titleText = ghost.prompt.trim() || `Generation #${ghost.itemIndex}`;
@@ -148,6 +163,7 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
               (activePortraitId !== null && activePortraitId === img.id) ||
               (character.portraitContentHash !== null &&
                 character.portraitContentHash === img.contentHash);
+            const attachedGhost = attachedGhostsByCardId.get(img.id) || null;
 
             return (
               <div
@@ -168,9 +184,11 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
                     className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
                   />
 
+                  {attachedGhost && <PendingGhostOverlay ghost={attachedGhost} />}
+
                   {/* Top Overlay Controls (Portrait Badge, Series Badge & Favorite) */}
                   <div
-                    className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none z-10"
+                    className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none z-30"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <div className="flex items-center gap-1.5">
@@ -180,13 +198,21 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
                           <span>Portrait</span>
                         </div>
                       )}
-                      {(img.seriesCount || 1) > 1 && (
+                      {((img.seriesCount || 1) > 1 || attachedGhost) && (
                         <span
-                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/75 backdrop-blur-xs border border-indigo-500/40 text-[10px] font-mono font-semibold text-indigo-200 shadow-sm pointer-events-none"
-                          title={`${img.seriesCount} images stacked in this series`}
+                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/75 backdrop-blur-xs border text-[10px] font-mono font-semibold text-indigo-200 shadow-sm pointer-events-none ${
+                            attachedGhost ? 'border-indigo-400/70' : 'border-indigo-500/40'
+                          }`}
+                          title={
+                            attachedGhost
+                              ? 'Generating new iteration onto this series stack'
+                              : `${img.seriesCount} images stacked in this series`
+                          }
                         >
-                          <Layers className="w-2.5 h-2.5 text-indigo-400" />
-                          <span>{img.seriesCount}</span>
+                          <Layers className={`w-2.5 h-2.5 text-indigo-400 ${attachedGhost ? 'animate-pulse' : ''}`} />
+                          <span>
+                            {attachedGhost ? `${img.seriesCount || 1} +1` : img.seriesCount}
+                          </span>
                         </span>
                       )}
                     </div>

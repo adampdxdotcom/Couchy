@@ -13,6 +13,17 @@ interface QueuePromptMeta {
   firstSeenMs: number;
 }
 
+interface QueueSeriesRegistration {
+  sourceImageId: number;
+  targetSeriesId?: number | null;
+  characterId?: number | null;
+  characterName?: string | null;
+  prompt?: string;
+  width?: number;
+  height?: number;
+  registeredAtMs: number;
+}
+
 interface LiveMonitorState {
   online: boolean;
   runningCount: number;
@@ -27,6 +38,7 @@ interface LiveMonitorState {
   promptProgressMap: Map<string, number>;
   finishedPromptIds: Map<string, number>;
   queuePromptMetaMap: Map<string, QueuePromptMeta>;
+  queuePromptSeriesMap: Map<string, QueueSeriesRegistration>;
   runTotalJobs: number;
   prevTotalRemaining: number;
   lastQueueFetchMs: number;
@@ -47,11 +59,88 @@ const state: LiveMonitorState = {
   promptProgressMap: new Map<string, number>(),
   finishedPromptIds: new Map<string, number>(),
   queuePromptMetaMap: new Map<string, QueuePromptMeta>(),
+  queuePromptSeriesMap: new Map<string, QueueSeriesRegistration>(),
   runTotalJobs: 0,
   prevTotalRemaining: 0,
   lastQueueFetchMs: 0,
   lastIndexedAt: Date.now(),
 };
+
+/**
+ * Registers series/source image metadata for a queued ComfyUI prompt (such as an upscale job)
+ * so its pending ghost card attaches onto the target series stack until completion.
+ */
+export function registerQueuedPromptSeriesTarget(
+  promptId: string,
+  meta: Omit<QueueSeriesRegistration, 'registeredAtMs'>
+): void {
+  if (!promptId) return;
+  state.queuePromptSeriesMap.set(promptId, {
+    ...meta,
+    registeredAtMs: Date.now(),
+  });
+}
+
+/**
+ * Determines whether a queued job appends to an existing series/image or branches off into a new card.
+ */
+function resolveSeriesTargetForJob(
+  explicitSeriesId: number | null,
+  branchFromImageId: number | null
+): { targetSeriesId: number | null; targetImageId: number | null; isBranchSplit: boolean } {
+  let targetSeriesId = explicitSeriesId && explicitSeriesId > 0 ? Number(explicitSeriesId) : null;
+  const sourceId = branchFromImageId && branchFromImageId > 0 ? Number(branchFromImageId) : null;
+
+  if (!targetSeriesId && !sourceId) {
+    return { targetSeriesId: null, targetImageId: null, isBranchSplit: false };
+  }
+
+  if (!targetSeriesId && sourceId) {
+    const candidate = db
+      .prepare(
+        `SELECT isi.series_id,
+                (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
+         FROM image_series_items isi
+         WHERE isi.image_id = ?
+         ORDER BY (isi.step_order = max_step) DESC, isi.series_id DESC
+         LIMIT 1`
+      )
+      .get(sourceId) as { series_id: number } | undefined;
+    if (candidate) {
+      targetSeriesId = candidate.series_id;
+    }
+  }
+
+  if (targetSeriesId) {
+    const existingItems = db
+      .prepare(`SELECT image_id FROM image_series_items WHERE series_id = ? ORDER BY step_order ASC`)
+      .all(targetSeriesId) as { image_id: number }[];
+    if (existingItems.length > 0) {
+      const branchIdx = sourceId
+        ? existingItems.findIndex((it) => it.image_id === sourceId)
+        : existingItems.length - 1;
+      const isMiddleBranch = branchIdx >= 0 && branchIdx < existingItems.length - 1;
+      if (isMiddleBranch) {
+        return {
+          targetSeriesId: null,
+          targetImageId: sourceId,
+          isBranchSplit: true,
+        };
+      }
+      return {
+        targetSeriesId,
+        targetImageId: sourceId,
+        isBranchSplit: false,
+      };
+    }
+  }
+
+  return {
+    targetSeriesId: null,
+    targetImageId: sourceId,
+    isBranchSplit: false,
+  };
+}
 
 /**
  * Forces the next getComfyUiLiveStatus call to fetch fresh /queue data immediately.
@@ -368,6 +457,8 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
           gb.checkpoint_name,
           gb.lora_count,
           gb.character_id,
+          gb.series_id,
+          gb.branch_from_image_id,
           c.name AS character_name,
           w.name AS workflow_name
         FROM generation_items gi
@@ -425,6 +516,10 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
         Boolean(r.output_image_id),
         r.item_id === oldestSubmittedItemId
       );
+      const seriesTarget = resolveSeriesTargetForJob(
+        r.series_id ? Number(r.series_id) : null,
+        r.branch_from_image_id ? Number(r.branch_from_image_id) : null
+      );
 
       ghostItems.push({
         itemId: Number(r.item_id),
@@ -442,6 +537,9 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
         characterId: r.character_id ? Number(r.character_id) : null,
         characterName: r.character_name || null,
         outputImageId: r.output_image_id ? Number(r.output_image_id) : null,
+        targetSeriesId: seriesTarget.targetSeriesId,
+        targetImageId: seriesTarget.targetImageId,
+        isBranchSplit: seriesTarget.isBranchSplit,
         createdAt: r.created_at,
       });
     }
@@ -571,6 +669,11 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
       seenPromptIds.add(pid);
 
       const queueMeta = state.queuePromptMetaMap.get(pid);
+      const regMeta = state.queuePromptSeriesMap.get(pid);
+      const seriesTarget = regMeta
+        ? resolveSeriesTargetForJob(regMeta.targetSeriesId ?? null, regMeta.sourceImageId)
+        : { targetSeriesId: null, targetImageId: null, isBranchSplit: false };
+
       const { cardState, progressPercent } = resolvePromptProgressState(
         pid,
         'submitted',
@@ -589,18 +692,21 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
         batchId: numericHash,
         itemIndex: externalIdx - 1,
         comfyuiPromptId: pid,
-        prompt: queueMeta?.prompt || 'ComfyUI Workflow Job',
+        prompt: regMeta?.prompt || queueMeta?.prompt || 'ComfyUI Workflow Job',
         state: cardState,
         progressPercent,
-        width: queueMeta?.width || 1024,
-        height: queueMeta?.height || 1536,
-        checkpointName: queueMeta?.checkpointName || 'ComfyUI Workflow',
-        workflowName: 'ComfyUI Workflow',
+        width: regMeta?.width || queueMeta?.width || 1024,
+        height: regMeta?.height || queueMeta?.height || 1536,
+        checkpointName: queueMeta?.checkpointName || (regMeta ? '4x-ESRGAN Upscale' : 'ComfyUI Workflow'),
+        workflowName: regMeta ? '4x-ESRGAN Upscale' : 'ComfyUI Workflow',
         loraCount: queueMeta?.loraCount || 0,
-        characterId: null,
-        characterName: null,
+        characterId: regMeta?.characterId ?? null,
+        characterName: regMeta?.characterName ?? null,
         outputImageId: null,
-        createdAt: new Date(queueMeta?.firstSeenMs || Date.now()).toISOString(),
+        targetSeriesId: seriesTarget.targetSeriesId,
+        targetImageId: seriesTarget.targetImageId,
+        isBranchSplit: seriesTarget.isBranchSplit,
+        createdAt: new Date(queueMeta?.firstSeenMs || regMeta?.registeredAtMs || Date.now()).toISOString(),
       });
     }
 
@@ -715,12 +821,18 @@ export async function getComfyUiLiveStatus(): Promise<ComfyUiLiveStatus> {
     }
   }
 
-  // Prune old entries from finishedPromptIds and queuePromptMetaMap (> 60s)
+  // Prune old entries from finishedPromptIds, queuePromptMetaMap, and queuePromptSeriesMap
   for (const [pid, ts] of state.finishedPromptIds.entries()) {
     if (now - ts > 60_000) {
       state.finishedPromptIds.delete(pid);
       state.promptProgressMap.delete(pid);
       state.queuePromptMetaMap.delete(pid);
+      state.queuePromptSeriesMap.delete(pid);
+    }
+  }
+  for (const [pid, reg] of state.queuePromptSeriesMap.entries()) {
+    if (now - reg.registeredAtMs > 30 * 60_000) {
+      state.queuePromptSeriesMap.delete(pid);
     }
   }
 
