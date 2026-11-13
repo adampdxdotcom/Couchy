@@ -97,6 +97,21 @@ export interface ImageCollectionItem {
   name: string;
 }
 
+export interface ImageSeriesItem {
+  seriesId: number;
+  imageId: number;
+  stepOrder: number;
+  filename: string;
+  thumbnailUrl: string;
+  originalUrl: string;
+  width: number;
+  height: number;
+  isFavorite: boolean;
+  rating: number;
+  createdAt: string;
+  chatSnapshot: QuickGenChatMessage[];
+}
+
 export interface ImageRecord {
   id: number;
   contentHash: string;
@@ -146,6 +161,11 @@ export interface ImageRecord {
   tags: ImageTagItem[];
   visualTags?: VisualTagItem[];
   collections: ImageCollectionItem[];
+  // Iteration Series / Conversation Stack
+  seriesId?: number | null;
+  seriesCount?: number;
+  seriesItems?: ImageSeriesItem[];
+  chatSnapshot?: QuickGenChatMessage[];
 }
 
 export interface CharacterProfile {

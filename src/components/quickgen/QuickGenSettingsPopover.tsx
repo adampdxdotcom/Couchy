@@ -7,6 +7,7 @@ interface QuickGenSettingsPopoverProps {
   megapixels: number;
   workflowDefaultMp: number;
   batchCount: number;
+  conversationEnabled?: boolean;
   onChangeAspectRatio: (ratio: string) => void;
   onChangeMegapixels: (mp: number) => void;
   onChangeBatchCount: (count: number) => void;
@@ -20,6 +21,7 @@ export const QuickGenSettingsPopover: React.FC<QuickGenSettingsPopoverProps> = (
   megapixels,
   workflowDefaultMp,
   batchCount,
+  conversationEnabled = false,
   onChangeAspectRatio,
   onChangeMegapixels,
   onChangeBatchCount,
@@ -90,24 +92,39 @@ export const QuickGenSettingsPopover: React.FC<QuickGenSettingsPopoverProps> = (
       </div>
 
       <div>
-        <span className="block text-[11px] font-medium text-zinc-400 mb-1.5">
-          Number of Generations
-        </span>
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <span className="text-[11px] font-medium text-zinc-400">
+            Number of Generations
+          </span>
+          {conversationEnabled && (
+            <span className="text-[10px] font-mono text-amber-300/90">
+              1x in Conversation
+            </span>
+          )}
+        </div>
         <div className="grid grid-cols-5 gap-1.5">
-          {BATCH_COUNT_OPTIONS.map((cnt) => (
-            <button
-              key={cnt}
-              type="button"
-              onClick={() => onChangeBatchCount(cnt)}
-              className={`px-2 py-1.5 rounded-lg font-mono text-[11px] border transition-colors cursor-pointer ${
-                batchCount === cnt
-                  ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200 font-semibold'
-                  : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800'
-              }`}
-            >
-              x{cnt}
-            </button>
-          ))}
+          {BATCH_COUNT_OPTIONS.map((cnt) => {
+            const isDisabled = conversationEnabled && cnt > 1;
+            return (
+              <button
+                key={cnt}
+                type="button"
+                disabled={isDisabled}
+                onClick={() => {
+                  if (!isDisabled) onChangeBatchCount(cnt);
+                }}
+                className={`px-2 py-1.5 rounded-lg font-mono text-[11px] border transition-colors ${
+                  isDisabled
+                    ? 'bg-zinc-900/40 border-zinc-800/50 text-zinc-600 cursor-not-allowed opacity-50'
+                    : batchCount === cnt
+                    ? 'bg-indigo-600/30 border-indigo-500 text-indigo-200 font-semibold cursor-pointer'
+                    : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800 cursor-pointer'
+                }`}
+              >
+                x{cnt}
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>

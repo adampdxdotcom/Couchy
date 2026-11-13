@@ -18,6 +18,8 @@ import {
   Tag,
   UserPlus,
   FolderPlus,
+  Layers,
+  MessageSquare,
 } from 'lucide-react';
 import type {
   CharacterProfile,
@@ -61,6 +63,7 @@ interface GalleryGridViewProps {
   onOpenInspector: (image: ImageRecord) => void;
   onOpenCharacterGallery?: (characterId: number) => void;
   onReusePrompt?: (image: ImageRecord) => void;
+  onOpenConversation?: (image: ImageRecord) => void;
   onQuickRate: (id: number, rating: number) => void;
   onQuickFavorite: (id: number, nextFav: boolean) => void;
   onQuickReject?: (id: number, nextRejected: boolean) => void;
@@ -126,6 +129,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   onOpenInspector,
   onOpenCharacterGallery,
   onReusePrompt,
+  onOpenConversation,
   onQuickRate,
   onQuickFavorite,
   onQuickReject,
@@ -596,23 +600,35 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                   } transition-transform duration-200 group-hover:scale-[1.02]`}
                 />
 
-                {/* Top Overlay Controls (Select & Favorite) */}
+                {/* Top Overlay Controls (Select, Series Badge & Favorite) */}
                 <div
                   className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none z-10"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  <button
-                    type="button"
-                    onClick={() => onToggleSelect(img.id)}
-                    aria-label={`Select ${img.filename}`}
-                    className={`pointer-events-auto p-1.5 rounded-md bg-black/65 backdrop-blur-xs text-zinc-100 hover:bg-black/85 transition-opacity cursor-pointer mobile-show-actions ${
-                      isSelected
-                        ? 'opacity-100 text-indigo-400'
-                        : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'
-                    }`}
-                  >
-                    {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => onToggleSelect(img.id)}
+                      aria-label={`Select ${img.filename}`}
+                      className={`pointer-events-auto p-1.5 rounded-md bg-black/65 backdrop-blur-xs text-zinc-100 hover:bg-black/85 transition-opacity cursor-pointer mobile-show-actions ${
+                        isSelected
+                          ? 'opacity-100 text-indigo-400'
+                          : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'
+                      }`}
+                    >
+                      {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                    </button>
+
+                    {(img.seriesCount || 1) > 1 && (
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-black/75 backdrop-blur-xs border border-indigo-500/40 text-[11px] font-mono font-semibold text-indigo-200 shadow-sm pointer-events-none"
+                        title={`${img.seriesCount} images stacked in this series`}
+                      >
+                        <Layers className="w-3 h-3 text-indigo-400" />
+                        <span>{img.seriesCount}</span>
+                      </span>
+                    )}
+                  </div>
 
                   <button
                     type="button"
@@ -652,6 +668,23 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                     ))}
                   </div>
                   <div className="flex items-center gap-1">
+                    {onOpenConversation && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenConversation(img);
+                        }}
+                        className="p-1 text-amber-300 hover:text-amber-200 hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
+                        title={
+                          img.chatSnapshot && img.chatSnapshot.length > 0
+                            ? 'Continue Conversation in Quick Gen'
+                            : 'Iterate on this image in Quick Gen Conversation mode'
+                        }
+                      >
+                        <MessageSquare className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     {onReusePrompt && (
                       <button
                         type="button"

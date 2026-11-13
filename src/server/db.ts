@@ -536,6 +536,31 @@ export function runMigrations(): void {
         ALTER TABLE lm_studio_settings ADD COLUMN conversation_system_prompt TEXT NOT NULL DEFAULT '';
       `,
     },
+    {
+      version: 11,
+      name: 'image_series_and_conversation_history',
+      sql: `
+        CREATE TABLE IF NOT EXISTS image_series (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          poster_image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS image_series_items (
+          series_id INTEGER NOT NULL REFERENCES image_series(id) ON DELETE CASCADE,
+          image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+          step_order INTEGER NOT NULL DEFAULT 0,
+          chat_snapshot_json TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (series_id, image_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_image_series_items_image ON image_series_items(image_id);
+        CREATE INDEX IF NOT EXISTS idx_image_series_items_series_step ON image_series_items(series_id, step_order);
+        ALTER TABLE generation_batches ADD COLUMN series_id INTEGER;
+        ALTER TABLE generation_batches ADD COLUMN branch_from_image_id INTEGER;
+        ALTER TABLE generation_batches ADD COLUMN chat_snapshot_json TEXT;
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

@@ -12,6 +12,7 @@ import type {
   LoraExplorerItem,
   ModelInventoryItem,
   PromptTemplate,
+  QuickGenChatMessage,
   ReproductionValidationResult,
   SavedSearchPreset,
   VisualTagItem,
@@ -92,13 +93,13 @@ export const api = {
       body: JSON.stringify(filters),
     }),
 
-  getImageDetail: (id: number) =>
+  getImageDetail: (id: number, seriesId?: number | null) =>
     requestJson<{
       image: ImageRecord;
       rawMetadata: Record<string, string>;
       visualWorkflowJson: string | null;
       apiWorkflowJson: string | null;
-    }>(`/api/images/${id}`),
+    }>(`/api/images/${id}${seriesId ? `?seriesId=${seriesId}` : ''}`),
 
   updateImageAnnotations: (
     id: number,
@@ -505,6 +506,9 @@ export const api = {
     loras: GenerationLoraSelection[];
     checkpointName?: string;
     baseSeed?: number;
+    seriesId?: number | null;
+    branchFromImageId?: number | null;
+    chatSnapshot?: QuickGenChatMessage[];
   }) =>
     requestJson<{ batch: GenerationBatchRecord; batches: GenerationBatchRecord[] }>(
       '/api/generation/submit-batch',

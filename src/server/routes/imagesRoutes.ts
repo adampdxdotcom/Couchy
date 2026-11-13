@@ -10,6 +10,10 @@ const createZipArchive = ((archiverPkg as any).default || archiverPkg) as (
 ) => archiverPkg.Archiver;
 import { appConfig } from '../config.ts';
 import { hydrateImageRecords, queryGalleryImages } from '../services/galleryQueryService.ts';
+import {
+  enrichSingleImageWithSeries,
+  setExclusiveSeriesFavorite,
+} from '../services/seriesService.ts';
 import { ensureWebpThumbnail } from '../services/scannerService.ts';
 import { submitImageUpscale } from '../services/comfyuiService.ts';
 import type { GalleryFilterState } from '../../shared/types.ts';
@@ -60,7 +64,11 @@ imagesRouter.get('/:id', (req, res) => {
       return;
     }
 
-    const hydrated = hydrateImageRecords([row])[0];
+    const requestedSeriesId = req.query.seriesId ? Number(req.query.seriesId) : null;
+    const rawHydrated = hydrateImageRecords([row])[0];
+    const hydrated = requestedSeriesId
+      ? enrichSingleImageWithSeries(rawHydrated, requestedSeriesId)
+      : rawHydrated;
     const wf = db
       .prepare(
         `SELECT w.* FROM image_workflows iw
@@ -205,6 +213,10 @@ imagesRouter.patch('/:id/annotations', (req, res) => {
        WHERE content_hash = ?`
     ).run(nextRating, nextFav, nextRej, nextArch, nextNotes, favAt, img.content_hash);
 
+    if (isFavorite !== undefined) {
+      setExclusiveSeriesFavorite(img.id, Boolean(isFavorite));
+    }
+
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to update annotations' });
@@ -269,6 +281,7 @@ imagesRouter.post('/bulk', (req, res) => {
           db.prepare(
             'UPDATE ratings SET is_favorite = ?, favorited_at = CASE WHEN ? = 1 THEN datetime(\'now\') ELSE NULL END WHERE content_hash = ?'
           ).run(isFavorite ? 1 : 0, isFavorite ? 1 : 0, img.content_hash);
+          setExclusiveSeriesFavorite(img.id, Boolean(isFavorite));
         }
         if (isRejected !== undefined) {
           db.prepare('UPDATE ratings SET is_rejected = ? WHERE content_hash = ?').run(

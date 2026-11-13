@@ -44,6 +44,8 @@ export function useQuickGenSubmit({
   const [agentEnabled, setAgentEnabled] = useState(false);
   const [conversationEnabled, setConversationEnabled] = useState(false);
   const [chatMessages, setChatMessages] = useState<QuickGenChatMessage[]>([]);
+  const [activeSeriesId, setActiveSeriesId] = useState<number | null>(null);
+  const [branchFromImageId, setBranchFromImageId] = useState<number | null>(null);
   const [isChatting, setIsChatting] = useState(false);
 
   const [aspectRatio, setAspectRatio] = useState('2:3 (Portrait Photo)');
@@ -78,12 +80,15 @@ export function useQuickGenSubmit({
     }
   }, [lmStudioOnline, agentEnabled, conversationEnabled]);
 
-  // Turn off conversation mode if Agent is turned off
+  // Turn off conversation mode if Agent is turned off; lock batchCount to 1 in Conversation mode
   useEffect(() => {
     if (!agentEnabled && conversationEnabled) {
       setConversationEnabled(false);
     }
-  }, [agentEnabled, conversationEnabled]);
+    if (conversationEnabled && batchCount !== 1) {
+      setBatchCount(1);
+    }
+  }, [agentEnabled, conversationEnabled, batchCount]);
 
   const pulseHighlight = (durationMs = 1400) => {
     if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
@@ -201,11 +206,26 @@ export function useQuickGenSubmit({
     }
 
     if (prefillPayload.aspectRatio) setAspectRatio(prefillPayload.aspectRatio);
+    if (prefillPayload.megapixels !== undefined) {
+      setMegapixels(snapToHalfMp(prefillPayload.megapixels, workflowDefaultMp));
+    }
     if (prefillPayload.batchCount !== undefined) setBatchCount(prefillPayload.batchCount);
+
+    if (prefillPayload.conversationMode) {
+      setAgentEnabled(true);
+      setConversationEnabled(true);
+      setBatchCount(1);
+      setChatMessages(prefillPayload.chatMessages || []);
+      setActiveSeriesId(prefillPayload.seriesId ?? null);
+      setBranchFromImageId(prefillPayload.branchFromImageId ?? null);
+    } else {
+      setActiveSeriesId(null);
+      setBranchFromImageId(null);
+    }
 
     focusInputAtEnd(60, true);
     pulseHighlight(1400);
-  }, [prefillPayload, loras]);
+  }, [prefillPayload, loras, workflowDefaultMp]);
 
   const handleInterrogateImageFile = async (file: File) => {
     if (!lmStudioOnline) {
@@ -363,6 +383,9 @@ export function useQuickGenSubmit({
         triggerWord,
         negativePrompt: '',
         loras: selectedLoras,
+        seriesId: conversationEnabled ? activeSeriesId : null,
+        branchFromImageId: conversationEnabled ? branchFromImageId : null,
+        chatSnapshot: conversationEnabled ? chatMessages : undefined,
       });
 
       const submittedCount = res.batch.items.filter((i) => i.status === 'submitted').length;
@@ -387,6 +410,8 @@ export function useQuickGenSubmit({
       // Reset Quick Gen box & conversation back to default state
       setPrompt('');
       setChatMessages([]);
+      setActiveSeriesId(null);
+      setBranchFromImageId(null);
       setConversationEnabled(false);
       setAgentEnabled(false);
       setAttachedCharacter(null);
@@ -433,6 +458,10 @@ export function useQuickGenSubmit({
     setConversationEnabled,
     chatMessages,
     setChatMessages,
+    activeSeriesId,
+    setActiveSeriesId,
+    branchFromImageId,
+    setBranchFromImageId,
     isChatting,
     aspectRatio,
     setAspectRatio,

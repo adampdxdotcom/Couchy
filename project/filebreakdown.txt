@@ -41,19 +41,21 @@ SERVER: SERVICES
 - `src/server/services/comfyuiLiveMonitor.ts` — WebSocket `/ws` + `/queue` monitor building live ghost preview cards.
 - `src/server/services/scannerService.ts` — Chokidar watcher, recursive indexer, 384px WebP thumbnails, prompt/seed linking.
 - `src/server/services/pngMetadataParser.ts` — PNG chunk (`prompt`, `workflow`, `parameters`) metadata & LoRA/model parser.
-- `src/server/services/galleryQueryService.ts` — Boolean search parser, batch image hydration, filters, sort modes, LoRA aggregation.
+- `src/server/services/galleryQueryService.ts` — Boolean search parser, batch image hydration, series collapsing, filters, sort modes, LoRA aggregation.
+- `src/server/services/seriesService.ts` — Image iteration series/stack persistence, middle-of-stack branching, upscale stacking, exclusive poster favorite.
 - `src/server/services/characterService.ts` — Character profile builder, transactional merge, heuristic auto-matching engine.
-- `src/server/services/lmStudioService.ts` — LM Studio photo-set prompt generator & hybrid Vision/WD14 image interrogation.
+- `src/server/services/lmStudioService.ts` — LM Studio photo-set prompt generator, 10-turn Quick Gen Conversation & hybrid Vision/WD14 interrogation.
 - `src/server/services/visualTaggerService.ts` — Local WD14 v3 ONNX Runtime keyword tagger & background queue.
 - `src/server/services/modelManagerService.ts` — Civitai & Hugging Face model search and SHA-256-verified `.part` downloader.
 - `src/server/services/backupService.ts` — SQLite binary snapshots (`PRAGMA integrity_check`) & JSON annotation export/restore.
 
-FRONTEND: TOP-LEVEL VIEWS
+FRONTEND: TOP-LEVEL VIEWS & INSPECTOR
 - `src/App.tsx` — Root workspace coordinator, tab routing, live queue polling, global gallery/metadata state.
 - `src/components/TopNavHeader.tsx` — Sticky 3-zone header (`Gallery`, `Characters`, `Generation`, `LoRAs`, `Workflow`, `System`) & notification pill.
 - `src/components/GalleryFilterBar.tsx` — Sticky boolean search bar, expandable multi-criteria filter drawer, layout/sort controls, presets.
-- `src/components/GalleryGridView.tsx` — Standard/Masonry/Compact gallery grid, live ghost cards, infinite scroll, multi-select bulk bar.
-- `src/components/ImageInspectorDrawer.tsx` — Split-pane lightbox & metadata/LoRA/tag inspector with standalone Upscale & workflow reproduction.
+- `src/components/GalleryGridView.tsx` — Standard/Masonry/Compact gallery grid, series stack badges, live ghost cards, infinite scroll, bulk bar.
+- `src/components/ImageInspectorDrawer.tsx` — Split-pane lightbox & metadata/LoRA/tag inspector with standalone Upscale & Conversation actions.
+- `src/components/inspector/SeriesIterationsStrip.tsx` — Bottom-docked series thumbnail strip in the Inspector for switching & branching iterations.
 - `src/components/CharacterExplorerView.tsx` — Container switching between character roster and individual character profile views.
 - `src/components/GenerationStudioView.tsx` — 4-step Photo Set Director orchestrator, outgoing shot queue preview, and batch history.
 - `src/components/LoraAndModelManagerView.tsx` — LoRA Explorer (`@mention`/nickname/category), Missing Dependencies/Inventory, model downloader.

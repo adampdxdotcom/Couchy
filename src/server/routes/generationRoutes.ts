@@ -24,6 +24,7 @@ import {
   invalidateComfyQueueCache,
 } from '../services/comfyuiLiveMonitor.ts';
 import { pollComfyPromptCompletion } from '../services/comfyuiPoller.ts';
+import { attachGeneratedImageToSeries } from '../services/seriesService.ts';
 import {
   normalizeResolutionSelectorRatio,
   type GenerationBatchRecord,
@@ -401,11 +402,47 @@ function trackGenerationItem(
         copyImageMetadataToDerivedImage(baseImageId, firstImageId);
       }
 
+      const resolvedOutputImageId = firstImageId ?? baseImageId ?? null;
       db.prepare(
         `UPDATE generation_items
          SET status = 'completed', output_image_id = COALESCE(?, output_image_id), completed_at = datetime('now')
          WHERE id = ?`
-      ).run(firstImageId ?? baseImageId ?? null, itemId);
+      ).run(resolvedOutputImageId, itemId);
+
+      if (resolvedOutputImageId) {
+        try {
+          const batchMeta = db
+            .prepare(
+              `SELECT gb.series_id, gb.branch_from_image_id, gb.chat_snapshot_json
+               FROM generation_items gi
+               JOIN generation_batches gb ON gb.id = gi.batch_id
+               WHERE gi.id = ?`
+            )
+            .get(itemId) as
+            | {
+                series_id: number | null;
+                branch_from_image_id: number | null;
+                chat_snapshot_json: string | null;
+              }
+            | undefined;
+
+          if (
+            batchMeta &&
+            (batchMeta.series_id ||
+              batchMeta.branch_from_image_id ||
+              (batchMeta.chat_snapshot_json && batchMeta.chat_snapshot_json.trim()))
+          ) {
+            attachGeneratedImageToSeries({
+              imageId: resolvedOutputImageId,
+              seriesId: batchMeta.series_id,
+              branchFromImageId: batchMeta.branch_from_image_id,
+              chatSnapshotJson: batchMeta.chat_snapshot_json,
+            });
+          }
+        } catch (seriesErr) {
+          console.warn('Failed to attach generated image to series:', seriesErr);
+        }
+      }
     },
     onError: (errMsg) => {
       db.prepare(
@@ -436,6 +473,9 @@ generationRouter.post('/submit-batch', async (req, res) => {
       loras,
       checkpointName,
       baseSeed,
+      seriesId,
+      branchFromImageId,
+      chatSnapshot,
     } = req.body || {};
 
     if (!workflowId) {
@@ -482,12 +522,17 @@ generationRouter.post('/submit-batch', async (req, res) => {
       ? String(checkpointName).trim()
       : wfDefaultCkpt;
 
+    const serializedChatSnapshot =
+      Array.isArray(chatSnapshot) && chatSnapshot.length > 0
+        ? JSON.stringify(chatSnapshot)
+        : null;
+
     // 1. Create batch and items in SQLite
     const batchInfo = db
       .prepare(
         `INSERT INTO generation_batches
-          (character_id, workflow_id, theme_title, mode, total_count, aspect_ratio, megapixels, width, height, checkpoint_name, lora_count)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (character_id, workflow_id, theme_title, mode, total_count, aspect_ratio, megapixels, width, height, checkpoint_name, lora_count, series_id, branch_from_image_id, chat_snapshot_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         characterId ? Number(characterId) : null,
@@ -500,7 +545,10 @@ generationRouter.post('/submit-batch', async (req, res) => {
         computedWidth,
         computedHeight,
         resolvedCheckpointName,
-        activeLorasCount
+        activeLorasCount,
+        seriesId ? Number(seriesId) : null,
+        branchFromImageId ? Number(branchFromImageId) : null,
+        serializedChatSnapshot
       );
     const batchId = Number(batchInfo.lastInsertRowid);
 

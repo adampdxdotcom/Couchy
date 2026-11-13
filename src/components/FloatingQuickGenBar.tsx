@@ -189,6 +189,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               megapixels={submitState.megapixels}
               workflowDefaultMp={submitState.workflowDefaultMp}
               batchCount={submitState.batchCount}
+              conversationEnabled={submitState.conversationEnabled}
               onChangeAspectRatio={submitState.setAspectRatio}
               onChangeMegapixels={submitState.setMegapixels}
               onChangeBatchCount={submitState.setBatchCount}
@@ -273,7 +274,11 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                 onSubmitPrompt={(proposedPrompt) =>
                   submitState.handleSubmitProposedPrompt(proposedPrompt, mentions.resetMentions)
                 }
-                onClearChat={() => submitState.setChatMessages([])}
+                onClearChat={() => {
+                  submitState.setChatMessages([]);
+                  submitState.setActiveSeriesId(null);
+                  submitState.setBranchFromImageId(null);
+                }}
               />
             )}
 

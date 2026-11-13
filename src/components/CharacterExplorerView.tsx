@@ -30,6 +30,7 @@ interface CharacterExplorerViewProps {
   onQuickRate: (id: number, rating: number) => void;
   onQuickFavorite?: (id: number, nextFav: boolean) => void;
   onReusePrompt?: (img: ImageRecord) => void;
+  onOpenConversation?: (img: ImageRecord) => void;
   onQuickReject?: (id: number, nextRejected: boolean) => void;
   onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
@@ -52,6 +53,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   onQuickRate,
   onQuickFavorite,
   onReusePrompt,
+  onOpenConversation,
   onQuickReject,
   onPushToast,
 }) => {
@@ -214,6 +216,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
             onQuickFavorite={onQuickFavorite}
             onSetPortrait={handleSetPortrait}
             onReusePrompt={onReusePrompt}
+            onOpenConversation={onOpenConversation}
             onQuickReject={onQuickReject}
             isExpandable={canExpandHighestRated}
             isExpanded={isHighestRatedExpanded}
@@ -233,6 +236,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
           onQuickFavorite={onQuickFavorite}
           onSetPortrait={handleSetPortrait}
           onReusePrompt={onReusePrompt}
+          onOpenConversation={onOpenConversation}
           onQuickReject={onQuickReject}
           emptyText="No confirmed images yet. Assign images from the gallery or confirm suggestions above."
         />

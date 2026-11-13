@@ -56,15 +56,31 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
     > or *"Shift the scene from golden hour sunlight to midnight rain over 6 shots"*
   - Preserves your attached character's trigger words, LoRA context, and visual continuity across every generated frame.
 
+- **Interactive Agent Conversation Mode (`Agent` &rarr; `Conversation`)**:
+  - When **Agent** is enabled, click the **Conversation** button to expand the Quick Gen dock into a 12–15 line inline conversation view (no separate chat window).
+  - Brainstorm lighting, framing, wardrobe, mood, and scene details back-and-forth with your local LLM (sending up to the last 10 messages of context per turn).
+  - Whenever the LLM has a ready-to-generate prompt, it presents a **Proposed Prompt** card with a one-click **Submit Prompt** button—or you can keep chatting to refine it further.
+  - Multi-image batch generation is automatically locked to `x1` during Conversation mode. Submitting a proposed prompt dispatches the job to ComfyUI, clears the conversation, and returns the Quick Gen box to its compact default state.
+  - The guiding system prompt for Conversation mode is fully editable (with a **Reset to Default** option) under **System &rarr; LM Studio Prompt Director & Guiding Templates**.
+
+- **Stacked Image Iterations, Conversation History & Branching**:
+  - **Persistent Conversation Snapshots**: Every image generated in Conversation mode saves its conversation history snapshot and links iterations into a stacked **Image Series**.
+  - **Continue or Start a Stack from Any Image**: Click the **Conversation (`MessageSquare`)** icon on any gallery card or in the Image Inspector preview to reopen that iteration's saved conversation in Quick Gen—or start a new conversation stack seeded from any standalone image's prompt.
+  - **Continue from Latest vs. Branch from Middle**:
+    - Continuing a conversation from the **latest** image in a series appends the new generation to that same stack.
+    - Continuing a conversation from an image in the **middle** of a stack (e.g., Step `#3` of `5`) splits off a **new stack** upon submission, copying the ancestor lineage (`#1..#3`) and their conversation edit history into the new series while leaving the original stack untouched.
+  - **Automatic Upscale Stacking**: Upscaling any image from the Inspector (`POST /api/images/:id/upscale`) automatically stacks the upscaled output onto the source image's series regardless of whether it originated in Conversation mode.
+  - **Exclusive Poster / Hearted Image**: Within an image stack, only one iteration can be hearted/favorited at a time. That hearted image acts as the stack's **Poster Image** in both the Main Gallery and Character Gallery; if no iteration is hearted, the most recent iteration is shown.
+
 - **Workflow, Aspect Ratio & Batch Size Selector**:
-  - Click the workflow/ratio pill (e.g., `Krea2_turbo · 2:3 · x1`) to open the quick settings popover:
+  - Click the workflow/ratio pill (e.g., `2:3 · 3MP · x1`) to open the quick settings popover:
     - **Aspect Ratio Presets**: `1:1`, `9:16`, `16:9`, `3:4`, `4:3`, `2:3`, and `3:2` (mapped directly to your workflow's resolution/aspect node).
-    - **Number of Generations**: `x1`, `x2`, `x4`, `x6`, or `x8` images per batch.
-    - **Resolution**: From .5mp up to 10mp selectable. Up to 3mp is native resolution, anything higher is upscaled from 3mp with a 4x upscaler, and then downscaled.
+    - **Number of Generations**: `x1`, `x2`, `x4`, `x6`, or `x8` images per batch (locked to `x1` when Conversation mode is enabled).
+    - **Resolution**: From `0.5 MP` up to `10.0 MP` selectable. Up to `3.0 MP` renders natively; higher targets automatically trigger the inline `4x` ESRGAN upscale + downscale pass.
   - Automatically displays and uses the attached character's preferred workflow if configured, or falls back to your default ComfyUI workflow.
 
 - **One-Click "Reuse Prompt" Integration**:
-  - Clicking **Reuse Prompt** (`RotateCcw`) on any gallery card or full-screen image inspector automatically expands the Quick Gen Box, fills in the positive prompt, matches the original image's aspect ratio preset, and re-attaches the confirmed character.
+  - Clicking **Reuse Prompt** (`RotateCcw`) on any gallery card or full-screen image inspector automatically expands the Quick Gen Box, fills in the positive prompt, matches the original image's aspect ratio preset, and re-attaches the confirmed character and LoRAs.
 
 ---
 
@@ -73,14 +89,18 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
 - **Automatic Recognition**: When ComfyUI finishes rendering an image, Couchy parses the embedded LoRAs and prompt text. If a character's LoRA or trigger word is detected, the image is automatically tagged and added to that character's personal gallery.
 - **Multi-Character Support**: Assign multiple characters to a single image, organize aliases, and use Assisted Character Identification to find untagged appearances.
 
-### 3. Extensive Gallery & Sticky Filters
-- **Virtualized Grid**: Fast, smooth scrolling across libraries with thousands of images.
-- **Sticky Search & Collapsible Filters**: On mobile and desktop, search prompts and filenames with a top-locked bar. Tap the filter toggle to slide open controls for:
+### 3. Extensive Gallery, Clean Card Info & Series Inspector
+- **Virtualized Grid & Streamlined Card Footer**: Fast, smooth scrolling across libraries with thousands of images. Gallery cards display a clean 3-row info footer:
+  1. **Character Name** (clickable to jump directly to that character's gallery)
+  2. **LoRA Pills** (showing clean nicknames/names for every active LoRA)
+  3. **Image Details** (`width×height · aspect ratio · checkpoint`)
+- **Series Stack Badges**: Cards belonging to a multi-image iteration or upscale stack display a `Layers` badge with the stack count while collapsing the stack to a single gallery card (the hearted poster image, or the newest iteration if none is hearted).
+- **Sticky Search & Collapsible Filters**: On mobile and desktop, search prompts and metadata with a top-locked bar. Tap the filter toggle to slide open controls for:
   - Star ratings ($1–5$ stars) and Favorites filter
   - Specific Character, Checkpoint, and LoRA filters
   - Aspect ratio and resolution dimensions
-  - Sort orders: Newest, Oldest, Highest Rated, Seed, and Resolution
-- **Full-Screen Inspector**: Inspect embedded ComfyUI workflows, node parameters, prompt text chunks, and sampler steps. On mobile, details dock cleanly to the bottom edge so images stay completely visible.
+  - Sort orders: Newest, Oldest, Highest Rated, Recently Favorited, File Size, and Checkpoint
+- **Full-Screen Inspector & Series Thumbnail Strip**: Inspect embedded ComfyUI workflows, node parameters, prompt text chunks, and sampler steps, or run standalone `4x` ESRGAN upscales. When inspecting a stacked series, a horizontal **Series Stack thumbnail strip** docks at the bottom of the metadata column so you can switch between iterations in place, heart a poster image, or branch a conversation from any step.
 
 ### 4. Workflows & Dynamic Node Mapper
 - **Import Any ComfyUI Workflow**: Import API or visual workflow JSON files directly.

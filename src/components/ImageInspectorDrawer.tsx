@@ -18,10 +18,12 @@ import {
   RefreshCw,
   Trash2,
   ArrowUpRight,
+  MessageSquare,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
+import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
 import type {
   CharacterProfile,
   ImageRecord,
@@ -33,6 +35,7 @@ interface ImageInspectorDrawerProps {
   onPrev?: () => void;
   onNext?: () => void;
   onUpdated: () => void;
+  onOpenConversation?: (image: ImageRecord) => void;
   characters: CharacterProfile[];
   collections: { id: number; name: string }[];
   onFilterByLora: (loraFilename: string) => void;
@@ -50,6 +53,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   onPrev,
   onNext,
   onUpdated,
+  onOpenConversation,
   characters,
   collections,
   onFilterByLora,
@@ -58,6 +62,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   onFilterByVisualKeyword,
 }) => {
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [selectedIterationId, setSelectedIterationId] = useState<number>(image.id);
   const [detailData, setDetailData] = useState<{
     image?: ImageRecord;
     rawMetadata: Record<string, string>;
@@ -81,6 +86,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   const [showRawWorkflow, setShowRawWorkflow] = useState(false);
 
   const activeImage = detailData?.image || image;
+  const seriesContextId = image.seriesId ?? detailData?.image?.seriesId ?? null;
   const currentMegapixels =
     activeImage.width > 0 && activeImage.height > 0
       ? (activeImage.width * activeImage.height) / 1_000_000
@@ -95,16 +101,14 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     getSuggestedUpscaleMp(currentMegapixels)
   );
 
+  // Sync selectedIterationId when outer image prop changes
   useEffect(() => {
-    setEditablePositivePrompt(image.positivePrompt || '');
-    setNotes(image.notes);
-    setReproStatusMsg(null);
-    setReproStatusIsError(false);
-    const imgMp =
-      image.width > 0 && image.height > 0 ? (image.width * image.height) / 1_000_000 : 1.0;
-    setUpscaleTargetMp(getSuggestedUpscaleMp(imgMp));
+    setSelectedIterationId(image.id);
+  }, [image.id]);
+
+  const refreshActiveDetail = (targetId = selectedIterationId) => {
     api
-      .getImageDetail(image.id)
+      .getImageDetail(targetId, seriesContextId)
       .then((res) => {
         setDetailData({
           image: res.image,
@@ -112,9 +116,22 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
           visualWorkflowJson: res.visualWorkflowJson,
           apiWorkflowJson: res.apiWorkflowJson,
         });
+        setEditablePositivePrompt(res.image.positivePrompt || '');
+        setNotes(res.image.notes || '');
+        const imgMp =
+          res.image.width > 0 && res.image.height > 0
+            ? (res.image.width * res.image.height) / 1_000_000
+            : 1.0;
+        setUpscaleTargetMp(getSuggestedUpscaleMp(imgMp));
       })
       .catch(() => {});
-  }, [image.id, image.notes, image.positivePrompt, image.width, image.height]);
+  };
+
+  useEffect(() => {
+    setReproStatusMsg(null);
+    setReproStatusIsError(false);
+    refreshActiveDetail(selectedIterationId);
+  }, [selectedIterationId, image.id, image.seriesId]);
 
   // Keyboard navigation (Escape, Left, Right)
   useEffect(() => {
@@ -141,7 +158,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   };
 
   const handleSaveNotes = async () => {
-    await api.updateImageAnnotations(image.id, { notes });
+    await api.updateImageAnnotations(activeImage.id, { notes });
+    refreshActiveDetail(activeImage.id);
     onUpdated();
   };
 
@@ -151,8 +169,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     setReproStatusIsError(false);
     try {
       const res = await api.submitReproduction({
-        imageId: image.id,
-        workflowId: image.workflowId ?? undefined,
+        imageId: activeImage.id,
+        workflowId: activeImage.workflowId ?? undefined,
         positivePrompt: editablePositivePrompt,
       });
       setReproStatusIsError(false);
@@ -171,10 +189,10 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     setReproStatusMsg(null);
     setReproStatusIsError(false);
     try {
-      const res = await api.upscaleImage(image.id, upscaleTargetMp);
+      const res = await api.upscaleImage(activeImage.id, upscaleTargetMp);
       setReproStatusIsError(false);
       setReproStatusMsg(
-        `Upscale queued at ${res.targetMegapixels.toFixed(1)} MP (Prompt ID: ${res.promptId})`
+        `Upscale queued at ${res.targetMegapixels.toFixed(1)} MP — will stack automatically on completion`
       );
       onUpdated();
     } catch (err: any) {
@@ -208,35 +226,56 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             : 'flex-1 p-4 pb-14 lg:pb-4'
         }`}
       >
-        {/* Full-Screen Toggle Button (Top Right) */}
-        {isFullScreen ? (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsFullScreen(false);
-            }}
-            className="absolute top-4 right-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-100 border border-zinc-700/80 shadow-2xl backdrop-blur-md text-xs font-medium cursor-pointer"
-            title="Exit Full Screen (Esc)"
-          >
-            <Minimize2 className="w-4 h-4 text-indigo-400" />
-            <span>Exit Full Screen</span>
-            <span className="text-zinc-500 text-[10px] hidden sm:inline ml-0.5 font-mono">ESC</span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setIsFullScreen(true);
-            }}
-            className="absolute top-4 right-4 z-10 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700/60 text-xs font-medium cursor-pointer backdrop-blur-xs shadow-md"
-            title="Expand Full Screen"
-          >
-            <Maximize2 className="w-3.5 h-3.5 text-indigo-400" />
-            <span className="hidden sm:inline">Full Screen</span>
-          </button>
-        )}
+        {/* Top-Right Preview Controls (Conversation & Full-Screen Toggle) */}
+        <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+          {onOpenConversation && !isFullScreen && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenConversation(activeImage);
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 border border-amber-400/50 text-xs font-medium cursor-pointer backdrop-blur-xs shadow-md transition-colors"
+              title="Open or continue Conversation mode in Quick Gen from this image"
+            >
+              <MessageSquare className="w-3.5 h-3.5 text-amber-300" />
+              <span className="hidden sm:inline">
+                {activeImage.chatSnapshot && activeImage.chatSnapshot.length > 0
+                  ? 'Continue Chat'
+                  : 'Iterate in Chat'}
+              </span>
+            </button>
+          )}
+
+          {isFullScreen ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsFullScreen(false);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-100 border border-zinc-700/80 shadow-2xl backdrop-blur-md text-xs font-medium cursor-pointer"
+              title="Exit Full Screen (Esc)"
+            >
+              <Minimize2 className="w-4 h-4 text-indigo-400" />
+              <span>Exit Full Screen</span>
+              <span className="text-zinc-500 text-[10px] hidden sm:inline ml-0.5 font-mono">ESC</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsFullScreen(true);
+              }}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-700/60 text-xs font-medium cursor-pointer backdrop-blur-xs shadow-md"
+              title="Expand Full Screen"
+            >
+              <Maximize2 className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="hidden sm:inline">Full Screen</span>
+            </button>
+          )}
+        </div>
 
         {/* Previous Image Arrow */}
         {onPrev && (
@@ -257,8 +296,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
         {/* Centered Image */}
         <img
-          src={image.originalUrl}
-          alt={image.filename}
+          src={activeImage.originalUrl}
+          alt={activeImage.filename}
           referrerPolicy="no-referrer"
           onClick={(e) => {
             e.stopPropagation();
@@ -294,15 +333,15 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
         >
           <div className="flex items-center gap-1.5 sm:gap-2 font-mono tabular-nums truncate text-xs">
             <span className="text-zinc-200 font-sans font-medium truncate max-w-[130px] xs:max-w-[180px] sm:max-w-xs">
-              {image.filename}
+              {activeImage.filename}
             </span>
             <span aria-hidden="true" className="text-zinc-600">·</span>
-            <span className="shrink-0">{image.width}×{image.height}</span>
+            <span className="shrink-0">{activeImage.width}×{activeImage.height}</span>
             <span aria-hidden="true" className="text-zinc-600 hidden sm:inline">·</span>
-            <span className="hidden sm:inline shrink-0">{formatBytes(image.fileSize)}</span>
+            <span className="hidden sm:inline shrink-0">{formatBytes(activeImage.fileSize)}</span>
             <span aria-hidden="true" className="text-zinc-600 hidden md:inline">·</span>
             <span className="hidden md:inline text-zinc-500 font-mono shrink-0">
-              SHA256: {image.contentHash.slice(0, 10)}…
+              SHA256: {activeImage.contentHash.slice(0, 10)}…
             </span>
           </div>
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
@@ -312,7 +351,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
               </span>
             )}
             <a
-              href={`/api/images/${image.id}/file?download=1`}
+              href={`/api/images/${activeImage.id}/file?download=1`}
               className="inline-flex items-center gap-1.5 text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 rounded hover:bg-zinc-800/80 transition-colors shrink-0"
               title="Download original unchanged file"
             >
@@ -339,16 +378,17 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   key={star}
                   type="button"
                   onClick={async () => {
-                    await api.updateImageAnnotations(image.id, {
-                      rating: image.rating === star ? 0 : star,
+                    await api.updateImageAnnotations(activeImage.id, {
+                      rating: activeImage.rating === star ? 0 : star,
                     });
+                    refreshActiveDetail(activeImage.id);
                     onUpdated();
                   }}
                   className="p-0.5 cursor-pointer"
                 >
                   <Star
                     className={`w-4 h-4 ${
-                      star <= image.rating
+                      star <= activeImage.rating
                         ? 'fill-amber-400 text-amber-400'
                         : 'text-zinc-500 hover:text-amber-300'
                     }`}
@@ -360,36 +400,46 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             <button
               type="button"
               onClick={async () => {
-                await api.updateImageAnnotations(image.id, { isFavorite: !image.isFavorite });
+                await api.updateImageAnnotations(activeImage.id, {
+                  isFavorite: !activeImage.isFavorite,
+                });
+                refreshActiveDetail(activeImage.id);
                 onUpdated();
               }}
               className={`p-1.5 rounded-lg border cursor-pointer shrink-0 ${
-                image.isFavorite
+                activeImage.isFavorite
                   ? 'bg-rose-500/15 border-rose-500/40 text-rose-400'
                   : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-rose-300'
               }`}
-              title="Favorite"
+              title={
+                (activeImage.seriesItems?.length || 0) > 1
+                  ? 'Set as Series Poster (only one image in a series can be favorited)'
+                  : 'Favorite'
+              }
             >
-              <Heart className={`w-4 h-4 ${image.isFavorite ? 'fill-rose-400' : ''}`} />
+              <Heart className={`w-4 h-4 ${activeImage.isFavorite ? 'fill-rose-400' : ''}`} />
             </button>
 
             <button
               type="button"
               onClick={async () => {
-                await api.updateImageAnnotations(image.id, { isRejected: !image.isRejected });
+                await api.updateImageAnnotations(activeImage.id, {
+                  isRejected: !activeImage.isRejected,
+                });
+                refreshActiveDetail(activeImage.id);
                 onUpdated();
               }}
               className={`p-1.5 rounded-lg border cursor-pointer shrink-0 ${
-                image.isRejected
+                activeImage.isRejected
                   ? 'bg-rose-500/20 border-rose-500/50 text-rose-400'
                   : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-rose-300'
               }`}
-              title={image.isRejected ? 'Restore from Rejected' : 'Reject Image (Hide from Library)'}
+              title={activeImage.isRejected ? 'Restore from Rejected' : 'Reject Image (Hide from Library)'}
             >
               <Trash2 className="w-4 h-4" />
             </button>
 
-            {renderDependencyLabel(image.dependencyStatus)}
+            {renderDependencyLabel(activeImage.dependencyStatus)}
           </div>
 
           <button
@@ -410,7 +460,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
               Assigned Character
             </h4>
 
-            {image.characters.length === 0 ? (
+            {activeImage.characters.length === 0 ? (
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-0.5">
                 <select
                   value={selectedCharId}
@@ -437,13 +487,14 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                     onClick={async () => {
                       if (!selectedCharId) return;
                       await api.updateCharacterAssociationStatus({
-                        imageId: image.id,
+                        imageId: activeImage.id,
                         characterId: Number(selectedCharId),
                         status: 'confirmed',
                         appearanceLabel: charAppearance.trim() || undefined,
                       });
                       setSelectedCharId('');
                       setCharAppearance('');
+                      refreshActiveDetail(activeImage.id);
                       onUpdated();
                     }}
                     className="px-3.5 py-2 sm:py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded cursor-pointer shrink-0"
@@ -454,7 +505,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
               </div>
             ) : (
               <div className="space-y-1.5">
-                {image.characters.map((ch) => (
+                {activeImage.characters.map((ch) => (
                   <div
                     key={ch.id}
                     className="flex items-center justify-between gap-2 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 min-w-0"
@@ -493,10 +544,11 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                             type="button"
                             onClick={async () => {
                               await api.updateCharacterAssociationStatus({
-                                imageId: image.id,
+                                imageId: activeImage.id,
                                 characterId: ch.characterId,
                                 status: 'confirmed',
                               });
+                              refreshActiveDetail(activeImage.id);
                               onUpdated();
                             }}
                             className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 rounded hover:bg-emerald-600/30 cursor-pointer"
@@ -509,10 +561,11 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                             type="button"
                             onClick={async () => {
                               await api.updateCharacterAssociationStatus({
-                                imageId: image.id,
+                                imageId: activeImage.id,
                                 characterId: ch.characterId,
                                 status: 'rejected',
                               });
+                              refreshActiveDetail(activeImage.id);
                               onUpdated();
                             }}
                             className="inline-flex items-center gap-1 px-2 py-1 bg-rose-600/20 border border-rose-500/40 text-rose-300 rounded hover:bg-rose-600/30 cursor-pointer"
@@ -527,10 +580,11 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                           type="button"
                           onClick={async () => {
                             await api.updateCharacterAssociationStatus({
-                              imageId: image.id,
+                              imageId: activeImage.id,
                               characterId: ch.characterId,
                               status: 'remove',
                             });
+                            refreshActiveDetail(activeImage.id);
                             onUpdated();
                           }}
                           className="text-zinc-500 hover:text-rose-400 px-1.5 py-0.5 cursor-pointer"
@@ -592,10 +646,10 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 <span className="font-display font-semibold text-zinc-200 uppercase tracking-wider">
                   Negative Prompt
                 </span>
-                {image.negativePrompt && (
+                {activeImage.negativePrompt && (
                   <button
                     type="button"
-                    onClick={() => copyText(image.negativePrompt!, 'neg')}
+                    onClick={() => copyText(activeImage.negativePrompt!, 'neg')}
                     className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 cursor-pointer"
                   >
                     {copiedField === 'neg' ? (
@@ -608,7 +662,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 )}
               </div>
               <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-zinc-300 leading-relaxed whitespace-pre-wrap max-h-28 overflow-y-auto">
-                {image.negativePrompt || (
+                {activeImage.negativePrompt || (
                   <span className="text-zinc-500 italic">None</span>
                 )}
               </div>
@@ -623,34 +677,34 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono tabular-nums">
               <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
                 <span className="block text-[10px] font-sans text-zinc-400">Checkpoint</span>
-                <span className="text-zinc-100 truncate block" title={image.checkpointName || ''}>
-                  {image.checkpointName || '—'}
+                <span className="text-zinc-100 truncate block" title={activeImage.checkpointName || ''}>
+                  {activeImage.checkpointName || '—'}
                 </span>
               </div>
               <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
                 <span className="block text-[10px] font-sans text-zinc-400">VAE</span>
-                <span className="text-zinc-100 truncate block">{image.vaeName || 'Baked / Default'}</span>
+                <span className="text-zinc-100 truncate block">{activeImage.vaeName || 'Baked / Default'}</span>
               </div>
               <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
                 <span className="block text-[10px] font-sans text-zinc-400">Seed</span>
-                <span className="text-zinc-100 truncate block">{image.seed ?? '—'}</span>
+                <span className="text-zinc-100 truncate block">{activeImage.seed ?? '—'}</span>
               </div>
               <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
                 <span className="block text-[10px] font-sans text-zinc-400">Steps / CFG</span>
                 <span className="text-zinc-100">
-                  {image.steps ?? '—'} / {image.cfg ?? '—'}
+                  {activeImage.steps ?? '—'} / {activeImage.cfg ?? '—'}
                 </span>
               </div>
               <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
                 <span className="block text-[10px] font-sans text-zinc-400">Sampler / Scheduler</span>
                 <span className="text-zinc-100 truncate block">
-                  {image.sampler || '—'} · {image.scheduler || '—'}
+                  {activeImage.sampler || '—'} · {activeImage.scheduler || '—'}
                 </span>
               </div>
               <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
                 <span className="block text-[10px] font-sans text-zinc-400">Denoise / Batch</span>
                 <span className="text-zinc-100">
-                  {image.denoise ?? '1.0'} · Batch {image.batchSize ?? 1}
+                  {activeImage.denoise ?? '1.0'} · Batch {activeImage.batchSize ?? 1}
                 </span>
               </div>
             </div>
@@ -665,13 +719,13 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
           {/* Section 4: Extracted LoRA Chain (Model & CLIP Strengths) */}
           <div className="space-y-2">
             <h4 className="font-display font-semibold text-zinc-200 uppercase tracking-wider">
-              Extracted LoRAs ({image.loras.length})
+              Extracted LoRAs ({activeImage.loras.length})
             </h4>
-            {image.loras.length === 0 ? (
+            {activeImage.loras.length === 0 ? (
               <p className="text-zinc-500">No LoRAs detected in workflow or metadata.</p>
             ) : (
               <div className="space-y-1.5">
-                {image.loras.map((l) => (
+                {activeImage.loras.map((l) => (
                   <div
                     key={l.id}
                     className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 flex items-center justify-between gap-2"
@@ -710,14 +764,14 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   Workflow &amp; Reproducibility
                 </h4>
                 <p className="text-zinc-400 mt-0.5 text-[11px]">
-                  Visual Graph: {image.hasVisualWorkflow ? 'Embedded' : 'None'} · API Graph:{' '}
-                  {image.hasApiWorkflow ? 'Embedded' : 'None'} · Current:{' '}
+                  Visual Graph: {activeImage.hasVisualWorkflow ? 'Embedded' : 'None'} · API Graph:{' '}
+                  {activeImage.hasApiWorkflow ? 'Embedded' : 'None'} · Current:{' '}
                   <span className="font-mono text-zinc-300 tabular-nums">
                     {currentMegapixels.toFixed(1)} MP
                   </span>
                 </p>
               </div>
-              {(image.hasVisualWorkflow || image.hasApiWorkflow) && (
+              {(activeImage.hasVisualWorkflow || activeImage.hasApiWorkflow) && (
                 <button
                   type="button"
                   onClick={handleRunWorkflow}
@@ -820,7 +874,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                     onClick={async () => {
                       setIsRescanningVisualTags(true);
                       try {
-                        const res = await api.rescanImageVisualTags(image.id);
+                        const res = await api.rescanImageVisualTags(activeImage.id);
                         setDetailData((prev) =>
                           prev
                             ? {
@@ -873,7 +927,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                         <button
                           type="button"
                           onClick={async () => {
-                            const res = await api.removeImageVisualTag(image.id, vt.tag);
+                            const res = await api.removeImageVisualTag(activeImage.id, vt.tag);
                             setDetailData((prev) =>
                               prev
                                 ? {
@@ -903,7 +957,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 Tags
               </span>
               <div className="flex flex-wrap items-center gap-1.5">
-                {image.tags.map((t) => (
+                {activeImage.tags.map((t) => (
                   <span
                     key={t.id}
                     className="inline-flex items-center gap-1 text-zinc-300 bg-zinc-950 border border-zinc-800 px-2 py-0.5 rounded"
@@ -913,9 +967,10 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                       type="button"
                       onClick={async () => {
                         await api.bulkUpdateImages({
-                          imageIds: [image.id],
+                          imageIds: [activeImage.id],
                           removeTagId: t.id,
                         });
+                        refreshActiveDetail(activeImage.id);
                         onUpdated();
                       }}
                       className="text-zinc-500 hover:text-rose-400 cursor-pointer"
@@ -931,10 +986,11 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   onKeyDown={async (e) => {
                     if (e.key === 'Enter' && newTag.trim()) {
                       await api.bulkUpdateImages({
-                        imageIds: [image.id],
+                        imageIds: [activeImage.id],
                         addTagName: newTag.trim(),
                       });
                       setNewTag('');
+                      refreshActiveDetail(activeImage.id);
                       onUpdated();
                     }
                   }}
@@ -949,7 +1005,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 Collections
               </span>
               <div className="flex flex-wrap items-center gap-2">
-                {image.collections.map((c) => (
+                {activeImage.collections.map((c) => (
                   <span
                     key={c.id}
                     className="inline-flex items-center gap-1 text-zinc-300 bg-zinc-950 border border-zinc-800 px-2 py-0.5 rounded"
@@ -959,9 +1015,10 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                       type="button"
                       onClick={async () => {
                         await api.bulkUpdateImages({
-                          imageIds: [image.id],
+                          imageIds: [activeImage.id],
                           removeCollectionId: c.id,
                         });
+                        refreshActiveDetail(activeImage.id);
                         onUpdated();
                       }}
                       className="text-zinc-500 hover:text-rose-400 cursor-pointer"
@@ -977,10 +1034,11 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                       const cid = e.target.value;
                       if (!cid) return;
                       await api.bulkUpdateImages({
-                        imageIds: [image.id],
+                        imageIds: [activeImage.id],
                         addCollectionId: Number(cid),
                       });
                       setSelectedColId('');
+                      refreshActiveDetail(activeImage.id);
                       onUpdated();
                     }}
                     className="px-2 py-1 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
@@ -1038,6 +1096,16 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Bottom Docked Series Iterations Thumbnail Strip */}
+        <SeriesIterationsStrip
+          items={activeImage.seriesItems || []}
+          activeImageId={activeImage.id}
+          onSelectIteration={(nextId) => setSelectedIterationId(nextId)}
+          onContinueConversation={
+            onOpenConversation ? () => onOpenConversation(activeImage) : undefined
+          }
+        />
       </aside>
     </div>
   );

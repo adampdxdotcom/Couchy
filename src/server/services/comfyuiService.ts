@@ -16,6 +16,7 @@ import {
   injectPositivePromptIntoGraph,
 } from './workflowCompilerService.ts';
 import { pollComfyPromptCompletion } from './comfyuiPoller.ts';
+import { attachUpscaledImageToSeries } from './seriesService.ts';
 import type {
   DependencyStatus,
   ModelInventoryItem,
@@ -721,6 +722,7 @@ export async function submitImageUpscale(params: {
       for (const derivedId of outputImageIds) {
         if (derivedId !== params.imageId) {
           copyImageMetadataToDerivedImage(params.imageId, derivedId);
+          attachUpscaledImageToSeries(params.imageId, derivedId);
         }
       }
     },

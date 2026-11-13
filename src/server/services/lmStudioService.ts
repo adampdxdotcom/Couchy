@@ -887,14 +887,17 @@ export async function converseQuickGenPrompt(params: {
 
   const systemPrompt = `${settings.conversationSystemPrompt}\n\n${contextNotes.join('\n')}`.trim();
 
+  const recentMessages = params.messages
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content?.trim())
+    .slice(-10)
+    .map((m) => ({
+      role: m.role,
+      content: m.content.trim(),
+    }));
+
   const apiMessages = [
     { role: 'system', content: systemPrompt },
-    ...params.messages
-      .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content?.trim())
-      .map((m) => ({
-        role: m.role,
-        content: m.content.trim(),
-      })),
+    ...recentMessages,
   ];
 
   const controller = new AbortController();

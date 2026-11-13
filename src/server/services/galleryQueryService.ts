@@ -1,5 +1,9 @@
 import { db } from '../db.ts';
 import { getTaggerSettings } from './visualTaggerService.ts';
+import {
+  collapseSeriesInGalleryPool,
+  enrichSingleImageWithSeries,
+} from './seriesService.ts';
 import type {
   GalleryFilterState,
   ImageRecord,
@@ -352,7 +356,7 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
       visualTags,
       collections,
     };
-  });
+  }).map((img) => (isSingleDetail ? enrichSingleImageWithSeries(img) : img));
 }
 
 /**
@@ -545,6 +549,9 @@ export function queryGalleryImages(filters: Partial<GalleryFilterState>): ImageR
   const archivedMode = filters.archivedMode || 'exclude';
   if (archivedMode === 'exclude') items = items.filter((i) => !i.isArchived);
   else if (archivedMode === 'only') items = items.filter((i) => i.isArchived);
+
+  // Collapse iteration stacks to their single representative card (poster/hearted or most recent)
+  items = collapseSeriesInGalleryPool(items);
 
   if (filters.favoritesOnly) {
     items = items.filter((i) => i.isFavorite);

@@ -3,6 +3,7 @@ import type {
   ImageLoraRecord,
   ImageRecord,
   LoraExplorerItem,
+  QuickGenChatMessage,
 } from '../../shared/types.ts';
 
 export interface QuickGenPrefill {
@@ -10,7 +11,12 @@ export interface QuickGenPrefill {
   character?: CharacterProfile | null;
   loras?: ImageLoraRecord[];
   aspectRatio?: string;
+  megapixels?: number;
   batchCount?: number;
+  conversationMode?: boolean;
+  chatMessages?: QuickGenChatMessage[];
+  seriesId?: number | null;
+  branchFromImageId?: number | null;
   timestamp: number;
 }
 

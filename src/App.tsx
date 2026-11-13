@@ -24,6 +24,7 @@ import type {
   ImageRecord,
   LoraExplorerItem,
   ModelInventoryItem,
+  QuickGenChatMessage,
   SavedSearchPreset,
   WorkflowLibraryItem,
 } from './shared/types.ts';
@@ -245,7 +246,16 @@ export default function App() {
 
   const allImageIdsRef = useRef<Set<number>>(new Set());
   useEffect(() => {
-    allImageIdsRef.current = new Set(allImages.map((img) => img.id));
+    const ids = new Set<number>();
+    for (const img of allImages) {
+      ids.add(img.id);
+      if (img.seriesItems) {
+        for (const si of img.seriesItems) {
+          ids.add(si.imageId);
+        }
+      }
+    }
+    allImageIdsRef.current = ids;
   }, [allImages]);
 
   const totalGalleryPages = Math.max(1, Math.ceil(images.length / galleryPageSize));
@@ -269,11 +279,19 @@ export default function App() {
     [totalGalleryPages]
   );
 
-  // Filter out ghost cards as soon as their indexed image is present in allImages
+  // Filter out ghost cards as soon as their indexed image (or stacked iteration) is present in allImages
   const activeGhostItems = useMemo(() => {
     const raw = comfyStatus.ghostItems || [];
     if (raw.length === 0) return [];
-    const knownIds = new Set(allImages.map((img) => img.id));
+    const knownIds = new Set<number>();
+    for (const img of allImages) {
+      knownIds.add(img.id);
+      if (img.seriesItems) {
+        for (const si of img.seriesItems) {
+          knownIds.add(si.imageId);
+        }
+      }
+    }
     return raw.filter((g) => !g.outputImageId || !knownIds.has(g.outputImageId));
   }, [comfyStatus.ghostItems, allImages]);
 
@@ -471,9 +489,74 @@ export default function App() {
     [characters, pushToast]
   );
 
+  const handleOpenConversationForImage = useCallback(
+    (img: ImageRecord) => {
+      if (!lmStudioStatus.online) {
+        pushToast('LM Studio is offline — start LM Studio to use Conversation mode.', 'warning');
+        return;
+      }
+
+      const confirmedCharLink = img.characters.find((c) => c.status === 'confirmed');
+      const firstCharLink = confirmedCharLink || img.characters[0];
+      const matchedChar = firstCharLink
+        ? characters.find((c) => c.id === firstCharLink.characterId) || null
+        : null;
+
+      const targetRatio = resolveClosestAspectRatio(img.width, img.height);
+      const targetMp =
+        img.width > 0 && img.height > 0
+          ? Math.max(0.5, Math.min(10.0, Math.round(((img.width * img.height) / 1_000_000) * 2) / 2))
+          : undefined;
+
+      let initialChatMessages: QuickGenChatMessage[] = [];
+      if (img.chatSnapshot && img.chatSnapshot.length > 0) {
+        initialChatMessages = img.chatSnapshot;
+      } else {
+        const promptText = (img.positivePrompt || '').trim();
+        if (promptText) {
+          initialChatMessages = [
+            {
+              id: `seed-${img.id}`,
+              role: 'assistant',
+              content: 'Loaded prompt from this image. How would you like to iterate on it?',
+              proposedPrompt: promptText,
+            },
+          ];
+        }
+      }
+
+      setQuickGenPrefill({
+        prompt: '',
+        character: matchedChar,
+        loras: img.loras || [],
+        aspectRatio: targetRatio,
+        megapixels: targetMp,
+        batchCount: 1,
+        conversationMode: true,
+        chatMessages: initialChatMessages,
+        seriesId: img.seriesId ?? null,
+        branchFromImageId: img.id,
+        timestamp: Date.now(),
+      });
+
+      setInspectedImageId(null);
+      if (activeTab === 'generation') {
+        setActiveTab('gallery');
+      }
+      pushToast(
+        img.seriesId
+          ? 'Reopened image series conversation in Quick Gen'
+          : 'Started Conversation stack from image in Quick Gen',
+        'info'
+      );
+    },
+    [activeTab, characters, lmStudioStatus.online, pushToast]
+  );
+
   const handleQuickFavorite = useCallback(
     async (id: number, isFavorite: boolean) => {
       const favoritedAt = isFavorite ? new Date().toISOString() : null;
+      const targetImg = allImages.find((img) => img.id === id);
       setImages((prev) =>
         prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
       );
@@ -481,9 +564,12 @@ export default function App() {
         prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
       );
       await api.updateImageAnnotations(id, { isFavorite });
+      if ((targetImg?.seriesCount || 1) > 1) {
+        await refreshAll();
+      }
       pushToast(isFavorite ? 'Added to Favorites' : 'Removed from Favorites', 'info');
     },
-    [pushToast]
+    [allImages, pushToast, refreshAll]
   );
 
   const handleQuickReject = useCallback(
@@ -628,6 +714,7 @@ export default function App() {
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
               onReusePrompt={handleReusePrompt}
+              onOpenConversation={handleOpenConversationForImage}
               onQuickRate={async (id, rating) => {
                 setImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
                 setAllImages((prev) =>
@@ -681,6 +768,7 @@ export default function App() {
               setActiveTab('gallery');
             }}
             onReusePrompt={handleReusePrompt}
+            onOpenConversation={handleOpenConversationForImage}
             onQuickRate={async (id, rating) => {
               setImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
               setAllImages((prev) =>
@@ -774,6 +862,7 @@ export default function App() {
               : undefined
           }
           onUpdated={refreshAll}
+          onOpenConversation={handleOpenConversationForImage}
           characters={characters}
           collections={collections}
           onFilterByLora={(loraName) => {

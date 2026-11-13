@@ -5,6 +5,8 @@ import {
   ChevronUp,
   Download,
   Heart,
+  Layers,
+  MessageSquare,
   RotateCcw,
   Star,
   Trash2,
@@ -26,6 +28,7 @@ interface CharacterGallerySectionProps {
   onQuickFavorite?: (id: number, nextFav: boolean) => void;
   onSetPortrait: (img: ImageRecord) => Promise<void>;
   onReusePrompt?: (img: ImageRecord) => void;
+  onOpenConversation?: (img: ImageRecord) => void;
   onQuickReject?: (id: number, nextRejected: boolean) => void;
   emptyText?: string;
   isExpandable?: boolean;
@@ -45,6 +48,7 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
   onQuickFavorite,
   onSetPortrait,
   onReusePrompt,
+  onOpenConversation,
   onQuickReject,
   emptyText,
   isExpandable = false,
@@ -164,17 +168,28 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
                     className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
                   />
 
-                  {/* Top Overlay Controls (Portrait Badge & Favorite) */}
+                  {/* Top Overlay Controls (Portrait Badge, Series Badge & Favorite) */}
                   <div
                     className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none z-10"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    {isPortrait ? (
-                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400 text-zinc-950 text-[10px] font-bold tracking-wider uppercase shadow-md pointer-events-none">
-                        <Star className="w-2.5 h-2.5 fill-zinc-950 text-zinc-950" />
-                        <span>Portrait</span>
-                      </div>
-                    ) : <div />}
+                    <div className="flex items-center gap-1.5">
+                      {isPortrait && (
+                        <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-400 text-zinc-950 text-[10px] font-bold tracking-wider uppercase shadow-md pointer-events-none">
+                          <Star className="w-2.5 h-2.5 fill-zinc-950 text-zinc-950" />
+                          <span>Portrait</span>
+                        </div>
+                      )}
+                      {(img.seriesCount || 1) > 1 && (
+                        <span
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-black/75 backdrop-blur-xs border border-indigo-500/40 text-[10px] font-mono font-semibold text-indigo-200 shadow-sm pointer-events-none"
+                          title={`${img.seriesCount} images stacked in this series`}
+                        >
+                          <Layers className="w-2.5 h-2.5 text-indigo-400" />
+                          <span>{img.seriesCount}</span>
+                        </span>
+                      )}
+                    </div>
 
                     {onQuickFavorite && (
                       <button
@@ -220,6 +235,19 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
                       ))}
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
+                      {onOpenConversation && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenConversation(img);
+                          }}
+                          className="p-1 text-amber-300 hover:text-amber-200 hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
+                          title="Continue or start Conversation in Quick Gen"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       {onReusePrompt && (
                         <button
                           type="button"
