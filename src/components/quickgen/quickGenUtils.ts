@@ -161,8 +161,9 @@ export function buildMentionEntries(params: {
 } {
   const { characters, loras, allImages, query, tab } = params;
   const q = query.trim().toLowerCase();
-  const charEntries: MentionEntry[] = [];
+  const directCharEntries: MentionEntry[] = [];
   const loraEntries: MentionEntry[] = [];
+  const imagePromptEntries: MentionEntry[] = [];
 
   for (const char of characters) {
     const charImages = allImages.filter((img) =>
@@ -180,7 +181,7 @@ export function buildMentionEntries(params: {
       );
 
     if (matchesChar) {
-      charEntries.push({
+      directCharEntries.push({
         key: `char-${char.id}`,
         type: 'character',
         character: char,
@@ -197,7 +198,7 @@ export function buildMentionEntries(params: {
           ? promptLine.slice(0, 42) + (promptLine.length > 42 ? '...' : '')
           : `${char.name} (${img.filename})`;
         if (!q || matchesChar || shortTitle.toLowerCase().includes(q)) {
-          charEntries.push({
+          imagePromptEntries.push({
             key: `img-${char.id}-${img.id}`,
             type: 'image',
             character: char,
@@ -215,9 +216,14 @@ export function buildMentionEntries(params: {
     const nick = (lora.nickname || '').toLowerCase();
     const loraName = lora.name.toLowerCase();
     const loraFile = lora.filename.toLowerCase();
+    const trig = (lora.triggerWord || '').toLowerCase();
 
     const matchesLora =
-      !q || (nick && nick.includes(q)) || loraName.includes(q) || loraFile.includes(q);
+      !q ||
+      (nick && nick.includes(q)) ||
+      loraName.includes(q) ||
+      loraFile.includes(q) ||
+      (trig && trig.includes(q));
 
     if (matchesLora) {
       const displayLabel = getCleanLoraLabel(lora);
@@ -233,15 +239,17 @@ export function buildMentionEntries(params: {
     }
   }
 
-  const allCombined = [...charEntries, ...loraEntries];
+  // Place Character and LoRA matches at the top of the list, above matching image prompts
+  const charTabEntries = [...directCharEntries, ...imagePromptEntries];
+  const allCombined = [...directCharEntries, ...loraEntries, ...imagePromptEntries];
   const mentionCounts = {
     all: allCombined.length,
-    characters: charEntries.length,
+    characters: charTabEntries.length,
     loras: loraEntries.length,
   };
 
   const mentionEntries =
-    tab === 'characters' ? charEntries : tab === 'loras' ? loraEntries : allCombined;
+    tab === 'characters' ? charTabEntries : tab === 'loras' ? loraEntries : allCombined;
 
   return { mentionEntries, mentionCounts };
 }
