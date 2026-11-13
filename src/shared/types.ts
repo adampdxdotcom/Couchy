@@ -231,6 +231,8 @@ export interface LoraExplorerItem {
   mentionEnabled?: boolean;
   defaultModelStrength?: number;
   defaultClipStrength?: number;
+  triggerWord?: string | null;
+  llmDescription?: string | null;
 }
 
 export interface ModelInventoryItem {
@@ -428,6 +430,8 @@ export interface QuickGenChatMessage {
   role: 'user' | 'assistant';
   content: string;
   proposedPrompt?: string | null;
+  selectedLoras?: string[];
+  excludedLoras?: string[];
 }
 
 export interface LmStudioStatus {

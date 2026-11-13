@@ -25,6 +25,12 @@ export function parseChatSnapshot(raw: string | null | undefined): QuickGenChatM
         role: m.role as 'user' | 'assistant',
         content: m.content,
         proposedPrompt: typeof m.proposedPrompt === 'string' ? m.proposedPrompt : null,
+        selectedLoras: Array.isArray(m.selectedLoras)
+          ? m.selectedLoras.map(String).filter(Boolean)
+          : undefined,
+        excludedLoras: Array.isArray(m.excludedLoras)
+          ? m.excludedLoras.map(String).filter(Boolean)
+          : undefined,
       }));
   } catch {
     return [];

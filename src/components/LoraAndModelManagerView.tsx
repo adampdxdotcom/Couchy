@@ -125,6 +125,8 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       nickname?: string | null;
       defaultModelStrength?: number;
       defaultClipStrength?: number;
+      triggerWord?: string | null;
+      llmDescription?: string | null;
     }
   ) => {
     try {
@@ -143,6 +145,20 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
             payload.nickname
               ? `Saved nickname @${payload.nickname}`
               : `Cleared nickname for ${loraName}`,
+            'success'
+          );
+        } else if (payload.triggerWord !== undefined) {
+          onPushToast(
+            payload.triggerWord
+              ? `Saved trigger word(s) for ${loraName}`
+              : `Cleared trigger word(s) for ${loraName}`,
+            'success'
+          );
+        } else if (payload.llmDescription !== undefined) {
+          onPushToast(
+            payload.llmDescription
+              ? `Saved Agent description for ${loraName}`
+              : `Cleared Agent description for ${loraName}`,
             'success'
           );
         } else {
@@ -343,6 +359,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                   @
                 </span>
                 <input
+                  key={`${selectedLora.filename}-nickname`}
                   type="text"
                   defaultValue={selectedLora.nickname || ''}
                   placeholder="e.g. cyberpunk, retro, watercolor"
@@ -350,10 +367,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                     const clean = e.target.value.trim().replace(/^@+/, '');
                     if (clean !== (selectedLora.nickname || '')) {
                       handleUpdateMentionConfig(selectedLora.filename, {
-                        mentionEnabled: selectedLora.mentionEnabled,
                         nickname: clean,
-                        defaultModelStrength: selectedLora.defaultModelStrength ?? 1.0,
-                        defaultClipStrength: selectedLora.defaultClipStrength ?? 1.0,
                       });
                     }
                   }}
@@ -374,6 +388,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                 </span>
               </div>
               <input
+                key={`${selectedLora.filename}-model-str`}
                 type="number"
                 min="0.0"
                 max="2.0"
@@ -383,10 +398,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                   const val = parseFloat(e.target.value);
                   if (!Number.isNaN(val) && val !== selectedLora.defaultModelStrength) {
                     handleUpdateMentionConfig(selectedLora.filename, {
-                      mentionEnabled: selectedLora.mentionEnabled,
-                      nickname: selectedLora.nickname,
                       defaultModelStrength: val,
-                      defaultClipStrength: selectedLora.defaultClipStrength ?? 1.0,
                     });
                   }
                 }}
@@ -406,6 +418,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                 </span>
               </div>
               <input
+                key={`${selectedLora.filename}-clip-str`}
                 type="number"
                 min="0.0"
                 max="2.0"
@@ -415,9 +428,6 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                   const val = parseFloat(e.target.value);
                   if (!Number.isNaN(val) && val !== selectedLora.defaultClipStrength) {
                     handleUpdateMentionConfig(selectedLora.filename, {
-                      mentionEnabled: selectedLora.mentionEnabled,
-                      nickname: selectedLora.nickname,
-                      defaultModelStrength: selectedLora.defaultModelStrength ?? 1.0,
                       defaultClipStrength: val,
                     });
                   }
@@ -426,6 +436,64 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
               />
               <p className="text-[11px] text-zinc-500">
                 Applied to CLIP conditioning when mentioned (0.0 to 2.0).
+              </p>
+            </div>
+          </div>
+
+          {/* Trigger Word(s) & Conversation Agent Description */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-zinc-800/60">
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-zinc-300">
+                Trigger Word(s)
+              </label>
+              <input
+                key={`${selectedLora.filename}-trigger`}
+                type="text"
+                defaultValue={selectedLora.triggerWord || ''}
+                placeholder="e.g. cyber_glow, rim light"
+                onBlur={(e) => {
+                  const clean = e.target.value.trim();
+                  if (clean !== (selectedLora.triggerWord || '')) {
+                    handleUpdateMentionConfig(selectedLora.filename, {
+                      triggerWord: clean,
+                    });
+                  }
+                }}
+                className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none"
+              />
+              <p className="text-[11px] text-zinc-500">
+                Comma-separated activation tokens automatically joined into the ComfyUI trigger node whenever this LoRA is attached.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-xs font-medium text-zinc-300">
+                  Agent Description (Conversation Mode)
+                </label>
+                {(selectedLora.loraCategory === 'character' || selectedLora.characters.length > 0) && (
+                  <span className="text-[10px] font-medium text-amber-400">
+                    Locked character LoRA (never auto-picked)
+                  </span>
+                )}
+              </div>
+              <textarea
+                key={`${selectedLora.filename}-llm-desc`}
+                rows={2}
+                defaultValue={selectedLora.llmDescription || ''}
+                placeholder="Describe when the Conversation Agent should pick this LoRA (e.g. moody neon night reflections, cinematic 35mm film grain)..."
+                onBlur={(e) => {
+                  const clean = e.target.value.trim();
+                  if (clean !== (selectedLora.llmDescription || '')) {
+                    handleUpdateMentionConfig(selectedLora.filename, {
+                      llmDescription: clean,
+                    });
+                  }
+                }}
+                className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none resize-y"
+              />
+              <p className="text-[11px] text-zinc-500">
+                Requires <span className="text-zinc-300 font-medium">Include in @Mention Menu</span> enabled above for the Conversation Agent to consider this LoRA.
               </p>
             </div>
           </div>

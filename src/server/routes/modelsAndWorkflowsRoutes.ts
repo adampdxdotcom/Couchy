@@ -77,8 +77,15 @@ modelsAndWorkflowsRouter.patch('/loras/classify', (req, res) => {
  */
 modelsAndWorkflowsRouter.patch('/loras/mention-config', (req, res) => {
   try {
-    const { loraName, mentionEnabled, nickname, defaultModelStrength, defaultClipStrength } =
-      req.body || {};
+    const {
+      loraName,
+      mentionEnabled,
+      nickname,
+      defaultModelStrength,
+      defaultClipStrength,
+      triggerWord,
+      llmDescription,
+    } = req.body || {};
     if (!loraName) {
       res.status(400).json({ error: 'loraName is required' });
       return;
@@ -104,6 +111,24 @@ modelsAndWorkflowsRouter.patch('/loras/mention-config', (req, res) => {
       }
     }
 
+    const existingRow = db
+      .prepare('SELECT trigger_word, llm_description FROM models WHERE LOWER(filename) = LOWER(?)')
+      .get(loraName) as { trigger_word?: string | null; llm_description?: string | null } | undefined;
+
+    const cleanTriggerWord =
+      triggerWord !== undefined
+        ? typeof triggerWord === 'string'
+          ? triggerWord.trim() || null
+          : null
+        : (existingRow?.trigger_word ?? null);
+
+    const cleanLlmDescription =
+      llmDescription !== undefined
+        ? typeof llmDescription === 'string'
+          ? llmDescription.trim() || null
+          : null
+        : (existingRow?.llm_description ?? null);
+
     const cleanModelStr =
       defaultModelStrength !== undefined && !Number.isNaN(Number(defaultModelStrength))
         ? Math.max(0.0, Math.min(2.0, Number(defaultModelStrength)))
@@ -116,20 +141,24 @@ modelsAndWorkflowsRouter.patch('/loras/mention-config', (req, res) => {
 
     // Ensure model row exists in models table
     db.prepare(
-      `INSERT INTO models (name, filename, model_type, lora_category, nickname, mention_enabled, default_model_strength, default_clip_strength)
-       VALUES (?, ?, 'lora', 'unclassified', ?, ?, ?, ?)
+      `INSERT INTO models (name, filename, model_type, lora_category, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description)
+       VALUES (?, ?, 'lora', 'unclassified', ?, ?, ?, ?, ?, ?)
        ON CONFLICT(filename) DO UPDATE SET
          nickname = excluded.nickname,
          mention_enabled = excluded.mention_enabled,
          default_model_strength = excluded.default_model_strength,
-         default_clip_strength = excluded.default_clip_strength`
+         default_clip_strength = excluded.default_clip_strength,
+         trigger_word = excluded.trigger_word,
+         llm_description = excluded.llm_description`
     ).run(
       loraName.replace(/\.(safetensors|pt|ckpt)$/i, ''),
       loraName,
       cleanNick || null,
       isMention,
       cleanModelStr,
-      cleanClipStr
+      cleanClipStr,
+      cleanTriggerWord,
+      cleanLlmDescription
     );
 
     res.json({ ok: true, items: listLoraExplorerItems() });

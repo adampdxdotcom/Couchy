@@ -526,10 +526,15 @@ export default function App() {
         }
       }
 
+      const latestExcludedMsg = [...initialChatMessages]
+        .reverse()
+        .find((m) => Array.isArray(m.excludedLoras) && m.excludedLoras.length > 0);
+
       setQuickGenPrefill({
         prompt: '',
         character: matchedChar,
         loras: img.loras || [],
+        excludedLoras: latestExcludedMsg?.excludedLoras || [],
         aspectRatio: targetRatio,
         megapixels: targetMp,
         batchCount: 1,

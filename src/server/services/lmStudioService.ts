@@ -883,18 +883,31 @@ Rules:
   }
 }
 
+function normalizeLoraMatchKey(value: string): string {
+  return value
+    .trim()
+    .replace(/^@+/, '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()!
+    .replace(/\.(?:safetensors|ckpt|pt|bin)$/i, '')
+    .toLowerCase();
+}
+
 /**
  * Interactive multi-turn Quick Gen Conversation handler via LM Studio /v1/chat/completions.
- * Extracts any <proposed_prompt>...</proposed_prompt> block for one-click submission.
+ * Extracts any <proposed_prompt>...</proposed_prompt> block and optional <selected_loras>...</selected_loras> picks.
  */
 export async function converseQuickGenPrompt(params: {
   messages: Array<{ role: 'user' | 'assistant'; content: string; proposedPrompt?: string | null }>;
   characterName?: string;
   characterDescription?: string;
   loraNames?: string[];
+  excludedLoras?: string[];
 }): Promise<{
   reply: string;
   proposedPrompt: string | null;
+  selectedLoras: string[];
   modelUsed: string;
 }> {
   const status = await checkLmStudioStatus();
@@ -909,10 +922,46 @@ export async function converseQuickGenPrompt(params: {
     : `${baseUrl}/v1/chat/completions`;
   const modelToUse = status.selectedModel || settings.selectedModel || 'local-model';
 
+  const excludedKeys = new Set(
+    (params.excludedLoras || []).map((l) => normalizeLoraMatchKey(l)).filter(Boolean)
+  );
+
+  // Query curated non-character @mention LoRAs that have an Agent Description configured
+  const candidateRows = db
+    .prepare(
+      `SELECT m.name, m.filename, m.lora_category, m.nickname, m.llm_description
+       FROM models m
+       WHERE m.model_type = 'lora'
+         AND m.mention_enabled = 1
+         AND TRIM(COALESCE(m.llm_description, '')) != ''
+         AND LOWER(COALESCE(m.lora_category, 'unclassified')) != 'character'
+         AND NOT EXISTS (
+           SELECT 1 FROM character_loras cl WHERE LOWER(cl.lora_name) = LOWER(m.filename)
+         )
+       ORDER BY LOWER(COALESCE(NULLIF(TRIM(m.nickname), ''), m.name)) ASC`
+    )
+    .all() as Array<{
+    name: string;
+    filename: string;
+    lora_category: string;
+    nickname: string | null;
+    llm_description: string;
+  }>;
+
+  const getCandidateHandle = (c: { nickname: string | null; name: string }) =>
+    (c.nickname || '').trim().replace(/^@+/, '') || c.name.trim();
+
+  const availableCandidates = candidateRows.filter((c) => {
+    const fileKey = normalizeLoraMatchKey(c.filename);
+    const nameKey = normalizeLoraMatchKey(c.name);
+    const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : '';
+    return !excludedKeys.has(fileKey) && !excludedKeys.has(nameKey) && (!nickKey || !excludedKeys.has(nickKey));
+  });
+
   const contextNotes: string[] = [];
   if (params.characterName?.trim()) {
     contextNotes.push(
-      `An active character LoRA is attached. Refer to the subject neutrally as "the subject" or "they" inside <proposed_prompt> and do NOT include the character's name or physical identity traits already baked into the LoRA.`
+      `An active character LoRA is attached and locked. Refer to the subject neutrally as "the subject" or "they" inside <proposed_prompt> and do NOT include the character's name or physical identity traits already baked into the LoRA.`
     );
   }
   if (params.loraNames && params.loraNames.length > 0) {
@@ -921,9 +970,40 @@ export async function converseQuickGenPrompt(params: {
       .filter(Boolean);
     if (cleanLoraLabels.length > 0) {
       contextNotes.push(
-        `Active style/helper LoRAs attached: ${cleanLoraLabels.join(', ')} (do NOT write LoRA filenames in the prompt).`
+        `Currently attached LoRAs: ${cleanLoraLabels.join(', ')} (do NOT write LoRA filenames or trigger words inside <proposed_prompt>).`
       );
     }
+  }
+  if (availableCandidates.length > 0) {
+    const catalogLines = availableCandidates.map((c) => {
+      const handle = getCandidateHandle(c);
+      const cat = c.lora_category && c.lora_category !== 'unclassified' ? ` [${c.lora_category}]` : '';
+      return `- @${handle}${cat}: ${c.llm_description.trim()}`;
+    });
+    contextNotes.push(
+      [
+        `Optional non-character LoRAs available for selection:`,
+        ...catalogLines,
+        `LoRA Selection Rules:`,
+        `- If any optional non-character LoRA(s) clearly match the scene, style, lighting, outfit, or concept (keep previously attached ones that still fit, or add better matches), list up to 3 handles inside <selected_loras>["@handle1", "@handle2"]</selected_loras>.`,
+        `- Character LoRAs are locked—NEVER invent or select character LoRAs, and NEVER output more than 3 handles.`,
+        `- Do NOT insert LoRA trigger words or filenames inside <proposed_prompt>; Couchy automatically injects trigger words for attached LoRAs.`,
+      ].join('\n')
+    );
+  }
+  if (excludedKeys.size > 0) {
+    const excludedLabels = candidateRows
+      .filter((c) => {
+        const fileKey = normalizeLoraMatchKey(c.filename);
+        const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : '';
+        return excludedKeys.has(fileKey) || (nickKey && excludedKeys.has(nickKey));
+      })
+      .map((c) => `@${getCandidateHandle(c)}`);
+    const fallbackExcluded = Array.from(excludedKeys).map((k) => `@${k}`);
+    const displayExcluded = excludedLabels.length > 0 ? excludedLabels : fallbackExcluded;
+    contextNotes.push(
+      `User-deselected LoRAs (respect the user's choice and do NOT select these again unless the user explicitly asks to re-enable them): ${displayExcluded.join(', ')}.`
+    );
   }
   contextNotes.push(
     `Always wrap any ready-to-generate image prompt inside <proposed_prompt>...</proposed_prompt> tags.`
@@ -966,7 +1046,7 @@ export async function converseQuickGenPrompt(params: {
     );
   }
 
-  const systemPrompt = `${settings.conversationSystemPrompt}\n\n${contextNotes.join('\n')}`.trim();
+  const systemPrompt = `${settings.conversationSystemPrompt}\n\n${contextNotes.join('\n\n')}`.trim();
 
   const apiMessages = [
     { role: 'system', content: systemPrompt },
@@ -998,28 +1078,69 @@ export async function converseQuickGenPrompt(params: {
     const rawContent: string = data?.choices?.[0]?.message?.content?.trim() || '';
     const withoutThink = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
+    // Extract optional <selected_loras>...</selected_loras> and strip tag before prompt/reply parsing
+    const selectedLoras: string[] = [];
+    const loraTagMatch = withoutThink.match(/<selected_loras>([\s\S]*?)(?:<\/selected_loras>|$)/i);
+    if (loraTagMatch && loraTagMatch[1]?.trim() && availableCandidates.length > 0) {
+      const rawBlock = loraTagMatch[1].trim();
+      let tokens: string[] = [];
+      try {
+        const parsed = JSON.parse(rawBlock);
+        if (Array.isArray(parsed)) {
+          tokens = parsed.map((v) => String(v));
+        }
+      } catch {
+        tokens = rawBlock
+          .replace(/^\[|\]$/g, '')
+          .split(/[,\n]+/)
+          .map((t) => t.replace(/^["'\s-]+|["'\s]+$/g, ''))
+          .filter(Boolean);
+      }
+
+      const seenFiles = new Set<string>();
+      for (const token of tokens) {
+        if (selectedLoras.length >= 3) break;
+        const cleanKey = normalizeLoraMatchKey(token);
+        if (!cleanKey) continue;
+        const matched = availableCandidates.find((c) => {
+          const fileKey = normalizeLoraMatchKey(c.filename);
+          const nameKey = normalizeLoraMatchKey(c.name);
+          const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : '';
+          return cleanKey === fileKey || cleanKey === nameKey || (nickKey && cleanKey === nickKey);
+        });
+        if (matched && !seenFiles.has(matched.filename)) {
+          seenFiles.add(matched.filename);
+          selectedLoras.push(matched.filename);
+        }
+      }
+    }
+
+    const cleanedContent = withoutThink
+      .replace(/<selected_loras>[\s\S]*?(?:<\/selected_loras>|$)/gi, '')
+      .trim();
+
     let proposedPrompt: string | null = null;
-    let replyText = withoutThink;
+    let replyText = cleanedContent;
 
     // 1. Primary extraction: <proposed_prompt>...</proposed_prompt>
-    const tagMatch = withoutThink.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
+    const tagMatch = cleanedContent.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
     if (tagMatch && tagMatch[1]?.trim()) {
       proposedPrompt = sanitizeAgentPrompt(
         tagMatch[1].replace(/^["']|["']$/g, '').trim(),
         params.characterName
       );
-      replyText = withoutThink
+      replyText = cleanedContent
         .replace(/<proposed_prompt>[\s\S]*?(?:<\/proposed_prompt>|$)/gi, '')
         .trim();
     } else {
       // 2. Fallback: ```prompt ... ``` fenced block if model omitted XML tags
-      const fenceMatch = withoutThink.match(/```(?:prompt|text)?\s*([\s\S]{25,}?)```/i);
+      const fenceMatch = cleanedContent.match(/```(?:prompt|text)?\s*([\s\S]{25,}?)```/i);
       if (fenceMatch && fenceMatch[1]?.trim()) {
         proposedPrompt = sanitizeAgentPrompt(
           fenceMatch[1].replace(/^["']|["']$/g, '').trim(),
           params.characterName
         );
-        replyText = withoutThink.replace(fenceMatch[0], '').trim();
+        replyText = cleanedContent.replace(fenceMatch[0], '').trim();
       }
     }
 
@@ -1032,6 +1153,7 @@ export async function converseQuickGenPrompt(params: {
     return {
       reply: replyText,
       proposedPrompt,
+      selectedLoras,
       modelUsed: data?.model || modelToUse,
     };
   } finally {

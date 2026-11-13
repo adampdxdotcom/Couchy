@@ -10,6 +10,7 @@ export interface QuickGenPrefill {
   prompt: string;
   character?: CharacterProfile | null;
   loras?: ImageLoraRecord[];
+  excludedLoras?: string[];
   aspectRatio?: string;
   megapixels?: number;
   batchCount?: number;

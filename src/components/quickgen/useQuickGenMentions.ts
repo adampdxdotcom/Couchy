@@ -122,7 +122,12 @@ export function useQuickGenMentions({
         const existingIdx = prev.findIndex((al) => normalizeLoraKey(al.loraName) === loraKey);
         if (existingIdx >= 0) {
           const updated = [...prev];
-          updated[existingIdx] = { ...updated[existingIdx], nickname: cleanLabel, showPill: true };
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            nickname: cleanLabel,
+            triggerWord: lora.triggerWord || updated[existingIdx].triggerWord || '',
+            showPill: true,
+          };
           return updated;
         }
         return [
@@ -131,6 +136,7 @@ export function useQuickGenMentions({
             loraName: lora.filename,
             modelStrength: lora.defaultModelStrength ?? 1.0,
             clipStrength: lora.defaultClipStrength ?? 1.0,
+            triggerWord: lora.triggerWord || '',
             nickname: cleanLabel,
             showPill: true,
           },

@@ -100,6 +100,14 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
                     <p className="text-xs text-zinc-100 bg-zinc-900/80 border border-zinc-800/80 rounded-lg p-2 font-sans whitespace-pre-wrap break-words select-all">
                       {msg.proposedPrompt}
                     </p>
+                    {msg.selectedLoras && msg.selectedLoras.length > 0 && (
+                      <div className="text-[11px] text-amber-300/90 font-mono truncate">
+                        Agent attached:{' '}
+                        {msg.selectedLoras
+                          .map((l) => l.replace(/\\/g, '/').split('/').pop()!.replace(/\.(safetensors|pt|ckpt|bin)$/i, ''))
+                          .join(', ')}
+                      </div>
+                    )}
                     <div className="flex items-center justify-end gap-2 pt-0.5">
                       <button
                         type="button"

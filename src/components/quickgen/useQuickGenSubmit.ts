@@ -129,7 +129,7 @@ export function useQuickGenSubmit({
     setAspectRatio(workflowDefaultAr);
   }, [resolvedWorkflow?.id, workflowDefaultAr]);
 
-  // Build active LoRAs and trigger word from current character + attached LoRAs
+  // Build active LoRAs and combined comma-separated trigger word from character + attached LoRAs
   const resolveActiveLoraStack = () => {
     const activeCharLoraRecords = attachedCharacter
       ? attachedCharacter.loras.filter((l) => !removedLoraKeys.has(normalizeLoraKey(l.loraName)))
@@ -153,12 +153,39 @@ export function useQuickGenSubmit({
       const alKey = normalizeLoraKey(al.loraName);
       if (removedLoraKeys.has(alKey)) continue;
       if (!selectedLoras.some((sl) => normalizeLoraKey(sl.loraName) === alKey)) {
-        selectedLoras.push(al);
+        const matchedExplorer = loras.find(
+          (l) => normalizeLoraKey(l.filename) === alKey || normalizeLoraKey(l.name) === alKey
+        );
+        selectedLoras.push({
+          ...al,
+          triggerWord: al.triggerWord?.trim() || matchedExplorer?.triggerWord?.trim() || '',
+        });
       }
     }
 
-    const triggerWord =
-      activeCharLoraRecords.find((l) => l.triggerWord?.trim())?.triggerWord?.trim() || '';
+    // Join unique trigger tokens (character trigger words first, then active pilled LoRAs) comma-separated
+    const triggerTokens: string[] = [];
+    const seenTokens = new Set<string>();
+    const appendTriggerTokens = (raw?: string | null) => {
+      if (!raw) return;
+      for (const part of raw.split(',')) {
+        const trimmed = part.trim();
+        const lower = trimmed.toLowerCase();
+        if (trimmed && !seenTokens.has(lower)) {
+          seenTokens.add(lower);
+          triggerTokens.push(trimmed);
+        }
+      }
+    };
+
+    for (const cl of activeCharLoraRecords) {
+      appendTriggerTokens(cl.triggerWord);
+    }
+    for (const sl of selectedLoras) {
+      appendTriggerTokens(sl.triggerWord);
+    }
+
+    const triggerWord = triggerTokens.join(', ');
 
     return { selectedLoras, triggerWord };
   };
@@ -169,7 +196,9 @@ export function useQuickGenSubmit({
     lastAppliedTimestampRef.current = prefillPayload.timestamp;
 
     setIsMinimized(false);
-    setRemovedLoraKeys(new Set());
+    setRemovedLoraKeys(
+      new Set((prefillPayload.excludedLoras || []).map((k) => normalizeLoraKey(k)).filter(Boolean))
+    );
 
     if (prefillPayload.prompt !== undefined) setPrompt(prefillPayload.prompt);
     if (prefillPayload.character !== undefined) setAttachedCharacter(prefillPayload.character);
@@ -196,6 +225,7 @@ export function useQuickGenSubmit({
           clipStrength: Number(
             imgLora.clipStrength ?? matchedExplorerLora?.defaultClipStrength ?? 1.0
           ),
+          triggerWord: matchedExplorerLora?.triggerWord || '',
           nickname: getCleanLoraLabel(matchedExplorerLora || { loraName: imgLora.loraName }),
           showPill: Boolean(matchedExplorerLora?.mentionEnabled),
         });
@@ -287,7 +317,10 @@ export function useQuickGenSubmit({
 
   const handleRemoveLora = (loraName: string) => {
     const keyToRemove = normalizeLoraKey(loraName);
-    setRemovedLoraKeys((prev) => new Set(prev).add(keyToRemove));
+    const nextRemoved = new Set(removedLoraKeys);
+    nextRemoved.add(keyToRemove);
+    setRemovedLoraKeys(nextRemoved);
+
     setAttachedLoras((prev) => {
       const remaining = prev.filter((l) => normalizeLoraKey(l.loraName) !== keyToRemove);
       if (!attachedCharacter && !remaining.some((l) => l.showPill !== false)) {
@@ -295,6 +328,19 @@ export function useQuickGenSubmit({
       }
       return remaining;
     });
+
+    if (conversationEnabled) {
+      const nextExcludedArray = Array.from(nextRemoved);
+      setChatMessages((prev) => {
+        if (prev.length === 0) return prev;
+        const lastAssistantIdx = [...prev].reverse().findIndex((m) => m.role === 'assistant');
+        if (lastAssistantIdx < 0) return prev;
+        const actualIdx = prev.length - 1 - lastAssistantIdx;
+        return prev.map((m, idx) =>
+          idx === actualIdx ? { ...m, excludedLoras: nextExcludedArray } : m
+        );
+      });
+    }
   };
 
   /** Sends a conversational turn to LM Studio when Conversation mode is active. */
@@ -314,6 +360,7 @@ export function useQuickGenSubmit({
 
     try {
       const { selectedLoras } = resolveActiveLoraStack();
+      const currentRemovedKeys = Array.from(removedLoraKeys);
       const res = await api.chatQuickGenPrompt({
         messages: nextHistory.map((m) => ({
           role: m.role,
@@ -323,13 +370,72 @@ export function useQuickGenSubmit({
         characterName: attachedCharacter?.name || undefined,
         characterDescription: attachedCharacter?.description || undefined,
         loraNames: selectedLoras.map((l) => l.loraName),
+        excludedLoras: currentRemovedKeys,
       });
+
+      const resolvedPickedLoras: LoraExplorerItem[] = [];
+      if (Array.isArray(res.selectedLoras) && res.selectedLoras.length > 0) {
+        const seenKeys = new Set<string>();
+        for (const pickedName of res.selectedLoras) {
+          if (resolvedPickedLoras.length >= 3) break;
+          const pickedKey = normalizeLoraKey(pickedName);
+          if (!pickedKey || seenKeys.has(pickedKey) || removedLoraKeys.has(pickedKey)) continue;
+          const matched = loras.find(
+            (l) =>
+              normalizeLoraKey(l.filename) === pickedKey || normalizeLoraKey(l.name) === pickedKey
+          );
+          if (!matched) continue;
+          // Character LoRAs stay locked to Characters
+          if (
+            matched.loraCategory === 'character' ||
+            matched.characters.length > 0 ||
+            isCharacterLora(matched.filename, attachedCharacter, loras)
+          ) {
+            continue;
+          }
+          seenKeys.add(pickedKey);
+          resolvedPickedLoras.push(matched);
+        }
+      }
+
+      if (resolvedPickedLoras.length > 0) {
+        setAttachedLoras((prev) => {
+          const next = [...prev];
+          for (const matched of resolvedPickedLoras) {
+            const matchedKey = normalizeLoraKey(matched.filename);
+            if (removedLoraKeys.has(matchedKey)) continue;
+            const existingIdx = next.findIndex((al) => normalizeLoraKey(al.loraName) === matchedKey);
+            const cleanLabel = getCleanLoraLabel(matched);
+            if (existingIdx >= 0) {
+              next[existingIdx] = {
+                ...next[existingIdx],
+                nickname: cleanLabel,
+                triggerWord: matched.triggerWord || next[existingIdx].triggerWord || '',
+                showPill: true,
+              };
+            } else {
+              next.push({
+                loraName: matched.filename,
+                modelStrength: matched.defaultModelStrength ?? 1.0,
+                clipStrength: matched.defaultClipStrength ?? 1.0,
+                triggerWord: matched.triggerWord || '',
+                nickname: cleanLabel,
+                showPill: true,
+              });
+            }
+          }
+          return next;
+        });
+      }
 
       const assistantMsg: QuickGenChatMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
         content: res.reply,
         proposedPrompt: res.proposedPrompt,
+        selectedLoras:
+          resolvedPickedLoras.length > 0 ? resolvedPickedLoras.map((l) => l.filename) : undefined,
+        excludedLoras: currentRemovedKeys.length > 0 ? currentRemovedKeys : undefined,
       };
       setChatMessages((prev) => [...prev, assistantMsg]);
       focusInputAtEnd(30, false);
@@ -376,6 +482,23 @@ export function useQuickGenSubmit({
         promptsToRun = Array.from({ length: batchCount }, () => cleanPrompt);
       }
 
+      const currentExcludedLoras = Array.from(removedLoraKeys);
+      let snapshotForBatch: QuickGenChatMessage[] | undefined;
+      if (chatMessages.length > 0) {
+        snapshotForBatch = chatMessages.map((m, idx) => {
+          const isLastAssistant =
+            m.role === 'assistant' &&
+            !chatMessages.slice(idx + 1).some((later) => later.role === 'assistant');
+          if (isLastAssistant) {
+            return {
+              ...m,
+              excludedLoras: currentExcludedLoras.length > 0 ? currentExcludedLoras : undefined,
+            };
+          }
+          return m;
+        });
+      }
+
       const res = await api.submitGenerationBatch({
         characterId: attachedCharacter?.id || null,
         workflowId: resolvedWorkflow.id,
@@ -389,7 +512,7 @@ export function useQuickGenSubmit({
         loras: selectedLoras,
         seriesId: activeSeriesId,
         branchFromImageId: branchFromImageId,
-        chatSnapshot: chatMessages.length > 0 ? chatMessages : undefined,
+        chatSnapshot: snapshotForBatch,
       });
 
       const submittedCount = res.batch.items.filter((i) => i.status === 'submitted').length;

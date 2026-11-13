@@ -561,6 +561,14 @@ export function runMigrations(): void {
         ALTER TABLE generation_batches ADD COLUMN chat_snapshot_json TEXT;
       `,
     },
+    {
+      version: 12,
+      name: 'lora_trigger_words_and_agent_descriptions',
+      sql: `
+        ALTER TABLE models ADD COLUMN trigger_word TEXT;
+        ALTER TABLE models ADD COLUMN llm_description TEXT;
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

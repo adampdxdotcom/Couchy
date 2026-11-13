@@ -270,6 +270,8 @@ export const api = {
     nickname?: string | null;
     defaultModelStrength?: number;
     defaultClipStrength?: number;
+    triggerWord?: string | null;
+    llmDescription?: string | null;
   }) =>
     requestJson<{ ok: boolean; items: LoraExplorerItem[] }>('/api/loras/mention-config', {
       method: 'PATCH',
@@ -469,10 +471,12 @@ export const api = {
     characterName?: string;
     characterDescription?: string;
     loraNames?: string[];
+    excludedLoras?: string[];
   }) =>
     requestJson<{
       reply: string;
       proposedPrompt: string | null;
+      selectedLoras?: string[];
       modelUsed: string;
     }>('/api/generation/lmstudio/chat', {
       method: 'POST',

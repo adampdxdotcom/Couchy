@@ -241,7 +241,7 @@ generationRouter.post('/lmstudio/generate-prompts', async (req, res) => {
  */
 generationRouter.post('/lmstudio/chat', async (req, res) => {
   try {
-    const { messages, characterName, characterDescription, loraNames } = req.body || {};
+    const { messages, characterName, characterDescription, loraNames, excludedLoras } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Please enter a message to start the conversation.' });
     }
@@ -250,6 +250,7 @@ generationRouter.post('/lmstudio/chat', async (req, res) => {
       characterName: characterName ? String(characterName) : undefined,
       characterDescription: characterDescription ? String(characterDescription) : undefined,
       loraNames: Array.isArray(loraNames) ? loraNames.map(String) : [],
+      excludedLoras: Array.isArray(excludedLoras) ? excludedLoras.map(String) : [],
     });
     res.json(result);
   } catch (err: any) {
