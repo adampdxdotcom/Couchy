@@ -22,9 +22,14 @@ import { copyImageMetadataToDerivedImage } from '../services/scannerService.ts';
 import {
   COUCHY_COMFY_CLIENT_ID,
   invalidateComfyQueueCache,
+  notifyImageIndexed,
+  recordComfyExecutionError,
 } from '../services/comfyuiLiveMonitor.ts';
 import { pollComfyPromptCompletion } from '../services/comfyuiPoller.ts';
-import { attachGenerationItemOutputToSeries } from '../services/seriesService.ts';
+import {
+  attachGenerationItemOutputToSeries,
+  preserveFailedGenerationConversation,
+} from '../services/seriesService.ts';
 import {
   normalizeResolutionSelectorRatio,
   type GenerationBatchRecord,
@@ -424,6 +429,13 @@ function trackGenerationItem(
          SET status = 'failed', error_message = ?, completed_at = datetime('now')
          WHERE id = ?`
       ).run(errMsg, itemId);
+      const recovery = preserveFailedGenerationConversation(itemId);
+      recordComfyExecutionError({
+        promptId,
+        message: errMsg,
+        recovery,
+      });
+      notifyImageIndexed();
     },
   });
 }
@@ -612,11 +624,13 @@ generationRouter.post('/submit-batch', async (req, res) => {
             resolvedMp > 3.0 && !hasInlineUpscale ? resolvedMp : undefined
           );
         } catch (err: any) {
+          const errMsg = err?.message || 'Failed to submit to ComfyUI';
           db.prepare(
             `UPDATE generation_items
              SET status = 'failed', error_message = ?, completed_at = datetime('now')
              WHERE id = ?`
-          ).run(err?.message || 'Failed to submit to ComfyUI', item.itemId);
+          ).run(errMsg, item.itemId);
+          preserveFailedGenerationConversation(item.itemId);
         }
       })
     );

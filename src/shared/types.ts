@@ -446,6 +446,22 @@ export interface LmStudioStatus {
   error: string | null;
 }
 
+export interface ComfyUiExecutionErrorNotice {
+  id: string;
+  promptId: string | null;
+  message: string;
+  timestamp: number;
+  recovery?: {
+    prompt: string;
+    characterId: number | null;
+    aspectRatio: string;
+    megapixels: number;
+    seriesId: number | null;
+    branchFromImageId: number | null;
+    chatMessages: QuickGenChatMessage[];
+  } | null;
+}
+
 export interface ComfyUiLiveStatus {
   online: boolean;
   runningCount: number;
@@ -458,6 +474,7 @@ export interface ComfyUiLiveStatus {
   totalRunJobs?: number | null;
   lastIndexedAt?: number;
   ghostItems?: QueuedGhostCardItem[];
+  lastError?: ComfyUiExecutionErrorNotice | null;
 }
 
 export interface AppToastMessage {

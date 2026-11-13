@@ -21,6 +21,24 @@ export interface PollComfyPromptOptions {
   onTimeout?: () => void | Promise<void>;
 }
 
+function formatComfyHistoryError(messages: unknown): string {
+  if (Array.isArray(messages)) {
+    for (const msg of messages) {
+      if (Array.isArray(msg) && msg[0] === 'execution_error' && msg[1] && typeof msg[1] === 'object') {
+        const details = msg[1] as Record<string, any>;
+        const excMsg = String(details.exception_message || '').trim();
+        const nodeType = String(details.node_type || '').trim();
+        if (excMsg && nodeType) return `${nodeType}: ${excMsg}`;
+        if (excMsg) return excMsg;
+      }
+    }
+  }
+  if (typeof messages === 'string' && messages.trim()) {
+    return messages.trim();
+  }
+  return 'ComfyUI execution error';
+}
+
 /**
  * Polls ComfyUI `/history/<promptId>` until completion or error, indexes any generated
  * output files into SQLite, runs caller hooks, and notifies live gallery listeners.
@@ -52,7 +70,7 @@ export function pollComfyPromptCompletion(options: PollComfyPromptOptions): void
           const entry = hist[promptId];
           if (entry) {
             if (entry.status?.status_str === 'error') {
-              const errMsg = JSON.stringify(entry.status?.messages || 'ComfyUI execution error');
+              const errMsg = formatComfyHistoryError(entry.status?.messages);
               await onError?.(errMsg);
               return;
             }

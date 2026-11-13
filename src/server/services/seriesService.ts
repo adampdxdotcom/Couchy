@@ -284,6 +284,126 @@ export function attachGenerationItemOutputToSeries(itemId: number, imageId: numb
 }
 
 /**
+ * Preserves a failed generation item's conversation history on its target series/source image
+ * (so clicking Continue Chat on the stack includes the turn that failed) and returns recovery state
+ * for Quick Gen.
+ */
+export function preserveFailedGenerationConversation(itemId: number): {
+  prompt: string;
+  characterId: number | null;
+  aspectRatio: string;
+  megapixels: number;
+  seriesId: number | null;
+  branchFromImageId: number | null;
+  chatMessages: QuickGenChatMessage[];
+} | null {
+  if (!itemId || itemId <= 0) return null;
+
+  const row = db
+    .prepare(
+      `SELECT
+         gi.prompt,
+         gb.character_id,
+         gb.aspect_ratio,
+         gb.megapixels,
+         gb.series_id,
+         gb.branch_from_image_id,
+         gb.chat_snapshot_json
+       FROM generation_items gi
+       JOIN generation_batches gb ON gb.id = gi.batch_id
+       WHERE gi.id = ?`
+    )
+    .get(itemId) as
+    | {
+        prompt: string;
+        character_id: number | null;
+        aspect_ratio: string | null;
+        megapixels: number | null;
+        series_id: number | null;
+        branch_from_image_id: number | null;
+        chat_snapshot_json: string | null;
+      }
+    | undefined;
+
+  if (!row) return null;
+
+  const chatMessages = parseChatSnapshot(row.chat_snapshot_json);
+  let resolvedSeriesId = row.series_id && row.series_id > 0 ? Number(row.series_id) : null;
+  const sourceImageId =
+    row.branch_from_image_id && row.branch_from_image_id > 0
+      ? Number(row.branch_from_image_id)
+      : null;
+
+  // If this was a Conversation Mode turn connected to a series or source image, persist the latest chat snapshot on the stack
+  if (chatMessages.length > 0 && row.chat_snapshot_json) {
+    try {
+      const tx = db.transaction(() => {
+        if (!resolvedSeriesId && sourceImageId) {
+          const existingMembership = db
+            .prepare(
+              `SELECT isi.series_id,
+                      (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
+               FROM image_series_items isi
+               WHERE isi.image_id = ?
+               ORDER BY (isi.step_order = max_step) DESC, isi.series_id DESC
+               LIMIT 1`
+            )
+            .get(sourceImageId) as { series_id: number } | undefined;
+          if (existingMembership) {
+            resolvedSeriesId = existingMembership.series_id;
+          }
+        }
+
+        if (resolvedSeriesId) {
+          const targetImageId =
+            sourceImageId ||
+            (
+              db
+                .prepare(
+                  `SELECT image_id FROM image_series_items WHERE series_id = ? ORDER BY step_order DESC LIMIT 1`
+                )
+                .get(resolvedSeriesId) as { image_id: number } | undefined
+            )?.image_id;
+
+          if (targetImageId) {
+            db.prepare(
+              `UPDATE image_series_items
+               SET chat_snapshot_json = ?
+               WHERE series_id = ? AND image_id = ?`
+            ).run(row.chat_snapshot_json, resolvedSeriesId, targetImageId);
+            db.prepare(`UPDATE image_series SET updated_at = datetime('now') WHERE id = ?`).run(
+              resolvedSeriesId
+            );
+          }
+        } else if (sourceImageId) {
+          // Source image was standalone when branching into Conversation mode: attach a 1-image series so chat history isn't lost on the card
+          const newSeriesId = attachGeneratedImageToSeries({
+            imageId: sourceImageId,
+            chatSnapshotJson: row.chat_snapshot_json,
+          });
+          if (newSeriesId) {
+            resolvedSeriesId = newSeriesId;
+          }
+        }
+      });
+      tx();
+    } catch (err) {
+      console.warn('Failed to persist failed batch conversation onto series:', err);
+    }
+  }
+
+  return {
+    prompt: row.prompt || '',
+    characterId: row.character_id ? Number(row.character_id) : null,
+    aspectRatio: row.aspect_ratio || '2:3 (Portrait Photo)',
+    megapixels: Number(row.megapixels || 3.0),
+    seriesId: resolvedSeriesId,
+    branchFromImageId: sourceImageId,
+    chatMessages,
+  };
+}
+
+/**
  * Automatically stacks an upscaled image onto its source image's series
  * (or creates a new 2-image series `[sourceImageId, derivedImageId]` if standalone).
  */

@@ -1,6 +1,11 @@
 import { appConfig } from '../config.ts';
 import { db } from '../db.ts';
-import type { ComfyUiLiveStatus, QueuedGhostCardItem } from '../../shared/types.ts';
+import { preserveFailedGenerationConversation } from './seriesService.ts';
+import type {
+  ComfyUiExecutionErrorNotice,
+  ComfyUiLiveStatus,
+  QueuedGhostCardItem,
+} from '../../shared/types.ts';
 
 export const COUCHY_COMFY_CLIENT_ID = 'couchy-studio-client';
 
@@ -45,6 +50,7 @@ interface LiveMonitorState {
   prevTotalRemaining: number;
   lastQueueFetchMs: number;
   lastIndexedAt: number;
+  lastError: ComfyUiExecutionErrorNotice | null;
 }
 
 const state: LiveMonitorState = {
@@ -66,7 +72,44 @@ const state: LiveMonitorState = {
   prevTotalRemaining: 0,
   lastQueueFetchMs: 0,
   lastIndexedAt: Date.now(),
+  lastError: null,
 };
+
+/**
+ * Records a ComfyUI execution failure so connected clients can display an error toast
+ * and automatically restore any failed Conversation Mode state.
+ */
+export function recordComfyExecutionError(params: {
+  promptId: string | null;
+  message: string;
+  recovery?: ComfyUiExecutionErrorNotice['recovery'];
+}): void {
+  const { promptId, message, recovery = null } = params;
+  if (promptId) {
+    state.runningPromptIds.delete(promptId);
+    state.pendingPromptIds.delete(promptId);
+    state.promptProgressMap.delete(promptId);
+    state.finishedPromptIds.delete(promptId);
+  }
+  // Avoid overwriting an identical promptId error that already has recovery attached
+  if (
+    promptId &&
+    state.lastError?.promptId === promptId &&
+    Date.now() - state.lastError.timestamp < 15_000
+  ) {
+    if (recovery && !state.lastError.recovery) {
+      state.lastError = { ...state.lastError, recovery };
+    }
+    return;
+  }
+  state.lastError = {
+    id: `${promptId || 'err'}-${Date.now()}`,
+    promptId,
+    message: message.trim() || 'ComfyUI execution failed',
+    timestamp: Date.now(),
+    recovery,
+  };
+}
 
 /**
  * Registers series/source image metadata for a queued ComfyUI prompt (such as an upscale job)
@@ -385,6 +428,40 @@ export function ensureComfyUiWsMonitor(): void {
             state.finishedPromptIds.delete(pid);
           }
           state.progressPercent = null;
+
+          if (type === 'execution_error') {
+            const excMsg = String(data?.exception_message || '').trim();
+            const nodeType = String(data?.node_type || '').trim();
+            const readableErr =
+              excMsg && nodeType
+                ? `${nodeType}: ${excMsg}`
+                : excMsg || 'ComfyUI execution error';
+
+            let recovery: ComfyUiExecutionErrorNotice['recovery'] = null;
+            if (pid) {
+              try {
+                const genRow = db
+                  .prepare('SELECT id FROM generation_items WHERE comfyui_prompt_id = ? LIMIT 1')
+                  .get(pid) as { id: number } | undefined;
+                if (genRow) {
+                  db.prepare(
+                    `UPDATE generation_items
+                     SET status = 'failed', error_message = ?, completed_at = datetime('now')
+                     WHERE id = ?`
+                  ).run(readableErr, genRow.id);
+                  recovery = preserveFailedGenerationConversation(genRow.id);
+                  notifyImageIndexed();
+                }
+              } catch {
+                // ignore DB lookup error
+              }
+            }
+            recordComfyExecutionError({
+              promptId: pid,
+              message: readableErr,
+              recovery,
+            });
+          }
         } else if (type === 'status' && data?.status?.exec_info) {
           const totalRemaining = Number(data.status.exec_info.queue_remaining ?? 0);
           syncRunJobCounts(totalRemaining);
@@ -905,6 +982,8 @@ export async function getComfyUiLiveStatus(): Promise<ComfyUiLiveStatus> {
     totalRunJobs,
     lastIndexedAt: state.lastIndexedAt,
     ghostItems,
+    lastError:
+      state.lastError && now - state.lastError.timestamp < 30_000 ? state.lastError : null,
   };
 }
 

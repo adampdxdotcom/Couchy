@@ -153,6 +153,9 @@ export async function ensureWebpThumbnail(
     const metadata = await sharp(sourceFile).metadata();
     const width = metadata.width || 0;
     const height = metadata.height || 0;
+    if (width <= 0 || height <= 0) {
+      return { thumbPath: null, width: 0, height: 0, format: 'PNG' };
+    }
     const format = (metadata.format || path.extname(sourceFile).slice(1)).toUpperCase();
 
     if (forceOverwrite || !fs.existsSync(thumbFile)) {
@@ -164,6 +167,61 @@ export async function ensureWebpThumbnail(
     return { thumbPath: thumbFile, width, height, format };
   } catch {
     return { thumbPath: null, width: 0, height: 0, format: 'PNG' };
+  }
+}
+
+/**
+ * Deletes a single corrupt/0x0 image record and any orphaned series rows from SQLite.
+ */
+function deleteCorruptImageRecord(imageId: number): void {
+  try {
+    const row = db
+      .prepare('SELECT id, content_hash FROM images WHERE id = ?')
+      .get(imageId) as { id: number; content_hash: string } | undefined;
+    if (!row) return;
+
+    const tx = db.transaction(() => {
+      db.prepare('UPDATE generation_items SET output_image_id = NULL WHERE output_image_id = ?').run(
+        row.id
+      );
+      db.prepare('DELETE FROM image_series_items WHERE image_id = ?').run(row.id);
+      db.prepare(
+        'DELETE FROM image_series WHERE id NOT IN (SELECT DISTINCT series_id FROM image_series_items)'
+      ).run();
+      db.prepare('DELETE FROM images WHERE id = ?').run(row.id);
+      const otherWithHash = db
+        .prepare('SELECT 1 FROM images WHERE content_hash = ? LIMIT 1')
+        .get(row.content_hash);
+      if (!otherWithHash) {
+        db.prepare('DELETE FROM ratings WHERE content_hash = ? AND rating = 0 AND is_favorite = 0').run(
+          row.content_hash
+        );
+      }
+    });
+    tx();
+  } catch (err) {
+    console.warn(`Failed to clean up corrupt image record #${imageId}:`, err);
+  }
+}
+
+/**
+ * Self-healing cleanup that purges any 0-byte or 0x0 corrupt image rows (e.g. from disk-full writes).
+ */
+export function purgeCorruptZeroDimensionImages(): number {
+  try {
+    const corruptRows = db
+      .prepare('SELECT id FROM images WHERE width <= 0 OR height <= 0 OR file_size <= 0')
+      .all() as { id: number }[];
+    if (corruptRows.length === 0) return 0;
+
+    for (const row of corruptRows) {
+      deleteCorruptImageRecord(row.id);
+    }
+    notifyImageIndexed();
+    return corruptRows.length;
+  } catch (err) {
+    console.warn('Failed to purge corrupt 0x0 image records:', err);
+    return 0;
   }
 }
 
@@ -385,14 +443,24 @@ export async function indexSingleImageFile(
     // while self-healing if the WebP thumbnail in data/thumbnails is missing on disk.
     const existingByPath = db
       .prepare(
-        'SELECT id, content_hash, file_size, file_mtime, is_missing, thumbnail_path FROM images WHERE relative_path = ?'
+        'SELECT id, content_hash, file_size, width, height, file_mtime, is_missing, thumbnail_path FROM images WHERE relative_path = ?'
       )
       .get(relativePath) as any;
+
+    // Reject 0-byte files immediately (e.g. failed ComfyUI SaveImage when disk is full)
+    if (stat.size <= 0) {
+      if (existingByPath?.id) {
+        deleteCorruptImageRecord(existingByPath.id);
+      }
+      return { outcome: 'error', imageId: null, contentHash: null };
+    }
 
     if (
       existingByPath &&
       !forceMetadataRebuild &&
       existingByPath.file_size === stat.size &&
+      existingByPath.width > 0 &&
+      existingByPath.height > 0 &&
       existingByPath.file_mtime === mtimeIso &&
       existingByPath.is_missing === 0
     ) {
@@ -436,6 +504,16 @@ export async function indexSingleImageFile(
 
     const contentHash = computeFileSha256(fullPath);
     const { thumbPath, width, height, format } = await ensureWebpThumbnail(fullPath, contentHash);
+
+    // Reject truncated or corrupt image files that Sharp cannot decode into valid dimensions
+    if (width <= 0 || height <= 0 || !thumbPath) {
+      if (existingByPath?.id) {
+        deleteCorruptImageRecord(existingByPath.id);
+      }
+      console.warn(`Skipping corrupt or unreadable image file (${width}x${height}): ${fullPath}`);
+      return { outcome: 'error', imageId: null, contentHash: null };
+    }
+
     const parsed = parseImageMetadata(fullPath);
 
     let imageId = 0;
@@ -717,6 +795,7 @@ function walkDirectoryRecursive(dir: string): string[] {
 export async function runDirectoryScan(
   scanType: 'full' | 'incremental' | 'reconcile' | 'rebuild_metadata' = 'incremental'
 ): Promise<number> {
+  purgeCorruptZeroDimensionImages();
   if (scanType === 'rebuild_metadata') {
     backfillMissingImagePrompts(true);
   }
@@ -813,6 +892,7 @@ export async function runDirectoryScan(
  * Starts continuous filesystem monitoring on the mounted ComfyUI output directory.
  */
 export function startFilesystemWatcher(): void {
+  purgeCorruptZeroDimensionImages();
   if (fsWatcher) {
     fsWatcher.close();
   }

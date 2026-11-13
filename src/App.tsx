@@ -246,7 +246,12 @@ export default function App() {
   }, [filters, allImages, loadFilteredImages]);
 
   const allImageIdsRef = useRef<Set<number>>(new Set());
+  const allImagesRef = useRef<ImageRecord[]>([]);
+  const charactersRef = useRef<CharacterProfile[]>([]);
+  const lastSeenErrorIdRef = useRef<string | null>(null);
+
   useEffect(() => {
+    allImagesRef.current = allImages;
     const ids = new Set<number>();
     for (const img of allImages) {
       ids.add(img.id);
@@ -258,6 +263,10 @@ export default function App() {
     }
     allImageIdsRef.current = ids;
   }, [allImages]);
+
+  useEffect(() => {
+    charactersRef.current = characters;
+  }, [characters]);
 
   const totalGalleryPages = Math.max(1, Math.ceil(images.length / galleryPageSize));
   const currentGalleryPage = Math.min(Math.max(1, galleryPage), totalGalleryPages);
@@ -316,6 +325,45 @@ export default function App() {
         const status = await api.getComfyUiLiveStatus();
         if (cancelled) return;
         setComfyStatus(status);
+
+        // Surface ComfyUI execution failures (e.g. disk full, OOM) and auto-restore failed Conversation turns
+        if (status.lastError && status.lastError.id !== lastSeenErrorIdRef.current) {
+          lastSeenErrorIdRef.current = status.lastError.id;
+          const rec = status.lastError.recovery;
+          if (rec && rec.chatMessages && rec.chatMessages.length > 0) {
+            const matchedChar = rec.characterId
+              ? charactersRef.current.find((c) => c.id === rec.characterId) || null
+              : null;
+            const sourceImg = rec.branchFromImageId
+              ? allImagesRef.current.find((img) => img.id === rec.branchFromImageId) || null
+              : null;
+            const latestExcludedMsg = [...rec.chatMessages]
+              .reverse()
+              .find((m) => Array.isArray(m.excludedLoras) && m.excludedLoras.length > 0);
+
+            setQuickGenPrefill({
+              prompt: '',
+              character: matchedChar,
+              loras: sourceImg?.loras || [],
+              excludedLoras: latestExcludedMsg?.excludedLoras || [],
+              aspectRatio: rec.aspectRatio,
+              megapixels: rec.megapixels,
+              batchCount: 1,
+              conversationMode: true,
+              chatMessages: rec.chatMessages,
+              seriesId: rec.seriesId,
+              branchFromImageId: rec.branchFromImageId,
+              timestamp: Date.now(),
+            });
+            pushToast(
+              `ComfyUI error (${status.lastError.message}) — Conversation restored in Quick Gen`,
+              'error'
+            );
+          } else {
+            pushToast(`ComfyUI generation failed: ${status.lastError.message}`, 'error');
+          }
+          refreshAll();
+        }
 
         const hasUnindexedGhost = (status.ghostItems || []).some(
           (g) =>
