@@ -34,6 +34,7 @@ interface FloatingQuickGenBarProps {
   allImages: ImageRecord[];
   workflows: WorkflowLibraryItem[];
   prefillPayload?: QuickGenPrefill | null;
+  onClearPrefill?: () => void;
   onRefreshAll: () => Promise<void>;
   onPushToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   lmStudioOnline?: boolean;
@@ -49,6 +50,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   allImages,
   workflows,
   prefillPayload,
+  onClearPrefill,
   onRefreshAll,
   onPushToast,
   lmStudioOnline = true,
@@ -66,6 +68,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     lmStudioOnline,
     onRefreshAll,
     onPushToast,
+    onClearPrefill,
     inputRef,
   });
 
@@ -321,20 +324,15 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                     : 'min-h-[1.5rem] max-h-24'
                 }`}
               />
-              {submitState.prompt.length > 0 && (
+              {(submitState.prompt.length > 0 ||
+                Boolean(submitState.attachedCharacter) ||
+                submitState.attachedLoras.length > 0 ||
+                submitState.chatMessages.length > 0) && (
                 <button
                   type="button"
-                  onClick={() => {
-                    submitState.setPrompt('');
-                    submitState.setAttachedLoras((prev) =>
-                      prev.filter((l) => l.showPill !== false)
-                    );
-                    mentions.setMentionOpen(false);
-                    submitState.setIsPromptFocused(false);
-                    inputRef.current?.blur();
-                  }}
+                  onClick={() => submitState.handleClearBox(mentions.resetMentions)}
                   className="p-1 text-zinc-500 hover:text-zinc-300 cursor-pointer shrink-0 mt-0.5"
-                  title="Clear prompt"
+                  title="Clear Quick Gen box"
                 >
                   <X className="w-4 h-4" />
                 </button>

@@ -538,6 +538,10 @@ export default function App() {
     [characters, pushToast]
   );
 
+  const handleClearQuickGenPrefill = useCallback(() => {
+    setQuickGenPrefill(null);
+  }, []);
+
   const handleOpenConversationForImage = useCallback(
     (img: ImageRecord) => {
       if (!lmStudioStatus.online) {
@@ -903,6 +907,7 @@ export default function App() {
           allImages={allImages}
           workflows={workflows}
           prefillPayload={quickGenPrefill}
+          onClearPrefill={handleClearQuickGenPrefill}
           onRefreshAll={refreshAll}
           onPushToast={pushToast}
           lmStudioOnline={lmStudioStatus.online}

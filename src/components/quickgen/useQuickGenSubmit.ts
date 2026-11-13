@@ -24,6 +24,7 @@ interface UseQuickGenSubmitParams {
   lmStudioOnline: boolean;
   onRefreshAll: () => Promise<void>;
   onPushToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
+  onClearPrefill?: () => void;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
 }
 
@@ -38,6 +39,7 @@ export function useQuickGenSubmit({
   lmStudioOnline,
   onRefreshAll,
   onPushToast,
+  onClearPrefill,
   inputRef,
 }: UseQuickGenSubmitParams) {
   const [prompt, setPrompt] = useState('');
@@ -249,13 +251,16 @@ export function useQuickGenSubmit({
       setActiveSeriesId(prefillPayload.seriesId ?? null);
       setBranchFromImageId(prefillPayload.branchFromImageId ?? null);
     } else {
+      setConversationEnabled(false);
+      setChatMessages([]);
       setActiveSeriesId(null);
       setBranchFromImageId(null);
     }
 
+    onClearPrefill?.();
     focusInputAtEnd(60, true);
     pulseHighlight(1400);
-  }, [prefillPayload, loras, workflowDefaultMp]);
+  }, [prefillPayload, loras, workflowDefaultMp, onClearPrefill]);
 
   const handleInterrogateImageFile = async (file: File) => {
     if (!lmStudioOnline) {
@@ -559,6 +564,30 @@ export function useQuickGenSubmit({
     }
   };
 
+  /** Completely clears the Quick Gen box (prompt, character, LoRAs, conversation, and settings). */
+  const handleClearBox = (onAfterReset?: () => void) => {
+    setPrompt('');
+    setAttachedCharacter(null);
+    setAttachedLoras([]);
+    setRemovedLoraKeys(new Set());
+    setChatMessages([]);
+    setActiveSeriesId(null);
+    setBranchFromImageId(null);
+    setConversationEnabled(false);
+    setAgentEnabled(false);
+    setAspectRatio(workflowDefaultAr);
+    setMegapixels(workflowDefaultMp);
+    setBatchCount(1);
+    setShowSettingsMenu(false);
+    setIsPromptFocused(false);
+    onClearPrefill?.();
+    onAfterReset?.();
+    if (inputRef.current) {
+      inputRef.current.value = '';
+      inputRef.current.blur();
+    }
+  };
+
   /** Primary Enter / Arrow button handler: chats if in Conversation mode, otherwise dispatches batch. */
   const handleSubmit = async (onAfterReset?: () => void) => {
     if (conversationEnabled) {
@@ -614,6 +643,7 @@ export function useQuickGenSubmit({
     handleInterrogateImageFile,
     handleRemoveCharacter,
     handleRemoveLora,
+    handleClearBox,
     handleSubmit,
     handleSubmitProposedPrompt,
   };

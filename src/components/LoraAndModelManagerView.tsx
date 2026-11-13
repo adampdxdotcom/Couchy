@@ -328,24 +328,22 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
               </div>
             </div>
 
-            <label className="flex items-center gap-2.5 cursor-pointer select-none">
+            <div className="flex items-center gap-2.5 select-none">
               <input
                 type="checkbox"
                 checked={Boolean(selectedLora.mentionEnabled)}
                 onChange={(e) =>
                   handleUpdateMentionConfig(selectedLora.filename, {
                     mentionEnabled: e.target.checked,
-                    nickname: selectedLora.nickname,
-                    defaultModelStrength: selectedLora.defaultModelStrength ?? 1.0,
-                    defaultClipStrength: selectedLora.defaultClipStrength ?? 1.0,
                   })
                 }
-                className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-zinc-900"
+                aria-label={`Include ${selectedLora.name} in @Mention Menu`}
+                className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-zinc-900 cursor-pointer"
               />
               <span className="text-xs font-medium text-zinc-200">
                 Include in @Mention Menu
               </span>
-            </label>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-zinc-800/80">
@@ -686,7 +684,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
               No LoRAs discovered in your mounted models directory or indexed image workflows yet.
             </div>
           ) : (
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead className="bg-zinc-950/90 border-b border-zinc-800 text-zinc-400">
                   <tr>
@@ -709,7 +707,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                       key={l.filename}
                       className="hover:bg-zinc-800/40 transition-colors group"
                     >
-                      {/* Mention Checkbox */}
+                      {/* Mention Checkbox: only clicking this checkbox activates/deactivates the LoRA */}
                       <td
                         className="py-3 px-3 text-center"
                         onClick={(e) => e.stopPropagation()}
@@ -717,20 +715,19 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                         <input
                           type="checkbox"
                           checked={Boolean(l.mentionEnabled)}
+                          onClick={(e) => e.stopPropagation()}
                           onChange={(e) =>
                             handleUpdateMentionConfig(l.filename, {
                               mentionEnabled: e.target.checked,
-                              nickname: l.nickname,
-                              defaultModelStrength: l.defaultModelStrength ?? 1.0,
-                              defaultClipStrength: l.defaultClipStrength ?? 1.0,
                             })
                           }
+                          aria-label={`Include ${l.name} in @mention menu`}
                           className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                           title={l.mentionEnabled ? 'Enabled in @mention' : 'Click to enable in @mention'}
                         />
                       </td>
 
-                      {/* LoRA Name & File */}
+                      {/* LoRA Name & File (opens LoRA settings without altering enabled state) */}
                       <td
                         className="py-3 px-4 cursor-pointer"
                         onClick={() => setSelectedLoraName(l.filename)}
@@ -751,17 +748,15 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                             @
                           </span>
                           <input
+                            key={`${l.filename}-row-nick-${l.nickname || ''}`}
                             type="text"
                             defaultValue={l.nickname || ''}
                             placeholder="nickname"
                             onBlur={(e) => {
-                              const clean = e.target.value.trim().replace(/^@+/, '');
-                              if (clean !== (l.nickname || '')) {
+                              const clean = e.target.value.trim().replace(/^@+/, '').toLowerCase();
+                              if (clean !== (l.nickname || '').toLowerCase()) {
                                 handleUpdateMentionConfig(l.filename, {
-                                  mentionEnabled: l.mentionEnabled,
                                   nickname: clean,
-                                  defaultModelStrength: l.defaultModelStrength ?? 1.0,
-                                  defaultClipStrength: l.defaultClipStrength ?? 1.0,
                                 });
                               }
                             }}

@@ -91,10 +91,30 @@ modelsAndWorkflowsRouter.patch('/loras/mention-config', (req, res) => {
       return;
     }
 
+    const existingRow = db
+      .prepare(
+        `SELECT id, filename, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description
+         FROM models WHERE LOWER(filename) = LOWER(?)`
+      )
+      .get(loraName) as
+      | {
+          id: number;
+          filename: string;
+          nickname: string | null;
+          mention_enabled: number;
+          default_model_strength: number | null;
+          default_clip_strength: number | null;
+          trigger_word: string | null;
+          llm_description: string | null;
+        }
+      | undefined;
+
     const cleanNick =
-      typeof nickname === 'string'
-        ? nickname.trim().replace(/^@+/, '').toLowerCase()
-        : null;
+      nickname !== undefined
+        ? typeof nickname === 'string'
+          ? nickname.trim().replace(/^@+/, '').toLowerCase() || null
+          : null
+        : (existingRow?.nickname ?? null);
 
     // Check collision if cleanNick is set
     if (cleanNick) {
@@ -110,10 +130,6 @@ modelsAndWorkflowsRouter.patch('/loras/mention-config', (req, res) => {
         return;
       }
     }
-
-    const existingRow = db
-      .prepare('SELECT trigger_word, llm_description FROM models WHERE LOWER(filename) = LOWER(?)')
-      .get(loraName) as { trigger_word?: string | null; llm_description?: string | null } | undefined;
 
     const cleanTriggerWord =
       triggerWord !== undefined
@@ -132,34 +148,52 @@ modelsAndWorkflowsRouter.patch('/loras/mention-config', (req, res) => {
     const cleanModelStr =
       defaultModelStrength !== undefined && !Number.isNaN(Number(defaultModelStrength))
         ? Math.max(0.0, Math.min(2.0, Number(defaultModelStrength)))
-        : 1.0;
+        : (existingRow?.default_model_strength ?? 1.0);
     const cleanClipStr =
       defaultClipStrength !== undefined && !Number.isNaN(Number(defaultClipStrength))
         ? Math.max(0.0, Math.min(2.0, Number(defaultClipStrength)))
-        : 1.0;
-    const isMention = mentionEnabled ? 1 : 0;
+        : (existingRow?.default_clip_strength ?? 1.0);
+    const isMention =
+      mentionEnabled !== undefined
+        ? mentionEnabled
+          ? 1
+          : 0
+        : (existingRow?.mention_enabled ?? 0);
 
-    // Ensure model row exists in models table
-    db.prepare(
-      `INSERT INTO models (name, filename, model_type, lora_category, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description)
-       VALUES (?, ?, 'lora', 'unclassified', ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(filename) DO UPDATE SET
-         nickname = excluded.nickname,
-         mention_enabled = excluded.mention_enabled,
-         default_model_strength = excluded.default_model_strength,
-         default_clip_strength = excluded.default_clip_strength,
-         trigger_word = excluded.trigger_word,
-         llm_description = excluded.llm_description`
-    ).run(
-      loraName.replace(/\.(safetensors|pt|ckpt)$/i, ''),
-      loraName,
-      cleanNick || null,
-      isMention,
-      cleanModelStr,
-      cleanClipStr,
-      cleanTriggerWord,
-      cleanLlmDescription
-    );
+    if (existingRow) {
+      db.prepare(
+        `UPDATE models
+         SET nickname = ?,
+             mention_enabled = ?,
+             default_model_strength = ?,
+             default_clip_strength = ?,
+             trigger_word = ?,
+             llm_description = ?
+         WHERE id = ?`
+      ).run(
+        cleanNick,
+        isMention,
+        cleanModelStr,
+        cleanClipStr,
+        cleanTriggerWord,
+        cleanLlmDescription,
+        existingRow.id
+      );
+    } else {
+      db.prepare(
+        `INSERT INTO models (name, filename, model_type, lora_category, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description)
+         VALUES (?, ?, 'lora', 'unclassified', ?, ?, ?, ?, ?, ?)`
+      ).run(
+        loraName.replace(/\.(safetensors|pt|ckpt)$/i, ''),
+        loraName,
+        cleanNick,
+        isMention,
+        cleanModelStr,
+        cleanClipStr,
+        cleanTriggerWord,
+        cleanLlmDescription
+      );
+    }
 
     res.json({ ok: true, items: listLoraExplorerItems() });
   } catch (err: any) {
