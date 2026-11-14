@@ -1,4 +1,5 @@
 import path from 'path';
+import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import {
   extractCivitaiEarlyAccessInfo,
@@ -14,7 +15,9 @@ import {
 import type {
   ComfyModelSubfolder,
   ExternalModelFileOption,
+  ExternalModelInstalledInfo,
   ExternalModelSearchResult,
+  ExternalModelVersionOption,
   ModelType,
 } from '../../shared/types.ts';
 
@@ -200,6 +203,207 @@ export function extractCivitaiVersionFiles(
 }
 
 /**
+ * Builds a normalized version option from a Civitai modelVersion object and parent model.
+ */
+export function buildCivitaiVersionOption(
+  parentModel: any,
+  versionObj: any,
+  rawType: string,
+  domain: CivitaiDomain
+): ExternalModelVersionOption | null {
+  if (!versionObj) return null;
+  const verDomain = resolveCivitaiDomain(parentModel, versionObj, domain);
+  const availableFiles = extractCivitaiVersionFiles(
+    versionObj,
+    rawType,
+    versionObj.baseModel,
+    verDomain
+  );
+  const primaryFile = availableFiles[0];
+  if (!primaryFile) return null;
+
+  const meta = normalizeCivitaiData(
+    parentModel || { id: versionObj.modelId, ...versionObj.model },
+    versionObj,
+    primaryFile.filename,
+    verDomain
+  );
+  const earlyAccess = extractCivitaiEarlyAccessInfo(versionObj);
+  const inferred = inferSubfolderAndTypeFromPath(
+    primaryFile.filename,
+    [],
+    rawType,
+    meta.baseModel
+  );
+
+  return {
+    versionId: meta.civitaiVersionId || String(versionObj.id),
+    versionName: versionObj.name || 'Latest',
+    civitaiUrl: meta.civitaiUrl,
+    baseModel: meta.baseModel,
+    trainedWords: meta.trainedWords,
+    recommendedWeight: meta.recommendedWeight,
+    previewImageUrl: meta.previewImages[0]?.url || null,
+    previewImages: meta.previewImages,
+    civitaiDescription: meta.civitaiDescription,
+    filename: primaryFile.filename,
+    fileSize: primaryFile.fileSize,
+    sha256Hash: primaryFile.sha256Hash,
+    downloadUrl: primaryFile.downloadUrl,
+    modelType: inferred.modelType,
+    suggestedSubfolder: inferred.suggestedSubfolder,
+    subfolderHint: inferred.subfolderHint || null,
+    availableFiles,
+    ...earlyAccess,
+  };
+}
+
+/**
+ * Extracts all downloadable versions from a Civitai parent model, ensuring `primaryVersion` is included.
+ */
+export function extractCivitaiVersions(
+  parentModel: any,
+  primaryVersion: any,
+  rawType: string,
+  domain: CivitaiDomain
+): ExternalModelVersionOption[] {
+  const candidates: any[] = [];
+  if (primaryVersion) candidates.push(primaryVersion);
+  if (Array.isArray(parentModel?.modelVersions)) {
+    for (const v of parentModel.modelVersions) {
+      candidates.push(v);
+    }
+  }
+
+  const seenIds = new Set<string>();
+  const versions: ExternalModelVersionOption[] = [];
+  for (const cand of candidates) {
+    const built = buildCivitaiVersionOption(parentModel, cand, rawType, domain);
+    if (!built || seenIds.has(built.versionId)) continue;
+    seenIds.add(built.versionId);
+    versions.push(built);
+  }
+  return versions;
+}
+
+/**
+ * Annotates search results (and each nested version option) with local installation matches
+ * checked against SHA-256 hash, Civitai version ID, and filename.
+ */
+export function annotateInstalledSearchResults(
+  items: ExternalModelSearchResult[]
+): ExternalModelSearchResult[] {
+  if (!items || items.length === 0) return items;
+
+  const installedRows = db
+    .prepare(
+      `SELECT id, filename, model_type, sha256_hash, autov2_hash, civitai_version_id
+       FROM models
+       WHERE is_installed = 1`
+    )
+    .all() as Array<{
+    id: number;
+    filename: string;
+    model_type: string;
+    sha256_hash: string | null;
+    autov2_hash: string | null;
+    civitai_version_id: string | null;
+  }>;
+
+  if (installedRows.length === 0) return items;
+
+  const bySha256 = new Map<string, (typeof installedRows)[number]>();
+  const byAutoV2 = new Map<string, (typeof installedRows)[number]>();
+  const byVersionId = new Map<string, (typeof installedRows)[number]>();
+  const byFilename = new Map<string, (typeof installedRows)[number]>();
+
+  for (const row of installedRows) {
+    if (row.sha256_hash) bySha256.set(row.sha256_hash.trim().toUpperCase(), row);
+    if (row.autov2_hash) byAutoV2.set(row.autov2_hash.trim().toUpperCase(), row);
+    if (row.civitai_version_id) byVersionId.set(String(row.civitai_version_id).trim(), row);
+    if (row.filename) byFilename.set(path.basename(row.filename).trim().toLowerCase(), row);
+  }
+
+  const resolveMatch = (entry: {
+    sha256Hash?: string | null;
+    versionId?: string | null;
+    filename?: string | null;
+    availableFiles?: ExternalModelFileOption[];
+  }): ExternalModelInstalledInfo => {
+    const hashes = new Set<string>();
+    if (entry.sha256Hash) hashes.add(entry.sha256Hash.trim().toUpperCase());
+    for (const f of entry.availableFiles || []) {
+      if (f.sha256Hash) hashes.add(f.sha256Hash.trim().toUpperCase());
+    }
+
+    for (const h of hashes) {
+      const m = bySha256.get(h) || byAutoV2.get(h.slice(0, 10));
+      if (m) {
+        return {
+          isInstalled: true,
+          installedModelId: m.id,
+          installedFilename: m.filename,
+          installedModelType: m.model_type as ModelType,
+          installedMatchReason: 'hash',
+        };
+      }
+    }
+
+    if (entry.versionId) {
+      const m = byVersionId.get(String(entry.versionId).trim());
+      if (m) {
+        return {
+          isInstalled: true,
+          installedModelId: m.id,
+          installedFilename: m.filename,
+          installedModelType: m.model_type as ModelType,
+          installedMatchReason: 'version_id',
+        };
+      }
+    }
+
+    if (entry.filename) {
+      const m = byFilename.get(path.basename(entry.filename).trim().toLowerCase());
+      if (m) {
+        return {
+          isInstalled: true,
+          installedModelId: m.id,
+          installedFilename: m.filename,
+          installedModelType: m.model_type as ModelType,
+          installedMatchReason: 'filename',
+        };
+      }
+    }
+
+    return {
+      isInstalled: false,
+      installedModelId: null,
+      installedFilename: null,
+      installedModelType: null,
+      installedMatchReason: null,
+    };
+  };
+
+  return items.map((item) => {
+    const annotatedVersions = item.availableVersions?.map((v) => ({
+      ...v,
+      ...resolveMatch({
+        sha256Hash: v.sha256Hash,
+        versionId: v.versionId,
+        filename: v.filename,
+        availableFiles: v.availableFiles,
+      }),
+    }));
+
+    return {
+      ...item,
+      ...resolveMatch(item),
+      ...(annotatedVersions ? { availableVersions: annotatedVersions } : {}),
+    };
+  });
+}
+
+/**
  * Normalizes a Hugging Face repo ID from a plain `owner/repo` string or full URL.
  */
 export function parseHuggingFaceRepoAndFile(input: string): {
@@ -361,25 +565,27 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
           )
         : null) || repoData.files[0];
 
-    return {
-      provider: 'huggingface',
-      id: repoData.repoId,
-      hfRepoId: repoData.repoId,
-      name: repoData.repoId,
-      modelType: matchedFile.modelType,
-      suggestedSubfolder: matchedFile.suggestedSubfolder,
-      versionName: hfParsed.branch,
-      filename: matchedFile.filename,
-      fileSize: matchedFile.fileSize,
-      sha256Hash: matchedFile.sha256Hash,
-      downloadUrl: matchedFile.downloadUrl,
-      creator: repoData.repoId.split('/')[0] || 'HuggingFace',
-      description: `Hugging Face repository ${repoData.repoId} (${repoData.files.length} weight file${
-        repoData.files.length === 1 ? '' : 's'
-      })`,
-      availableFiles: repoData.files,
-      totalRepoFilesCount: repoData.files.length,
-    };
+    return annotateInstalledSearchResults([
+      {
+        provider: 'huggingface',
+        id: repoData.repoId,
+        hfRepoId: repoData.repoId,
+        name: repoData.repoId,
+        modelType: matchedFile.modelType,
+        suggestedSubfolder: matchedFile.suggestedSubfolder,
+        versionName: hfParsed.branch,
+        filename: matchedFile.filename,
+        fileSize: matchedFile.fileSize,
+        sha256Hash: matchedFile.sha256Hash,
+        downloadUrl: matchedFile.downloadUrl,
+        creator: repoData.repoId.split('/')[0] || 'HuggingFace',
+        description: `Hugging Face repository ${repoData.repoId} (${repoData.files.length} weight file${
+          repoData.files.length === 1 ? '' : 's'
+        })`,
+        availableFiles: repoData.files,
+        totalRepoFilesCount: repoData.files.length,
+      },
+    ])[0];
   }
 
   // 2. Civitai Model Page or API Download URL (.com or .red)
@@ -445,58 +651,53 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
     }
 
     const rawType = String(parentModel?.type || targetVer?.model?.type || 'Checkpoint');
-    const availableFiles = extractCivitaiVersionFiles(
+    const availableVersions = extractCivitaiVersions(
+      parentModel,
       targetVer,
       rawType,
-      targetVer.baseModel,
       finalDomain
     );
-    const primaryFile = availableFiles[0];
-    if (!primaryFile) {
+    const activeVersion =
+      availableVersions.find((v) => v.versionId === String(targetVer.id)) ||
+      availableVersions[0];
+
+    if (!activeVersion) {
       throw new Error('No downloadable weight files found on that Civitai model version.');
     }
 
-    const meta = normalizeCivitaiData(
-      parentModel || { id: targetVer.modelId, ...targetVer.model },
-      targetVer,
-      primaryFile.filename,
-      finalDomain
-    );
-    const earlyAccess = extractCivitaiEarlyAccessInfo(targetVer);
-    const inferred = inferSubfolderAndTypeFromPath(
-      primaryFile.filename,
-      [],
-      rawType,
-      meta.baseModel
-    );
-
-    return {
+    const result: ExternalModelSearchResult = {
       provider: 'civitai',
-      id: meta.civitaiId || String(parentModel?.id || targetVer.modelId || targetVer.id),
-      versionId: meta.civitaiVersionId,
-      civitaiUrl: meta.civitaiUrl,
-      name: parentModel?.name || targetVer.model?.name || primaryFile.filename,
-      modelType: inferred.modelType,
-      suggestedSubfolder: inferred.suggestedSubfolder,
-      subfolderHint: inferred.subfolderHint || null,
-      versionName: targetVer.name || 'Latest',
-      baseModel: meta.baseModel,
-      trainedWords: meta.trainedWords,
-      recommendedWeight: meta.recommendedWeight,
-      previewImageUrl: meta.previewImages[0]?.url || null,
-      previewImages: meta.previewImages,
-      civitaiDescription: meta.civitaiDescription,
-      filename: primaryFile.filename,
-      fileSize: primaryFile.fileSize,
-      sha256Hash: primaryFile.sha256Hash,
-      downloadUrl: primaryFile.downloadUrl,
+      id: String(resolvedModelId || targetVer.id),
+      versionId: activeVersion.versionId,
+      civitaiUrl: activeVersion.civitaiUrl,
+      name: parentModel?.name || targetVer.model?.name || activeVersion.filename,
+      modelType: activeVersion.modelType,
+      suggestedSubfolder: activeVersion.suggestedSubfolder,
+      subfolderHint: activeVersion.subfolderHint || null,
+      versionName: activeVersion.versionName,
+      baseModel: activeVersion.baseModel,
+      trainedWords: activeVersion.trainedWords,
+      recommendedWeight: activeVersion.recommendedWeight,
+      previewImageUrl: activeVersion.previewImageUrl,
+      previewImages: activeVersion.previewImages,
+      civitaiDescription: activeVersion.civitaiDescription,
+      filename: activeVersion.filename,
+      fileSize: activeVersion.fileSize,
+      sha256Hash: activeVersion.sha256Hash,
+      downloadUrl: activeVersion.downloadUrl,
       creator:
         parentModel?.creator?.username || targetVer.model?.creator?.username || 'Civitai Creator',
-      description: meta.civitaiDescription?.slice(0, 220) || 'Resolved from Civitai URL',
-      availableFiles,
-      totalRepoFilesCount: availableFiles.length,
-      ...earlyAccess,
+      description: activeVersion.civitaiDescription?.slice(0, 220) || 'Resolved from Civitai URL',
+      availableFiles: activeVersion.availableFiles,
+      totalRepoFilesCount: activeVersion.availableFiles.length,
+      availableVersions,
+      earlyAccessEndsAt: activeVersion.earlyAccessEndsAt,
+      isEarlyAccessActive: activeVersion.isEarlyAccessActive,
+      availability: activeVersion.availability,
+      earlyAccessConfig: activeVersion.earlyAccessConfig,
     };
+
+    return annotateInstalledSearchResults([result])[0];
   }
 
   // 3. Generic Direct File URL
@@ -508,32 +709,34 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
       : `${rawBasename}.safetensors`;
     const inferred = inferSubfolderAndTypeFromPath(parsedUrl.pathname);
 
-    return {
-      provider: 'direct',
-      id: cleanFilename,
-      name: cleanFilename.replace(/\.(safetensors|gguf|ckpt|pt|pth|bin|sft)$/i, ''),
-      modelType: inferred.modelType,
-      suggestedSubfolder: inferred.suggestedSubfolder,
-      versionName: 'Direct URL',
-      filename: cleanFilename,
-      fileSize: null,
-      sha256Hash: null,
-      downloadUrl: input,
-      creator: parsedUrl.hostname,
-      description: `Direct download from ${parsedUrl.hostname}`,
-      availableFiles: [
-        {
-          rfilename: cleanFilename,
-          filename: cleanFilename,
-          fileSize: null,
-          sha256Hash: null,
-          downloadUrl: input,
-          modelType: inferred.modelType,
-          suggestedSubfolder: inferred.suggestedSubfolder,
-        },
-      ],
-      totalRepoFilesCount: 1,
-    };
+    return annotateInstalledSearchResults([
+      {
+        provider: 'direct',
+        id: cleanFilename,
+        name: cleanFilename.replace(/\.(safetensors|gguf|ckpt|pt|pth|bin|sft)$/i, ''),
+        modelType: inferred.modelType,
+        suggestedSubfolder: inferred.suggestedSubfolder,
+        versionName: 'Direct URL',
+        filename: cleanFilename,
+        fileSize: null,
+        sha256Hash: null,
+        downloadUrl: input,
+        creator: parsedUrl.hostname,
+        description: `Direct download from ${parsedUrl.hostname}`,
+        availableFiles: [
+          {
+            rfilename: cleanFilename,
+            filename: cleanFilename,
+            fileSize: null,
+            sha256Hash: null,
+            downloadUrl: input,
+            modelType: inferred.modelType,
+            suggestedSubfolder: inferred.suggestedSubfolder,
+          },
+        ],
+        totalRepoFilesCount: 1,
+      },
+    ])[0];
   }
 
   throw new Error(

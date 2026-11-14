@@ -234,7 +234,42 @@ export interface ExternalModelFileOption {
   suggestedSubfolder: ComfyModelSubfolder;
 }
 
-export interface ExternalModelSearchResult {
+export interface ExternalModelInstalledInfo {
+  isInstalled?: boolean;
+  installedModelId?: number | null;
+  installedFilename?: string | null;
+  installedModelType?: ModelType | null;
+  installedMatchReason?: 'hash' | 'version_id' | 'filename' | null;
+}
+
+export interface ExternalModelVersionOption extends ExternalModelInstalledInfo {
+  versionId: string;
+  versionName: string;
+  civitaiUrl?: string | null;
+  baseModel?: string | null;
+  trainedWords?: string[];
+  recommendedWeight?: number | null;
+  previewImageUrl?: string | null;
+  previewImages?: { url: string; width?: number | null; height?: number | null }[];
+  civitaiDescription?: string | null;
+  filename: string;
+  fileSize: number | null;
+  sha256Hash: string | null;
+  downloadUrl: string;
+  modelType: ModelType;
+  suggestedSubfolder: ComfyModelSubfolder;
+  subfolderHint?: string | null;
+  availableFiles: ExternalModelFileOption[];
+  earlyAccessEndsAt?: string | null;
+  isEarlyAccessActive?: boolean;
+  availability?: string | null;
+  earlyAccessConfig?: {
+    downloadPrice?: number | null;
+    timeframe?: number | null;
+  } | null;
+}
+
+export interface ExternalModelSearchResult extends ExternalModelInstalledInfo {
   provider: 'civitai' | 'huggingface' | 'direct';
   id: string;
   versionId?: string | null;
@@ -259,6 +294,7 @@ export interface ExternalModelSearchResult {
   description: string;
   availableFiles?: ExternalModelFileOption[];
   totalRepoFilesCount?: number;
+  availableVersions?: ExternalModelVersionOption[];
   earlyAccessEndsAt?: string | null;
   isEarlyAccessActive?: boolean;
   availability?: string | null;

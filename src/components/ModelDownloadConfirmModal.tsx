@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Check, Clock, FileCode2, FolderGit2, Info, Loader2, Search } from 'lucide-react';
+import { Check, CheckCircle2, Clock, FileCode2, FolderGit2, Info, Loader2, Search } from 'lucide-react';
 import { formatBytes } from '../shared/utils.ts';
 import {
   formatUnlockCountdown,
@@ -249,6 +249,30 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
               <div className="text-emerald-400 truncate">SHA256: {activeHash}</div>
             )}
           </div>
+
+          {/* Already Installed Locally Notice */}
+          {pendingDownload.isInstalled && (
+            <div className="flex items-start gap-2.5 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/35 text-emerald-200 text-[11px]">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <div className="font-medium text-emerald-100">
+                  Already Installed Locally
+                  {pendingDownload.installedFilename
+                    ? ` (${pendingDownload.installedFilename})`
+                    : ''}
+                </div>
+                <p className="text-emerald-200/80">
+                  Matched in your local model inventory
+                  {pendingDownload.installedMatchReason === 'hash'
+                    ? ' by SHA-256 hash'
+                    : pendingDownload.installedMatchReason === 'version_id'
+                    ? ' by Civitai version ID'
+                    : ' by filename'}
+                  . Enable overwrite below if you want to replace the existing file.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* UNET vs Checkpoint Hint if present */}
           {pendingDownload.subfolderHint && (

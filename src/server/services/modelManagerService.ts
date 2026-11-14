@@ -24,7 +24,8 @@ import {
   DOWNLOAD_WEIGHT_EXTS,
   MODEL_TYPE_TO_DEFAULT_SUBFOLDER,
   SUBFOLDER_TO_MODEL_TYPE,
-  extractCivitaiVersionFiles,
+  annotateInstalledSearchResults,
+  extractCivitaiVersions,
   inferSubfolderAndTypeFromPath,
   parseHuggingFaceRepoAndFile,
   resolveDirectModelUrl,
@@ -85,62 +86,56 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
         }
 
         const rawType = String(parentModel?.type || ver.model?.type || 'LORA');
-        const availableFiles = extractCivitaiVersionFiles(
+        const availableVersions = extractCivitaiVersions(
+          parentModel,
           ver,
           rawType,
-          ver.baseModel,
           finalDomain
         );
-        const primaryFile = availableFiles[0];
-        if (primaryFile) {
-          const meta = normalizeCivitaiData(
-            parentModel || { id: ver.modelId, ...ver.model },
-            ver,
-            primaryFile.filename,
-            finalDomain
-          );
-          const earlyAccess = extractCivitaiEarlyAccessInfo(ver);
-          const inferred = inferSubfolderAndTypeFromPath(
-            primaryFile.filename,
-            [],
-            rawType,
-            meta.baseModel
-          );
+        const activeVersion =
+          availableVersions.find((v) => v.versionId === String(ver.id)) ||
+          availableVersions[0];
+
+        if (activeVersion) {
           const excerpt =
-            meta.civitaiDescription?.slice(0, 220) ||
+            activeVersion.civitaiDescription?.slice(0, 220) ||
             `Matched exact model hash ${trimmed}`;
 
-          return [
+          return annotateInstalledSearchResults([
             {
               provider: 'civitai',
-              id: meta.civitaiId || String(ver.modelId || ver.id),
-              versionId: meta.civitaiVersionId,
-              civitaiUrl: meta.civitaiUrl,
-              name: parentModel?.name || ver.model?.name || primaryFile.filename,
-              modelType: inferred.modelType,
-              suggestedSubfolder: inferred.suggestedSubfolder,
-              subfolderHint: inferred.subfolderHint || null,
-              versionName: ver.name || 'v1.0',
-              baseModel: meta.baseModel,
-              trainedWords: meta.trainedWords,
-              recommendedWeight: meta.recommendedWeight,
-              previewImageUrl: meta.previewImages[0]?.url || null,
-              previewImages: meta.previewImages,
-              civitaiDescription: meta.civitaiDescription,
-              filename: primaryFile.filename,
-              fileSize: primaryFile.fileSize,
-              sha256Hash: primaryFile.sha256Hash,
-              downloadUrl: primaryFile.downloadUrl,
+              id: String(resolvedModelId || ver.id),
+              versionId: activeVersion.versionId,
+              civitaiUrl: activeVersion.civitaiUrl,
+              name: parentModel?.name || ver.model?.name || activeVersion.filename,
+              modelType: activeVersion.modelType,
+              suggestedSubfolder: activeVersion.suggestedSubfolder,
+              subfolderHint: activeVersion.subfolderHint || null,
+              versionName: activeVersion.versionName,
+              baseModel: activeVersion.baseModel,
+              trainedWords: activeVersion.trainedWords,
+              recommendedWeight: activeVersion.recommendedWeight,
+              previewImageUrl: activeVersion.previewImageUrl,
+              previewImages: activeVersion.previewImages,
+              civitaiDescription: activeVersion.civitaiDescription,
+              filename: activeVersion.filename,
+              fileSize: activeVersion.fileSize,
+              sha256Hash: activeVersion.sha256Hash,
+              downloadUrl: activeVersion.downloadUrl,
               creator:
                 parentModel?.creator?.username ||
                 ver.model?.creator?.username ||
                 'Civitai Creator',
               description: excerpt,
-              availableFiles,
-              totalRepoFilesCount: availableFiles.length,
-              ...earlyAccess,
+              availableFiles: activeVersion.availableFiles,
+              totalRepoFilesCount: activeVersion.availableFiles.length,
+              availableVersions,
+              earlyAccessEndsAt: activeVersion.earlyAccessEndsAt,
+              isEarlyAccessActive: activeVersion.isEarlyAccessActive,
+              availability: activeVersion.availability,
+              earlyAccessConfig: activeVersion.earlyAccessConfig,
             },
-          ];
+          ]);
         }
       }
     } catch {
@@ -186,55 +181,45 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
     if (!latestVer) continue;
     const itemDomain = resolveCivitaiDomain(item, latestVer, searchDomain);
     const rawType = String(item.type || 'LORA');
-    const availableFiles = extractCivitaiVersionFiles(
-      latestVer,
-      rawType,
-      latestVer.baseModel,
-      itemDomain
-    );
-    const primaryFile = availableFiles[0];
-    if (!primaryFile) continue;
-
-    const meta = normalizeCivitaiData(item, latestVer, primaryFile.filename, itemDomain);
-    const earlyAccess = extractCivitaiEarlyAccessInfo(latestVer);
-    const inferred = inferSubfolderAndTypeFromPath(
-      primaryFile.filename,
-      [],
-      rawType,
-      meta.baseModel
-    );
+    const availableVersions = extractCivitaiVersions(item, latestVer, rawType, itemDomain);
+    const activeVersion = availableVersions[0];
+    if (!activeVersion) continue;
 
     results.push({
       provider: 'civitai',
       id: String(item.id),
-      versionId: meta.civitaiVersionId,
-      civitaiUrl: meta.civitaiUrl,
+      versionId: activeVersion.versionId,
+      civitaiUrl: activeVersion.civitaiUrl,
       name: item.name,
-      modelType: inferred.modelType,
-      suggestedSubfolder: inferred.suggestedSubfolder,
-      subfolderHint: inferred.subfolderHint || null,
-      versionName: latestVer.name || 'Latest',
-      baseModel: meta.baseModel,
-      trainedWords: meta.trainedWords,
-      recommendedWeight: meta.recommendedWeight,
-      previewImageUrl: meta.previewImages[0]?.url || null,
-      previewImages: meta.previewImages,
-      civitaiDescription: meta.civitaiDescription,
-      filename: primaryFile.filename,
-      fileSize: primaryFile.fileSize,
-      sha256Hash: primaryFile.sha256Hash,
-      downloadUrl: primaryFile.downloadUrl,
+      modelType: activeVersion.modelType,
+      suggestedSubfolder: activeVersion.suggestedSubfolder,
+      subfolderHint: activeVersion.subfolderHint || null,
+      versionName: activeVersion.versionName,
+      baseModel: activeVersion.baseModel,
+      trainedWords: activeVersion.trainedWords,
+      recommendedWeight: activeVersion.recommendedWeight,
+      previewImageUrl: activeVersion.previewImageUrl,
+      previewImages: activeVersion.previewImages,
+      civitaiDescription: activeVersion.civitaiDescription,
+      filename: activeVersion.filename,
+      fileSize: activeVersion.fileSize,
+      sha256Hash: activeVersion.sha256Hash,
+      downloadUrl: activeVersion.downloadUrl,
       creator: item.creator?.username || 'Unknown',
       description:
-        meta.civitaiDescription?.slice(0, 220) ||
+        activeVersion.civitaiDescription?.slice(0, 220) ||
         String(item.description || '').replace(/<[^>]+>/g, '').slice(0, 220),
-      availableFiles,
-      totalRepoFilesCount: availableFiles.length,
-      ...earlyAccess,
+      availableFiles: activeVersion.availableFiles,
+      totalRepoFilesCount: activeVersion.availableFiles.length,
+      availableVersions,
+      earlyAccessEndsAt: activeVersion.earlyAccessEndsAt,
+      isEarlyAccessActive: activeVersion.isEarlyAccessActive,
+      availability: activeVersion.availability,
+      earlyAccessConfig: activeVersion.earlyAccessConfig,
     });
   }
 
-  return results;
+  return annotateInstalledSearchResults(results);
 }
 
 /**
@@ -362,7 +347,7 @@ export async function searchHuggingFaceModels(
     });
   }
 
-  return results;
+  return annotateInstalledSearchResults(results);
 }
 
 /**

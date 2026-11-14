@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  CheckCircle2,
   Clock,
   ExternalLink,
   FolderGit2,
@@ -7,6 +8,7 @@ import {
   Layers,
   Loader2,
   Play,
+  RotateCw,
   Search,
   X,
 } from 'lucide-react';
@@ -82,6 +84,55 @@ function getDefaultSubfolderForItem(item: ExternalModelSearchResult): ComfyModel
   }
 }
 
+export function getDownloaderCardKey(item: ExternalModelSearchResult): string {
+  return item.provider === 'direct'
+    ? `${item.provider}-${item.id}-${item.filename}`
+    : `${item.provider}-${item.id}`;
+}
+
+function applySelectedVersion(
+  item: ExternalModelSearchResult,
+  selectedVersionId?: string
+): ExternalModelSearchResult {
+  const versions = item.availableVersions;
+  if (!versions || versions.length === 0) return item;
+  const match =
+    (selectedVersionId && versions.find((v) => v.versionId === selectedVersionId)) ||
+    versions.find((v) => v.versionId === item.versionId) ||
+    versions[0];
+  if (!match || match.versionId === item.versionId) return item;
+  return {
+    ...item,
+    versionId: match.versionId,
+    versionName: match.versionName,
+    civitaiUrl: match.civitaiUrl ?? item.civitaiUrl,
+    baseModel: match.baseModel ?? null,
+    trainedWords: match.trainedWords ?? [],
+    recommendedWeight: match.recommendedWeight ?? null,
+    previewImageUrl: match.previewImageUrl ?? null,
+    previewImages: match.previewImages ?? [],
+    civitaiDescription: match.civitaiDescription ?? null,
+    filename: match.filename,
+    fileSize: match.fileSize,
+    sha256Hash: match.sha256Hash,
+    downloadUrl: match.downloadUrl,
+    modelType: match.modelType,
+    suggestedSubfolder: match.suggestedSubfolder,
+    subfolderHint: match.subfolderHint ?? null,
+    availableFiles: match.availableFiles,
+    totalRepoFilesCount: match.availableFiles.length,
+    earlyAccessEndsAt: match.earlyAccessEndsAt ?? null,
+    isEarlyAccessActive: Boolean(match.isEarlyAccessActive),
+    availability: match.availability ?? null,
+    earlyAccessConfig: match.earlyAccessConfig ?? null,
+    isInstalled: Boolean(match.isInstalled),
+    installedModelId: match.installedModelId ?? null,
+    installedFilename: match.installedFilename ?? null,
+    installedModelType: match.installedModelType ?? null,
+    installedMatchReason: match.installedMatchReason ?? null,
+  };
+}
+
 /**
  * Unified smart Model Downloader searching Civitai and Hugging Face Hub,
  * rendering full-width preview cards stacked newest-first and clearing automatically on completion.
@@ -117,6 +168,21 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   const [directStartingKey, setDirectStartingKey] = useState<string | null>(null);
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
   const [selectedPreviewIdx, setSelectedPreviewIdx] = useState<Record<string, number>>({});
+  const [selectedVersionByCard, setSelectedVersionByCard] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    setSelectedVersionByCard({});
+  }, [searchBatchTimestamp]);
+
+  const handleInspectInstalledItem = (target: ExternalModelSearchResult) => {
+    if (!onInspectDownload) return;
+    const installedName = target.installedFilename || target.filename;
+    onInspectDownload({
+      installed_filename: installedName,
+      installed_model_type: target.installedModelType || target.modelType,
+      destination_path: installedName,
+    });
+  };
 
   const registerStartedDownload = (
     jobId: number,
@@ -125,7 +191,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     targetSubfolder: string,
     isScheduled = false
   ) => {
-    const cardKey = `${item.provider}-${item.id}-${item.filename}`;
+    const cardKey = getDownloaderCardKey(item);
     if (!isScheduled) {
       setActivePreviewDownloads((prev) => [
         {
@@ -140,9 +206,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       ]);
     }
     setSearchResults((prev) => {
-      const remaining = prev.filter(
-        (r) => `${r.provider}-${r.id}-${r.filename}` !== cardKey
-      );
+      const remaining = prev.filter((r) => getDownloaderCardKey(r) !== cardKey);
       if (remaining.length === 0) {
         setExtQuery('');
       }
@@ -152,7 +216,9 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
 
   const openDownloadModal = async (
     item: ExternalModelSearchResult,
-    preferSchedule?: boolean
+    preferSchedule?: boolean,
+    initialError: string | null = null,
+    preferOverwrite = false
   ) => {
     const initialFile = item.availableFiles?.[0] || null;
     const initialFolder = initialFile?.suggestedSubfolder || getDefaultSubfolderForItem(item);
@@ -163,10 +229,10 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     setSelectedFile(initialFile);
     setDlSubfolder(initialFolder);
     setCustomFilename(initialFile?.filename || item.filename);
-    setAllowOverwrite(false);
+    setAllowOverwrite(preferOverwrite);
     setScheduleDownload(shouldSchedule);
     setScheduledForInput(toLocalDateTimeInputValue(defaultIso));
-    setDlError(null);
+    setDlError(initialError);
 
     // Fetch full recursive tree + LFS SHA-256 hashes for Hugging Face repos
     if (item.provider === 'huggingface' && item.id) {
@@ -259,9 +325,12 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       }
     } catch (err: any) {
       const msg = err?.message || 'Download could not start';
-      // If file already exists on disk, open modal with overwrite option & error visible
-      await openDownloadModal(item, Boolean(scheduledForIso));
-      setDlError(msg);
+      // Only open the confirmation modal when overwrite permission is needed
+      if (/already exists/i.test(msg)) {
+        await openDownloadModal(item, Boolean(scheduledForIso), msg, true);
+      } else {
+        onPushToast?.(msg, 'error');
+      }
     } finally {
       setDirectStartingKey(null);
     }
@@ -339,9 +408,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   };
 
   const handleDismissSearchCard = (cardKey: string) => {
-    setSearchResults((prev) =>
-      prev.filter((r) => `${r.provider}-${r.id}-${r.filename}` !== cardKey)
-    );
+    setSearchResults((prev) => prev.filter((r) => getDownloaderCardKey(r) !== cardKey));
   };
 
   // Build unified full-width preview stack ordered newest first:
@@ -362,7 +429,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     })),
     ...searchResults
       .map((item, idx) => ({
-        cardKey: `${item.provider}-${item.id}-${item.filename}`,
+        cardKey: getDownloaderCardKey(item),
         item,
         activeEntry: null,
         // Subtract idx so multi-result searches preserve their rank while comparing against startedAt
@@ -422,7 +489,10 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       {/* Full-Width Preview Stack (Newest First; Active Downloads Clear Automatically on Completion) */}
       {combinedPreviews.length > 0 && (
         <div className="space-y-4">
-          {combinedPreviews.map(({ cardKey, item, activeEntry }) => {
+          {combinedPreviews.map(({ cardKey, item: rawItem, activeEntry }) => {
+            const item = activeEntry
+              ? rawItem
+              : applySelectedVersion(rawItem, selectedVersionByCard[cardKey]);
             const previews =
               item.previewImages && item.previewImages.length > 0
                 ? item.previewImages
@@ -432,7 +502,8 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
             const activeThumbIdx = selectedPreviewIdx[cardKey] || 0;
             const currentThumbUrl =
               previews[activeThumbIdx]?.url || previews[0]?.url || item.previewImageUrl || null;
-            const hasThumb = Boolean(currentThumbUrl && !brokenImages[`${cardKey}-${activeThumbIdx}`]);
+            const thumbKey = `${cardKey}-${item.versionId || 'default'}-${activeThumbIdx}`;
+            const hasThumb = Boolean(currentThumbUrl && !brokenImages[thumbKey]);
 
             const fileCount = item.totalRepoFilesCount || item.availableFiles?.length || 1;
             const targetFolder = activeEntry?.targetSubfolder || getDefaultSubfolderForItem(item);
@@ -488,7 +559,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                         onError={() =>
                           setBrokenImages((prev) => ({
                             ...prev,
-                            [`${cardKey}-${activeThumbIdx}`]: true,
+                            [thumbKey]: true,
                           }))
                         }
                       />
@@ -560,10 +631,57 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                               {item.baseModel}
                             </span>
                           )}
-                          {item.versionName && (
-                            <span className="px-2 py-0.5 text-[11px] font-mono bg-zinc-950 border border-zinc-800 text-zinc-400 rounded shrink-0">
-                              {item.versionName}
-                            </span>
+                          {!activeEntry &&
+                          item.availableVersions &&
+                          item.availableVersions.length > 1 ? (
+                            <select
+                              value={item.versionId || ''}
+                              onChange={(e) => {
+                                const nextVerId = e.target.value;
+                                setSelectedVersionByCard((prev) => ({
+                                  ...prev,
+                                  [cardKey]: nextVerId,
+                                }));
+                                setSelectedPreviewIdx((prev) => ({ ...prev, [cardKey]: 0 }));
+                              }}
+                              aria-label={`Select version for ${item.name}`}
+                              className="px-2 py-0.5 text-[11px] font-mono bg-zinc-950 border border-zinc-700 hover:border-indigo-500/60 text-zinc-200 rounded shrink-0 cursor-pointer focus:outline-none focus:border-indigo-500 max-w-[260px]"
+                            >
+                              {item.availableVersions.map((ver) => (
+                                <option key={ver.versionId} value={ver.versionId}>
+                                  {ver.versionName}
+                                  {ver.baseModel ? ` · ${ver.baseModel}` : ''}
+                                  {ver.isInstalled
+                                    ? ' ✓ Installed'
+                                    : ver.isEarlyAccessActive
+                                    ? ' ⏳ Early Access'
+                                    : ''}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            item.versionName && (
+                              <span className="px-2 py-0.5 text-[11px] font-mono bg-zinc-950 border border-zinc-800 text-zinc-400 rounded shrink-0">
+                                {item.versionName}
+                              </span>
+                            )
+                          )}
+                          {item.isInstalled && (
+                            <button
+                              type="button"
+                              onClick={() => handleInspectInstalledItem(item)}
+                              title={`Already installed locally (${
+                                item.installedMatchReason === 'hash'
+                                  ? 'matched by SHA-256'
+                                  : item.installedMatchReason === 'version_id'
+                                  ? 'matched by Civitai version ID'
+                                  : 'matched by filename'
+                              }): ${item.installedFilename || item.filename}. Click to inspect.`}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-mono bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 rounded shrink-0 cursor-pointer transition-colors"
+                            >
+                              <CheckCircle2 className="w-3 h-3" />
+                              <span>Installed</span>
+                            </button>
                           )}
                           {item.isEarlyAccessActive && (
                             <span
@@ -716,12 +834,13 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                             <div className="flex flex-wrap items-center gap-2">
                               <button
                                 type="button"
+                                disabled={directStartingKey === cardKey}
                                 onClick={() =>
                                   isDirectLora
                                     ? handleDirectLoraDownload(item, cardKey, suggestedIso)
                                     : openDownloadModal(item, true)
                                 }
-                                className="flex-1 min-w-[200px] inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg transition-colors cursor-pointer"
+                                className="flex-1 min-w-[200px] inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white font-medium rounded-lg transition-colors cursor-pointer"
                               >
                                 <Clock className="w-4 h-4" />
                                 <span>
@@ -732,16 +851,49 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                               </button>
                               <button
                                 type="button"
+                                disabled={directStartingKey === cardKey}
                                 onClick={() =>
                                   isDirectLora
                                     ? handleDirectLoraDownload(item, cardKey, null)
                                     : openDownloadModal(item, false)
                                 }
                                 title="Try downloading now (if already unlocked with Buzz)"
-                                className="inline-flex items-center justify-center gap-1.5 py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 font-medium rounded-lg transition-colors cursor-pointer shrink-0"
+                                className="inline-flex items-center justify-center gap-1.5 py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 border border-zinc-700 text-zinc-200 font-medium rounded-lg transition-colors cursor-pointer shrink-0"
                               >
                                 <Play className="w-3.5 h-3.5 text-indigo-400" />
                                 <span>Try Now</span>
+                              </button>
+                            </div>
+                          );
+                        }
+
+                        if (item.isInstalled) {
+                          return (
+                            <div className="flex flex-wrap items-center gap-2">
+                              {onInspectDownload && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleInspectInstalledItem(item)}
+                                  className="flex-1 min-w-[180px] inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-200 font-medium rounded-lg transition-colors cursor-pointer"
+                                >
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                                  <span>
+                                    Inspect Installed
+                                    {item.installedFilename &&
+                                    item.installedFilename.toLowerCase() !==
+                                      item.filename.toLowerCase()
+                                      ? ` (${item.installedFilename})`
+                                      : ''}
+                                  </span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => openDownloadModal(item, false, null, true)}
+                                className="inline-flex items-center justify-center gap-1.5 py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 font-medium rounded-lg transition-colors cursor-pointer shrink-0"
+                              >
+                                <RotateCw className="w-3.5 h-3.5 text-indigo-400" />
+                                <span>Re-download / Overwrite</span>
                               </button>
                             </div>
                           );
@@ -751,11 +903,14 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                           return (
                             <button
                               type="button"
+                              disabled={directStartingKey === cardKey}
                               onClick={() => handleDirectLoraDownload(item, cardKey)}
-                              className="w-full inline-flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg transition-colors cursor-pointer"
+                              className="w-full inline-flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium rounded-lg transition-colors cursor-pointer"
                             >
                               <HardDriveDownload className="w-4 h-4" />
-                              <span>Download LoRA</span>
+                              <span>
+                                {directStartingKey === cardKey ? 'Starting Download...' : 'Download LoRA'}
+                              </span>
                             </button>
                           );
                         }

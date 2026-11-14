@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../api/client.ts';
 import type { ActivePreviewDownloadEntry } from '../ModelDownloaderTab.tsx';
+import { getDownloaderCardKey } from '../ModelDownloaderTab.tsx';
 import type { ExternalModelSearchResult } from '../../shared/types.ts';
 
 /**
@@ -49,7 +50,7 @@ export function useModelDownloaderState(
 
     setActivePreviewDownloads((prev) => prev.filter((e) => !finishedJobIds.has(e.jobId)));
     setSearchResults((prev) =>
-      prev.filter((r) => !finishedCardKeys.has(`${r.provider}-${r.id}-${r.filename}`))
+      prev.filter((r) => !finishedCardKeys.has(getDownloaderCardKey(r)))
     );
   }, [downloads, activePreviewDownloads]);
 
