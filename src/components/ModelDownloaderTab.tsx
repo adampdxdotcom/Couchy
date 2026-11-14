@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import {
+  CheckCircle2,
   ExternalLink,
   FileWarning,
   FolderGit2,
   HardDriveDownload,
   Layers,
   Link2,
+  Loader2,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
@@ -33,6 +35,7 @@ interface ModelDownloaderTabProps {
   downloads: any[];
   onSearch: (e?: React.FormEvent, customQ?: string) => Promise<void>;
   onRefreshDownloads: () => Promise<void>;
+  onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
 function getDefaultSubfolderForItem(item: ExternalModelSearchResult): ComfyModelSubfolder {
@@ -76,6 +79,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   downloads,
   onSearch,
   onRefreshDownloads,
+  onPushToast,
 }) => {
   const [directUrl, setDirectUrl] = useState('');
   const [isResolvingUrl, setIsResolvingUrl] = useState(false);
@@ -89,6 +93,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   const [allowOverwrite, setAllowOverwrite] = useState(false);
   const [dlError, setDlError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [directStartingKey, setDirectStartingKey] = useState<string | null>(null);
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
 
   const openDownloadModal = async (item: ExternalModelSearchResult) => {
@@ -149,6 +154,48 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       setUrlError(err?.message || 'Could not resolve model URL');
     } finally {
       setIsResolvingUrl(false);
+    }
+  };
+
+  const handleDirectLoraDownload = async (item: ExternalModelSearchResult, cardKey: string) => {
+    setDirectStartingKey(cardKey);
+    try {
+      const primary = item.availableFiles?.[0];
+      const targetFilename = primary?.filename || item.filename;
+      await api.startModelDownload({
+        provider: item.provider,
+        modelName: item.name,
+        filename: targetFilename,
+        modelType: 'lora',
+        sourceUrl: primary?.downloadUrl || item.downloadUrl,
+        expectedHash: primary?.sha256Hash || item.sha256Hash || null,
+        subfolder: 'loras',
+        allowOverwrite: false,
+        userConfirmed: true,
+        hfRepoId: item.hfRepoId || null,
+        civitaiMeta:
+          item.provider === 'civitai'
+            ? {
+                civitaiId: item.id,
+                civitaiVersionId: item.versionId || null,
+                civitaiUrl: item.civitaiUrl || null,
+                baseModel: item.baseModel || null,
+                trainedWords: item.trainedWords || [],
+                recommendedWeight: item.recommendedWeight ?? null,
+                civitaiDescription: item.civitaiDescription || null,
+                previewImages: item.previewImages || [],
+              }
+            : null,
+      });
+      await onRefreshDownloads();
+      onPushToast?.(`Started downloading ${targetFilename} to /downloads/loras`, 'info');
+    } catch (err: any) {
+      const msg = err?.message || 'Download could not start';
+      // If file already exists on disk, open modal with overwrite option & error visible
+      await openDownloadModal(item);
+      setDlError(msg);
+    } finally {
+      setDirectStartingKey(null);
     }
   };
 
@@ -417,23 +464,80 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                 </div>
 
                 <div className="px-4 pb-4 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => openDownloadModal(item)}
-                    className="w-full inline-flex items-center justify-center gap-1.5 py-2 bg-zinc-800 hover:bg-indigo-600 text-zinc-100 font-medium rounded-lg transition-colors cursor-pointer"
-                  >
-                    {fileCount > 1 || item.provider === 'huggingface' ? (
-                      <>
-                        <FolderGit2 className="w-3.5 h-3.5" />
-                        <span>Browse Files &amp; Download ({fileCount})</span>
-                      </>
-                    ) : (
-                      <>
-                        <HardDriveDownload className="w-3.5 h-3.5" />
-                        <span>Review &amp; Download</span>
-                      </>
-                    )}
-                  </button>
+                  {(() => {
+                    const isDirectLora =
+                      item.modelType === 'lora' &&
+                      (item.provider === 'civitai' || fileCount <= 1);
+                    const matchingJob = downloads.find(
+                      (d) =>
+                        typeof d.destination_path === 'string' &&
+                        d.destination_path.toLowerCase().endsWith(`/${item.filename.toLowerCase()}`)
+                    );
+                    const isDownloadingNow =
+                      directStartingKey === cardKey || matchingJob?.status === 'downloading';
+                    const isCompletedNow = matchingJob?.status === 'completed';
+                    const dlPct =
+                      matchingJob && matchingJob.total_bytes > 0
+                        ? Math.min(
+                            100,
+                            Math.round((matchingJob.bytes_downloaded / matchingJob.total_bytes) * 100)
+                          )
+                        : null;
+
+                    if (isDirectLora) {
+                      return (
+                        <button
+                          type="button"
+                          disabled={isDownloadingNow}
+                          onClick={() => handleDirectLoraDownload(item, cardKey)}
+                          className={`w-full inline-flex items-center justify-center gap-1.5 py-2 font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-60 ${
+                            isCompletedNow
+                              ? 'bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-600/30'
+                              : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                          }`}
+                        >
+                          {isDownloadingNow ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span className="font-mono tabular-nums">
+                                Downloading{dlPct !== null ? ` (${dlPct}%)` : '...'}
+                              </span>
+                            </>
+                          ) : isCompletedNow ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Downloaded to /loras</span>
+                            </>
+                          ) : (
+                            <>
+                              <HardDriveDownload className="w-3.5 h-3.5" />
+                              <span>Download LoRA</span>
+                            </>
+                          )}
+                        </button>
+                      );
+                    }
+
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => openDownloadModal(item)}
+                        className="w-full inline-flex items-center justify-center gap-1.5 py-2 bg-zinc-800 hover:bg-indigo-600 text-zinc-100 font-medium rounded-lg transition-colors cursor-pointer"
+                      >
+                        {fileCount > 1 || item.provider === 'huggingface' ? (
+                          <>
+                            <FolderGit2 className="w-3.5 h-3.5" />
+                            <span>Browse Files &amp; Download ({fileCount})</span>
+                          </>
+                        ) : (
+                          <>
+                            <HardDriveDownload className="w-3.5 h-3.5" />
+                            <span>Review &amp; Download</span>
+                          </>
+                        )}
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
             );

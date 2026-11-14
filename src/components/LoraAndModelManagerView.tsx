@@ -972,6 +972,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           downloads={downloads}
           onSearch={handleExternalSearch}
           onRefreshDownloads={refreshDownloads}
+          onPushToast={onPushToast}
         />
       )}
     </div>
