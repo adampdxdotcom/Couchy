@@ -918,6 +918,8 @@ export default function App() {
       {inspectedImage && (
         <ImageInspectorDrawer
           image={inspectedImage}
+          allImages={allImages}
+          loras={loras}
           ghostItems={activeGhostItems}
           onClose={() => setInspectedImageId(null)}
           onPrev={
@@ -930,6 +932,7 @@ export default function App() {
           }
           onUpdated={refreshAll}
           onOpenConversation={handleOpenConversationForImage}
+          onReusePrompt={handleReusePrompt}
           characters={characters}
           collections={collections}
           onFilterByLora={(loraName) => {

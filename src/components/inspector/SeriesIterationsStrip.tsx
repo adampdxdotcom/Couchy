@@ -13,6 +13,7 @@ interface SeriesIterationsStripProps {
   onSelectIteration: (imageId: number) => void;
   onContinueConversation?: () => void;
   onOpenMiniGallery?: () => void;
+  disableGalleryModal?: boolean;
 }
 
 /**
@@ -28,6 +29,7 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
   onSelectIteration,
   onContinueConversation,
   onOpenMiniGallery,
+  disableGalleryModal = false,
 }) => {
   const hasPending = pendingGhosts.length > 0;
   if ((!items || items.length <= 1) && !hasPending) return null;
@@ -78,9 +80,14 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
           {onOpenMiniGallery && (
             <button
               type="button"
+              disabled={disableGalleryModal}
               onClick={onOpenMiniGallery}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 text-zinc-200 text-[11px] font-medium transition-colors cursor-pointer shrink-0"
-              title="Open Series Mini Gallery popup"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-200 text-[11px] font-medium transition-colors cursor-pointer shrink-0"
+              title={
+                disableGalleryModal
+                  ? 'Gallery modal disabled in Split Mode — click step thumbnails below'
+                  : 'Open Series Mini Gallery popup'
+              }
             >
               <LayoutGrid className="w-3 h-3 text-indigo-400" />
               <span>Gallery</span>

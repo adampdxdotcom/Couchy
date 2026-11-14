@@ -18,26 +18,34 @@ import {
   Trash2,
   ArrowUpRight,
   User,
+  Columns2,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { findAttachedGhostsForImage, formatBytes } from '../shared/utils.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
 import { SeriesMiniGalleryModal } from './inspector/SeriesMiniGalleryModal.tsx';
+import { SplitCompareView } from './inspector/SplitCompareView.tsx';
+import { ComparePickerModal } from './inspector/ComparePickerModal.tsx';
+import { pickDefaultCompareImageId } from './inspector/splitCompareUtils.ts';
 import type {
   CharacterProfile,
   ImageRecord,
+  LoraExplorerItem,
   QueuedGhostCardItem,
 } from '../shared/types.ts';
 
 interface ImageInspectorDrawerProps {
   image: ImageRecord;
+  allImages?: ImageRecord[];
+  loras?: LoraExplorerItem[];
   ghostItems?: QueuedGhostCardItem[];
   onClose: () => void;
   onPrev?: () => void;
   onNext?: () => void;
   onUpdated: () => void;
   onOpenConversation?: (image: ImageRecord) => void;
+  onReusePrompt?: (image: ImageRecord) => void;
   characters: CharacterProfile[];
   collections: { id: number; name: string }[];
   onFilterByLora: (loraFilename: string) => void;
@@ -51,12 +59,15 @@ interface ImageInspectorDrawerProps {
  */
 export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   image,
+  allImages = [],
+  loras = [],
   ghostItems = [],
   onClose,
   onPrev,
   onNext,
   onUpdated,
   onOpenConversation,
+  onReusePrompt,
   characters,
   collections,
   onFilterByLora,
@@ -66,6 +77,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 }) => {
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [selectedIterationId, setSelectedIterationId] = useState<number>(image.id);
+  const [slotASeriesContextId, setSlotASeriesContextId] = useState<number | null>(
+    image.seriesId ?? null
+  );
   const [detailData, setDetailData] = useState<{
     image?: ImageRecord;
     rawMetadata: Record<string, string>;
@@ -89,11 +103,27 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   const [showRawWorkflow, setShowRawWorkflow] = useState(false);
   const [showSeriesMiniGallery, setShowSeriesMiniGallery] = useState(false);
 
+  // A/B Split-Screen Comparison state
+  const [isSplitMode, setIsSplitMode] = useState(false);
+  const [compareSelection, setCompareSelection] = useState<{
+    imageId: number;
+    seriesId: number | null;
+  } | null>(null);
+  const [compareDetailImage, setCompareDetailImage] = useState<ImageRecord | null>(null);
+  const [showComparePicker, setShowComparePicker] = useState(false);
+
   const activeImage =
     detailData?.image && detailData.image.id === selectedIterationId
       ? detailData.image
-      : image;
-  const seriesContextId = image.seriesId ?? activeImage.seriesId ?? null;
+      : allImages.find((img) => img.id === selectedIterationId) || image;
+  const seriesContextId = slotASeriesContextId ?? activeImage.seriesId ?? null;
+
+  const compareImage: ImageRecord | null = compareSelection
+    ? compareDetailImage && compareDetailImage.id === compareSelection.imageId
+      ? compareDetailImage
+      : allImages.find((img) => img.id === compareSelection.imageId) || null
+    : null;
+
   const currentMegapixels =
     activeImage.width > 0 && activeImage.height > 0
       ? (activeImage.width * activeImage.height) / 1_000_000
@@ -108,16 +138,24 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     getSuggestedUpscaleMp(currentMegapixels)
   );
 
-  // Sync selectedIterationId and clear stale detail snapshot when outer image prop changes
+  // Sync selectedIterationId and reset mode state when outer image prop changes
   useEffect(() => {
     setDetailData(null);
     setSelectedIterationId(image.id);
+    setSlotASeriesContextId(image.seriesId ?? null);
     setShowSeriesMiniGallery(false);
+    setIsSplitMode(false);
+    setCompareSelection(null);
+    setCompareDetailImage(null);
+    setShowComparePicker(false);
   }, [image.id]);
 
-  const refreshActiveDetail = (targetId = selectedIterationId) => {
+  const refreshActiveDetail = (
+    targetId = selectedIterationId,
+    explicitSeriesId: number | null = seriesContextId
+  ) => {
     api
-      .getImageDetail(targetId, seriesContextId)
+      .getImageDetail(targetId, explicitSeriesId)
       .then((res) => {
         setDetailData({
           image: res.image,
@@ -136,43 +174,65 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
       .catch(() => {});
   };
 
+  const refreshCompareDetail = (sel = compareSelection) => {
+    if (!sel) {
+      setCompareDetailImage(null);
+      return;
+    }
+    api
+      .getImageDetail(sel.imageId, sel.seriesId)
+      .then((res) => {
+        setCompareDetailImage(res.image);
+      })
+      .catch(() => {});
+  };
+
   const matchingPendingGhosts = findAttachedGhostsForImage(activeImage, ghostItems);
   const prevPendingCountRef = useRef<number>(matchingPendingGhosts.length);
 
   useEffect(() => {
     setReproStatusMsg(null);
     setReproStatusIsError(false);
-    refreshActiveDetail(selectedIterationId);
-  }, [selectedIterationId, image.id, image.seriesId, image.seriesCount]);
+    refreshActiveDetail(selectedIterationId, slotASeriesContextId);
+  }, [selectedIterationId, slotASeriesContextId, image.id, image.seriesId, image.seriesCount]);
+
+  useEffect(() => {
+    if (!isSplitMode || !compareSelection) return;
+    refreshCompareDetail(compareSelection);
+  }, [isSplitMode, compareSelection?.imageId, compareSelection?.seriesId]);
 
   // Refresh active detail immediately when a pending series iteration completes and leaves the queue
   useEffect(() => {
     if (prevPendingCountRef.current > 0 && matchingPendingGhosts.length < prevPendingCountRef.current) {
-      refreshActiveDetail(selectedIterationId);
+      refreshActiveDetail(selectedIterationId, slotASeriesContextId);
     }
     prevPendingCountRef.current = matchingPendingGhosts.length;
-  }, [matchingPendingGhosts.length, selectedIterationId]);
+  }, [matchingPendingGhosts.length, selectedIterationId, slotASeriesContextId]);
 
-  // Keyboard navigation (Escape, Left, Right)
+  // Keyboard navigation (two-stage Escape in Split Mode; suppress arrow keys in Split Mode & modals)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) return;
       if (e.key === 'Escape') {
-        if (showSeriesMiniGallery) {
+        if (showComparePicker) {
+          setShowComparePicker(false);
+        } else if (showSeriesMiniGallery) {
           setShowSeriesMiniGallery(false);
+        } else if (isSplitMode) {
+          setIsSplitMode(false);
         } else if (isFullScreen) {
           setIsFullScreen(false);
         } else {
           onClose();
         }
       }
-      if (showSeriesMiniGallery) return;
+      if (showComparePicker || showSeriesMiniGallery || isSplitMode) return;
       if (e.key === 'ArrowLeft' && onPrev) onPrev();
       if (e.key === 'ArrowRight' && onNext) onNext();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose, onPrev, onNext, isFullScreen, showSeriesMiniGallery]);
+  }, [onClose, onPrev, onNext, isFullScreen, isSplitMode, showSeriesMiniGallery, showComparePicker]);
 
   const copyText = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
@@ -236,8 +296,86 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     return { estW, estH };
   })();
 
+  const handleEnterSplitMode = () => {
+    if (!compareSelection) {
+      const smartBId = pickDefaultCompareImageId(activeImage);
+      if (smartBId) {
+        setCompareSelection({
+          imageId: smartBId,
+          seriesId: seriesContextId,
+        });
+      }
+    }
+    setIsFullScreen(false);
+    setShowSeriesMiniGallery(false);
+    setIsSplitMode(true);
+  };
+
+  const handleSwapSplitSlots = () => {
+    if (!compareImage) return;
+    const prevA = activeImage;
+    const prevASeries = seriesContextId;
+    const prevB = compareImage;
+    const prevBSeries = compareSelection?.seriesId ?? prevB.seriesId ?? null;
+
+    setSelectedIterationId(prevB.id);
+    setSlotASeriesContextId(prevBSeries);
+    setDetailData({
+      image: prevB,
+      rawMetadata: {},
+      visualWorkflowJson: null,
+      apiWorkflowJson: null,
+    });
+
+    setCompareSelection({ imageId: prevA.id, seriesId: prevASeries });
+    setCompareDetailImage(prevA);
+  };
+
+  const handleSplitAnnotationRefresh = () => {
+    refreshActiveDetail(selectedIterationId, slotASeriesContextId);
+    refreshCompareDetail(compareSelection);
+    onUpdated();
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex flex-col lg:flex-row overflow-hidden">
+      {isSplitMode ? (
+        <SplitCompareView
+          imageA={activeImage}
+          imageB={compareImage}
+          onSwap={handleSwapSplitSlots}
+          onOpenPickerForB={() => setShowComparePicker(true)}
+          onExitSplit={() => setIsSplitMode(false)}
+          onRateImage={async (targetId, nextRating) => {
+            await api.updateImageAnnotations(targetId, { rating: nextRating });
+            handleSplitAnnotationRefresh();
+          }}
+          onToggleFavorite={async (targetId, nextFavorite) => {
+            await api.updateImageAnnotations(targetId, { isFavorite: nextFavorite });
+            handleSplitAnnotationRefresh();
+          }}
+          onToggleReject={async (targetId, nextRejected) => {
+            await api.updateImageAnnotations(targetId, { isRejected: nextRejected });
+            handleSplitAnnotationRefresh();
+          }}
+          onReusePrompt={
+            onReusePrompt
+              ? (targetImg) => {
+                  onReusePrompt(targetImg);
+                  onClose();
+                }
+              : undefined
+          }
+          onSelectStepA={(nextId) => setSelectedIterationId(nextId)}
+          onSelectStepB={(nextId) => {
+            setCompareSelection((prev) => ({
+              imageId: nextId,
+              seriesId: prev?.seriesId ?? compareImage?.seriesId ?? null,
+            }));
+          }}
+        />
+      ) : (
+        <>
       {/* Left Pane: Full-Resolution Image Viewer / Lightbox */}
       <div
         onClick={() => {
@@ -433,14 +571,26 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             {renderDependencyLabel(activeImage.dependencyStatus)}
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-100 cursor-pointer shrink-0"
-            title="Close Inspector (Esc)"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleEnterSplitMode}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-indigo-500/60 text-zinc-200 hover:text-white text-xs font-medium cursor-pointer shrink-0 transition-colors"
+              title="Enter A/B Split-Screen Comparison"
+            >
+              <Columns2 className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Compare</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-100 cursor-pointer shrink-0"
+              title="Close Inspector (Esc)"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Inspector Body */}
@@ -1130,7 +1280,10 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
         </div>
       </aside>
 
-      {showSeriesMiniGallery && (
+        </>
+      )}
+
+      {showSeriesMiniGallery && !isSplitMode && (
         <SeriesMiniGalleryModal
           items={
             activeImage.seriesItems && activeImage.seriesItems.length > 0
@@ -1189,6 +1342,26 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 }
               : undefined
           }
+        />
+      )}
+
+      {showComparePicker && (
+        <ComparePickerModal
+          targetSlot="B"
+          currentSlotAId={activeImage.id}
+          currentSlotBId={compareImage?.id ?? null}
+          initialImages={allImages}
+          characters={characters}
+          loras={loras}
+          onSelectImage={(pickedImg) => {
+            setCompareDetailImage(pickedImg);
+            setCompareSelection({
+              imageId: pickedImg.id,
+              seriesId: pickedImg.seriesId ?? null,
+            });
+            setShowComparePicker(false);
+          }}
+          onClose={() => setShowComparePicker(false)}
         />
       )}
     </div>
