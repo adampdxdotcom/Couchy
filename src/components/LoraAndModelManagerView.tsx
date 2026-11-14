@@ -68,6 +68,17 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   const [extQuery, setExtQuery] = useState('');
   const [extTypeFilter, setExtTypeFilter] = useState('');
   const [searchResults, setSearchResults] = useState<ExternalModelSearchResult[]>([]);
+  const [searchBatchTimestamp, setSearchBatchTimestamp] = useState<number>(0);
+  const [activePreviewDownloads, setActivePreviewDownloads] = useState<
+    Array<{
+      jobId: number;
+      cardKey: string;
+      item: ExternalModelSearchResult;
+      targetFilename: string;
+      targetSubfolder: string;
+      startedAt: number;
+    }>
+  >([]);
   const [isSearchingExt, setIsSearchingExt] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [downloads, setDownloads] = useState<any[]>([]);
@@ -85,8 +96,27 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
     refreshDownloads();
   }, [subTab]);
 
+  // Automatically clear any preview card once its server-side download completes
+  useEffect(() => {
+    if (activePreviewDownloads.length === 0 || downloads.length === 0) return;
+    const finishedEntries = activePreviewDownloads.filter((entry) => {
+      const job = downloads.find((d: any) => Number(d.id) === entry.jobId);
+      return Boolean(job && job.status !== 'downloading');
+    });
+    if (finishedEntries.length === 0) return;
+
+    const finishedJobIds = new Set(finishedEntries.map((e) => e.jobId));
+    const finishedCardKeys = new Set(finishedEntries.map((e) => e.cardKey));
+
+    setActivePreviewDownloads((prev) => prev.filter((e) => !finishedJobIds.has(e.jobId)));
+    setSearchResults((prev) =>
+      prev.filter((r) => !finishedCardKeys.has(`${r.provider}-${r.id}-${r.filename}`))
+    );
+  }, [downloads, activePreviewDownloads]);
+
   // Poll while any model download is active and refresh inventory once finished
-  const hasActiveDownload = downloads.some((d) => d.status === 'downloading');
+  const hasActiveDownload =
+    downloads.some((d) => d.status === 'downloading') || activePreviewDownloads.length > 0;
   useEffect(() => {
     if (!hasActiveDownload) return;
     const timer = setInterval(async () => {
@@ -100,7 +130,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       } catch {
         // ignore transient polling failure
       }
-    }, 2000);
+    }, 1500);
     return () => clearInterval(timer);
   }, [hasActiveDownload, onRefresh]);
 
@@ -157,6 +187,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
     try {
       const res = await api.searchModels(qToUse, extTypeFilter);
       setSearchResults(res.items || []);
+      setSearchBatchTimestamp(Date.now());
     } catch (err: any) {
       setSearchError(err.message || 'External model search failed');
     } finally {
@@ -1000,6 +1031,10 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           extTypeFilter={extTypeFilter}
           setExtTypeFilter={setExtTypeFilter}
           searchResults={searchResults}
+          setSearchResults={setSearchResults}
+          searchBatchTimestamp={searchBatchTimestamp}
+          activePreviewDownloads={activePreviewDownloads}
+          setActivePreviewDownloads={setActivePreviewDownloads}
           isSearchingExt={isSearchingExt}
           searchError={searchError}
           downloads={downloads}

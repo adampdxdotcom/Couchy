@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import {
-  CheckCircle2,
   ExternalLink,
   FileWarning,
   FolderGit2,
@@ -8,6 +7,7 @@ import {
   Layers,
   Loader2,
   Search,
+  X,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
@@ -22,12 +22,25 @@ import type {
   ModelType,
 } from '../shared/types.ts';
 
+export interface ActivePreviewDownloadEntry {
+  jobId: number;
+  cardKey: string;
+  item: ExternalModelSearchResult;
+  targetFilename: string;
+  targetSubfolder: string;
+  startedAt: number;
+}
+
 interface ModelDownloaderTabProps {
   extQuery: string;
   setExtQuery: (q: string) => void;
   extTypeFilter: string;
   setExtTypeFilter: (t: string) => void;
   searchResults: ExternalModelSearchResult[];
+  setSearchResults: React.Dispatch<React.SetStateAction<ExternalModelSearchResult[]>>;
+  searchBatchTimestamp: number;
+  activePreviewDownloads: ActivePreviewDownloadEntry[];
+  setActivePreviewDownloads: React.Dispatch<React.SetStateAction<ActivePreviewDownloadEntry[]>>;
   isSearchingExt: boolean;
   searchError: string | null;
   downloads: any[];
@@ -62,7 +75,7 @@ function getDefaultSubfolderForItem(item: ExternalModelSearchResult): ComfyModel
 
 /**
  * Unified smart Model Downloader searching Civitai and Hugging Face Hub,
- * resolving hashes, owner/repo IDs, and direct URLs from a single search bar.
+ * rendering full-width preview cards stacked newest-first and clearing automatically on completion.
  */
 export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   extQuery,
@@ -70,6 +83,10 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   extTypeFilter,
   setExtTypeFilter,
   searchResults,
+  setSearchResults,
+  searchBatchTimestamp,
+  activePreviewDownloads,
+  setActivePreviewDownloads,
   isSearchingExt,
   searchError,
   downloads,
@@ -87,6 +104,36 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [directStartingKey, setDirectStartingKey] = useState<string | null>(null);
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
+  const [selectedPreviewIdx, setSelectedPreviewIdx] = useState<Record<string, number>>({});
+
+  const registerStartedDownload = (
+    jobId: number,
+    item: ExternalModelSearchResult,
+    targetFilename: string,
+    targetSubfolder: string
+  ) => {
+    const cardKey = `${item.provider}-${item.id}-${item.filename}`;
+    setActivePreviewDownloads((prev) => [
+      {
+        jobId,
+        cardKey,
+        item,
+        targetFilename,
+        targetSubfolder,
+        startedAt: Date.now(),
+      },
+      ...prev.filter((p) => p.cardKey !== cardKey && p.jobId !== jobId),
+    ]);
+    setSearchResults((prev) => {
+      const remaining = prev.filter(
+        (r) => `${r.provider}-${r.id}-${r.filename}` !== cardKey
+      );
+      if (remaining.length === 0) {
+        setExtQuery('');
+      }
+      return remaining;
+    });
+  };
 
   const openDownloadModal = async (item: ExternalModelSearchResult) => {
     const initialFile = item.availableFiles?.[0] || null;
@@ -138,7 +185,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     try {
       const primary = item.availableFiles?.[0];
       const targetFilename = primary?.filename || item.filename;
-      await api.startModelDownload({
+      const res = await api.startModelDownload({
         provider: item.provider,
         modelName: item.name,
         filename: targetFilename,
@@ -163,6 +210,9 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
               }
             : null,
       });
+      if (res?.job?.id) {
+        registerStartedDownload(Number(res.job.id), item, targetFilename, 'loras');
+      }
       await onRefreshDownloads();
       onPushToast?.(`Started downloading ${targetFilename} to /downloads/loras`, 'info');
     } catch (err: any) {
@@ -183,11 +233,13 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       const folderMeta = COMFY_SUBFOLDER_OPTIONS.find((o) => o.value === dlSubfolder);
       const effectiveType: ModelType =
         folderMeta?.modelType || selectedFile?.modelType || pendingDownload.modelType;
+      const targetFilename =
+        customFilename.trim() || selectedFile?.filename || pendingDownload.filename;
 
-      await api.startModelDownload({
+      const res = await api.startModelDownload({
         provider: pendingDownload.provider,
         modelName: pendingDownload.name,
-        filename: customFilename.trim() || selectedFile?.filename || pendingDownload.filename,
+        filename: targetFilename,
         modelType: effectiveType,
         sourceUrl: selectedFile?.downloadUrl || pendingDownload.downloadUrl,
         expectedHash: selectedFile ? selectedFile.sha256Hash : pendingDownload.sha256Hash || null,
@@ -209,6 +261,14 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
               }
             : null,
       });
+      if (res?.job?.id) {
+        registerStartedDownload(
+          Number(res.job.id),
+          pendingDownload,
+          targetFilename,
+          dlSubfolder
+        );
+      }
       setPendingDownload(null);
       setSelectedFile(null);
       await onRefreshDownloads();
@@ -218,6 +278,39 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       setIsSubmitting(false);
     }
   };
+
+  const handleDismissSearchCard = (cardKey: string) => {
+    setSearchResults((prev) =>
+      prev.filter((r) => `${r.provider}-${r.id}-${r.filename}` !== cardKey)
+    );
+  };
+
+  // Build unified full-width preview stack ordered newest first:
+  // - Active downloads use their `startedAt` timestamp
+  // - Staged search results use `searchBatchTimestamp` (preserving relative rank)
+  const activeKeySet = new Set(activePreviewDownloads.map((a) => a.cardKey));
+  const combinedPreviews: Array<{
+    cardKey: string;
+    item: ExternalModelSearchResult;
+    activeEntry: ActivePreviewDownloadEntry | null;
+    sortTime: number;
+  }> = [
+    ...activePreviewDownloads.map((entry) => ({
+      cardKey: entry.cardKey,
+      item: entry.item,
+      activeEntry: entry,
+      sortTime: entry.startedAt,
+    })),
+    ...searchResults
+      .map((item, idx) => ({
+        cardKey: `${item.provider}-${item.id}-${item.filename}`,
+        item,
+        activeEntry: null,
+        // Subtract idx so multi-result searches preserve their rank while comparing against startedAt
+        sortTime: (searchBatchTimestamp || 1) - idx * 0.001,
+      }))
+      .filter((entry) => !activeKeySet.has(entry.cardKey)),
+  ].sort((a, b) => b.sortTime - a.sortTime);
 
   return (
     <div className="space-y-6">
@@ -267,14 +360,24 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
         </div>
       )}
 
-      {/* Search Results Grid */}
-      {searchResults.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {searchResults.map((item) => {
-            const cardKey = `${item.provider}-${item.id}-${item.filename}`;
-            const hasThumb = Boolean(item.previewImageUrl && !brokenImages[cardKey]);
+      {/* Full-Width Preview Stack (Newest First; Active Downloads Clear Automatically on Completion) */}
+      {combinedPreviews.length > 0 && (
+        <div className="space-y-4">
+          {combinedPreviews.map(({ cardKey, item, activeEntry }) => {
+            const previews =
+              item.previewImages && item.previewImages.length > 0
+                ? item.previewImages
+                : item.previewImageUrl
+                ? [{ url: item.previewImageUrl }]
+                : [];
+            const activeThumbIdx = selectedPreviewIdx[cardKey] || 0;
+            const currentThumbUrl =
+              previews[activeThumbIdx]?.url || previews[0]?.url || item.previewImageUrl || null;
+            const hasThumb = Boolean(currentThumbUrl && !brokenImages[`${cardKey}-${activeThumbIdx}`]);
+
             const fileCount = item.totalRepoFilesCount || item.availableFiles?.length || 1;
-            const targetFolder = getDefaultSubfolderForItem(item);
+            const targetFolder = activeEntry?.targetSubfolder || getDefaultSubfolderForItem(item);
+            const displayFilename = activeEntry?.targetFilename || item.filename;
             const isCivitaiRed = Boolean(item.civitaiUrl?.includes('civitai.red'));
             const providerLabel =
               item.provider === 'civitai'
@@ -285,22 +388,49 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                 ? 'Hugging Face'
                 : 'Direct URL';
 
+            const matchingJob = activeEntry
+              ? downloads.find((d) => Number(d.id) === activeEntry.jobId)
+              : downloads.find(
+                  (d) =>
+                    d.status === 'downloading' &&
+                    typeof d.destination_path === 'string' &&
+                    d.destination_path.toLowerCase().endsWith(`/${displayFilename.toLowerCase()}`)
+                );
+
+            const isDownloadingNow =
+              Boolean(activeEntry) ||
+              directStartingKey === cardKey ||
+              matchingJob?.status === 'downloading';
+
+            const dlPct =
+              matchingJob && matchingJob.total_bytes > 0
+                ? Math.min(
+                    100,
+                    Math.round((matchingJob.bytes_downloaded / matchingJob.total_bytes) * 100)
+                  )
+                : null;
+
             return (
               <div
-                key={cardKey}
-                className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden flex flex-col justify-between text-xs"
+                key={activeEntry ? `dl-${activeEntry.jobId}` : cardKey}
+                className={`w-full bg-zinc-900 border rounded-xl overflow-hidden flex flex-col md:flex-row text-xs transition-colors ${
+                  isDownloadingNow ? 'border-indigo-500/60' : 'border-zinc-800'
+                }`}
               >
-                <div>
-                  {/* Cover Preview Thumbnail or Fallback */}
-                  <div className="relative h-44 bg-zinc-950 border-b border-zinc-800 overflow-hidden">
+                {/* Left Column: Preview Image & Optional Multi-Thumbnail Strip */}
+                <div className="relative w-full md:w-80 lg:w-96 shrink-0 bg-zinc-950 border-b md:border-b-0 md:border-r border-zinc-800 flex flex-col justify-between">
+                  <div className="relative h-56 md:h-64 w-full overflow-hidden flex items-center justify-center bg-zinc-950">
                     {hasThumb ? (
                       <img
-                        src={item.previewImageUrl!}
+                        src={currentThumbUrl!}
                         alt={item.name}
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-contain bg-zinc-950"
                         loading="lazy"
                         onError={() =>
-                          setBrokenImages((prev) => ({ ...prev, [cardKey]: true }))
+                          setBrokenImages((prev) => ({
+                            ...prev,
+                            [`${cardKey}-${activeThumbIdx}`]: true,
+                          }))
                         }
                       />
                     ) : (
@@ -314,167 +444,226 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                       </div>
                     )}
 
-                    <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
-                      <span className="px-2 py-0.5 rounded bg-zinc-950/85 border border-zinc-700/80 font-mono text-[10px] text-zinc-200">
+                    <div className="absolute top-2.5 left-2.5 flex flex-wrap items-center gap-1.5">
+                      <span className="px-2 py-0.5 rounded bg-zinc-950/90 border border-zinc-700/80 font-mono text-[10px] text-zinc-200">
                         {providerLabel}
                       </span>
-                      <span className="px-2 py-0.5 rounded bg-zinc-950/85 border border-zinc-700/80 font-mono text-[10px] text-emerald-300">
+                      <span className="px-2 py-0.5 rounded bg-zinc-950/90 border border-zinc-700/80 font-mono text-[10px] text-emerald-300">
                         /{targetFolder}
                       </span>
                       {fileCount > 1 && (
-                        <span className="px-2 py-0.5 rounded bg-zinc-950/85 border border-zinc-700/80 font-mono text-[10px] text-zinc-300">
+                        <span className="px-2 py-0.5 rounded bg-zinc-950/90 border border-zinc-700/80 font-mono text-[10px] text-zinc-300">
                           {fileCount} files
                         </span>
                       )}
                     </div>
-
-                    {item.civitaiUrl && (
-                      <a
-                        href={item.civitaiUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        title={
-                          isCivitaiRed
-                            ? 'Open original Civitai.red page'
-                            : 'Open original Civitai.com page'
-                        }
-                        className="absolute top-2.5 right-2.5 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-950/85 hover:bg-zinc-900 border border-zinc-700/80 text-[11px] text-zinc-200 hover:text-white transition-colors"
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                        <span>{isCivitaiRed ? 'Civitai.red' : 'Civitai'}</span>
-                      </a>
-                    )}
                   </div>
 
-                  {/* Card Details */}
-                  <div className="p-4 space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <h4 className="text-sm font-display font-semibold text-zinc-100 leading-snug break-all">
-                        {item.name}
-                      </h4>
-                      {item.baseModel && (
-                        <span className="px-1.5 py-0.5 text-[10px] font-mono bg-zinc-950 border border-zinc-700 text-indigo-300 rounded shrink-0">
-                          {item.baseModel}
-                        </span>
+                  {previews.length > 1 && (
+                    <div className="px-2.5 py-2 bg-zinc-950/95 border-t border-zinc-800/80 flex items-center gap-1.5 overflow-x-auto">
+                      {previews.slice(0, 4).map((p, idx) => (
+                        <button
+                          key={`${cardKey}-thumb-${idx}`}
+                          type="button"
+                          onClick={() =>
+                            setSelectedPreviewIdx((prev) => ({ ...prev, [cardKey]: idx }))
+                          }
+                          className={`w-12 h-9 rounded overflow-hidden border shrink-0 cursor-pointer transition-colors ${
+                            activeThumbIdx === idx
+                              ? 'border-indigo-500 ring-1 ring-indigo-500/50'
+                              : 'border-zinc-800 opacity-70 hover:opacity-100'
+                          }`}
+                        >
+                          <img
+                            src={p.url}
+                            alt=""
+                            className="w-full h-full object-cover"
+                            loading="lazy"
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Right Column: Full-Width Model Details & Download Action / Progress */}
+                <div className="flex-1 p-5 flex flex-col justify-between gap-4 min-w-0">
+                  <div className="space-y-3">
+                    {/* Header Row: Title, Base Model, Civitai Link & Dismiss */}
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h4 className="text-base font-display font-semibold text-zinc-100 leading-snug break-words">
+                            {item.name}
+                          </h4>
+                          {item.baseModel && (
+                            <span className="px-2 py-0.5 text-[11px] font-mono bg-zinc-950 border border-zinc-700 text-indigo-300 rounded shrink-0">
+                              {item.baseModel}
+                            </span>
+                          )}
+                          {item.versionName && (
+                            <span className="px-2 py-0.5 text-[11px] font-mono bg-zinc-950 border border-zinc-800 text-zinc-400 rounded shrink-0">
+                              {item.versionName}
+                            </span>
+                          )}
+                        </div>
+                        {item.creator && (
+                          <div className="text-[11px] text-zinc-500">by {item.creator}</div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {item.civitaiUrl && (
+                          <a
+                            href={item.civitaiUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            title={
+                              isCivitaiRed
+                                ? 'Open original Civitai.red page'
+                                : 'Open original Civitai.com page'
+                            }
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-zinc-950 hover:bg-zinc-800 border border-zinc-700/80 text-xs text-zinc-200 hover:text-white transition-colors"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 text-indigo-400" />
+                            <span>{isCivitaiRed ? 'Civitai.red' : 'Civitai'}</span>
+                          </a>
+                        )}
+                        {!isDownloadingNow && (
+                          <button
+                            type="button"
+                            onClick={() => handleDismissSearchCard(cardKey)}
+                            title="Dismiss preview"
+                            className="p-1 rounded-md bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Technical Specs Row */}
+                    <div className="text-xs font-mono text-zinc-300 flex flex-wrap items-center gap-x-3 gap-y-1 bg-zinc-950/70 border border-zinc-800/80 rounded-lg px-3 py-2">
+                      <span className="uppercase font-semibold text-indigo-300">
+                        {item.modelType}
+                      </span>
+                      <span className="text-zinc-600">·</span>
+                      <span className="text-zinc-200 break-all" title={displayFilename}>
+                        {displayFilename}
+                      </span>
+                      <span className="text-zinc-600">·</span>
+                      <span className="text-zinc-300 tabular-nums">
+                        {formatBytes(item.fileSize)}
+                      </span>
+                      {item.recommendedWeight !== null &&
+                        item.recommendedWeight !== undefined && (
+                          <>
+                            <span className="text-zinc-600">·</span>
+                            <span className="text-indigo-300">
+                              Rec. Weight: {item.recommendedWeight.toFixed(2)}x
+                            </span>
+                          </>
+                        )}
+                      {item.sha256Hash && (
+                        <>
+                          <span className="text-zinc-600">·</span>
+                          <span className="text-emerald-400">
+                            SHA256: {item.sha256Hash.slice(0, 12)}…
+                          </span>
+                        </>
                       )}
                     </div>
 
-                    <div className="text-[11px] font-mono text-zinc-400 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                      <span className="uppercase text-indigo-300">{item.modelType}</span>
-                      <span>·</span>
-                      <span className="truncate max-w-[180px]" title={item.filename}>
-                        {item.filename}
-                      </span>
-                      <span>·</span>
-                      <span>{formatBytes(item.fileSize)}</span>
-                    </div>
-
+                    {/* Trigger Words */}
                     {item.trainedWords && item.trainedWords.length > 0 && (
-                      <div className="text-[11px] text-zinc-300 truncate">
+                      <div className="text-xs bg-zinc-950/50 border border-zinc-800/60 rounded-lg px-3 py-2">
                         <span className="text-zinc-500">Triggers: </span>
-                        <span className="font-mono text-amber-300">
+                        <span className="font-mono text-amber-300 break-words">
                           {item.trainedWords.join(', ')}
                         </span>
                       </div>
                     )}
 
-                    {(item.recommendedWeight !== null && item.recommendedWeight !== undefined) ||
-                    item.sha256Hash ? (
-                      <div className="text-[11px] font-mono flex flex-wrap items-center gap-x-3 text-zinc-400">
-                        {item.recommendedWeight !== null && item.recommendedWeight !== undefined && (
-                          <span className="text-indigo-300">
-                            Rec. Weight: {item.recommendedWeight.toFixed(2)}x
-                          </span>
-                        )}
-                        {item.sha256Hash && (
-                          <span className="text-emerald-400 truncate">
-                            SHA256: {item.sha256Hash.slice(0, 12)}…
-                          </span>
-                        )}
-                      </div>
-                    ) : null}
-
+                    {/* Description */}
                     {item.description && (
-                      <p className="text-zinc-400 line-clamp-2 pt-0.5">{item.description}</p>
+                      <p className="text-xs text-zinc-400 line-clamp-3 leading-relaxed">
+                        {item.description}
+                      </p>
                     )}
                   </div>
-                </div>
 
-                <div className="px-4 pb-4 pt-1">
-                  {(() => {
-                    const isDirectLora =
-                      item.modelType === 'lora' &&
-                      (item.provider === 'civitai' || fileCount <= 1);
-                    const matchingJob = downloads.find(
-                      (d) =>
-                        typeof d.destination_path === 'string' &&
-                        d.destination_path.toLowerCase().endsWith(`/${item.filename.toLowerCase()}`)
-                    );
-                    const isDownloadingNow =
-                      directStartingKey === cardKey || matchingJob?.status === 'downloading';
-                    const isCompletedNow = matchingJob?.status === 'completed';
-                    const dlPct =
-                      matchingJob && matchingJob.total_bytes > 0
-                        ? Math.min(
-                            100,
-                            Math.round((matchingJob.bytes_downloaded / matchingJob.total_bytes) * 100)
-                          )
-                        : null;
+                  {/* Action Button or Active Download Progress Bar */}
+                  <div className="pt-1">
+                    {isDownloadingNow ? (
+                      <div className="space-y-2 bg-zinc-950 border border-indigo-500/40 rounded-lg p-3">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="inline-flex items-center gap-2 font-medium text-indigo-300">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>
+                              Downloading to /downloads/{targetFolder}/{displayFilename}
+                            </span>
+                          </span>
+                          <span className="font-mono tabular-nums text-zinc-200">
+                            {matchingJob ? (
+                              <>
+                                {formatBytes(matchingJob.bytes_downloaded || 0)}
+                                {matchingJob.total_bytes > 0
+                                  ? ` / ${formatBytes(matchingJob.total_bytes)} (${dlPct ?? 0}%)`
+                                  : ''}
+                              </>
+                            ) : (
+                              'Starting...'
+                            )}
+                          </span>
+                        </div>
+                        <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden border border-zinc-800">
+                          <div
+                            className="h-full bg-indigo-500 transition-all duration-300"
+                            style={{ width: `${dlPct !== null ? Math.max(4, dlPct) : 15}%` }}
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      (() => {
+                        const isDirectLora =
+                          item.modelType === 'lora' &&
+                          (item.provider === 'civitai' || fileCount <= 1);
 
-                    if (isDirectLora) {
-                      return (
-                        <button
-                          type="button"
-                          disabled={isDownloadingNow}
-                          onClick={() => handleDirectLoraDownload(item, cardKey)}
-                          className={`w-full inline-flex items-center justify-center gap-1.5 py-2 font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-60 ${
-                            isCompletedNow
-                              ? 'bg-emerald-600/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-600/30'
-                              : 'bg-indigo-600 hover:bg-indigo-500 text-white'
-                          }`}
-                        >
-                          {isDownloadingNow ? (
-                            <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              <span className="font-mono tabular-nums">
-                                Downloading{dlPct !== null ? ` (${dlPct}%)` : '...'}
-                              </span>
-                            </>
-                          ) : isCompletedNow ? (
-                            <>
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Downloaded to /loras</span>
-                            </>
-                          ) : (
-                            <>
-                              <HardDriveDownload className="w-3.5 h-3.5" />
+                        if (isDirectLora) {
+                          return (
+                            <button
+                              type="button"
+                              onClick={() => handleDirectLoraDownload(item, cardKey)}
+                              className="w-full inline-flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg transition-colors cursor-pointer"
+                            >
+                              <HardDriveDownload className="w-4 h-4" />
                               <span>Download LoRA</span>
-                            </>
-                          )}
-                        </button>
-                      );
-                    }
+                            </button>
+                          );
+                        }
 
-                    return (
-                      <button
-                        type="button"
-                        onClick={() => openDownloadModal(item)}
-                        className="w-full inline-flex items-center justify-center gap-1.5 py-2 bg-zinc-800 hover:bg-indigo-600 text-zinc-100 font-medium rounded-lg transition-colors cursor-pointer"
-                      >
-                        {fileCount > 1 || item.provider === 'huggingface' ? (
-                          <>
-                            <FolderGit2 className="w-3.5 h-3.5" />
-                            <span>Browse Files &amp; Download ({fileCount})</span>
-                          </>
-                        ) : (
-                          <>
-                            <HardDriveDownload className="w-3.5 h-3.5" />
-                            <span>Review &amp; Download</span>
-                          </>
-                        )}
-                      </button>
-                    );
-                  })()}
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => openDownloadModal(item)}
+                            className="w-full inline-flex items-center justify-center gap-2 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg transition-colors cursor-pointer"
+                          >
+                            {fileCount > 1 || item.provider === 'huggingface' ? (
+                              <>
+                                <FolderGit2 className="w-4 h-4" />
+                                <span>Browse Files &amp; Download ({fileCount})</span>
+                              </>
+                            ) : (
+                              <>
+                                <HardDriveDownload className="w-4 h-4" />
+                                <span>Review &amp; Download</span>
+                              </>
+                            )}
+                          </button>
+                        );
+                      })()
+                    )}
+                  </div>
                 </div>
               </div>
             );
