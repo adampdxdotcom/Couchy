@@ -1,6 +1,15 @@
 import path from 'path';
 import { appConfig } from '../config.ts';
-import { fetchCivitaiParentModel, normalizeCivitaiData } from './civitaiMetadataService.ts';
+import {
+  fetchCivitaiJsonWithFallback,
+  fetchCivitaiParentModelWithDomain,
+  getCivitaiHeaders,
+  normalizeCivitaiData,
+  probeCivitaiWebDomain,
+  resolveCivitaiDomain,
+  rewriteCivitaiDownloadUrl,
+  type CivitaiDomain,
+} from './civitaiMetadataService.ts';
 import type {
   ComfyModelSubfolder,
   ExternalModelFileOption,
@@ -161,7 +170,8 @@ export function inferSubfolderAndTypeFromPath(
 export function extractCivitaiVersionFiles(
   ver: any,
   explicitCivitaiType?: string,
-  baseModel?: string | null
+  baseModel?: string | null,
+  domain: CivitaiDomain = 'civitai.com'
 ): ExternalModelFileOption[] {
   const rawFiles = Array.isArray(ver?.files) ? ver.files : [];
   const options: ExternalModelFileOption[] = [];
@@ -173,12 +183,13 @@ export function extractCivitaiVersionFiles(
     if (!DOWNLOAD_WEIGHT_EXTS.has(ext) && rawFiles.length > 1) continue;
 
     const inferred = inferSubfolderAndTypeFromPath(name, [], explicitCivitaiType, baseModel);
+    const rawDlUrl = f.downloadUrl || ver.downloadUrl;
     options.push({
       rfilename: name,
       filename: path.basename(name),
       fileSize: f.sizeKB ? Math.round(Number(f.sizeKB) * 1024) : null,
       sha256Hash: f.hashes?.SHA256 ? String(f.hashes.SHA256).toUpperCase() : null,
-      downloadUrl: f.downloadUrl || ver.downloadUrl,
+      downloadUrl: rewriteCivitaiDownloadUrl(rawDlUrl, domain),
       modelType: inferred.modelType,
       suggestedSubfolder: inferred.suggestedSubfolder,
     });
@@ -324,7 +335,7 @@ export async function listHuggingFaceRepoFiles(
 }
 
 /**
- * Resolves a pasted Civitai URL, Hugging Face URL/repo, or direct weight link into an ExternalModelSearchResult.
+ * Resolves a pasted Civitai URL (.com or .red), Hugging Face URL/repo, or direct weight link into an ExternalModelSearchResult.
  */
 export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalModelSearchResult> {
   const input = rawInput.trim();
@@ -370,13 +381,14 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
     };
   }
 
-  // 2. Civitai Model Page or API Download URL
-  if (/^https?:\/\/(www\.)?civitai\.com\//i.test(input)) {
+  // 2. Civitai Model Page or API Download URL (.com or .red)
+  if (/^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(input)) {
     const url = new URL(input);
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (appConfig.civitaiApiKey) {
-      headers.Authorization = `Bearer ${appConfig.civitaiApiKey}`;
-    }
+    const initialDomain: CivitaiDomain = url.hostname.toLowerCase().endsWith('civitai.red')
+      ? 'civitai.red'
+      : 'civitai.com';
+    let detectedDomain: CivitaiDomain = initialDomain;
+    const headers = getCivitaiHeaders();
 
     const verParam = url.searchParams.get('modelVersionId');
     const apiDownloadMatch = url.pathname.match(/\/api\/download\/models\/(\d+)/i);
@@ -387,17 +399,30 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
 
     if (apiDownloadMatch || (verParam && !modelPageMatch)) {
       const verId = apiDownloadMatch ? apiDownloadMatch[1] : verParam!;
-      const verRes = await fetch(`https://civitai.com/api/v1/model-versions/${verId}`, { headers });
-      if (!verRes.ok) {
-        throw new Error(`Civitai version ${verId} lookup failed (HTTP ${verRes.status})`);
+      const verRes = await fetchCivitaiJsonWithFallback(
+        `/api/v1/model-versions/${verId}`,
+        headers,
+        initialDomain
+      );
+      if (!verRes?.data) {
+        throw new Error(`Civitai version ${verId} lookup failed on both civitai.com and civitai.red`);
       }
-      targetVer = await verRes.json();
+      targetVer = verRes.data;
+      if (verRes.domain === 'civitai.red') detectedDomain = 'civitai.red';
       if (targetVer?.modelId) {
-        parentModel = await fetchCivitaiParentModel(targetVer.modelId, headers);
+        const parentRes = await fetchCivitaiParentModelWithDomain(
+          targetVer.modelId,
+          headers,
+          detectedDomain
+        );
+        parentModel = parentRes.model;
+        if (parentRes.domain === 'civitai.red') detectedDomain = 'civitai.red';
       }
     } else if (modelPageMatch) {
       const modelId = modelPageMatch[1];
-      parentModel = await fetchCivitaiParentModel(modelId, headers);
+      const parentRes = await fetchCivitaiParentModelWithDomain(modelId, headers, initialDomain);
+      parentModel = parentRes.model;
+      if (parentRes.domain === 'civitai.red') detectedDomain = 'civitai.red';
       if (!parentModel) {
         throw new Error(`Civitai model ${modelId} not found.`);
       }
@@ -412,8 +437,19 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
       throw new Error('Could not resolve a downloadable model version from that Civitai URL.');
     }
 
+    const resolvedModelId = parentModel?.id || targetVer.modelId;
+    let finalDomain = resolveCivitaiDomain(parentModel, targetVer, detectedDomain);
+    if (finalDomain === 'civitai.com' && resolvedModelId) {
+      finalDomain = await probeCivitaiWebDomain(resolvedModelId, finalDomain);
+    }
+
     const rawType = String(parentModel?.type || targetVer?.model?.type || 'Checkpoint');
-    const availableFiles = extractCivitaiVersionFiles(targetVer, rawType, targetVer.baseModel);
+    const availableFiles = extractCivitaiVersionFiles(
+      targetVer,
+      rawType,
+      targetVer.baseModel,
+      finalDomain
+    );
     const primaryFile = availableFiles[0];
     if (!primaryFile) {
       throw new Error('No downloadable weight files found on that Civitai model version.');
@@ -422,7 +458,8 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
     const meta = normalizeCivitaiData(
       parentModel || { id: targetVer.modelId, ...targetVer.model },
       targetVer,
-      primaryFile.filename
+      primaryFile.filename,
+      finalDomain
     );
     const inferred = inferSubfolderAndTypeFromPath(
       primaryFile.filename,

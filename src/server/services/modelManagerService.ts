@@ -9,8 +9,14 @@ import {
   applyCivitaiEnrichmentToModel,
   cacheModelPreviewImages,
   fetchAndEnrichModelFromCivitai,
-  fetchCivitaiParentModel,
+  fetchCivitaiJsonWithFallback,
+  fetchCivitaiParentModelWithDomain,
+  getCivitaiHeaders,
   normalizeCivitaiData,
+  probeCivitaiWebDomain,
+  resolveCivitaiDomain,
+  rewriteCivitaiDownloadUrl,
+  type CivitaiDomain,
   type CivitaiNormalizedMeta,
 } from './civitaiMetadataService.ts';
 import {
@@ -32,42 +38,65 @@ import type {
 export type { ExternalModelSearchResult };
 
 /**
- * Searches Civitai REST API for LoRAs and Checkpoints by query or SHA-256/AutoV2 hash.
+ * Searches Civitai REST API (.com and .red) for models by query or SHA-256/AutoV2 hash.
  */
 export async function searchCivitaiModels(query: string, typeFilter?: string): Promise<ExternalModelSearchResult[]> {
   const trimmed = query.trim();
 
-  // If user pasted a Civitai URL directly into search, resolve it
-  if (/^https?:\/\/(www\.)?civitai\.com\//i.test(trimmed)) {
+  // If user pasted a Civitai URL (.com or .red) directly into search, resolve it
+  if (/^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(trimmed)) {
     const resolved = await resolveDirectModelUrl(trimmed);
     return [resolved];
   }
 
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (appConfig.civitaiApiKey) {
-    headers.Authorization = `Bearer ${appConfig.civitaiApiKey}`;
-  }
+  const headers = getCivitaiHeaders();
 
-  // If query looks like a hash (10 to 64 hex chars), try hash lookup endpoint first
+  // If query looks like a hash (10 to 64 hex chars), try hash lookup endpoint across .com and .red
   if (/^[a-fA-F0-9]{10,64}$/.test(trimmed)) {
     try {
-      const hashRes = await fetch(
-        `https://civitai.com/api/v1/model-versions/by-hash/${encodeURIComponent(trimmed)}`,
-        { headers }
+      const hashLookup = await fetchCivitaiJsonWithFallback(
+        `/api/v1/model-versions/by-hash/${encodeURIComponent(trimmed)}`,
+        headers,
+        'civitai.com',
+        9000
       );
-      if (hashRes.ok) {
-        const ver = (await hashRes.json()) as any;
-        const parentModel = ver.modelId
-          ? await fetchCivitaiParentModel(ver.modelId, headers)
-          : null;
+      if (hashLookup?.data) {
+        const ver = hashLookup.data;
+        let detectedDomain: CivitaiDomain = hashLookup.domain;
+        let parentModel: any = null;
+
+        if (ver.modelId) {
+          const parentRes = await fetchCivitaiParentModelWithDomain(
+            ver.modelId,
+            headers,
+            detectedDomain
+          );
+          parentModel = parentRes.model;
+          if (parentRes.domain === 'civitai.red') {
+            detectedDomain = 'civitai.red';
+          }
+        }
+
+        const resolvedModelId = parentModel?.id || ver.modelId;
+        let finalDomain = resolveCivitaiDomain(parentModel, ver, detectedDomain);
+        if (finalDomain === 'civitai.com' && resolvedModelId) {
+          finalDomain = await probeCivitaiWebDomain(resolvedModelId, finalDomain);
+        }
+
         const rawType = String(parentModel?.type || ver.model?.type || 'LORA');
-        const availableFiles = extractCivitaiVersionFiles(ver, rawType, ver.baseModel);
+        const availableFiles = extractCivitaiVersionFiles(
+          ver,
+          rawType,
+          ver.baseModel,
+          finalDomain
+        );
         const primaryFile = availableFiles[0];
         if (primaryFile) {
           const meta = normalizeCivitaiData(
             parentModel || { id: ver.modelId, ...ver.model },
             ver,
-            primaryFile.filename
+            primaryFile.filename,
+            finalDomain
           );
           const inferred = inferSubfolderAndTypeFromPath(
             primaryFile.filename,
@@ -116,35 +145,54 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
     }
   }
 
-  const url = new URL('https://civitai.com/api/v1/models');
-  url.searchParams.set('limit', '12');
-  if (trimmed) url.searchParams.set('query', trimmed);
-  if (typeFilter === 'checkpoint') url.searchParams.set('types', 'Checkpoint');
+  const params = new URLSearchParams();
+  params.set('limit', '12');
+  if (trimmed) params.set('query', trimmed);
+  if (typeFilter === 'checkpoint') params.set('types', 'Checkpoint');
   else if (typeFilter === 'lora') {
-    url.searchParams.append('types', 'LORA');
-    url.searchParams.append('types', 'LoCon');
-    url.searchParams.append('types', 'DoRA');
-  } else if (typeFilter === 'controlnet') url.searchParams.set('types', 'Controlnet');
-  else if (typeFilter === 'vae') url.searchParams.set('types', 'VAE');
-  else if (typeFilter === 'upscaler') url.searchParams.set('types', 'Upscaler');
-  else if (typeFilter === 'embedding') url.searchParams.set('types', 'TextualInversion');
+    params.append('types', 'LORA');
+    params.append('types', 'LoCon');
+    params.append('types', 'DoRA');
+  } else if (typeFilter === 'controlnet') params.set('types', 'Controlnet');
+  else if (typeFilter === 'vae') params.set('types', 'VAE');
+  else if (typeFilter === 'upscaler') params.set('types', 'Upscaler');
+  else if (typeFilter === 'embedding') params.set('types', 'TextualInversion');
 
-  const res = await fetch(url.toString(), { headers });
-  if (!res.ok) {
-    throw new Error(`Civitai API returned HTTP ${res.status}`);
+  const searchPath = `/api/v1/models?${params.toString()}`;
+  const searchRes = await fetchCivitaiJsonWithFallback(searchPath, headers, 'civitai.com', 9000);
+  if (!searchRes) {
+    throw new Error('Civitai API search failed on both civitai.com and civitai.red');
   }
-  const data = (await res.json()) as { items?: any[] };
+
+  let items: any[] = Array.isArray(searchRes.data?.items) ? searchRes.data.items : [];
+  let searchDomain: CivitaiDomain = searchRes.domain;
+
+  // If .com returned 0 items for a specific query, also check .red in case the model is only indexed on .red
+  if (items.length === 0 && trimmed && searchDomain === 'civitai.com') {
+    const redFallback = await fetchCivitaiJsonWithFallback(searchPath, headers, 'civitai.red', 7000);
+    if (redFallback?.data?.items?.length) {
+      items = redFallback.data.items;
+      searchDomain = 'civitai.red';
+    }
+  }
+
   const results: ExternalModelSearchResult[] = [];
 
-  for (const item of data.items || []) {
+  for (const item of items) {
     const latestVer = (item.modelVersions || [])[0];
     if (!latestVer) continue;
+    const itemDomain = resolveCivitaiDomain(item, latestVer, searchDomain);
     const rawType = String(item.type || 'LORA');
-    const availableFiles = extractCivitaiVersionFiles(latestVer, rawType, latestVer.baseModel);
+    const availableFiles = extractCivitaiVersionFiles(
+      latestVer,
+      rawType,
+      latestVer.baseModel,
+      itemDomain
+    );
     const primaryFile = availableFiles[0];
     if (!primaryFile) continue;
 
-    const meta = normalizeCivitaiData(item, latestVer, primaryFile.filename);
+    const meta = normalizeCivitaiData(item, latestVer, primaryFile.filename, itemDomain);
     const inferred = inferSubfolderAndTypeFromPath(
       primaryFile.filename,
       [],
@@ -445,7 +493,17 @@ export async function startConfirmedModelDownload(params: {
         headers.Authorization = `Bearer ${appConfig.hfApiToken}`;
       }
 
-      const res = await fetch(params.sourceUrl, { headers });
+      let res = await fetch(params.sourceUrl, { headers });
+      if ((!res.ok || !res.body) && /^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(params.sourceUrl)) {
+        const altDomain: CivitaiDomain = /civitai\.red/i.test(params.sourceUrl)
+          ? 'civitai.com'
+          : 'civitai.red';
+        const altUrl = rewriteCivitaiDownloadUrl(params.sourceUrl, altDomain);
+        const retryRes = await fetch(altUrl, { headers });
+        if (retryRes.ok && retryRes.body) {
+          res = retryRes;
+        }
+      }
       if (!res.ok || !res.body) {
         throw new Error(`Download failed with HTTP ${res.status}`);
       }

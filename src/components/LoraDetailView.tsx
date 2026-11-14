@@ -115,7 +115,9 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-indigo-300 hover:text-indigo-200 rounded-lg transition-colors"
             >
               <ExternalLink className="w-3.5 h-3.5" />
-              <span>View on Civitai</span>
+              <span>
+                {lora.civitaiUrl.includes('civitai.red') ? 'View on Civitai.red' : 'View on Civitai'}
+              </span>
             </a>
           )}
           <button

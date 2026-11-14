@@ -74,16 +74,79 @@ export function parsePreviewImagesJson(
   }
 }
 
+export type CivitaiDomain = 'civitai.com' | 'civitai.red';
+
 export function buildCivitaiUrl(
   modelId?: string | number | null,
-  versionId?: string | number | null
+  versionId?: string | number | null,
+  domain: CivitaiDomain = 'civitai.com'
 ): string | null {
   const mId = modelId ? String(modelId).trim() : '';
   const vId = versionId ? String(versionId).trim() : '';
   if (!mId) return null;
+  const host = domain === 'civitai.red' ? 'civitai.red' : 'civitai.com';
   return vId
-    ? `https://civitai.com/models/${encodeURIComponent(mId)}?modelVersionId=${encodeURIComponent(vId)}`
-    : `https://civitai.com/models/${encodeURIComponent(mId)}`;
+    ? `https://${host}/models/${encodeURIComponent(mId)}?modelVersionId=${encodeURIComponent(vId)}`
+    : `https://${host}/models/${encodeURIComponent(mId)}`;
+}
+
+/**
+ * Determines whether a Civitai model/version belongs on `civitai.red` (NSFW / mature / delisted on .com)
+ * or standard `civitai.com` based on API payload flags and fallback history.
+ */
+export function resolveCivitaiDomain(
+  modelObj: any,
+  versionObj: any,
+  preferredDomain?: CivitaiDomain
+): CivitaiDomain {
+  if (preferredDomain === 'civitai.red') return 'civitai.red';
+
+  if (
+    Boolean(modelObj?.nsfw) ||
+    Boolean(versionObj?.model?.nsfw) ||
+    Boolean(versionObj?.nsfw) ||
+    Boolean(modelObj?.poi) ||
+    Boolean(versionObj?.model?.poi)
+  ) {
+    return 'civitai.red';
+  }
+
+  const maxNsfwLevel = Math.max(
+    Number(modelObj?.nsfwLevel || 0),
+    Number(versionObj?.model?.nsfwLevel || 0),
+    Number(versionObj?.nsfwLevel || 0)
+  );
+  if (maxNsfwLevel >= 4) {
+    return 'civitai.red';
+  }
+
+  const images = Array.isArray(versionObj?.images) ? versionObj.images : [];
+  const hasRestrictedPreview = images.some((img: any) => {
+    if (!img) return false;
+    if (typeof img.nsfwLevel === 'number' && img.nsfwLevel >= 4) return true;
+    if (img.nsfw === true) return true;
+    if (typeof img.nsfw === 'string' && !['none', 'false', ''].includes(img.nsfw.toLowerCase())) {
+      return true;
+    }
+    return false;
+  });
+  if (hasRestrictedPreview) {
+    return 'civitai.red';
+  }
+
+  return 'civitai.com';
+}
+
+/**
+ * Rewrites a Civitai download URL to match the resolved domain (`civitai.com` vs `civitai.red`).
+ */
+export function rewriteCivitaiDownloadUrl(
+  downloadUrl: string | null | undefined,
+  domain: CivitaiDomain
+): string {
+  const raw = String(downloadUrl || '').trim();
+  if (!raw) return '';
+  return raw.replace(/^https?:\/\/(www\.)?civitai\.(com|red)\//i, `https://${domain}/`);
 }
 
 function decodeHtmlEntities(input: string): string {
@@ -263,7 +326,8 @@ export function extractRecommendedWeight(
 export function normalizeCivitaiData(
   modelObj: any,
   versionObj: any,
-  fallbackFilename?: string | null
+  fallbackFilename?: string | null,
+  preferredDomain?: CivitaiDomain
 ): CivitaiNormalizedMeta {
   const civitaiId = modelObj?.id
     ? String(modelObj.id)
@@ -271,7 +335,8 @@ export function normalizeCivitaiData(
     ? String(versionObj.modelId)
     : null;
   const civitaiVersionId = versionObj?.id ? String(versionObj.id) : null;
-  const civitaiUrl = buildCivitaiUrl(civitaiId, civitaiVersionId);
+  const domain = resolveCivitaiDomain(modelObj, versionObj, preferredDomain);
+  const civitaiUrl = buildCivitaiUrl(civitaiId, civitaiVersionId, domain);
   const baseModel =
     typeof versionObj?.baseModel === 'string' && versionObj.baseModel.trim()
       ? versionObj.baseModel.trim()
@@ -487,12 +552,71 @@ export function computeFileSha256Stream(filePath: string): Promise<{ sha256: str
   });
 }
 
-function getCivitaiHeaders(): Record<string, string> {
+export function getCivitaiHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (appConfig.civitaiApiKey) {
     headers.Authorization = `Bearer ${appConfig.civitaiApiKey}`;
   }
   return headers;
+}
+
+/**
+ * Queries a Civitai API path against `civitai.com` (or `preferredDomain`) first,
+ * falling back to `civitai.red` when `.com` returns 404/non-OK.
+ */
+export async function fetchCivitaiJsonWithFallback(
+  apiPath: string,
+  headers = getCivitaiHeaders(),
+  preferredDomain: CivitaiDomain = 'civitai.com',
+  timeoutMs = 8000
+): Promise<{ data: any; domain: CivitaiDomain } | null> {
+  const cleanPath = apiPath.startsWith('/') ? apiPath : `/${apiPath}`;
+  const domains: CivitaiDomain[] =
+    preferredDomain === 'civitai.red'
+      ? ['civitai.red', 'civitai.com']
+      : ['civitai.com', 'civitai.red'];
+
+  for (const domain of domains) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const res = await fetch(`https://${domain}${cleanPath}`, {
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        const data = await res.json();
+        return { data, domain };
+      }
+    } catch {
+      // try fallback domain
+    }
+  }
+  return null;
+}
+
+/**
+ * Fetches parent model details across `civitai.com` and `civitai.red` and reports which domain resolved it.
+ * If `civitai.com` fails (e.g. 404 for a restricted model), `domain` is set to `'civitai.red'`.
+ */
+export async function fetchCivitaiParentModelWithDomain(
+  modelId: string | number,
+  headers = getCivitaiHeaders(),
+  preferredDomain: CivitaiDomain = 'civitai.com'
+): Promise<{ model: any | null; domain: CivitaiDomain }> {
+  const cleanId = encodeURIComponent(String(modelId));
+  const result = await fetchCivitaiJsonWithFallback(
+    `/api/v1/models/${cleanId}`,
+    headers,
+    preferredDomain
+  );
+  if (result) {
+    const resolvedDomain = resolveCivitaiDomain(result.data, null, result.domain);
+    return { model: result.data, domain: resolvedDomain };
+  }
+  // If .com failed to return the parent model, it is delisted/restricted on .com -> prefer .red
+  return { model: null, domain: 'civitai.red' };
 }
 
 /**
@@ -502,25 +626,73 @@ export async function fetchCivitaiParentModel(
   modelId: string | number,
   headers = getCivitaiHeaders()
 ): Promise<any | null> {
+  const res = await fetchCivitaiParentModelWithDomain(modelId, headers);
+  return res.model;
+}
+
+/**
+ * Probes `https://civitai.com/models/{id}` when metadata flags alone did not indicate `civitai.red`.
+ * If `civitai.com` returns 404/403/451 for the model web page, returns `'civitai.red'`.
+ */
+export async function probeCivitaiWebDomain(
+  modelId: string | number | null | undefined,
+  currentDomain: CivitaiDomain
+): Promise<CivitaiDomain> {
+  if (currentDomain === 'civitai.red' || !modelId) return currentDomain;
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(`https://civitai.com/api/v1/models/${encodeURIComponent(String(modelId))}`, {
-      headers,
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch(`https://civitai.com/models/${encodeURIComponent(String(modelId))}`, {
+      method: 'HEAD',
+      redirect: 'manual',
       signal: controller.signal,
     });
     clearTimeout(timer);
-    if (!res.ok) return null;
-    return await res.json();
+    if (res.status === 404 || res.status === 451 || res.status === 403) {
+      return 'civitai.red';
+    }
   } catch {
-    return null;
+    // keep currentDomain on transient timeout
+  }
+  return currentDomain;
+}
+
+/**
+ * Parses modelId and versionId from an existing Civitai URL if present.
+ */
+function parseIdsFromCivitaiUrl(urlStr?: string | null): {
+  modelId: string | null;
+  versionId: string | null;
+  domain: CivitaiDomain | null;
+} {
+  if (!urlStr || !String(urlStr).trim()) {
+    return { modelId: null, versionId: null, domain: null };
+  }
+  try {
+    const u = new URL(String(urlStr).trim());
+    const host = u.hostname.toLowerCase();
+    const domain: CivitaiDomain | null = host.endsWith('civitai.red')
+      ? 'civitai.red'
+      : host.endsWith('civitai.com')
+      ? 'civitai.com'
+      : null;
+    const mMatch = u.pathname.match(/\/models\/(\d+)/i);
+    const dlMatch = u.pathname.match(/\/api\/download\/models\/(\d+)/i);
+    const verParam = u.searchParams.get('modelVersionId');
+    return {
+      modelId: mMatch ? mMatch[1] : null,
+      versionId: verParam || (dlMatch ? dlMatch[1] : null),
+      domain,
+    };
+  } catch {
+    return { modelId: null, versionId: null, domain: null };
   }
 }
 
 /**
  * Resolves Civitai metadata for an existing model row via SHA-256 / AutoV2 hash lookup
- * (with fallback to stored `civitai_version_id` / `civitai_id`), caches thumbnails locally,
- * and applies non-destructive metadata enrichment.
+ * (with fallback to stored `civitai_version_id` / `civitai_id`), detects `civitai.red` vs `civitai.com`,
+ * caches thumbnails locally, and applies non-destructive metadata enrichment.
  */
 export async function fetchAndEnrichModelFromCivitai(modelId: number): Promise<{
   meta: CivitaiNormalizedMeta;
@@ -553,45 +725,52 @@ export async function fetchAndEnrichModelFromCivitai(modelId: number): Promise<{
     }
   }
 
+  const parsedFromUrl = parseIdsFromCivitaiUrl(row.civitai_url || row.download_url);
+  const storedCivitaiId = row.civitai_id || parsedFromUrl.modelId;
+  const storedVersionId = row.civitai_version_id || parsedFromUrl.versionId;
+  let detectedDomain: CivitaiDomain = parsedFromUrl.domain || 'civitai.com';
+
   const headers = getCivitaiHeaders();
   let versionObj: any = null;
   let modelObj: any = null;
 
-  // 1. Prefer exact hash lookup when SHA-256 or AutoV2 hash is known
+  // 1. Prefer exact hash lookup when SHA-256 or AutoV2 hash is known (tries .com then .red)
   const hashesToTry = [sha256, autov2].filter((h): h is string => Boolean(h && h.trim()));
   for (const h of hashesToTry) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 9000);
-      const res = await fetch(
-        `https://civitai.com/api/v1/model-versions/by-hash/${encodeURIComponent(h.trim())}`,
-        { headers, signal: controller.signal }
-      );
-      clearTimeout(timer);
-      if (res.ok) {
-        versionObj = await res.json();
-        break;
-      }
-    } catch {
-      // try next hash or fallback
+    const found = await fetchCivitaiJsonWithFallback(
+      `/api/v1/model-versions/by-hash/${encodeURIComponent(h.trim())}`,
+      headers,
+      detectedDomain,
+      9000
+    );
+    if (found?.data) {
+      versionObj = found.data;
+      if (found.domain === 'civitai.red') detectedDomain = 'civitai.red';
+      break;
     }
   }
 
   // 2. Fallback to stored Civitai version or model IDs if hash lookup missed
-  if (!versionObj && row.civitai_version_id) {
-    try {
-      const res = await fetch(
-        `https://civitai.com/api/v1/model-versions/${encodeURIComponent(String(row.civitai_version_id))}`,
-        { headers }
-      );
-      if (res.ok) versionObj = await res.json();
-    } catch {
-      // ignore
+  if (!versionObj && storedVersionId) {
+    const foundVer = await fetchCivitaiJsonWithFallback(
+      `/api/v1/model-versions/${encodeURIComponent(String(storedVersionId))}`,
+      headers,
+      detectedDomain
+    );
+    if (foundVer?.data) {
+      versionObj = foundVer.data;
+      if (foundVer.domain === 'civitai.red') detectedDomain = 'civitai.red';
     }
   }
 
-  if (!versionObj && row.civitai_id) {
-    modelObj = await fetchCivitaiParentModel(row.civitai_id, headers);
+  if (!versionObj && storedCivitaiId) {
+    const parentRes = await fetchCivitaiParentModelWithDomain(
+      storedCivitaiId,
+      headers,
+      detectedDomain
+    );
+    modelObj = parentRes.model;
+    if (parentRes.domain === 'civitai.red') detectedDomain = 'civitai.red';
     if (modelObj?.modelVersions?.length) {
       versionObj = modelObj.modelVersions[0];
     }
@@ -600,22 +779,33 @@ export async function fetchAndEnrichModelFromCivitai(modelId: number): Promise<{
   if (!versionObj) {
     const err: any = new Error(
       hashesToTry.length > 0
-        ? 'No matching model found on Civitai for this file hash.'
+        ? 'No matching model found on Civitai (.com or .red) for this file hash.'
         : 'Cannot look up model on Civitai: no local file hash or Civitai ID available.'
     );
     err.statusCode = 404;
     throw err;
   }
 
-  const resolvedParentId = versionObj.modelId || row.civitai_id;
+  const resolvedParentId = versionObj.modelId || storedCivitaiId;
   if (!modelObj && resolvedParentId) {
-    modelObj = await fetchCivitaiParentModel(resolvedParentId, headers);
+    const parentRes = await fetchCivitaiParentModelWithDomain(
+      resolvedParentId,
+      headers,
+      detectedDomain
+    );
+    modelObj = parentRes.model;
+    if (parentRes.domain === 'civitai.red') detectedDomain = 'civitai.red';
   }
   if (!modelObj && versionObj.model) {
     modelObj = { id: resolvedParentId, ...versionObj.model };
   }
 
-  const meta = normalizeCivitaiData(modelObj, versionObj, row.filename);
+  let finalDomain = resolveCivitaiDomain(modelObj, versionObj, detectedDomain);
+  if (finalDomain === 'civitai.com' && resolvedParentId) {
+    finalDomain = await probeCivitaiWebDomain(resolvedParentId, finalDomain);
+  }
+
+  const meta = normalizeCivitaiData(modelObj, versionObj, row.filename, finalDomain);
   const cacheKey = `m${row.id}_${meta.civitaiVersionId || row.autov2_hash || 'v'}`;
   const cachedPreviews = await cacheModelPreviewImages(cacheKey, meta.previewImages);
   const { filledTriggerWord, filledDefaultStrength } = applyCivitaiEnrichmentToModel(
@@ -625,4 +815,79 @@ export async function fetchAndEnrichModelFromCivitai(modelId: number): Promise<{
   );
 
   return { meta, cachedPreviews, filledTriggerWord, filledDefaultStrength };
+}
+
+/**
+ * Scans all local `models` records that have Civitai URLs, IDs, or hashes,
+ * detects whether each model belongs on `civitai.red` vs `civitai.com`,
+ * and heals broken or outdated `civitai_url` links in place.
+ */
+export async function healExistingCivitaiLinks(): Promise<{
+  checked: number;
+  healed: number;
+  redCount: number;
+}> {
+  const rows = db
+    .prepare(
+      `SELECT id, filename, file_path, sha256_hash, autov2_hash, civitai_id, civitai_version_id, civitai_url, download_url
+       FROM models
+       WHERE civitai_url IS NOT NULL
+          OR civitai_id IS NOT NULL
+          OR civitai_version_id IS NOT NULL
+          OR sha256_hash IS NOT NULL
+          OR autov2_hash IS NOT NULL
+          OR download_url LIKE '%civitai.%'`
+    )
+    .all() as any[];
+
+  let checked = 0;
+  let healed = 0;
+  let redCount = 0;
+
+  for (const row of rows) {
+    checked++;
+    const previousUrl = row.civitai_url || null;
+    try {
+      const { meta } = await fetchAndEnrichModelFromCivitai(row.id);
+      if (meta.civitaiUrl?.includes('civitai.red')) {
+        redCount++;
+      }
+      if (meta.civitaiUrl && meta.civitaiUrl !== previousUrl) {
+        healed++;
+      }
+    } catch {
+      // If API lookup failed completely, still check if a known civitai_id 404s on civitai.com web
+      const parsed = parseIdsFromCivitaiUrl(row.civitai_url || row.download_url);
+      const mId = row.civitai_id || parsed.modelId;
+      const vId = row.civitai_version_id || parsed.versionId;
+      if (mId) {
+        const probedDomain = await probeCivitaiWebDomain(mId, parsed.domain || 'civitai.com');
+        const nextUrl = buildCivitaiUrl(mId, vId, probedDomain);
+        if (probedDomain === 'civitai.red') redCount++;
+        if (nextUrl && nextUrl !== previousUrl) {
+          db.prepare(
+            `UPDATE models
+             SET civitai_id = COALESCE(?, civitai_id),
+                 civitai_version_id = COALESCE(?, civitai_version_id),
+                 civitai_url = ?
+             WHERE id = ?`
+          ).run(String(mId), vId ? String(vId) : null, nextUrl, row.id);
+          healed++;
+        }
+      }
+    }
+  }
+
+  return { checked, healed, redCount };
+}
+
+let initialHealTriggered = false;
+export function triggerBackgroundCivitaiLinkHealOnce(): void {
+  if (initialHealTriggered) return;
+  initialHealTriggered = true;
+  setImmediate(() => {
+    healExistingCivitaiLinks().catch(() => {
+      // background heal is best-effort
+    });
+  });
 }

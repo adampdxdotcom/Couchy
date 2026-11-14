@@ -302,6 +302,14 @@ export const api = {
       previewCount: number;
     }>(`/api/models/${modelId}/civitai-fetch`, { method: 'POST' }),
 
+  healCivitaiLinks: () =>
+    requestJson<{
+      ok: boolean;
+      checked: number;
+      healed: number;
+      redCount: number;
+    }>('/api/models/civitai-heal', { method: 'POST' }),
+
   getModelImpact: (name: string) =>
     requestJson<{
       modelName: string;

@@ -25,7 +25,9 @@ import {
 } from '../services/modelDownloadResolverService.ts';
 import {
   fetchAndEnrichModelFromCivitai,
+  healExistingCivitaiLinks,
   resolveSafeModelPreviewPath,
+  triggerBackgroundCivitaiLinkHealOnce,
 } from '../services/civitaiMetadataService.ts';
 import { getComfyUiLiveStatus } from '../services/comfyuiLiveMonitor.ts';
 import { getExecutableApiGraph, getWorkflowDefaults } from '../services/workflowCompilerService.ts';
@@ -56,6 +58,7 @@ modelsAndWorkflowsRouter.get('/comfyui/live-status', async (_req, res) => {
  */
 modelsAndWorkflowsRouter.get('/loras', (_req, res) => {
   try {
+    triggerBackgroundCivitaiLinkHealOnce();
     res.json({ items: listLoraExplorerItems() });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to list LoRAs' });
@@ -259,6 +262,20 @@ modelsAndWorkflowsRouter.post('/models/sync', async (_req, res) => {
     res.json({ items });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to sync model inventory' });
+  }
+});
+
+/**
+ * POST /api/models/civitai-heal
+ * Scans existing models in the database, detects whether each belongs on civitai.red vs civitai.com,
+ * and heals broken or missing Civitai page URLs.
+ */
+modelsAndWorkflowsRouter.post('/models/civitai-heal', async (_req, res) => {
+  try {
+    const summary = await healExistingCivitaiLinks();
+    res.json({ ok: true, ...summary });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to heal Civitai links' });
   }
 });
 

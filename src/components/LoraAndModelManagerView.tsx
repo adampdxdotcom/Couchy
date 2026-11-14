@@ -61,6 +61,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   const [loraCategoryFilter, setLoraCategoryFilter] = useState<string>('');
   const [impactReport, setImpactReport] = useState<any | null>(null);
   const [fetchingModelId, setFetchingModelId] = useState<number | null>(null);
+  const [isHealingLinks, setIsHealingLinks] = useState(false);
   const [brokenThumbs, setBrokenThumbs] = useState<Record<string, boolean>>({});
 
   // Model Downloader State
@@ -117,6 +118,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       await onRefresh();
       const notes: string[] = [];
       if (res.baseModel) notes.push(res.baseModel);
+      if (res.civitaiUrl?.includes('civitai.red')) notes.push('civitai.red link');
       if (res.filledTriggerWord) notes.push('trigger word auto-filled');
       if (res.filledDefaultStrength) notes.push('default strength updated');
       if (res.previewCount > 0) notes.push(`${res.previewCount} preview(s) cached`);
@@ -128,6 +130,22 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       onPushToast?.(err?.message || 'Could not fetch metadata from Civitai', 'error');
     } finally {
       setFetchingModelId(null);
+    }
+  };
+
+  const handleHealCivitaiLinks = async () => {
+    setIsHealingLinks(true);
+    try {
+      const res = await api.healCivitaiLinks();
+      await onRefresh();
+      onPushToast?.(
+        `Checked ${res.checked} model(s) · Healed ${res.healed} link(s) (${res.redCount} on civitai.red)`,
+        'success'
+      );
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Failed to heal Civitai links', 'error');
+    } finally {
+      setIsHealingLinks(false);
     }
   };
 
@@ -298,17 +316,30 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           </button>
         </div>
 
-        <button
-          type="button"
-          onClick={async () => {
-            await api.syncModelInventory();
-            await onRefresh();
-          }}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-200 rounded-lg cursor-pointer"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          <span>Sync ComfyUI & Disk Models</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={isHealingLinks}
+            onClick={handleHealCivitaiLinks}
+            title="Check all models against Civitai (.com & .red) and repair broken links"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 disabled:opacity-50 text-zinc-200 rounded-lg cursor-pointer"
+          >
+            <ExternalLink className="w-3.5 h-3.5 text-indigo-400" />
+            <span>{isHealingLinks ? 'Healing Links...' : 'Heal Civitai Links'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={async () => {
+              await api.syncModelInventory();
+              await onRefresh();
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-200 rounded-lg cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Sync ComfyUI & Disk Models</span>
+          </button>
+        </div>
       </div>
 
       {/* Sub-Tab 1: LoRA Explorer (Grid & List) */}
@@ -475,7 +506,11 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                               target="_blank"
                               rel="noreferrer"
                               onClick={(e) => e.stopPropagation()}
-                              title="Open on Civitai"
+                              title={
+                                l.civitaiUrl.includes('civitai.red')
+                                  ? 'Open on Civitai.red'
+                                  : 'Open on Civitai.com'
+                              }
                               className="p-1.5 rounded bg-zinc-950/85 hover:bg-zinc-900 border border-zinc-700/80 text-zinc-200 hover:text-indigo-300 transition-colors"
                             >
                               <ExternalLink className="w-3 h-3" />
@@ -906,10 +941,14 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                               target="_blank"
                               rel="noreferrer"
                               className="inline-flex items-center gap-1 text-indigo-300 hover:text-indigo-200"
-                              title="Open on Civitai"
+                              title={
+                                m.civitaiUrl.includes('civitai.red')
+                                  ? 'Open on Civitai.red'
+                                  : 'Open on Civitai.com'
+                              }
                             >
                               <ExternalLink className="w-3 h-3" />
-                              <span>Page</span>
+                              <span>{m.civitaiUrl.includes('civitai.red') ? 'Civitai.red' : 'Page'}</span>
                             </a>
                           )}
                           {(m.isInstalled || m.sha256Hash || m.civitaiId) && (

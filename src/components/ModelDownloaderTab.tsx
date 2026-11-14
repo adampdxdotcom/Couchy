@@ -275,9 +275,12 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
             const hasThumb = Boolean(item.previewImageUrl && !brokenImages[cardKey]);
             const fileCount = item.totalRepoFilesCount || item.availableFiles?.length || 1;
             const targetFolder = getDefaultSubfolderForItem(item);
+            const isCivitaiRed = Boolean(item.civitaiUrl?.includes('civitai.red'));
             const providerLabel =
               item.provider === 'civitai'
-                ? 'Civitai'
+                ? isCivitaiRed
+                  ? 'Civitai.red'
+                  : 'Civitai'
                 : item.provider === 'huggingface'
                 ? 'Hugging Face'
                 : 'Direct URL';
@@ -330,11 +333,15 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                         href={item.civitaiUrl}
                         target="_blank"
                         rel="noreferrer"
-                        title="Open original Civitai page"
+                        title={
+                          isCivitaiRed
+                            ? 'Open original Civitai.red page'
+                            : 'Open original Civitai.com page'
+                        }
                         className="absolute top-2.5 right-2.5 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-950/85 hover:bg-zinc-900 border border-zinc-700/80 text-[11px] text-zinc-200 hover:text-white transition-colors"
                       >
                         <ExternalLink className="w-3 h-3" />
-                        <span>Civitai</span>
+                        <span>{isCivitaiRed ? 'Civitai.red' : 'Civitai'}</span>
                       </a>
                     )}
                   </div>
