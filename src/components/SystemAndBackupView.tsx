@@ -10,6 +10,7 @@ import { WorkspacePreferencesSection } from './system/WorkspacePreferencesSectio
 import { VisualTaggerSection } from './system/VisualTaggerSection.tsx';
 import { LmStudioTemplatesSection } from './system/LmStudioTemplatesSection.tsx';
 import { ComfyUiConnectionSection } from './system/ComfyUiConnectionSection.tsx';
+import { ModelCleanupSection } from './system/ModelCleanupSection.tsx';
 import { DatabaseBackupSection } from './system/DatabaseBackupSection.tsx';
 import { CollectionsAndScannerSection } from './system/CollectionsAndScannerSection.tsx';
 
@@ -493,22 +494,32 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       )}
 
       {activeSubTab === 'comfyui' && (
-        <ComfyUiConnectionSection
-          comfyuiUrl={comfyuiUrl}
-          setComfyuiUrl={setComfyuiUrl}
-          outputDir={outputDir}
-          setOutputDir={setOutputDir}
-          modelsDir={modelsDir}
-          setModelsDir={setModelsDir}
-          downloadsDir={downloadsDir}
-          setDownloadsDir={setDownloadsDir}
-          scheduledHours={scheduledHours}
-          setScheduledHours={setScheduledHours}
-          connTestResult={connTestResult}
-          isTestingConn={isTestingConn}
-          onTestComfyUi={handleTestComfyUi}
-          onSaveConfig={handleSaveConfig}
-        />
+        <div className="space-y-5">
+          <ComfyUiConnectionSection
+            comfyuiUrl={comfyuiUrl}
+            setComfyuiUrl={setComfyuiUrl}
+            outputDir={outputDir}
+            setOutputDir={setOutputDir}
+            modelsDir={modelsDir}
+            setModelsDir={setModelsDir}
+            downloadsDir={downloadsDir}
+            setDownloadsDir={setDownloadsDir}
+            scheduledHours={scheduledHours}
+            setScheduledHours={setScheduledHours}
+            connTestResult={connTestResult}
+            isTestingConn={isTestingConn}
+            onTestComfyUi={handleTestComfyUi}
+            onSaveConfig={handleSaveConfig}
+          />
+          <ModelCleanupSection
+            initialStatus={healthData?.modelCleanup || null}
+            onRefreshAll={onRefreshAll}
+            onFeedback={(msg) => {
+              setBackupMsg(msg);
+              setTimeout(() => setBackupMsg(null), 4000);
+            }}
+          />
+        </div>
       )}
 
       {activeSubTab === 'backup' && (

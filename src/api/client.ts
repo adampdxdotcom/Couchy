@@ -12,6 +12,7 @@ import type {
   LmStudioStatus,
   LoraCategory,
   LoraExplorerItem,
+  ModelCleanupStatus,
   ModelInventoryItem,
   PromptTemplate,
   QuickGenChatMessage,
@@ -48,6 +49,20 @@ export const api = {
 
   updateConfig: (payload: Record<string, any>) =>
     requestJson<any>('/api/config', { method: 'PATCH', body: JSON.stringify(payload) }),
+
+  getModelCleanupStatus: () => requestJson<ModelCleanupStatus>('/api/models/cleanup'),
+
+  updateModelCleanupConfig: (payload: { enabled?: boolean; retentionHours?: number }) =>
+    requestJson<ModelCleanupStatus>('/api/models/cleanup', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+
+  runModelCleanup: (action: 'scan' | 'clean_due' | 'clean_all') =>
+    requestJson<{ status: ModelCleanupStatus; deletedFiles: string[]; freedBytes: number }>(
+      '/api/models/cleanup/run',
+      { method: 'POST', body: JSON.stringify({ action }) }
+    ),
 
   triggerScan: (scanType: 'incremental' | 'full' | 'reconcile' | 'rebuild_metadata' = 'incremental') =>
     requestJson<{ jobId: number; scan: any }>('/api/scans/trigger', {

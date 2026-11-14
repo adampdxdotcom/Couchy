@@ -8,7 +8,9 @@ Repository: **[https://github.com/adampdxdotcom/Couchy](https://github.com/adamp
 
 ## Overview
 
-Couchy bridges the gap between raw ComfyUI generation folders and an organized, searchable creative studio. Whether you want to quickly generate prompt batches through a workflow (such as Krea2 Turbo), create focused character portraits with custom LoRAs, or orchestrate progressive photo series using a local LLM agent, Couchy gives you a responsive desktop and mobile web interface without touching your original files.
+Couchy bridges the gap between raw ComfyUI generation folders and an organized, searchable creative studio. Whether you want to generate prompt batches with **Krea 2** (Krea2 Turbo), create focused character portraits with custom LoRAs, or orchestrate progressive photo series using a local LLM agent, Couchy gives you a responsive desktop and mobile web interface without touching your original files.
+
+> **Supported Image Generation Model**: Image generation in Couchy is currently built exclusively for **Krea 2** (`Krea2 Turbo`) ComfyUI workflows (natural-language prose prompting, Krea 2 aspect/megapixel resolution node conventions, and inline `4x` ESRGAN upscaling). Other image generation model architectures (such as SD 1.5, SDXL, Pony, Illustrious, or standard Flux.1) are **not supported** for generation at this time.
 
 - **Non-Destructive & Read-Only**: Original images in your ComfyUI output folder are never renamed, relocated, or modified.
 - **Content-Addressed Tracking**: Every image is indexed by its SHA-256 hash. If you move or reorganize files in your ComfyUI folders, all favorites, star ratings, tags, collections, notes, and character associations are preserved.
@@ -19,7 +21,7 @@ Couchy bridges the gap between raw ComfyUI generation folders and an organized, 
 ## Key Features
 
 ### 1. Generation Studio & Floating Quick Gen Box
-- **Generation Studio**: A full-featured workspace to generate single images or multi-image sets. Configure aspect ratio presets (`1:1`, `9:16`, `16:9`, `3:4`, `4:3`, `2:3`, `3:2`), output counts, checkpoint models, and stacked LoRAs with custom weights.
+- **Generation Studio**: A full-featured Krea 2 generation workspace for single images or multi-image sets. Configure aspect ratio presets (`1:1`, `9:16`, `16:9`, `3:4`, `4:3`, `2:3`, `3:2`), output counts, checkpoint/base weights, and stacked LoRAs with custom weights.
 - **Floating Quick Gen Box**: An always-accessible bottom generation dock available across the Gallery, Characters, LoRAs & Models, and Workflows tabs (detailed below).
 
 ---
@@ -106,10 +108,11 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
     - **Synced Dual & Split Loupe Inspector**: Toggle **Loupe** (`2×`, `4×`, `1:1 Native`) in Split Mode to project a synchronized **Dual Mirrored Lens** across both panes in Side-by-Side mode or a **Split `[A | B]` Lens** in Overlay Wipe mode. Click anywhere on the image to pin/lock the lens in place while rating, hearting, or inspecting diffs.
     - **Collapsible Bottom Diff Drawer**: Starts collapsed to preserve full canvas space; expand to inspect side-by-side diffs only (word-level positive prompt diff, negative prompt diff, differing parameters/resolution, and added/removed/weight-changed LoRAs) with per-slot **Star Rating**, **Heart**, **Reuse**, and **Reject** actions, plus **Swap** and two-stage `Esc` exit (`Picker` &rarr; `Exit Split` &rarr; `Close Inspector`).
 
-### 4. Workflows & Dynamic Node Mapper
-- **Import Any ComfyUI Workflow**: Import API or visual workflow JSON files directly.
-- **Interactive Node Mapper**: Easily map workflow nodes for positive prompt, negative prompt, checkpoint loader, LoRA loader, latent resolution, and seed.
-- **Default Presets**: Set any workflow as the primary default across the Generation Studio and Quick Gen dock (e.g. Krea2 Turbo).
+### 4. Workflows & Dynamic Node Mapper (Krea 2 Only)
+- **Built for Krea 2 Workflows**: Couchy's prompt compilation, resolution selector, LoRA stacker, and `4x` ESRGAN upscale pipeline are tailored specifically for **Krea 2** (`Krea2 Turbo`) ComfyUI API workflows; other image generation architectures are not supported.
+- **Import Krea 2 Workflows**: Import Krea 2 API or visual workflow JSON files directly.
+- **Interactive Node Mapper**: Map Krea 2 workflow nodes for positive prompt, negative prompt, checkpoint loader, LoRA loader, latent resolution (`#49`), and seed.
+- **Default Preset**: Set your primary Krea 2 workflow as the system default across Generation Studio and the Quick Gen dock.
 
 ### 5. LoRA & Model Management
 - **Directory Scanning**: Live indexing of both your primary ComfyUI models directory (`/data/models`) and your downloaded models directory (`/downloads`) across all ComfyUI subfolders (`loras`, `checkpoints`, `diffusion_models`, `unet`, `text_encoders`, `clip`, `vae`, `controlnet`, `upscale_models`, `embeddings`).
@@ -136,7 +139,7 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
 
 ### Prerequisites
 - Docker and Docker Compose installed ([Docker Engine](https://docs.docker.com/engine/install/))
-- A running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance (bare metal or containerized)
+- A running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance (bare metal or containerized) configured with a **Krea 2** workflow & model weights (only Krea 2 generation is currently supported)
 - *(Optional)* An NVIDIA GPU with NVIDIA Container Toolkit installed for GPU-accelerated local ONNX tagging
 - *(Optional)* Any OpenAI-compatible Local LLM server (Ollama, `llama.cpp`, KoboldCpp, vLLM, TabbyAPI, or LM Studio) for Quick Gen **Agent** (Conversation & `x2`–`x8` themed set expansion), Generation Studio photo sets, and image interrogation
 
@@ -324,6 +327,7 @@ The unified search bar under **Civitai & Hugging Face Downloader** automatically
 - **Direct LoRA Downloads**: Non-installed Civitai LoRAs download in one click straight into `/downloads/loras` (`./model-downloads/loras`). Multi-file Hugging Face repos and other model types open a confirmation modal to pick the exact file and ComfyUI subfolder (`checkpoints`, `diffusion_models`, `text_encoders`, `vae`, `controlnet`, `upscale_models`, `embeddings`).
 - **Safe Atomic Writes & SHA-256 Verification**: Downloads stream to a temporary `.part` file, verify the expected SHA-256 checksum on completion (if provided by Civitai or Hugging Face LFS), cache up to 4 WebP preview images locally, and automatically sync into Couchy's inventory.
 - **Active Stack & History Links**: Concurrent downloads stack newest-first as full-width preview cards with live progress and clear automatically once finished. In the **Download Queue & Hash Verification History**, completed Civitai downloads display their first cached preview thumbnail—click any completed **LoRA** name to jump straight into its **LoRA Detail Inspector** (`@mention` nickname, trigger words, strengths, category), or click other model types to locate them in **Model Inventory**.
+- **Optional Auto-Clean Copied Downloads (`System` &rarr; `ComfyUI`)**: If you periodically copy downloaded models from `./model-downloads` into your main `ComfyUI/models` directory, enable **Auto-Clean Copied Downloads** and choose a retention window in hours (`24h` default). Couchy verifies an identical **filename, byte size, and SHA-256 hash** inside your read-only `COMFYUI_MODELS_DIR` before removing Couchy's duplicate from `DOWNLOADS_DIR`—ComfyUI's copy and all Couchy LoRA/Civitai metadata remain untouched. (Leave **Off** if ComfyUI loads directly from `model-downloads` via `extra_model_paths.yaml`.)
 
 ---
 

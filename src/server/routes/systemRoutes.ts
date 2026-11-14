@@ -19,6 +19,12 @@ import {
   getVisualTaggerStatus,
   updateVisualTaggerConfig,
 } from '../services/visualTaggerService.ts';
+import {
+  getModelCleanupSettings,
+  getModelCleanupStatus,
+  scanAndCleanCopiedDownloads,
+  updateModelCleanupSettings,
+} from '../services/modelCleanupService.ts';
 
 export const systemRouter = Router();
 
@@ -46,6 +52,8 @@ systemRouter.get('/health', (_req, res) => {
     .get() as { value: string } | undefined;
   const saveUploadedPromptImages = saveUploadedRow ? saveUploadedRow.value === '1' : false;
 
+  const cleanupSettings = getModelCleanupSettings();
+
   res.json({
     status: 'ok',
     counts: {
@@ -68,10 +76,13 @@ systemRouter.get('/health', (_req, res) => {
       scheduledBackupHours: appConfig.scheduledBackupHours,
       quickGenBoxEnabled,
       saveUploadedPromptImages,
+      autoCleanCopiedModels: cleanupSettings.enabled,
+      autoCleanCopiedModelsHours: cleanupSettings.retentionHours,
     },
     comfyuiInstance: comfyRow || null,
     activeScan: getActiveScanStatus(),
     visualTagger: getVisualTaggerStatus(),
+    modelCleanup: getModelCleanupStatus(),
   });
 });
 
@@ -372,5 +383,56 @@ systemRouter.post('/tagger/control', (req, res) => {
     res.json(status);
   } catch (err: any) {
     res.status(400).json({ error: err?.message || 'Failed to control visual tagger queue' });
+  }
+});
+
+/**
+ * GET /api/models/cleanup
+ * Returns Auto-Clean Copied Downloads settings and verified duplicate candidates.
+ */
+systemRouter.get('/models/cleanup', (_req, res) => {
+  res.json(getModelCleanupStatus());
+});
+
+/**
+ * PATCH /api/models/cleanup
+ * Updates Auto-Clean Copied Downloads toggle and retention hours.
+ */
+systemRouter.patch('/models/cleanup', (req, res) => {
+  try {
+    const { enabled, retentionHours } = req.body || {};
+    updateModelCleanupSettings({
+      enabled: enabled !== undefined ? Boolean(enabled) : undefined,
+      retentionHours: retentionHours !== undefined ? Number(retentionHours) : undefined,
+    });
+    if (enabled === true) {
+      setImmediate(() => {
+        scanAndCleanCopiedDownloads().catch(() => {});
+      });
+    }
+    res.json(getModelCleanupStatus());
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to update model cleanup settings' });
+  }
+});
+
+/**
+ * POST /api/models/cleanup/run
+ * Runs a duplicate verification scan against COMFYUI_MODELS_DIR and optionally cleans due or all verified copies.
+ */
+systemRouter.post('/models/cleanup/run', async (req, res) => {
+  try {
+    const action = req.body?.action || 'scan';
+    if (!['scan', 'clean_due', 'clean_all'].includes(action)) {
+      res.status(400).json({ error: 'Invalid cleanup action' });
+      return;
+    }
+    const result = await scanAndCleanCopiedDownloads({
+      deleteEligible: action !== 'scan',
+      forceImmediate: action === 'clean_all',
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Model cleanup scan failed' });
   }
 });

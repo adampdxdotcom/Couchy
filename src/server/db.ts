@@ -620,6 +620,25 @@ export function runMigrations(): void {
         );
       `,
     },
+    {
+      version: 17,
+      name: 'downloaded_model_cleanup_tracking',
+      sql: `
+        CREATE TABLE IF NOT EXISTS downloaded_model_copies (
+          download_path TEXT PRIMARY KEY,
+          filename TEXT NOT NULL,
+          file_size INTEGER NOT NULL,
+          dl_mtime_ms INTEGER NOT NULL,
+          comfy_path TEXT,
+          comfy_mtime_ms INTEGER,
+          verified_sha256 TEXT,
+          verified_at TEXT,
+          last_checked_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_downloaded_model_copies_verified
+          ON downloaded_model_copies(verified_at);
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

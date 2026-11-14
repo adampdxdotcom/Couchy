@@ -380,6 +380,34 @@ export interface ModelInventoryItem {
   dependentWorkflowCount: number;
 }
 
+export interface ModelCleanupCandidate {
+  downloadPath: string;
+  comfyPath: string;
+  filename: string;
+  fileSize: number;
+  verifiedSha256: string;
+  verifiedAt: string;
+  eligibleAt: string;
+  hoursRemaining: number;
+  isEligible: boolean;
+}
+
+export interface ModelCleanupStatus {
+  enabled: boolean;
+  retentionHours: number;
+  downloadsDir: string;
+  comfyuiModelsDir: string;
+  sameDirectoryConflict: boolean;
+  isScanning: boolean;
+  lastScanAt: string | null;
+  lastDeletedCount: number;
+  lastDeletedBytes: number;
+  lastCleanupAt: string | null;
+  totalReclaimableBytes: number;
+  eligibleCount: number;
+  candidates: ModelCleanupCandidate[];
+}
+
 export interface WorkflowLibraryItem {
   id: number;
   name: string;

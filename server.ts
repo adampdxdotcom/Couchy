@@ -22,15 +22,20 @@ import {
   startVisualTaggerQueue,
 } from './src/server/services/visualTaggerService.ts';
 import { startDownloadScheduler } from './src/server/services/downloadSchedulerService.ts';
+import {
+  scanAndCleanCopiedDownloads,
+  startModelCleanupScheduler,
+} from './src/server/services/modelCleanupService.ts';
 
 async function startServer() {
   // 1. Run SQLite schema migrations & one-time prompt backfill
   runMigrations();
   backfillMissingImagePrompts(false);
 
-  // 2. Start filesystem monitoring & scheduled download worker
+  // 2. Start filesystem monitoring, scheduled download worker & model cleanup scheduler
   startFilesystemWatcher();
   startDownloadScheduler();
+  startModelCleanupScheduler();
 
   const app = express();
   app.use(express.json({ limit: '25mb' }));
@@ -74,6 +79,7 @@ async function startServer() {
       try {
         await runBackgroundThumbnailMigration();
         await syncModelInventory();
+        await scanAndCleanCopiedDownloads().catch(() => {});
         await runDirectoryScan('incremental');
         // Only resume visual tagging if user previously enabled it AND model is already on disk
         if (getTaggerSettings().enabled && isTaggerModelDownloaded()) {
