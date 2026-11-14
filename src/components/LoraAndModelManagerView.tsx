@@ -1,23 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import {
   Search,
-  Download,
   RefreshCw,
   CheckCircle2,
-  AlertTriangle,
-  ArrowLeft,
   ShieldCheck,
-  HardDriveDownload,
-  FileWarning,
-  AtSign,
+  ExternalLink,
+  Eye,
+  EyeOff,
   Layers,
-  Check,
+  LayoutGrid,
+  List,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
+import { LoraDetailView } from './LoraDetailView.tsx';
+import { ModelDownloaderTab } from './ModelDownloaderTab.tsx';
 import type {
+  ExternalModelSearchResult,
   ImageRecord,
-  LoraCategory,
   LoraExplorerItem,
   ModelInventoryItem,
 } from '../shared/types.ts';
@@ -33,8 +33,8 @@ interface LoraAndModelManagerViewProps {
 }
 
 /**
- * Combined LoRA Explorer, Missing Dependencies Dashboard, Model Usage Impact Report,
- * and Civitai / Hugging Face Model Downloader.
+ * Combined LoRA Explorer (Grid & List), LoRA Detail Inspector,
+ * Model Inventory & Missing Dependencies, and Civitai / Hugging Face Downloader.
  */
 export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = ({
   loras,
@@ -46,35 +46,82 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   onPushToast,
 }) => {
   const [subTab, setSubTab] = useState<'loras' | 'dependencies' | 'downloader'>('loras');
+  const [explorerLayout, setExplorerLayout] = useState<'grid' | 'list'>('grid');
+  const [showHiddenLoras, setShowHiddenLoras] = useState(false);
   const [selectedLoraName, setSelectedLoraName] = useState<string | null>(null);
   const [loraSearch, setLoraSearch] = useState('');
   const [loraCategoryFilter, setLoraCategoryFilter] = useState<string>('');
   const [impactReport, setImpactReport] = useState<any | null>(null);
+  const [fetchingModelId, setFetchingModelId] = useState<number | null>(null);
+  const [brokenThumbs, setBrokenThumbs] = useState<Record<string, boolean>>({});
 
   // Model Downloader State
   const [provider, setProvider] = useState<'civitai' | 'huggingface'>('civitai');
   const [extQuery, setExtQuery] = useState('');
   const [extTypeFilter, setExtTypeFilter] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<ExternalModelSearchResult[]>([]);
   const [isSearchingExt, setIsSearchingExt] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [downloads, setDownloads] = useState<any[]>([]);
 
-  // Explicit Confirmation Modal for Model Download
-  const [pendingDownload, setPendingDownload] = useState<any | null>(null);
-  const [dlSubfolder, setDlSubfolder] = useState('loras');
-  const [allowOverwrite, setAllowOverwrite] = useState(false);
-  const [dlError, setDlError] = useState<string | null>(null);
+  const refreshDownloads = async () => {
+    try {
+      const res = await api.listDownloads();
+      setDownloads(res.items || []);
+    } catch {
+      // ignore
+    }
+  };
 
   useEffect(() => {
-    api.listDownloads().then((res) => setDownloads(res.items || [])).catch(() => {});
+    refreshDownloads();
   }, [subTab]);
+
+  // Poll while any model download is active and refresh inventory once finished
+  const hasActiveDownload = downloads.some((d) => d.status === 'downloading');
+  useEffect(() => {
+    if (!hasActiveDownload) return;
+    const timer = setInterval(async () => {
+      try {
+        const res = await api.listDownloads();
+        const next = res.items || [];
+        setDownloads(next);
+        if (!next.some((d: any) => d.status === 'downloading')) {
+          await onRefresh();
+        }
+      } catch {
+        // ignore transient polling failure
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [hasActiveDownload, onRefresh]);
 
   const selectedLora = loras.find((l) => l.filename === selectedLoraName) || null;
 
   const handleLoadImpact = async (modelFilename: string) => {
     const res = await api.getModelImpact(modelFilename);
     setImpactReport(res);
+  };
+
+  const handleFetchFromCivitai = async (modelId: number) => {
+    setFetchingModelId(modelId);
+    try {
+      const res = await api.fetchModelFromCivitai(modelId);
+      await onRefresh();
+      const notes: string[] = [];
+      if (res.baseModel) notes.push(res.baseModel);
+      if (res.filledTriggerWord) notes.push('trigger word auto-filled');
+      if (res.filledDefaultStrength) notes.push('default strength updated');
+      if (res.previewCount > 0) notes.push(`${res.previewCount} preview(s) cached`);
+      onPushToast?.(
+        `Fetched Civitai metadata${notes.length > 0 ? ` (${notes.join(', ')})` : ''}`,
+        'success'
+      );
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Could not fetch metadata from Civitai', 'error');
+    } finally {
+      setFetchingModelId(null);
+    }
   };
 
   const handleExternalSearch = async (e?: React.FormEvent, customQ?: string) => {
@@ -92,29 +139,6 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       setSearchError(err.message || 'External model search failed');
     } finally {
       setIsSearchingExt(false);
-    }
-  };
-
-  const handleConfirmDownload = async () => {
-    if (!pendingDownload) return;
-    setDlError(null);
-    try {
-      await api.startModelDownload({
-        provider: pendingDownload.provider,
-        modelName: pendingDownload.name,
-        filename: pendingDownload.filename,
-        modelType: pendingDownload.modelType,
-        sourceUrl: pendingDownload.downloadUrl,
-        expectedHash: pendingDownload.sha256Hash || null,
-        subfolder: dlSubfolder,
-        allowOverwrite,
-        userConfirmed: true,
-      });
-      setPendingDownload(null);
-      const dls = await api.listDownloads();
-      setDownloads(dls.items || []);
-    } catch (err: any) {
-      setDlError(err.message || 'Download could not start');
     }
   };
 
@@ -166,428 +190,63 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
         }
       }
     } catch (err: any) {
-      if (onPushToast) {
-        onPushToast(err.message || 'Failed to update @mention settings', 'error');
-      }
+      onPushToast?.(err.message || 'Failed to update @mention settings', 'error');
     }
   };
 
-  // Dedicated LoRA Detail Page
+  const handleToggleLoraVisibility = async (loraName: string, nextHidden: boolean) => {
+    try {
+      await api.updateLoraVisibility(loraName, nextHidden);
+      await onRefresh();
+      onPushToast?.(
+        nextHidden
+          ? `Hidden ${loraName} from Couchy`
+          : `Restored ${loraName} to Couchy`,
+        nextHidden ? 'info' : 'success'
+      );
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Failed to update LoRA visibility', 'error');
+    }
+  };
+
   if (selectedLora) {
-    const associatedImages = allImages.filter((img) =>
-      img.loras.some((l) => l.loraName.toLowerCase() === selectedLora.filename.toLowerCase())
-    );
-    const highestRated = [...associatedImages]
-      .filter((i) => i.rating >= 4)
-      .sort((a, b) => b.rating - a.rating)
-      .slice(0, 6);
-
     return (
-      <div className="px-6 py-6 max-w-7xl mx-auto space-y-6">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedLoraName(null);
-              setImpactReport(null);
-            }}
-            className="inline-flex items-center gap-2 text-xs font-medium text-zinc-300 hover:text-white cursor-pointer"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Back to LoRA Explorer</span>
-          </button>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => handleLoadImpact(selectedLora.filename)}
-              className="px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-200 rounded-lg cursor-pointer"
-            >
-              View Usage Impact Report
-            </button>
-            <button
-              type="button"
-              onClick={() => onFilterGalleryByLora(selectedLora.filename)}
-              className="px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-200 rounded-lg cursor-pointer"
-            >
-              Filter in Main Gallery
-            </button>
-            <button
-              type="button"
-              disabled={associatedImages.length === 0}
-              onClick={() =>
-                api.exportImagesZip({
-                  imageIds: associatedImages.map((i) => i.id),
-                  archiveName: `lora-${selectedLora.name}`,
-                })
-              }
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-lg cursor-pointer"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span className="font-mono tabular-nums">
-                Download All Images ({associatedImages.length})
-              </span>
-            </button>
-          </div>
-        </div>
-
-        {/* LoRA Detail Card */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h1 className="text-2xl font-display font-bold text-zinc-100">
-                {selectedLora.name}
-              </h1>
-              <p className="text-xs font-mono text-zinc-400 mt-1">
-                File: {selectedLora.filename} · Path: {selectedLora.filePath || 'Not locally installed'} ·{' '}
-                {formatBytes(selectedLora.fileSize)}
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3 text-xs">
-              <label className="text-zinc-400">Semantic Classification:</label>
-              <select
-                value={selectedLora.loraCategory}
-                onChange={async (e) => {
-                  await api.classifyLora(selectedLora.filename, e.target.value as LoraCategory);
-                  await onRefresh();
-                }}
-                className="px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-              >
-                <option value="unclassified">Unclassified</option>
-                <option value="character">Character</option>
-                <option value="style">Style</option>
-                <option value="clothing">Clothing / Outfit</option>
-                <option value="concept">Concept</option>
-                <option value="pose">Pose</option>
-                <option value="object">Object</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 text-xs font-mono tabular-nums">
-            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
-              <span className="block text-[10px] font-sans text-zinc-400">Status</span>
-              <span className={selectedLora.isInstalled ? 'text-emerald-400' : 'text-amber-400'}>
-                {selectedLora.isInstalled ? 'Installed' : 'Missing'}
-              </span>
-            </div>
-            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
-              <span className="block text-[10px] font-sans text-zinc-400">Images Using It</span>
-              <span className="text-zinc-100">{selectedLora.imageCount}</span>
-            </div>
-            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
-              <span className="block text-[10px] font-sans text-zinc-400">Average Rating</span>
-              <span className="text-amber-400">★ {selectedLora.averageRating}</span>
-            </div>
-            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
-              <span className="block text-[10px] font-sans text-zinc-400">Model Strength Range</span>
-              <span className="text-zinc-100">
-                {selectedLora.minModelStrength ?? '—'} to {selectedLora.maxModelStrength ?? '—'}
-              </span>
-            </div>
-            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
-              <span className="block text-[10px] font-sans text-zinc-400">CLIP Strength Range</span>
-              <span className="text-zinc-100">
-                {selectedLora.minClipStrength ?? '—'} to {selectedLora.maxClipStrength ?? '—'}
-              </span>
-            </div>
-            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
-              <span className="block text-[10px] font-sans text-zinc-400">SHA256 / AutoV2</span>
-              <span className="text-zinc-100 truncate block">
-                {selectedLora.autov2Hash || selectedLora.sha256Hash?.slice(0, 10) || 'Unverified'}
-              </span>
-            </div>
-          </div>
-
-          {selectedLora.characters.length > 0 && (
-            <div className="text-xs text-zinc-300">
-              Linked Characters:{' '}
-              {selectedLora.characters
-                .map((c) => `${c.name} (${c.appearanceLabel})`)
-                .join(' · ')}
-            </div>
-          )}
-        </div>
-
-        {/* Quick Gen @Mention Configuration Card */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400">
-                <AtSign className="w-4 h-4" />
-              </div>
-              <div>
-                <h2 className="text-sm font-display font-semibold text-zinc-100">
-                  Quick Gen @Mention Settings
-                </h2>
-                <p className="text-xs text-zinc-400">
-                  Enable this LoRA in the Quick Gen `@` autocomplete popup and define its mention nickname.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2.5 select-none">
-              <input
-                type="checkbox"
-                checked={Boolean(selectedLora.mentionEnabled)}
-                onChange={(e) =>
-                  handleUpdateMentionConfig(selectedLora.filename, {
-                    mentionEnabled: e.target.checked,
-                  })
-                }
-                aria-label={`Include ${selectedLora.name} in @Mention Menu`}
-                className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-zinc-900 cursor-pointer"
-              />
-              <span className="text-xs font-medium text-zinc-200">
-                Include in @Mention Menu
-              </span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-zinc-800/80">
-            {/* Nickname input */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-300">
-                LoRA Nickname
-              </label>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 font-mono text-xs">
-                  @
-                </span>
-                <input
-                  key={`${selectedLora.filename}-nickname`}
-                  type="text"
-                  defaultValue={selectedLora.nickname || ''}
-                  placeholder="e.g. cyberpunk, retro, watercolor"
-                  onBlur={(e) => {
-                    const clean = e.target.value.trim().replace(/^@+/, '');
-                    if (clean !== (selectedLora.nickname || '')) {
-                      handleUpdateMentionConfig(selectedLora.filename, {
-                        nickname: clean,
-                      });
-                    }
-                  }}
-                  className="w-full pl-7 pr-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none"
-                />
-              </div>
-              <p className="text-[11px] text-zinc-500">
-                Type this token after <span className="font-mono text-zinc-400">@</span> in Quick Gen to attach this LoRA.
-              </p>
-            </div>
-
-            {/* Default Model Strength */}
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center text-xs">
-                <label className="font-medium text-zinc-300">Default Model Strength</label>
-                <span className="font-mono text-amber-300 tabular-nums">
-                  {(selectedLora.defaultModelStrength ?? 1.0).toFixed(2)}x
-                </span>
-              </div>
-              <input
-                key={`${selectedLora.filename}-model-str`}
-                type="number"
-                min="0.0"
-                max="2.0"
-                step="0.05"
-                defaultValue={selectedLora.defaultModelStrength ?? 1.0}
-                onBlur={(e) => {
-                  const val = parseFloat(e.target.value);
-                  if (!Number.isNaN(val) && val !== selectedLora.defaultModelStrength) {
-                    handleUpdateMentionConfig(selectedLora.filename, {
-                      defaultModelStrength: val,
-                    });
-                  }
-                }}
-                className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs font-mono text-zinc-100 focus:outline-none"
-              />
-              <p className="text-[11px] text-zinc-500">
-                Applied to ComfyUI workflow when mentioned (0.0 to 2.0).
-              </p>
-            </div>
-
-            {/* Default CLIP Strength */}
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center text-xs">
-                <label className="font-medium text-zinc-300">Default CLIP Strength</label>
-                <span className="font-mono text-amber-300 tabular-nums">
-                  {(selectedLora.defaultClipStrength ?? 1.0).toFixed(2)}x
-                </span>
-              </div>
-              <input
-                key={`${selectedLora.filename}-clip-str`}
-                type="number"
-                min="0.0"
-                max="2.0"
-                step="0.05"
-                defaultValue={selectedLora.defaultClipStrength ?? 1.0}
-                onBlur={(e) => {
-                  const val = parseFloat(e.target.value);
-                  if (!Number.isNaN(val) && val !== selectedLora.defaultClipStrength) {
-                    handleUpdateMentionConfig(selectedLora.filename, {
-                      defaultClipStrength: val,
-                    });
-                  }
-                }}
-                className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs font-mono text-zinc-100 focus:outline-none"
-              />
-              <p className="text-[11px] text-zinc-500">
-                Applied to CLIP conditioning when mentioned (0.0 to 2.0).
-              </p>
-            </div>
-          </div>
-
-          {/* Trigger Word(s) & Conversation Agent Description */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-zinc-800/60">
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-zinc-300">
-                Trigger Word(s)
-              </label>
-              <input
-                key={`${selectedLora.filename}-trigger`}
-                type="text"
-                defaultValue={selectedLora.triggerWord || ''}
-                placeholder="e.g. cyber_glow, rim light"
-                onBlur={(e) => {
-                  const clean = e.target.value.trim();
-                  if (clean !== (selectedLora.triggerWord || '')) {
-                    handleUpdateMentionConfig(selectedLora.filename, {
-                      triggerWord: clean,
-                    });
-                  }
-                }}
-                className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs font-mono text-zinc-100 placeholder-zinc-600 focus:outline-none"
-              />
-              <p className="text-[11px] text-zinc-500">
-                Comma-separated activation tokens automatically joined into the ComfyUI trigger node whenever this LoRA is attached.
-              </p>
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between gap-2">
-                <label className="text-xs font-medium text-zinc-300">
-                  Agent Description (Conversation Mode)
-                </label>
-                {(selectedLora.loraCategory === 'character' || selectedLora.characters.length > 0) && (
-                  <span className="text-[10px] font-medium text-amber-400">
-                    Locked character LoRA (never auto-picked)
-                  </span>
-                )}
-              </div>
-              <textarea
-                key={`${selectedLora.filename}-llm-desc`}
-                rows={2}
-                defaultValue={selectedLora.llmDescription || ''}
-                placeholder="Describe when the Conversation Agent should pick this LoRA (e.g. moody neon night reflections, cinematic 35mm film grain)..."
-                onBlur={(e) => {
-                  const clean = e.target.value.trim();
-                  if (clean !== (selectedLora.llmDescription || '')) {
-                    handleUpdateMentionConfig(selectedLora.filename, {
-                      llmDescription: clean,
-                    });
-                  }
-                }}
-                className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none resize-y"
-              />
-              <p className="text-[11px] text-zinc-500">
-                Requires <span className="text-zinc-300 font-medium">Include in @Mention Menu</span> enabled above for the Conversation Agent to consider this LoRA.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Model Usage Impact Report Modal/Box */}
-        {impactReport && (
-          <div className="bg-zinc-950 border border-indigo-500/50 rounded-xl p-5 space-y-2 text-xs">
-            <h3 className="text-sm font-display font-semibold text-zinc-100">
-              Model Usage Impact Report — {impactReport.modelName}
-            </h3>
-            <p className="text-zinc-400">
-              Removing this model will impact{' '}
-              <strong className="font-mono text-zinc-100">{impactReport.dependentImageCount}</strong>{' '}
-              historical image(s),{' '}
-              <strong className="font-mono text-zinc-100">{impactReport.dependentWorkflowCount}</strong>{' '}
-              workflow(s), and{' '}
-              <strong className="font-mono text-zinc-100">{impactReport.characters.length}</strong>{' '}
-              linked character profile(s).
-            </p>
-          </div>
+      <LoraDetailView
+        lora={selectedLora}
+        allImages={allImages}
+        impactReport={impactReport}
+        isFetchingCivitai={Boolean(
+          selectedLora.modelId && fetchingModelId === selectedLora.modelId
         )}
-
-        {/* Highest-Rated Images */}
-        {highestRated.length > 0 && (
-          <div className="space-y-3">
-            <h3 className="text-sm font-display font-semibold text-zinc-100">
-              Highest-Rated Images Using {selectedLora.name}
-            </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              {highestRated.map((img) => (
-                <div
-                  key={img.id}
-                  onClick={() => onOpenImage(img)}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden cursor-pointer"
-                >
-                  <img
-                    src={img.thumbnailUrl}
-                    alt={img.filename}
-                    className="w-full aspect-square object-cover"
-                  />
-                  <div className="p-2 text-xs flex justify-between">
-                    <span className="truncate text-zinc-200">{img.filename}</span>
-                    <span className="text-amber-400 font-mono">★ {img.rating}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* All Associated Images */}
-        <div className="space-y-3">
-          <h3 className="text-sm font-display font-semibold text-zinc-100">
-            All Associated Images ({associatedImages.length})
-          </h3>
-          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
-            {associatedImages.map((img) => {
-              const loraEntry = img.loras.find(
-                (l) => l.loraName.toLowerCase() === selectedLora.filename.toLowerCase()
-              );
-              return (
-                <div
-                  key={img.id}
-                  onClick={() => onOpenImage(img)}
-                  className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden cursor-pointer"
-                >
-                  <img
-                    src={img.thumbnailUrl}
-                    alt={img.filename}
-                    className="w-full aspect-square object-cover"
-                  />
-                  <div className="p-2 text-xs space-y-0.5">
-                    <div className="truncate text-zinc-200">{img.filename}</div>
-                    {loraEntry && (
-                      <div className="text-[11px] font-mono text-zinc-400">
-                        M:{loraEntry.modelStrength} · C:{loraEntry.clipStrength}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
+        onBack={() => {
+          setSelectedLoraName(null);
+          setImpactReport(null);
+        }}
+        onLoadImpact={handleLoadImpact}
+        onFilterGalleryByLora={onFilterGalleryByLora}
+        onFetchFromCivitai={handleFetchFromCivitai}
+        onToggleVisibility={handleToggleLoraVisibility}
+        onUpdateMentionConfig={handleUpdateMentionConfig}
+        onRefresh={onRefresh}
+        onOpenImage={onOpenImage}
+        onPushToast={onPushToast}
+      />
     );
   }
 
+  const hiddenCount = loras.filter((l) => l.isHidden).length;
+  const activeLoraCount = loras.length - hiddenCount;
+
   const filteredLoras = loras.filter((l) => {
+    if (!showHiddenLoras && l.isHidden) return false;
     if (loraCategoryFilter && l.loraCategory !== loraCategoryFilter) return false;
     if (!loraSearch.trim()) return true;
     const q = loraSearch.toLowerCase();
     return (
       l.name.toLowerCase().includes(q) ||
       l.filename.toLowerCase().includes(q) ||
+      (l.baseModel || '').toLowerCase().includes(q) ||
+      (l.triggerWord || '').toLowerCase().includes(q) ||
       (l.sha256Hash || '').toLowerCase().includes(q) ||
       l.characters.some((c) => c.name.toLowerCase().includes(q))
     );
@@ -603,13 +262,13 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           <button
             type="button"
             onClick={() => setSubTab('loras')}
-            className={`px-3.5 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+            className={`px-3.5 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               subTab === 'loras'
                 ? 'bg-indigo-600 text-white'
                 : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
             }`}
           >
-            LoRA Explorer ({loras.length})
+            LoRA Explorer ({activeLoraCount})
           </button>
           <button
             type="button"
@@ -648,7 +307,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
         </button>
       </div>
 
-      {/* Sub-Tab 1: LoRA Explorer */}
+      {/* Sub-Tab 1: LoRA Explorer (Grid & List) */}
       {subTab === 'loras' && (
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-3">
@@ -658,7 +317,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                 type="text"
                 value={loraSearch}
                 onChange={(e) => setLoraSearch(e.target.value)}
-                placeholder="Search LoRAs by name, filename, hash, or character..."
+                placeholder="Search LoRAs by name, filename, base model, trigger, hash, or character..."
                 className="w-full pl-9 pr-4 py-2 text-xs bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-100"
               />
             </div>
@@ -677,11 +336,241 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
               <option value="object">Object LoRAs</option>
               <option value="unclassified">Unclassified</option>
             </select>
+
+            <button
+              type="button"
+              onClick={() => setShowHiddenLoras((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                showHiddenLoras
+                  ? 'bg-amber-500/15 border-amber-500/50 text-amber-200'
+                  : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-700'
+              }`}
+              title={showHiddenLoras ? 'Hide hidden LoRAs' : 'Show hidden LoRAs'}
+            >
+              {showHiddenLoras ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+              <span className="tabular-nums">Show Hidden ({hiddenCount})</span>
+            </button>
+
+            <div className="flex items-center p-0.5 bg-zinc-900 border border-zinc-800 rounded-lg">
+              <button
+                type="button"
+                onClick={() => setExplorerLayout('grid')}
+                className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md cursor-pointer whitespace-nowrap shrink-0 ${
+                  explorerLayout === 'grid'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Grid View"
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                <span>Grid</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setExplorerLayout('list')}
+                className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md cursor-pointer whitespace-nowrap shrink-0 ${
+                  explorerLayout === 'list'
+                    ? 'bg-indigo-600 text-white'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+                title="Table View"
+              >
+                <List className="w-3.5 h-3.5" />
+                <span>List</span>
+              </button>
+            </div>
           </div>
 
           {filteredLoras.length === 0 ? (
-            <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-10 text-center text-xs text-zinc-400">
-              No LoRAs discovered in your mounted models directory or indexed image workflows yet.
+            <div className="bg-zinc-900/60 border border-zinc-800 rounded-xl p-10 text-center text-xs text-zinc-400 space-y-3">
+              <div>
+                {!showHiddenLoras && hiddenCount > 0 && loras.length === hiddenCount
+                  ? `All ${hiddenCount} discovered LoRA(s) are currently hidden.`
+                  : 'No LoRAs match your current filter or mounted models directory.'}
+              </div>
+              {!showHiddenLoras && hiddenCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowHiddenLoras(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg cursor-pointer"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  <span>Show Hidden ({hiddenCount})</span>
+                </button>
+              )}
+            </div>
+          ) : explorerLayout === 'grid' ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {filteredLoras.map((l) => {
+                const coverUrl = l.previewImages?.[0]?.url || null;
+                const hasThumb = Boolean(coverUrl && !brokenThumbs[l.filename]);
+
+                return (
+                  <div
+                    key={l.filename}
+                    onClick={() => setSelectedLoraName(l.filename)}
+                    className={`group bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl overflow-hidden flex flex-col justify-between cursor-pointer transition-colors ${
+                      l.isHidden ? 'opacity-75' : ''
+                    }`}
+                  >
+                    <div>
+                      {/* Preview Thumbnail Header */}
+                      <div className="relative aspect-[4/3] bg-zinc-950 border-b border-zinc-800 overflow-hidden">
+                        {hasThumb ? (
+                          <img
+                            src={coverUrl!}
+                            alt={l.name}
+                            className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
+                            loading="lazy"
+                            onError={() =>
+                              setBrokenThumbs((prev) => ({ ...prev, [l.filename]: true }))
+                            }
+                          />
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-zinc-600 bg-gradient-to-br from-zinc-950 via-zinc-900/90 to-zinc-950">
+                            <Layers className="w-6 h-6 text-zinc-700" />
+                            <span className="text-[11px] font-mono text-zinc-600 px-3 text-center truncate max-w-full">
+                              {l.name}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Isolated @Mention Checkbox */}
+                        <div
+                          className="absolute top-2.5 left-2.5 flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-950/85 border border-zinc-700/80"
+                          onClick={(e) => e.stopPropagation()}
+                          title={l.mentionEnabled ? 'Enabled in @mention' : 'Click to enable in @mention'}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={Boolean(l.mentionEnabled)}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              handleUpdateMentionConfig(l.filename, {
+                                mentionEnabled: e.target.checked,
+                              })
+                            }
+                            aria-label={`Include ${l.name} in @mention menu`}
+                            className="w-3.5 h-3.5 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                          />
+                          <span className="text-[10px] font-mono text-zinc-300">@</span>
+                        </div>
+
+                        {/* Top-right Civitai Link & Base Model */}
+                        <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5">
+                          {l.baseModel && (
+                            <span className="px-1.5 py-0.5 text-[10px] font-mono bg-zinc-950/85 border border-zinc-700/80 text-indigo-300 rounded">
+                              {l.baseModel}
+                            </span>
+                          )}
+                          {l.civitaiUrl && (
+                            <a
+                              href={l.civitaiUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              title="Open on Civitai"
+                              className="p-1.5 rounded bg-zinc-950/85 hover:bg-zinc-900 border border-zinc-700/80 text-zinc-200 hover:text-indigo-300 transition-colors"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Card Body */}
+                      <div className="p-3.5 space-y-2">
+                        <div>
+                          <div className="font-medium text-sm text-zinc-100 group-hover:text-indigo-300 transition-colors truncate">
+                            {l.name}
+                          </div>
+                          <div className="text-[11px] font-mono text-zinc-500 truncate">
+                            {l.filename}
+                          </div>
+                        </div>
+
+                        <div className="text-[11px] text-zinc-400 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono tabular-nums">
+                          {l.isHidden && (
+                            <>
+                              <span className="font-sans font-medium text-amber-400">Hidden</span>
+                              <span>·</span>
+                            </>
+                          )}
+                          <span className="capitalize font-sans text-zinc-300">{l.loraCategory}</span>
+                          <span>·</span>
+                          <span>{l.imageCount} imgs</span>
+                          {l.averageRating > 0 && (
+                            <>
+                              <span>·</span>
+                              <span className="text-amber-400">★ {l.averageRating}</span>
+                            </>
+                          )}
+                          <span>·</span>
+                          <span>{(l.defaultModelStrength ?? 1.0).toFixed(2)}x</span>
+                          <span>·</span>
+                          <span className={l.isInstalled ? 'text-emerald-400' : 'text-amber-400'}>
+                            {l.isInstalled ? 'Installed' : 'Missing'}
+                          </span>
+                        </div>
+
+                        {l.triggerWord && (
+                          <div className="text-[11px] font-mono text-amber-300/90 truncate">
+                            Trigger: {l.triggerWord}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Inline Nickname & Hide/Unhide Footer */}
+                    <div
+                      className="px-3.5 pb-3 pt-1 flex items-center justify-between gap-2"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="relative flex-1 min-w-0">
+                        <span className="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500 font-mono text-[11px]">
+                          @
+                        </span>
+                        <input
+                          key={`${l.filename}-grid-nick-${l.nickname || ''}`}
+                          type="text"
+                          defaultValue={l.nickname || ''}
+                          placeholder="nickname"
+                          onBlur={(e) => {
+                            const clean = e.target.value.trim().replace(/^@+/, '').toLowerCase();
+                            if (clean !== (l.nickname || '').toLowerCase()) {
+                              handleUpdateMentionConfig(l.filename, { nickname: clean });
+                            }
+                          }}
+                          className="w-full pl-5 pr-2 py-1 bg-zinc-950/80 border border-zinc-800 focus:border-indigo-500 rounded text-xs font-mono text-zinc-200 placeholder-zinc-700 focus:outline-none"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleToggleLoraVisibility(l.filename, !Boolean(l.isHidden))
+                        }
+                        title={
+                          l.isHidden
+                            ? `Unhide ${l.name} in Couchy`
+                            : `Hide ${l.name} from Couchy`
+                        }
+                        className={`inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded border cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
+                          l.isHidden
+                            ? 'bg-amber-500/15 border-amber-500/50 text-amber-200 hover:bg-amber-500/25'
+                            : 'bg-zinc-950/80 border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700'
+                        }`}
+                      >
+                        {l.isHidden ? (
+                          <Eye className="w-3 h-3" />
+                        ) : (
+                          <EyeOff className="w-3 h-3" />
+                        )}
+                        <span>{l.isHidden ? 'Unhide' : 'Hide'}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-x-auto">
@@ -692,134 +581,199 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                       @
                     </th>
                     <th className="py-3 px-4 font-medium">LoRA Name & File</th>
+                    <th className="py-3 px-3 font-medium">Base Model</th>
                     <th className="py-3 px-3 font-medium">Nickname</th>
                     <th className="py-3 px-3 font-medium">Classification</th>
                     <th className="py-3 px-3 font-medium">Linked Characters</th>
                     <th className="py-3 px-3 font-medium text-right">Images</th>
                     <th className="py-3 px-3 font-medium text-right">Avg Rating</th>
                     <th className="py-3 px-3 font-medium text-right">Default Str</th>
-                    <th className="py-3 px-4 font-medium text-right">Status</th>
+                    <th className="py-3 px-3 font-medium text-right">Status</th>
+                    <th className="py-3 px-4 font-medium text-right">Visibility</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800/70">
-                  {filteredLoras.map((l) => (
-                    <tr
-                      key={l.filename}
-                      className="hover:bg-zinc-800/40 transition-colors group"
-                    >
-                      {/* Mention Checkbox: only clicking this checkbox activates/deactivates the LoRA */}
-                      <td
-                        className="py-3 px-3 text-center"
-                        onClick={(e) => e.stopPropagation()}
+                  {filteredLoras.map((l) => {
+                    const coverUrl = l.previewImages?.[0]?.url || null;
+                    return (
+                      <tr
+                        key={l.filename}
+                        className={`hover:bg-zinc-800/40 transition-colors group ${
+                          l.isHidden ? 'opacity-75' : ''
+                        }`}
                       >
-                        <input
-                          type="checkbox"
-                          checked={Boolean(l.mentionEnabled)}
+                        <td
+                          className="py-3 px-3 text-center"
                           onClick={(e) => e.stopPropagation()}
-                          onChange={(e) =>
-                            handleUpdateMentionConfig(l.filename, {
-                              mentionEnabled: e.target.checked,
-                            })
-                          }
-                          aria-label={`Include ${l.name} in @mention menu`}
-                          className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                          title={l.mentionEnabled ? 'Enabled in @mention' : 'Click to enable in @mention'}
-                        />
-                      </td>
-
-                      {/* LoRA Name & File (opens LoRA settings without altering enabled state) */}
-                      <td
-                        className="py-3 px-4 cursor-pointer"
-                        onClick={() => setSelectedLoraName(l.filename)}
-                      >
-                        <div className="font-medium text-zinc-100 hover:text-indigo-300 transition-colors">
-                          {l.name}
-                        </div>
-                        <div className="text-[11px] font-mono text-zinc-500">{l.filename}</div>
-                      </td>
-
-                      {/* Inline Nickname Input */}
-                      <td
-                        className="py-3 px-3"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="relative max-w-[140px]">
-                          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500 font-mono text-[11px]">
-                            @
-                          </span>
+                        >
                           <input
-                            key={`${l.filename}-row-nick-${l.nickname || ''}`}
-                            type="text"
-                            defaultValue={l.nickname || ''}
-                            placeholder="nickname"
-                            onBlur={(e) => {
-                              const clean = e.target.value.trim().replace(/^@+/, '').toLowerCase();
-                              if (clean !== (l.nickname || '').toLowerCase()) {
-                                handleUpdateMentionConfig(l.filename, {
-                                  nickname: clean,
-                                });
-                              }
-                            }}
-                            className="w-full pl-5 pr-2 py-1 bg-zinc-950/80 border border-zinc-800 focus:border-indigo-500 rounded text-xs font-mono text-zinc-200 placeholder-zinc-700 focus:outline-none"
+                            type="checkbox"
+                            checked={Boolean(l.mentionEnabled)}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) =>
+                              handleUpdateMentionConfig(l.filename, {
+                                mentionEnabled: e.target.checked,
+                              })
+                            }
+                            aria-label={`Include ${l.name} in @mention menu`}
+                            className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                            title={l.mentionEnabled ? 'Enabled in @mention' : 'Click to enable in @mention'}
                           />
-                        </div>
-                      </td>
+                        </td>
 
-                      {/* Classification */}
-                      <td
-                        className="py-3 px-3 capitalize text-zinc-300 cursor-pointer"
-                        onClick={() => setSelectedLoraName(l.filename)}
-                      >
-                        {l.loraCategory}
-                      </td>
+                        <td
+                          className="py-3 px-4 cursor-pointer"
+                          onClick={() => setSelectedLoraName(l.filename)}
+                        >
+                          <div className="flex items-center gap-3">
+                            {coverUrl && !brokenThumbs[l.filename] ? (
+                              <img
+                                src={coverUrl}
+                                alt={l.name}
+                                className="w-9 h-9 rounded object-cover border border-zinc-800 shrink-0"
+                                onError={() =>
+                                  setBrokenThumbs((prev) => ({ ...prev, [l.filename]: true }))
+                                }
+                              />
+                            ) : (
+                              <div className="w-9 h-9 rounded bg-zinc-950 border border-zinc-800 flex items-center justify-center text-zinc-700 shrink-0">
+                                <Layers className="w-4 h-4" />
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-medium text-zinc-100 hover:text-indigo-300 transition-colors truncate">
+                                  {l.name}
+                                </span>
+                                {l.civitaiUrl && (
+                                  <a
+                                    href={l.civitaiUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="text-zinc-500 hover:text-indigo-300"
+                                    title="Open on Civitai"
+                                  >
+                                    <ExternalLink className="w-3 h-3" />
+                                  </a>
+                                )}
+                              </div>
+                              <div className="text-[11px] font-mono text-zinc-500 truncate">
+                                {l.filename}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
 
-                      {/* Linked Characters */}
-                      <td
-                        className="py-3 px-3 text-zinc-300 cursor-pointer"
-                        onClick={() => setSelectedLoraName(l.filename)}
-                      >
-                        {l.characters.length > 0
-                          ? l.characters.map((c) => c.name).join(' · ')
-                          : '—'}
-                      </td>
+                        <td
+                          className="py-3 px-3 font-mono text-[11px] text-indigo-300 cursor-pointer"
+                          onClick={() => setSelectedLoraName(l.filename)}
+                        >
+                          {l.baseModel || '—'}
+                        </td>
 
-                      {/* Images */}
-                      <td
-                        className="py-3 px-3 text-right font-mono tabular-nums text-zinc-200 cursor-pointer"
-                        onClick={() => setSelectedLoraName(l.filename)}
-                      >
-                        {l.imageCount}
-                      </td>
+                        <td
+                          className="py-3 px-3"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="relative max-w-[140px]">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-zinc-500 font-mono text-[11px]">
+                              @
+                            </span>
+                            <input
+                              key={`${l.filename}-row-nick-${l.nickname || ''}`}
+                              type="text"
+                              defaultValue={l.nickname || ''}
+                              placeholder="nickname"
+                              onBlur={(e) => {
+                                const clean = e.target.value.trim().replace(/^@+/, '').toLowerCase();
+                                if (clean !== (l.nickname || '').toLowerCase()) {
+                                  handleUpdateMentionConfig(l.filename, {
+                                    nickname: clean,
+                                  });
+                                }
+                              }}
+                              className="w-full pl-5 pr-2 py-1 bg-zinc-950/80 border border-zinc-800 focus:border-indigo-500 rounded text-xs font-mono text-zinc-200 placeholder-zinc-700 focus:outline-none"
+                            />
+                          </div>
+                        </td>
 
-                      {/* Avg Rating */}
-                      <td
-                        className="py-3 px-3 text-right font-mono tabular-nums text-amber-400 cursor-pointer"
-                        onClick={() => setSelectedLoraName(l.filename)}
-                      >
-                        {l.averageRating > 0 ? `★ ${l.averageRating}` : '—'}
-                      </td>
+                        <td
+                          className="py-3 px-3 capitalize text-zinc-300 cursor-pointer"
+                          onClick={() => setSelectedLoraName(l.filename)}
+                        >
+                          {l.loraCategory}
+                        </td>
 
-                      {/* Default Model Strength */}
-                      <td
-                        className="py-3 px-3 text-right font-mono tabular-nums text-zinc-300 cursor-pointer"
-                        onClick={() => setSelectedLoraName(l.filename)}
-                      >
-                        {(l.defaultModelStrength ?? 1.0).toFixed(2)}x
-                      </td>
+                        <td
+                          className="py-3 px-3 text-zinc-300 cursor-pointer"
+                          onClick={() => setSelectedLoraName(l.filename)}
+                        >
+                          {l.characters.length > 0
+                            ? l.characters.map((c) => c.name).join(' · ')
+                            : '—'}
+                        </td>
 
-                      {/* Status */}
-                      <td
-                        className="py-3 px-4 text-right cursor-pointer"
-                        onClick={() => setSelectedLoraName(l.filename)}
-                      >
-                        {l.isInstalled ? (
-                          <span className="text-emerald-400">Installed</span>
-                        ) : (
-                          <span className="text-amber-400">Missing</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                        <td
+                          className="py-3 px-3 text-right font-mono tabular-nums text-zinc-200 cursor-pointer"
+                          onClick={() => setSelectedLoraName(l.filename)}
+                        >
+                          {l.imageCount}
+                        </td>
+
+                        <td
+                          className="py-3 px-3 text-right font-mono tabular-nums text-amber-400 cursor-pointer"
+                          onClick={() => setSelectedLoraName(l.filename)}
+                        >
+                          {l.averageRating > 0 ? `★ ${l.averageRating}` : '—'}
+                        </td>
+
+                        <td
+                          className="py-3 px-3 text-right font-mono tabular-nums text-zinc-300 cursor-pointer"
+                          onClick={() => setSelectedLoraName(l.filename)}
+                        >
+                          {(l.defaultModelStrength ?? 1.0).toFixed(2)}x
+                        </td>
+
+                        <td
+                          className="py-3 px-3 text-right cursor-pointer"
+                          onClick={() => setSelectedLoraName(l.filename)}
+                        >
+                          {l.isHidden ? (
+                            <span className="text-amber-400">Hidden</span>
+                          ) : l.isInstalled ? (
+                            <span className="text-emerald-400">Installed</span>
+                          ) : (
+                            <span className="text-amber-400">Missing</span>
+                          )}
+                        </td>
+
+                        <td
+                          className="py-3 px-4 text-right"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleToggleLoraVisibility(l.filename, !Boolean(l.isHidden))
+                            }
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded border cursor-pointer transition-colors whitespace-nowrap shrink-0 ${
+                              l.isHidden
+                                ? 'bg-amber-500/15 border-amber-500/50 text-amber-200 hover:bg-amber-500/25'
+                                : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700'
+                            }`}
+                          >
+                            {l.isHidden ? (
+                              <Eye className="w-3 h-3" />
+                            ) : (
+                              <EyeOff className="w-3 h-3" />
+                            )}
+                            <span>{l.isHidden ? 'Unhide' : 'Hide'}</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -830,7 +784,6 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       {/* Sub-Tab 2: Missing Dependencies & Model Inventory */}
       {subTab === 'dependencies' && (
         <div className="space-y-6">
-          {/* Missing Dependencies Alert Table */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div>
@@ -894,7 +847,6 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
             )}
           </div>
 
-          {/* Complete Installed & Historical Inventory */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
             <h3 className="text-sm font-display font-semibold text-zinc-100">
               Complete Model Inventory ({models.length})
@@ -905,11 +857,11 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                   <tr>
                     <th className="py-2.5 px-3">Filename</th>
                     <th className="py-2.5 px-3">Type</th>
-                    <th className="py-2.5 px-3">Source</th>
+                    <th className="py-2.5 px-3">Base Model</th>
                     <th className="py-2.5 px-3">Verification / Hash</th>
                     <th className="py-2.5 px-3 text-right">Size</th>
                     <th className="py-2.5 px-3 text-right">Used In</th>
-                    <th className="py-2.5 px-3 text-right">Impact</th>
+                    <th className="py-2.5 px-3 text-right">Civitai & Impact</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800/60">
@@ -917,7 +869,9 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                     <tr key={m.id}>
                       <td className="py-2.5 px-3 font-mono text-zinc-200">{m.filename}</td>
                       <td className="py-2.5 px-3 capitalize text-zinc-300">{m.modelType}</td>
-                      <td className="py-2.5 px-3 text-zinc-400">{m.sourceType}</td>
+                      <td className="py-2.5 px-3 font-mono text-[11px] text-indigo-300">
+                        {m.baseModel || '—'}
+                      </td>
                       <td className="py-2.5 px-3 font-mono">
                         {m.sha256Hash ? (
                           <span className="inline-flex items-center gap-1 text-emerald-400">
@@ -937,13 +891,37 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                         {m.dependentImageCount} imgs · {m.dependentWorkflowCount} wfs
                       </td>
                       <td className="py-2.5 px-3 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleLoadImpact(m.filename)}
-                          className="text-indigo-400 hover:text-indigo-300 cursor-pointer"
-                        >
-                          Impact Report
-                        </button>
+                        <div className="inline-flex items-center gap-2.5">
+                          {m.civitaiUrl && (
+                            <a
+                              href={m.civitaiUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-indigo-300 hover:text-indigo-200"
+                              title="Open on Civitai"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              <span>Page</span>
+                            </a>
+                          )}
+                          {(m.isInstalled || m.sha256Hash || m.civitaiId) && (
+                            <button
+                              type="button"
+                              disabled={fetchingModelId === m.id}
+                              onClick={() => handleFetchFromCivitai(m.id)}
+                              className="text-zinc-300 hover:text-white disabled:opacity-50 cursor-pointer"
+                            >
+                              {fetchingModelId === m.id ? 'Fetching...' : 'Fetch Civitai'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleLoadImpact(m.filename)}
+                            className="text-indigo-400 hover:text-indigo-300 cursor-pointer"
+                          >
+                            Impact
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -967,241 +945,22 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
         </div>
       )}
 
-      {/* Sub-Tab 3: Civitai & Hugging Face Model Search & Confirmed Downloader */}
+      {/* Sub-Tab 3: Civitai & Hugging Face Downloader */}
       {subTab === 'downloader' && (
-        <div className="space-y-6">
-          <form
-            onSubmit={(e) => handleExternalSearch(e)}
-            className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap items-center gap-3 text-xs"
-          >
-            <div className="flex items-center p-0.5 bg-zinc-950 border border-zinc-800 rounded-lg">
-              <button
-                type="button"
-                onClick={() => setProvider('civitai')}
-                className={`px-3 py-1.5 rounded-md font-medium cursor-pointer ${
-                  provider === 'civitai' ? 'bg-indigo-600 text-white' : 'text-zinc-400'
-                }`}
-              >
-                Civitai API
-              </button>
-              <button
-                type="button"
-                onClick={() => setProvider('huggingface')}
-                className={`px-3 py-1.5 rounded-md font-medium cursor-pointer ${
-                  provider === 'huggingface' ? 'bg-indigo-600 text-white' : 'text-zinc-400'
-                }`}
-              >
-                Hugging Face Hub
-              </button>
-            </div>
-
-            <input
-              type="text"
-              value={extQuery}
-              onChange={(e) => setExtQuery(e.target.value)}
-              placeholder="Search model name or paste SHA-256 / AutoV2 hash..."
-              className="flex-1 min-w-[240px] px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-            />
-
-            {provider === 'civitai' && (
-              <select
-                value={extTypeFilter}
-                onChange={(e) => setExtTypeFilter(e.target.value)}
-                className="px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200"
-              >
-                <option value="">All Types</option>
-                <option value="lora">LoRA</option>
-                <option value="checkpoint">Checkpoint</option>
-              </select>
-            )}
-
-            <button
-              type="submit"
-              disabled={isSearchingExt}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer"
-            >
-              {isSearchingExt ? 'Searching...' : 'Search Models'}
-            </button>
-          </form>
-
-          {searchError && (
-            <div className="p-3 bg-rose-500/15 border border-rose-500/40 rounded-lg text-xs text-rose-300">
-              {searchError}
-            </div>
-          )}
-
-          {/* Search Results */}
-          {searchResults.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {searchResults.map((item) => (
-                <div
-                  key={`${item.provider}-${item.id}-${item.filename}`}
-                  className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-col justify-between space-y-3 text-xs"
-                >
-                  <div className="space-y-1.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <h4 className="text-sm font-display font-semibold text-zinc-100">
-                        {item.name}
-                      </h4>
-                      <span className="uppercase font-mono text-[10px] text-indigo-300 shrink-0">
-                        {item.modelType}
-                      </span>
-                    </div>
-                    <div className="text-zinc-400 font-mono text-[11px] truncate">
-                      {item.filename} · {formatBytes(item.fileSize)}
-                    </div>
-                    {item.sha256Hash && (
-                      <div className="text-[11px] font-mono text-emerald-400 truncate">
-                        SHA256: {item.sha256Hash.slice(0, 16)}…
-                      </div>
-                    )}
-                    <p className="text-zinc-400 line-clamp-2">{item.description}</p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPendingDownload(item);
-                      setDlSubfolder(item.modelType === 'checkpoint' ? 'checkpoints' : 'loras');
-                      setDlError(null);
-                    }}
-                    className="w-full inline-flex items-center justify-center gap-1.5 py-2 bg-zinc-800 hover:bg-indigo-600 text-zinc-100 font-medium rounded-lg transition-colors cursor-pointer"
-                  >
-                    <HardDriveDownload className="w-3.5 h-3.5" />
-                    <span>Review & Download</span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Download History & Progress */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-display font-semibold text-zinc-100">
-                Server-Side Download Queue & Hash Verification History
-              </h3>
-              <button
-                type="button"
-                onClick={() => api.listDownloads().then((r) => setDownloads(r.items || []))}
-                className="text-xs text-indigo-400 hover:text-indigo-300 cursor-pointer"
-              >
-                Refresh Status
-              </button>
-            </div>
-
-            {downloads.length === 0 ? (
-              <p className="text-xs text-zinc-500">No model downloads initiated yet.</p>
-            ) : (
-              <div className="space-y-2 text-xs">
-                {downloads.map((d) => {
-                  const pct =
-                    d.total_bytes > 0
-                      ? Math.min(100, Math.round((d.bytes_downloaded / d.total_bytes) * 100))
-                      : d.status === 'completed'
-                      ? 100
-                      : 0;
-                  return (
-                    <div
-                      key={d.id}
-                      className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 space-y-1.5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-medium text-zinc-200">
-                          {d.model_name} ({d.provider})
-                        </span>
-                        <span className="font-mono tabular-nums text-zinc-300">
-                          {d.status} · {pct}%
-                        </span>
-                      </div>
-                      <div className="text-[11px] font-mono text-zinc-400 truncate">
-                        Destination: {d.destination_path}
-                      </div>
-                      {d.actual_hash && (
-                        <div className="text-[11px] font-mono text-emerald-400">
-                          Verified SHA256: {d.actual_hash.slice(0, 24)}…
-                        </div>
-                      )}
-                      {d.error_message && (
-                        <div className="text-[11px] text-rose-400 flex items-center gap-1">
-                          <FileWarning className="w-3.5 h-3.5" />
-                          <span>{d.error_message}</span>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Explicit User Confirmation Modal Before Downloading */}
-      {pendingDownload && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-md w-full p-6 space-y-4 text-xs">
-            <h3 className="text-base font-display font-semibold text-zinc-100">
-              Confirm Server-Side Model Download
-            </h3>
-            <p className="text-zinc-400">
-              Models are downloaded strictly server-side into your writable downloads volume and verified via
-              SHA-256 hash. Downloaded files are never executed automatically.
-            </p>
-            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 space-y-1 font-mono">
-              <div className="text-zinc-200">Model: {pendingDownload.name}</div>
-              <div className="text-zinc-400">File: {pendingDownload.filename}</div>
-              <div className="text-zinc-400">Size: {formatBytes(pendingDownload.fileSize)}</div>
-              {pendingDownload.sha256Hash && (
-                <div className="text-emerald-400 truncate">
-                  Expected SHA256: {pendingDownload.sha256Hash}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-zinc-300 mb-1">Destination Subfolder</label>
-              <select
-                value={dlSubfolder}
-                onChange={(e) => setDlSubfolder(e.target.value)}
-                className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-              >
-                <option value="loras">/downloads/loras</option>
-                <option value="checkpoints">/downloads/checkpoints</option>
-                <option value="vae">/downloads/vae</option>
-                <option value="controlnet">/downloads/controlnet</option>
-              </select>
-            </div>
-
-            <label className="inline-flex items-center gap-2 text-zinc-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={allowOverwrite}
-                onChange={(e) => setAllowOverwrite(e.target.checked)}
-              />
-              <span>Explicitly allow overwriting if file already exists</span>
-            </label>
-
-            {dlError && <p className="text-rose-400">{dlError}</p>}
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setPendingDownload(null)}
-                className="px-3.5 py-2 bg-zinc-800 text-zinc-300 rounded-lg cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDownload}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer"
-              >
-                Confirm & Start Download
-              </button>
-            </div>
-          </div>
-        </div>
+        <ModelDownloaderTab
+          provider={provider}
+          setProvider={setProvider}
+          extQuery={extQuery}
+          setExtQuery={setExtQuery}
+          extTypeFilter={extTypeFilter}
+          setExtTypeFilter={setExtTypeFilter}
+          searchResults={searchResults}
+          isSearchingExt={isSearchingExt}
+          searchError={searchError}
+          downloads={downloads}
+          onSearch={handleExternalSearch}
+          onRefreshDownloads={refreshDownloads}
+        />
       )}
     </div>
   );

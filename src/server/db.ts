@@ -569,6 +569,27 @@ export function runMigrations(): void {
         ALTER TABLE models ADD COLUMN llm_description TEXT;
       `,
     },
+    {
+      version: 13,
+      name: 'civitai_model_metadata_and_previews',
+      sql: `
+        ALTER TABLE models ADD COLUMN civitai_version_id TEXT;
+        ALTER TABLE models ADD COLUMN civitai_url TEXT;
+        ALTER TABLE models ADD COLUMN base_model TEXT;
+        ALTER TABLE models ADD COLUMN recommended_weight REAL;
+        ALTER TABLE models ADD COLUMN civitai_description TEXT;
+        ALTER TABLE models ADD COLUMN preview_images_json TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE models ADD COLUMN civitai_fetched_at TEXT;
+      `,
+    },
+    {
+      version: 14,
+      name: 'models_is_hidden_visibility',
+      sql: `
+        ALTER TABLE models ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX IF NOT EXISTS idx_models_is_hidden ON models(is_hidden);
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

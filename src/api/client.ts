@@ -264,6 +264,12 @@ export const api = {
       body: JSON.stringify({ loraName, loraCategory, userNotes }),
     }),
 
+  updateLoraVisibility: (loraName: string, isHidden: boolean) =>
+    requestJson<{ ok: boolean; items: LoraExplorerItem[] }>('/api/loras/visibility', {
+      method: 'PATCH',
+      body: JSON.stringify({ loraName, isHidden }),
+    }),
+
   updateLoraMentionConfig: (payload: {
     loraName: string;
     mentionEnabled?: boolean;
@@ -282,6 +288,17 @@ export const api = {
 
   syncModelInventory: () =>
     requestJson<{ items: ModelInventoryItem[] }>('/api/models/sync', { method: 'POST' }),
+
+  fetchModelFromCivitai: (modelId: number) =>
+    requestJson<{
+      ok: boolean;
+      filledTriggerWord: boolean;
+      filledDefaultStrength: boolean;
+      civitaiUrl: string | null;
+      baseModel: string | null;
+      recommendedWeight: number | null;
+      previewCount: number;
+    }>(`/api/models/${modelId}/civitai-fetch`, { method: 'POST' }),
 
   getModelImpact: (name: string) =>
     requestJson<{
@@ -311,6 +328,7 @@ export const api = {
     subfolder?: string;
     allowOverwrite?: boolean;
     userConfirmed: boolean;
+    civitaiMeta?: Record<string, any> | null;
   }) =>
     requestJson<{ job: any }>('/api/downloads/start', {
       method: 'POST',

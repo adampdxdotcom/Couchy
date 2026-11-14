@@ -204,6 +204,36 @@ export interface CharacterProfile {
   updatedAt: string;
 }
 
+export interface ModelPreviewImage {
+  filename: string;
+  url: string;
+  width?: number | null;
+  height?: number | null;
+  sourceUrl?: string | null;
+}
+
+export interface ExternalModelSearchResult {
+  provider: 'civitai' | 'huggingface';
+  id: string;
+  versionId?: string | null;
+  civitaiUrl?: string | null;
+  name: string;
+  modelType: ModelType;
+  versionName: string;
+  baseModel?: string | null;
+  trainedWords?: string[];
+  recommendedWeight?: number | null;
+  previewImageUrl?: string | null;
+  previewImages?: { url: string; width?: number | null; height?: number | null }[];
+  civitaiDescription?: string | null;
+  filename: string;
+  fileSize: number | null;
+  sha256Hash: string | null;
+  downloadUrl: string;
+  creator: string;
+  description: string;
+}
+
 export interface LoraExplorerItem {
   name: string;
   modelId: number | null;
@@ -214,8 +244,16 @@ export interface LoraExplorerItem {
   autov2Hash: string | null;
   loraCategory: LoraCategory;
   isInstalled: boolean;
+  isHidden?: boolean;
   downloadUrl: string | null;
   civitaiId: string | null;
+  civitaiVersionId?: string | null;
+  civitaiUrl?: string | null;
+  baseModel?: string | null;
+  recommendedWeight?: number | null;
+  civitaiDescription?: string | null;
+  previewImages?: ModelPreviewImage[];
+  civitaiFetchedAt?: string | null;
   hfRepoId: string | null;
   userNotes: string | null;
   imageCount: number;
@@ -246,9 +284,17 @@ export interface ModelInventoryItem {
   sha256Hash: string | null;
   autov2Hash: string | null;
   isInstalled: boolean;
+  isHidden?: boolean;
   sourceType: 'filesystem' | 'comfyui_api' | 'historical';
   downloadUrl: string | null;
   civitaiId: string | null;
+  civitaiVersionId?: string | null;
+  civitaiUrl?: string | null;
+  baseModel?: string | null;
+  recommendedWeight?: number | null;
+  civitaiDescription?: string | null;
+  previewImages?: ModelPreviewImage[];
+  civitaiFetchedAt?: string | null;
   hfRepoId: string | null;
   userNotes: string | null;
   lastSeenAt: string;
@@ -412,6 +458,8 @@ export interface QueuedGhostCardItem {
   targetSeriesId?: number | null;
   targetImageId?: number | null;
   isBranchSplit?: boolean;
+  batchTotalCount?: number | null;
+  batchCurrentNumber?: number | null;
   createdAt: string;
 }
 

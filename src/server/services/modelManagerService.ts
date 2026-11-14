@@ -5,21 +5,17 @@ import { Readable } from 'stream';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import { syncModelInventory } from './comfyuiService.ts';
-import type { ModelType } from '../../shared/types.ts';
+import {
+  applyCivitaiEnrichmentToModel,
+  cacheModelPreviewImages,
+  fetchAndEnrichModelFromCivitai,
+  fetchCivitaiParentModel,
+  normalizeCivitaiData,
+  type CivitaiNormalizedMeta,
+} from './civitaiMetadataService.ts';
+import type { ExternalModelSearchResult, ModelType } from '../../shared/types.ts';
 
-export interface ExternalModelSearchResult {
-  provider: 'civitai' | 'huggingface';
-  id: string;
-  name: string;
-  modelType: ModelType;
-  versionName: string;
-  filename: string;
-  fileSize: number | null;
-  sha256Hash: string | null;
-  downloadUrl: string;
-  creator: string;
-  description: string;
-}
+export type { ExternalModelSearchResult };
 
 /**
  * Searches Civitai REST API for LoRAs and Checkpoints by query or SHA-256/AutoV2 hash.
@@ -41,19 +37,45 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
         const ver = (await hashRes.json()) as any;
         const primaryFile = (ver.files || [])[0];
         if (primaryFile) {
+          const parentModel = ver.modelId
+            ? await fetchCivitaiParentModel(ver.modelId, headers)
+            : null;
+          const meta = normalizeCivitaiData(
+            parentModel || { id: ver.modelId, ...ver.model },
+            ver,
+            primaryFile.name
+          );
+          const excerpt =
+            meta.civitaiDescription?.slice(0, 220) ||
+            `Matched exact model hash ${query.trim()}`;
+
           return [
             {
               provider: 'civitai',
-              id: String(ver.modelId || ver.id),
-              name: ver.model?.name || primaryFile.name,
-              modelType: ver.model?.type?.toLowerCase() === 'checkpoint' ? 'checkpoint' : 'lora',
+              id: meta.civitaiId || String(ver.modelId || ver.id),
+              versionId: meta.civitaiVersionId,
+              civitaiUrl: meta.civitaiUrl,
+              name: parentModel?.name || ver.model?.name || primaryFile.name,
+              modelType:
+                String(parentModel?.type || ver.model?.type || '').toLowerCase() === 'checkpoint'
+                  ? 'checkpoint'
+                  : 'lora',
               versionName: ver.name || 'v1.0',
+              baseModel: meta.baseModel,
+              trainedWords: meta.trainedWords,
+              recommendedWeight: meta.recommendedWeight,
+              previewImageUrl: meta.previewImages[0]?.url || null,
+              previewImages: meta.previewImages,
+              civitaiDescription: meta.civitaiDescription,
               filename: primaryFile.name,
               fileSize: primaryFile.sizeKB ? Math.round(primaryFile.sizeKB * 1024) : null,
               sha256Hash: primaryFile.hashes?.SHA256 || null,
               downloadUrl: primaryFile.downloadUrl || ver.downloadUrl,
-              creator: ver.model?.creator?.username || 'Civitai Creator',
-              description: `Matched exact model hash ${query.trim()}`,
+              creator:
+                parentModel?.creator?.username ||
+                ver.model?.creator?.username ||
+                'Civitai Creator',
+              description: excerpt,
             },
           ];
         }
@@ -82,18 +104,31 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
     const file = (latestVer.files || [])[0];
     if (!file) continue;
 
+    const fallbackFilename = file.name || `${item.name.replace(/\s+/g, '_')}.safetensors`;
+    const meta = normalizeCivitaiData(item, latestVer, fallbackFilename);
+
     results.push({
       provider: 'civitai',
       id: String(item.id),
+      versionId: meta.civitaiVersionId,
+      civitaiUrl: meta.civitaiUrl,
       name: item.name,
       modelType: String(item.type).toLowerCase() === 'checkpoint' ? 'checkpoint' : 'lora',
       versionName: latestVer.name || 'Latest',
-      filename: file.name || `${item.name.replace(/\s+/g, '_')}.safetensors`,
+      baseModel: meta.baseModel,
+      trainedWords: meta.trainedWords,
+      recommendedWeight: meta.recommendedWeight,
+      previewImageUrl: meta.previewImages[0]?.url || null,
+      previewImages: meta.previewImages,
+      civitaiDescription: meta.civitaiDescription,
+      filename: fallbackFilename,
       fileSize: file.sizeKB ? Math.round(file.sizeKB * 1024) : null,
       sha256Hash: file.hashes?.SHA256 || null,
       downloadUrl: file.downloadUrl || latestVer.downloadUrl,
       creator: item.creator?.username || 'Unknown',
-      description: String(item.description || '').replace(/<[^>]+>/g, '').slice(0, 220),
+      description:
+        meta.civitaiDescription?.slice(0, 220) ||
+        String(item.description || '').replace(/<[^>]+>/g, '').slice(0, 220),
     });
   }
 
@@ -163,6 +198,7 @@ export async function startConfirmedModelDownload(params: {
   expectedHash?: string | null;
   subfolder?: string;
   allowOverwrite?: boolean;
+  civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
 }): Promise<any> {
   // Sanitize filename and subfolder against path traversal
   const safeFilename = path.basename(params.filename.trim());
@@ -268,7 +304,7 @@ export async function startConfirmedModelDownload(params: {
          WHERE id = ?`
       ).run(bytesDownloaded, actualHash, hashVerified ? 1 : 0, jobId);
 
-      // Register in `models` table and refresh dependency statuses
+      // Register in `models` table and apply Civitai enrichment if applicable
       db.prepare(
         `INSERT INTO models
           (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, download_url, last_seen_at)
@@ -291,6 +327,38 @@ export async function startConfirmedModelDownload(params: {
         actualHash.slice(0, 10).toLowerCase(),
         params.sourceUrl
       );
+
+      const savedRow = db
+        .prepare('SELECT id FROM models WHERE LOWER(filename) = LOWER(?)')
+        .get(safeFilename) as { id: number } | undefined;
+
+      if (savedRow && params.provider === 'civitai') {
+        try {
+          if (params.civitaiMeta) {
+            const meta: CivitaiNormalizedMeta = {
+              civitaiId: params.civitaiMeta.civitaiId ?? null,
+              civitaiVersionId: params.civitaiMeta.civitaiVersionId ?? null,
+              civitaiUrl: params.civitaiMeta.civitaiUrl ?? null,
+              baseModel: params.civitaiMeta.baseModel ?? null,
+              trainedWords: Array.isArray(params.civitaiMeta.trainedWords)
+                ? params.civitaiMeta.trainedWords
+                : [],
+              recommendedWeight: params.civitaiMeta.recommendedWeight ?? null,
+              civitaiDescription: params.civitaiMeta.civitaiDescription ?? null,
+              previewImages: Array.isArray(params.civitaiMeta.previewImages)
+                ? params.civitaiMeta.previewImages
+                : [],
+            };
+            const cacheKey = `m${savedRow.id}_${meta.civitaiVersionId || actualHash.slice(0, 10).toLowerCase()}`;
+            const cachedPreviews = await cacheModelPreviewImages(cacheKey, meta.previewImages);
+            applyCivitaiEnrichmentToModel(savedRow.id, meta, cachedPreviews);
+          } else {
+            await fetchAndEnrichModelFromCivitai(savedRow.id);
+          }
+        } catch {
+          // Do not fail completed model download if optional Civitai enrichment fails
+        }
+      }
 
       await syncModelInventory();
     } catch (err: any) {

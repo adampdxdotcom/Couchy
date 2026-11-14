@@ -515,6 +515,16 @@ generationRouter.post('/submit-batch', async (req, res) => {
         ? JSON.stringify(chatSnapshot)
         : null;
 
+    // Auto-create a shared stack series whenever a multi-image batch (>1 shot) is submitted
+    // from either Quick Gen or Generation Studio without continuing/branching an existing series.
+    let effectiveSeriesId = seriesId ? Number(seriesId) : null;
+    if (!effectiveSeriesId && !branchFromImageId && promptList.length > 1) {
+      const createdSeries = db
+        .prepare(`INSERT INTO image_series (poster_image_id) VALUES (NULL)`)
+        .run();
+      effectiveSeriesId = Number(createdSeries.lastInsertRowid);
+    }
+
     // 1. Create batch and items in SQLite
     const batchInfo = db
       .prepare(
@@ -534,7 +544,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
         computedHeight,
         resolvedCheckpointName,
         activeLorasCount,
-        seriesId ? Number(seriesId) : null,
+        effectiveSeriesId,
         branchFromImageId ? Number(branchFromImageId) : null,
         serializedChatSnapshot
       );
@@ -572,75 +582,73 @@ generationRouter.post('/submit-batch', async (req, res) => {
       });
     }
 
-    // 2. Dispatch all items at once to ComfyUI /prompt concurrently
-    await Promise.all(
-      createdItems.map(async (item) => {
-        try {
-          const apiPayload = compileWorkflowForGeneration({
-            workflowId: Number(workflowId),
-            positivePrompt: item.prompt,
-            triggerWord: triggerWord !== undefined ? String(triggerWord) : undefined,
-            negativePrompt: (negativePrompt || '').trim(),
-            seed: item.seed,
-            aspectRatio: resolvedAr,
-            megapixels: resolvedMp,
-            width: computedWidth,
-            height: computedHeight,
-            loras: loraSelections,
-            checkpointName: checkpointName || undefined,
-          });
-          const hasInlineUpscale = Boolean(findInlineUpscaleNodes(apiPayload));
+    // 2. Dispatch items sequentially to ComfyUI /prompt so ComfyUI queues them in exact shot order
+    for (const item of createdItems) {
+      try {
+        const apiPayload = compileWorkflowForGeneration({
+          workflowId: Number(workflowId),
+          positivePrompt: item.prompt,
+          triggerWord: triggerWord !== undefined ? String(triggerWord) : undefined,
+          negativePrompt: (negativePrompt || '').trim(),
+          seed: item.seed,
+          aspectRatio: resolvedAr,
+          megapixels: resolvedMp,
+          width: computedWidth,
+          height: computedHeight,
+          loras: loraSelections,
+          checkpointName: checkpointName || undefined,
+        });
+        const hasInlineUpscale = Boolean(findInlineUpscaleNodes(apiPayload));
 
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 8000);
-          const comfyRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            body: JSON.stringify({
-              prompt: apiPayload,
-              client_id: COUCHY_COMFY_CLIENT_ID,
-            }),
-          });
-          clearTimeout(timer);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        const comfyRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            prompt: apiPayload,
+            client_id: COUCHY_COMFY_CLIENT_ID,
+          }),
+        });
+        clearTimeout(timer);
 
-          if (!comfyRes.ok) {
-            const errText = await comfyRes.text();
-            throw new Error(`ComfyUI HTTP ${comfyRes.status}: ${errText}`);
-          }
-
-          const data = (await comfyRes.json()) as { prompt_id?: string };
-          const promptId = data.prompt_id || `prompt-${Date.now()}-${item.itemId}`;
-
-          db.prepare(
-            `UPDATE generation_items
-             SET comfyui_prompt_id = ?, status = 'submitted'
-             WHERE id = ?`
-          ).run(promptId, item.itemId);
-
-          // Primary workflow handles >3MP inline via Switch #51; only fall back to two-pass upscale if absent
-          trackGenerationItem(
-            item.itemId,
-            promptId,
-            characterId ? Number(characterId) : null,
-            resolvedMp > 3.0 && !hasInlineUpscale ? resolvedMp : undefined
-          );
-          logger.info(
-            'ComfyUI',
-            `Submitted batch #${batchId} item #${item.itemId} (${promptId}) [${computedWidth}x${computedHeight}]`
-          );
-        } catch (err: any) {
-          const errMsg = err?.message || 'Failed to submit to ComfyUI';
-          logger.error('ComfyUI', `Failed to submit batch #${batchId} item #${item.itemId}`, errMsg);
-          db.prepare(
-            `UPDATE generation_items
-             SET status = 'failed', error_message = ?, completed_at = datetime('now')
-             WHERE id = ?`
-          ).run(errMsg, item.itemId);
-          preserveFailedGenerationConversation(item.itemId);
+        if (!comfyRes.ok) {
+          const errText = await comfyRes.text();
+          throw new Error(`ComfyUI HTTP ${comfyRes.status}: ${errText}`);
         }
-      })
-    );
+
+        const data = (await comfyRes.json()) as { prompt_id?: string };
+        const promptId = data.prompt_id || `prompt-${Date.now()}-${item.itemId}`;
+
+        db.prepare(
+          `UPDATE generation_items
+           SET comfyui_prompt_id = ?, status = 'submitted'
+           WHERE id = ?`
+        ).run(promptId, item.itemId);
+
+        // Primary workflow handles >3MP inline via Switch #51; only fall back to two-pass upscale if absent
+        trackGenerationItem(
+          item.itemId,
+          promptId,
+          characterId ? Number(characterId) : null,
+          resolvedMp > 3.0 && !hasInlineUpscale ? resolvedMp : undefined
+        );
+        logger.info(
+          'ComfyUI',
+          `Submitted batch #${batchId} item #${item.itemId} (${promptId}) [${computedWidth}x${computedHeight}]`
+        );
+      } catch (err: any) {
+        const errMsg = err?.message || 'Failed to submit to ComfyUI';
+        logger.error('ComfyUI', `Failed to submit batch #${batchId} item #${item.itemId}`, errMsg);
+        db.prepare(
+          `UPDATE generation_items
+           SET status = 'failed', error_message = ?, completed_at = datetime('now')
+           WHERE id = ?`
+        ).run(errMsg, item.itemId);
+        preserveFailedGenerationConversation(item.itemId);
+      }
+    }
 
     invalidateComfyQueueCache();
 

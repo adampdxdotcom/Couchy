@@ -57,7 +57,11 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
         ]
       : [];
 
-  const totalWithPending = displayItems.length + pendingGhosts.length;
+  const maxBatchTotal = pendingGhosts.reduce(
+    (max, g) => Math.max(max, Number(g.batchTotalCount || 0)),
+    0
+  );
+  const totalWithPending = Math.max(displayItems.length + pendingGhosts.length, maxBatchTotal);
   const activeIdx = displayItems.findIndex((it) => it.imageId === activeImageId);
   const isMiddleStep = activeIdx >= 0 && activeIdx < displayItems.length - 1;
 
@@ -163,7 +167,10 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
         {pendingGhosts.map((ghost, pIdx) => {
           const isQueuedOnly = ghost.state === 'queued' || ghost.progressPercent === null;
           const pct = Math.min(100, Math.max(0, ghost.progressPercent ?? 0));
-          const nextStepNum = displayItems.length + pIdx + 1;
+          const nextStepNum =
+            ghost.batchTotalCount && ghost.batchTotalCount > 1 && ghost.batchCurrentNumber
+              ? ghost.batchCurrentNumber
+              : displayItems.length + pIdx + 1;
           return (
             <div
               key={`pending-preview-${ghost.itemId}`}

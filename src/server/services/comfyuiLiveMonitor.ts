@@ -559,6 +559,7 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
           gi.created_at,
           gi.completed_at,
           (strftime('%s', 'now') - strftime('%s', gi.created_at)) AS age_seconds,
+          gb.total_count,
           gb.width,
           gb.height,
           gb.checkpoint_name,
@@ -588,16 +589,21 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
 
     const submittedRows = rows.filter((r) => r.status === 'submitted');
     const oldestSubmittedItemId =
-      submittedRows.length > 0 ? submittedRows[submittedRows.length - 1].item_id : null;
+      submittedRows.length > 0
+        ? [...submittedRows].sort((a, b) =>
+            a.batch_id !== b.batch_id ? a.batch_id - b.batch_id : a.item_index - b.item_index
+          )[0].item_id
+        : null;
 
     const ghostItems: QueuedGhostCardItem[] = [];
     const seenPromptIds = new Set<string>();
 
+    // Filter stale uncompleted items and keep all valid rows grouped by batch_id
+    const validRowsByBatch = new Map<number, any[]>();
     for (const r of rows) {
       const pid: string | null = r.comfyui_prompt_id || null;
       const ageSeconds = Number(r.age_seconds ?? 0);
 
-      // Skip stale uncompleted items that are no longer in ComfyUI's queue or finished map
       const isKnownInComfy =
         pid &&
         (state.runningPromptIds.has(pid) ||
@@ -617,41 +623,102 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
 
       if (pid) seenPromptIds.add(pid);
 
+      const bid = Number(r.batch_id);
+      const list = validRowsByBatch.get(bid);
+      if (list) list.push(r);
+      else validRowsByBatch.set(bid, [r]);
+    }
+
+    // Look up finished (completed/failed) counts per active batch for "X of N" progress
+    const finishedCountByBatch = new Map<number, number>();
+    if (validRowsByBatch.size > 0) {
+      const batchIds = Array.from(validRowsByBatch.keys());
+      const placeholders = batchIds.map(() => '?').join(',');
+      const countRows = db
+        .prepare(
+          `SELECT batch_id, COUNT(*) AS cnt
+           FROM generation_items
+           WHERE batch_id IN (${placeholders}) AND status IN ('completed', 'failed')
+           GROUP BY batch_id`
+        )
+        .all(...batchIds) as { batch_id: number; cnt: number }[];
+      for (const cr of countRows) {
+        finishedCountByBatch.set(Number(cr.batch_id), Number(cr.cnt));
+      }
+    }
+
+    // Emit ONLY ONE representative ghost item per batch so multi-image batches never flood the gallery
+    for (const [bid, batchRows] of validRowsByBatch.entries()) {
+      const activeRows = batchRows.filter(
+        (r) => r.status !== 'completed' && !r.output_image_id
+      );
+
+      let chosen: any;
+      if (activeRows.length > 0) {
+        // Prefer whichever shot in the batch is actively running / emitting step progress in ComfyUI
+        chosen =
+          activeRows.find((r) => {
+            const p: string | null = r.comfyui_prompt_id || null;
+            return Boolean(
+              p &&
+                (state.runningPromptIds.has(p) ||
+                  state.promptProgressMap.has(p) ||
+                  state.finishedPromptIds.has(p))
+            );
+          }) || activeRows[0];
+      } else {
+        // All shots completed within the 25s tail window: keep only the final completed shot
+        chosen = batchRows[batchRows.length - 1];
+      }
+
+      const pid: string | null = chosen.comfyui_prompt_id || null;
       const { cardState, progressPercent } = resolvePromptProgressState(
         pid,
-        r.status,
-        Boolean(r.output_image_id),
-        r.item_id === oldestSubmittedItemId
+        chosen.status,
+        Boolean(chosen.output_image_id),
+        chosen.item_id === oldestSubmittedItemId
       );
       const queueMeta = pid ? state.queuePromptMetaMap.get(pid) : undefined;
-      const outputImgId = r.output_image_id ? Number(r.output_image_id) : null;
+      const outputImgId = chosen.output_image_id ? Number(chosen.output_image_id) : null;
       const seriesTarget = resolveSeriesTargetForJob(
-        r.series_id ? Number(r.series_id) : null,
-        r.branch_from_image_id ? Number(r.branch_from_image_id) : null,
+        chosen.series_id ? Number(chosen.series_id) : null,
+        chosen.branch_from_image_id ? Number(chosen.branch_from_image_id) : null,
         outputImgId
       );
 
+      const batchTotalCount = Math.max(1, Number(chosen.total_count || 1));
+      const finishedInBatch = finishedCountByBatch.get(bid) ?? 0;
+      const batchCurrentNumber =
+        batchTotalCount > 1
+          ? Math.min(
+              batchTotalCount,
+              activeRows.length > 0 ? finishedInBatch + 1 : batchTotalCount
+            )
+          : 1;
+
       ghostItems.push({
-        itemId: Number(r.item_id),
-        batchId: Number(r.batch_id),
-        itemIndex: Number(r.item_index),
+        itemId: Number(chosen.item_id),
+        batchId: bid,
+        itemIndex: Number(chosen.item_index),
         comfyuiPromptId: pid,
-        prompt: r.prompt || '',
+        prompt: chosen.prompt || '',
         state: cardState,
         progressPercent,
-        width: Number(r.width || 1024),
-        height: Number(r.height || 1536),
-        checkpointName: r.checkpoint_name || r.workflow_name || null,
-        workflowName: r.workflow_name || null,
-        loraCount: Number(r.lora_count || 0),
+        width: Number(chosen.width || 1024),
+        height: Number(chosen.height || 1536),
+        checkpointName: chosen.checkpoint_name || chosen.workflow_name || null,
+        workflowName: chosen.workflow_name || null,
+        loraCount: Number(chosen.lora_count || 0),
         loraNames: queueMeta?.loraNames || undefined,
-        characterId: r.character_id ? Number(r.character_id) : null,
-        characterName: r.character_name || null,
+        characterId: chosen.character_id ? Number(chosen.character_id) : null,
+        characterName: chosen.character_name || null,
         outputImageId: outputImgId,
         targetSeriesId: seriesTarget.targetSeriesId,
         targetImageId: seriesTarget.targetImageId,
         isBranchSplit: seriesTarget.isBranchSplit,
-        createdAt: toIsoUtc(r.created_at),
+        batchTotalCount,
+        batchCurrentNumber,
+        createdAt: toIsoUtc(chosen.created_at),
       });
     }
 

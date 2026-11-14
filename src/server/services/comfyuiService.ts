@@ -18,6 +18,7 @@ import {
 } from './workflowCompilerService.ts';
 import { pollComfyPromptCompletion } from './comfyuiPoller.ts';
 import { attachUpscaledImageToSeries } from './seriesService.ts';
+import { parsePreviewImagesJson } from './civitaiMetadataService.ts';
 import type {
   DependencyStatus,
   ModelInventoryItem,
@@ -240,9 +241,20 @@ export function listModelInventory(): ModelInventoryItem[] {
     sha256Hash: r.sha256_hash || null,
     autov2Hash: r.autov2_hash || null,
     isInstalled: Boolean(r.is_installed),
+    isHidden: Boolean(r.is_hidden),
     sourceType: r.source_type,
     downloadUrl: r.download_url || null,
     civitaiId: r.civitai_id || null,
+    civitaiVersionId: r.civitai_version_id || null,
+    civitaiUrl: r.civitai_url || null,
+    baseModel: r.base_model || null,
+    recommendedWeight:
+      r.recommended_weight !== null && r.recommended_weight !== undefined
+        ? Number(r.recommended_weight)
+        : null,
+    civitaiDescription: r.civitai_description || null,
+    previewImages: parsePreviewImagesJson(r.preview_images_json, r.id),
+    civitaiFetchedAt: r.civitai_fetched_at || null,
     hfRepoId: r.hf_repo_id || null,
     userNotes: r.user_notes || null,
     lastSeenAt: r.last_seen_at,

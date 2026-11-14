@@ -18,6 +18,10 @@ import {
   searchHuggingFaceModels,
   startConfirmedModelDownload,
 } from '../services/modelManagerService.ts';
+import {
+  fetchAndEnrichModelFromCivitai,
+  resolveSafeModelPreviewPath,
+} from '../services/civitaiMetadataService.ts';
 import { getComfyUiLiveStatus } from '../services/comfyuiLiveMonitor.ts';
 import { getExecutableApiGraph, getWorkflowDefaults } from '../services/workflowCompilerService.ts';
 import type { WorkflowLibraryItem } from '../../shared/types.ts';
@@ -68,6 +72,33 @@ modelsAndWorkflowsRouter.patch('/loras/classify', (req, res) => {
     res.json({ ok: true, items: listLoraExplorerItems() });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || 'Failed to classify LoRA' });
+  }
+});
+
+/**
+ * PATCH /api/loras/visibility
+ * Toggles whether a LoRA is hidden across Couchy's Explorer, @mention, Agent, and pickers.
+ */
+modelsAndWorkflowsRouter.patch('/loras/visibility', (req, res) => {
+  try {
+    const { loraName, isHidden } = req.body || {};
+    if (!loraName) {
+      res.status(400).json({ error: 'loraName is required' });
+      return;
+    }
+    const cleanName = String(loraName).trim();
+    const hiddenFlag = isHidden ? 1 : 0;
+
+    db.prepare(
+      `INSERT INTO models (name, filename, model_type, lora_category, is_hidden)
+       VALUES (?, ?, 'lora', 'unclassified', ?)
+       ON CONFLICT(filename) DO UPDATE SET
+         is_hidden = excluded.is_hidden`
+    ).run(cleanName.replace(/\.(safetensors|pt|ckpt)$/i, ''), cleanName, hiddenFlag);
+
+    res.json({ ok: true, items: listLoraExplorerItems() });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to update LoRA visibility' });
   }
 });
 
@@ -227,6 +258,49 @@ modelsAndWorkflowsRouter.post('/models/sync', async (_req, res) => {
 });
 
 /**
+ * POST /api/models/:id/civitai-fetch
+ * Computes file SHA-256 if missing, fetches Civitai version + parent metadata,
+ * caches up to 4 preview thumbnails locally, and merges non-destructively.
+ */
+modelsAndWorkflowsRouter.post('/models/:id/civitai-fetch', async (req, res) => {
+  try {
+    const modelId = Number(req.params.id);
+    if (!Number.isFinite(modelId) || modelId <= 0) {
+      res.status(400).json({ error: 'Valid numeric model ID is required' });
+      return;
+    }
+    const result = await fetchAndEnrichModelFromCivitai(modelId);
+    res.json({
+      ok: true,
+      filledTriggerWord: result.filledTriggerWord,
+      filledDefaultStrength: result.filledDefaultStrength,
+      civitaiUrl: result.meta.civitaiUrl,
+      baseModel: result.meta.baseModel,
+      recommendedWeight: result.meta.recommendedWeight,
+      previewCount: result.cachedPreviews.length,
+    });
+  } catch (err: any) {
+    const status = typeof err?.statusCode === 'number' ? err.statusCode : 500;
+    res.status(status).json({ error: err?.message || 'Failed to fetch Civitai metadata' });
+  }
+});
+
+/**
+ * GET /api/models/:id/preview/:filename
+ * Serves locally cached WebP preview thumbnails for models.
+ */
+modelsAndWorkflowsRouter.get('/models/:id/preview/:filename', (req, res) => {
+  const targetPath = resolveSafeModelPreviewPath(req.params.filename);
+  if (!targetPath || !fs.existsSync(targetPath)) {
+    res.status(404).end();
+    return;
+  }
+  res.setHeader('Content-Type', 'image/webp');
+  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  res.sendFile(path.resolve(targetPath));
+});
+
+/**
  * GET /api/models/:name/impact
  * Model Usage Impact Report before removing or replacing a LoRA or Checkpoint.
  */
@@ -319,6 +393,7 @@ modelsAndWorkflowsRouter.post('/downloads/start', async (req, res) => {
       subfolder,
       allowOverwrite,
       userConfirmed,
+      civitaiMeta,
     } = req.body || {};
 
     if (!userConfirmed) {
@@ -335,6 +410,7 @@ modelsAndWorkflowsRouter.post('/downloads/start', async (req, res) => {
       expectedHash,
       subfolder,
       allowOverwrite: Boolean(allowOverwrite),
+      civitaiMeta: civitaiMeta || null,
     });
     res.json({ job });
   } catch (err: any) {

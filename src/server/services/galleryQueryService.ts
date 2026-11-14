@@ -4,6 +4,7 @@ import {
   collapseSeriesInGalleryPool,
   enrichSingleImageWithSeries,
 } from './seriesService.ts';
+import { parsePreviewImagesJson } from './civitaiMetadataService.ts';
 import type {
   GalleryFilterState,
   ImageRecord,
@@ -672,8 +673,16 @@ export function listLoraExplorerItems(): LoraExplorerItem[] {
         m.autov2_hash AS autov2Hash,
         COALESCE(m.lora_category, 'unclassified') AS loraCategory,
         COALESCE(m.is_installed, 0) AS isInstalled,
+        COALESCE(m.is_hidden, 0) AS isHidden,
         m.download_url AS downloadUrl,
         m.civitai_id AS civitaiId,
+        m.civitai_version_id AS civitaiVersionId,
+        m.civitai_url AS civitaiUrl,
+        m.base_model AS baseModel,
+        m.recommended_weight AS recommendedWeight,
+        m.civitai_description AS civitaiDescription,
+        m.preview_images_json AS previewImagesJson,
+        m.civitai_fetched_at AS civitaiFetchedAt,
         m.hf_repo_id AS hfRepoId,
         m.user_notes AS userNotes,
         m.nickname AS nickname,
@@ -719,8 +728,19 @@ export function listLoraExplorerItems(): LoraExplorerItem[] {
     autov2Hash: r.autov2Hash ?? null,
     loraCategory: r.loraCategory || 'unclassified',
     isInstalled: Boolean(r.isInstalled),
+    isHidden: Boolean(r.isHidden),
     downloadUrl: r.downloadUrl ?? null,
     civitaiId: r.civitaiId ?? null,
+    civitaiVersionId: r.civitaiVersionId ?? null,
+    civitaiUrl: r.civitaiUrl ?? null,
+    baseModel: r.baseModel ?? null,
+    recommendedWeight:
+      r.recommendedWeight !== null && r.recommendedWeight !== undefined
+        ? Number(r.recommendedWeight)
+        : null,
+    civitaiDescription: r.civitaiDescription ?? null,
+    previewImages: parsePreviewImagesJson(r.previewImagesJson, r.modelId),
+    civitaiFetchedAt: r.civitaiFetchedAt ?? null,
     hfRepoId: r.hfRepoId ?? null,
     userNotes: r.userNotes ?? null,
     nickname: r.nickname || null,

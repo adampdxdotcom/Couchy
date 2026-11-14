@@ -72,8 +72,9 @@ export function attachGeneratedImageToSeries(params: {
   seriesId?: number | null;
   branchFromImageId?: number | null;
   chatSnapshotJson?: string | null;
+  preferredStepOrder?: number | null;
 }): number | null {
-  const { imageId, seriesId, branchFromImageId, chatSnapshotJson } = params;
+  const { imageId, seriesId, branchFromImageId, chatSnapshotJson, preferredStepOrder } = params;
   if (!imageId || imageId <= 0) return null;
 
   const tx = db.transaction((): number | null => {
@@ -102,6 +103,10 @@ export function attachGeneratedImageToSeries(params: {
 
     // Case 1: Target series exists
     if (targetSeriesId) {
+      const seriesRow = db
+        .prepare(`SELECT id FROM image_series WHERE id = ?`)
+        .get(targetSeriesId) as { id: number } | undefined;
+
       const existingItems = db
         .prepare(
           `SELECT series_id, image_id, step_order, chat_snapshot_json
@@ -115,6 +120,22 @@ export function attachGeneratedImageToSeries(params: {
         step_order: number;
         chat_snapshot_json: string | null;
       }[];
+
+      // Pre-created empty batch series (first arriving shot)
+      if (seriesRow && existingItems.length === 0 && !sourceId) {
+        const initialStep =
+          preferredStepOrder !== undefined && preferredStepOrder !== null && preferredStepOrder >= 0
+            ? preferredStepOrder
+            : 0;
+        db.prepare(
+          `INSERT OR REPLACE INTO image_series_items (series_id, image_id, step_order, chat_snapshot_json)
+           VALUES (?, ?, ?, ?)`
+        ).run(targetSeriesId, imageId, initialStep, chatSnapshotJson ?? null);
+        db.prepare(`UPDATE image_series SET updated_at = datetime('now') WHERE id = ?`).run(
+          targetSeriesId
+        );
+        return targetSeriesId;
+      }
 
       if (existingItems.length > 0) {
         // Idempotency guard: if this generated image is already attached to this series, leave it intact
@@ -164,12 +185,20 @@ export function attachGeneratedImageToSeries(params: {
           return newSeriesId;
         }
 
-        // Continuing from the latest image in the series: append to the same series
+        // Continuing or completing a multi-image batch item: preserve deterministic item_index slot if free
         const maxStep = existingItems[existingItems.length - 1].step_order;
+        const canUsePreferredStep =
+          !sourceId &&
+          preferredStepOrder !== undefined &&
+          preferredStepOrder !== null &&
+          preferredStepOrder >= 0 &&
+          !existingItems.some((it) => it.step_order === preferredStepOrder);
+        const targetStep = canUsePreferredStep ? preferredStepOrder : maxStep + 1;
+
         db.prepare(
           `INSERT OR REPLACE INTO image_series_items (series_id, image_id, step_order, chat_snapshot_json)
            VALUES (?, ?, ?, ?)`
-        ).run(targetSeriesId, imageId, maxStep + 1, chatSnapshotJson ?? null);
+        ).run(targetSeriesId, imageId, targetStep, chatSnapshotJson ?? null);
 
         db.prepare(`UPDATE image_series SET updated_at = datetime('now') WHERE id = ?`).run(
           targetSeriesId
@@ -253,13 +282,15 @@ export function attachGenerationItemOutputToSeries(itemId: number, imageId: numb
   if (!itemId || !imageId || imageId <= 0) return null;
   const batchMeta = db
     .prepare(
-      `SELECT gb.series_id, gb.branch_from_image_id, gb.chat_snapshot_json
+      `SELECT gi.item_index, gb.total_count, gb.series_id, gb.branch_from_image_id, gb.chat_snapshot_json
        FROM generation_items gi
        JOIN generation_batches gb ON gb.id = gi.batch_id
        WHERE gi.id = ?`
     )
     .get(itemId) as
     | {
+        item_index: number;
+        total_count: number;
         series_id: number | null;
         branch_from_image_id: number | null;
         chat_snapshot_json: string | null;
@@ -275,11 +306,17 @@ export function attachGenerationItemOutputToSeries(itemId: number, imageId: numb
     return null;
   }
 
+  const preferredStepOrder =
+    batchMeta.total_count > 1 && !batchMeta.branch_from_image_id && batchMeta.item_index >= 1
+      ? batchMeta.item_index - 1
+      : null;
+
   return attachGeneratedImageToSeries({
     imageId,
     seriesId: batchMeta.series_id,
     branchFromImageId: batchMeta.branch_from_image_id,
     chatSnapshotJson: batchMeta.chat_snapshot_json,
+    preferredStepOrder,
   });
 }
 

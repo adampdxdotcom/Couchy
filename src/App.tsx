@@ -669,6 +669,7 @@ export default function App() {
   const inspectedIdx = images.findIndex((i) => i.id === inspectedImageId);
   const showQuickGenBar =
     healthData?.config?.quickGenBoxEnabled !== false && activeTab !== 'generation';
+  const visibleLoras = useMemo(() => loras.filter((l) => !l.isHidden), [loras]);
 
   return (
     <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-zinc-950 text-zinc-100 flex flex-col">
@@ -719,7 +720,7 @@ export default function App() {
               infiniteScroll={infiniteScroll}
               onInfiniteScrollChange={handleInfiniteScrollChange}
               characters={characters}
-              loras={loras}
+              loras={visibleLoras}
               checkpoints={checkpoints}
               collections={collections}
               tags={tags}
@@ -746,7 +747,7 @@ export default function App() {
 
             <GalleryGridView
               images={images}
-              loras={loras}
+              loras={visibleLoras}
               ghostItems={activeGhostItems}
               filters={filters}
               page={currentGalleryPage}
@@ -817,7 +818,7 @@ export default function App() {
             characters={characters}
             allImages={allImages}
             ghostItems={activeGhostItems}
-            loras={loras}
+            loras={visibleLoras}
             workflows={workflows}
             collections={collections}
             selectedCharacterId={selectedCharacterId}
@@ -848,7 +849,7 @@ export default function App() {
         {activeTab === 'generation' && (
           <GenerationStudioView
             characters={characters}
-            loras={loras}
+            loras={visibleLoras}
             models={models}
             workflows={workflows}
             checkpoints={checkpoints}
@@ -882,7 +883,7 @@ export default function App() {
             workflows={workflows}
             allImages={allImages}
             models={models}
-            loras={loras}
+            loras={visibleLoras}
             checkpoints={checkpoints}
             onRefresh={refreshAll}
             onOpenImage={(img) => setInspectedImageId(img.id)}
@@ -903,7 +904,7 @@ export default function App() {
       {showQuickGenBar && (
         <FloatingQuickGenBar
           characters={characters}
-          loras={loras}
+          loras={visibleLoras}
           allImages={allImages}
           workflows={workflows}
           prefillPayload={quickGenPrefill}
@@ -919,7 +920,7 @@ export default function App() {
         <ImageInspectorDrawer
           image={inspectedImage}
           allImages={allImages}
-          loras={loras}
+          loras={visibleLoras}
           ghostItems={activeGhostItems}
           onClose={() => setInspectedImageId(null)}
           onPrev={

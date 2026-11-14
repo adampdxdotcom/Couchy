@@ -521,7 +521,9 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
           standaloneGhostItems.map((ghost) => {
             const isQueuedOnly = ghost.state === 'queued' || ghost.progressPercent === null;
             const displayPct = Math.min(100, Math.max(0, ghost.progressPercent ?? 0));
-            const titleText = ghost.prompt.trim() || `Generation #${ghost.itemIndex}`;
+            const totalCount = Number(ghost.batchTotalCount || 0);
+            const currentNum = Number(ghost.batchCurrentNumber || ghost.itemIndex || 1);
+            const showBatchCount = totalCount > 1;
 
             return (
               <article
@@ -546,9 +548,14 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                       <span className="text-xs font-medium tracking-wider uppercase text-zinc-400">
                         Pending
                       </span>
+                      {showBatchCount && (
+                        <span className="text-xs font-mono tabular-nums text-zinc-300">
+                          {currentNum} of {totalCount}
+                        </span>
+                      )}
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center gap-2.5 w-full max-w-[140px]">
+                    <div className="flex flex-col items-center gap-2 w-full max-w-[140px]">
                       <span className="text-2xl sm:text-3xl font-mono font-semibold tabular-nums text-indigo-300 tracking-tight">
                         {displayPct}%
                       </span>
@@ -558,6 +565,11 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                           style={{ width: `${displayPct}%` }}
                         />
                       </div>
+                      {showBatchCount && (
+                        <span className="text-xs font-mono tabular-nums text-zinc-300">
+                          {currentNum} of {totalCount}
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>

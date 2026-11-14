@@ -8,7 +8,7 @@ interface PendingGhostOverlayProps {
 
 /**
  * Translucent live Pending / Progress overlay rendered on top of an existing
- * series stack's poster thumbnail while a new iteration or upscale is queued/sampling.
+ * series stack's poster thumbnail while a new iteration, batch shot, or upscale is queued/sampling.
  */
 export const PendingGhostOverlay: React.FC<PendingGhostOverlayProps> = ({
   ghost,
@@ -16,6 +16,9 @@ export const PendingGhostOverlay: React.FC<PendingGhostOverlayProps> = ({
 }) => {
   const isQueuedOnly = ghost.state === 'queued' || ghost.progressPercent === null;
   const displayPct = Math.min(100, Math.max(0, ghost.progressPercent ?? 0));
+  const totalCount = Number(ghost.batchTotalCount || 0);
+  const currentNum = Number(ghost.batchCurrentNumber || ghost.itemIndex || 1);
+  const showBatchCount = totalCount > 1;
 
   return (
     <div
@@ -34,11 +37,20 @@ export const PendingGhostOverlay: React.FC<PendingGhostOverlayProps> = ({
           >
             Pending
           </span>
+          {showBatchCount && (
+            <span
+              className={`font-mono tabular-nums text-zinc-200/90 drop-shadow ${
+                compact ? 'text-[10px]' : 'text-xs'
+              }`}
+            >
+              {currentNum} of {totalCount}
+            </span>
+          )}
         </div>
       ) : (
         <div
           className={`flex flex-col items-center w-full ${
-            compact ? 'gap-1.5 max-w-[85px]' : 'gap-2.5 max-w-[140px]'
+            compact ? 'gap-1.5 max-w-[85px]' : 'gap-2 max-w-[140px]'
           }`}
         >
           <span
@@ -54,6 +66,15 @@ export const PendingGhostOverlay: React.FC<PendingGhostOverlayProps> = ({
               style={{ width: `${displayPct}%` }}
             />
           </div>
+          {showBatchCount && (
+            <span
+              className={`font-mono tabular-nums text-zinc-200/90 drop-shadow ${
+                compact ? 'text-[10px]' : 'text-xs'
+              }`}
+            >
+              {currentNum} of {totalCount}
+            </span>
+          )}
         </div>
       )}
     </div>
