@@ -1,6 +1,7 @@
 import path from 'path';
 import { appConfig } from '../config.ts';
 import {
+  extractCivitaiEarlyAccessInfo,
   fetchCivitaiJsonWithFallback,
   fetchCivitaiParentModelWithDomain,
   getCivitaiHeaders,
@@ -461,6 +462,7 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
       primaryFile.filename,
       finalDomain
     );
+    const earlyAccess = extractCivitaiEarlyAccessInfo(targetVer);
     const inferred = inferSubfolderAndTypeFromPath(
       primaryFile.filename,
       [],
@@ -493,6 +495,7 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
       description: meta.civitaiDescription?.slice(0, 220) || 'Resolved from Civitai URL',
       availableFiles,
       totalRepoFilesCount: availableFiles.length,
+      ...earlyAccess,
     };
   }
 

@@ -8,6 +8,7 @@ import { syncModelInventory } from './comfyuiService.ts';
 import {
   applyCivitaiEnrichmentToModel,
   cacheModelPreviewImages,
+  extractCivitaiEarlyAccessInfo,
   fetchAndEnrichModelFromCivitai,
   fetchCivitaiJsonWithFallback,
   fetchCivitaiParentModelWithDomain,
@@ -98,6 +99,7 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
             primaryFile.filename,
             finalDomain
           );
+          const earlyAccess = extractCivitaiEarlyAccessInfo(ver);
           const inferred = inferSubfolderAndTypeFromPath(
             primaryFile.filename,
             [],
@@ -136,6 +138,7 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
               description: excerpt,
               availableFiles,
               totalRepoFilesCount: availableFiles.length,
+              ...earlyAccess,
             },
           ];
         }
@@ -193,6 +196,7 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
     if (!primaryFile) continue;
 
     const meta = normalizeCivitaiData(item, latestVer, primaryFile.filename, itemDomain);
+    const earlyAccess = extractCivitaiEarlyAccessInfo(latestVer);
     const inferred = inferSubfolderAndTypeFromPath(
       primaryFile.filename,
       [],
@@ -226,6 +230,7 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
         String(item.description || '').replace(/<[^>]+>/g, '').slice(0, 220),
       availableFiles,
       totalRepoFilesCount: availableFiles.length,
+      ...earlyAccess,
     });
   }
 
@@ -419,10 +424,202 @@ export async function smartSearchModels(
   return combined;
 }
 
+export interface ScheduledDownloadPayload {
+  subfolder: ComfyModelSubfolder;
+  allowOverwrite: boolean;
+  hfRepoId?: string | null;
+  civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
+  retryCount?: number;
+}
+
+export interface ExecuteDownloadJobParams {
+  provider: 'civitai' | 'huggingface' | 'direct';
+  modelName: string;
+  safeFilename: string;
+  effectiveModelType: ModelType;
+  destinationPath: string;
+  sourceUrl: string;
+  expectedHash?: string | null;
+  hfRepoId?: string | null;
+  civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
+  /** When true, caller handles HTTP 401/403 re-scheduling instead of marking failed immediately. */
+  deferAuthErrorToCaller?: boolean;
+}
+
 /**
- * Initiates a server-side model download after explicit user confirmation.
- * Validates destination path, checks duplicate overwrite protection, streams to a .part file,
- * and verifies SHA-256 hash upon completion.
+ * Streams a remote model file to disk (.part -> atomic rename), verifies SHA-256,
+ * registers the model in SQLite, enriches Civitai previews, and syncs ComfyUI inventory.
+ */
+export async function executeDownloadJob(
+  jobId: number,
+  params: ExecuteDownloadJobParams
+): Promise<void> {
+  const partPath = `${params.destinationPath}.part`;
+  try {
+    fs.mkdirSync(path.dirname(params.destinationPath), { recursive: true });
+
+    const headers: Record<string, string> = {};
+    if (params.provider === 'civitai' && appConfig.civitaiApiKey) {
+      headers.Authorization = `Bearer ${appConfig.civitaiApiKey}`;
+    } else if (params.provider === 'huggingface' && appConfig.hfApiToken) {
+      headers.Authorization = `Bearer ${appConfig.hfApiToken}`;
+    }
+
+    let res = await fetch(params.sourceUrl, { headers });
+    if ((!res.ok || !res.body) && /^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(params.sourceUrl)) {
+      const altDomain: CivitaiDomain = /civitai\.red/i.test(params.sourceUrl)
+        ? 'civitai.com'
+        : 'civitai.red';
+      const altUrl = rewriteCivitaiDownloadUrl(params.sourceUrl, altDomain);
+      const retryRes = await fetch(altUrl, { headers });
+      if (retryRes.ok && retryRes.body) {
+        res = retryRes;
+      }
+    }
+
+    if (!res.ok || !res.body) {
+      if ((res.status === 401 || res.status === 403) && params.provider === 'civitai') {
+        const authErr: any = new Error(
+          `Civitai returned HTTP ${res.status} (Early Access or Creator permission required — check CIVITAI_API_KEY or wait until early access ends)`
+        );
+        authErr.httpStatus = res.status;
+        if (params.deferAuthErrorToCaller) {
+          throw authErr;
+        }
+        throw authErr;
+      }
+      throw new Error(`Download failed with HTTP ${res.status}`);
+    }
+
+    const totalBytes = Number(res.headers.get('content-length') || 0);
+    db.prepare('UPDATE download_jobs SET total_bytes = ? WHERE id = ?').run(totalBytes, jobId);
+
+    const hash = crypto.createHash('sha256');
+    const fileStream = fs.createWriteStream(partPath);
+    let bytesDownloaded = 0;
+    let lastUpdate = Date.now();
+
+    const nodeReadable = Readable.fromWeb(res.body as any);
+    for await (const chunk of nodeReadable) {
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      hash.update(buf);
+      fileStream.write(buf);
+      bytesDownloaded += buf.length;
+
+      if (Date.now() - lastUpdate > 400) {
+        db.prepare('UPDATE download_jobs SET bytes_downloaded = ? WHERE id = ?').run(
+          bytesDownloaded,
+          jobId
+        );
+        lastUpdate = Date.now();
+      }
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      fileStream.end((err?: Error | null) => (err ? reject(err) : resolve()));
+    });
+
+    const actualHash = hash.digest('hex').toUpperCase();
+    const expected = params.expectedHash ? params.expectedHash.trim().toUpperCase() : null;
+    const hashVerified = expected ? actualHash === expected || actualHash.startsWith(expected) : true;
+
+    if (expected && !hashVerified) {
+      fs.unlinkSync(partPath);
+      throw new Error(`Hash mismatch: expected ${expected}, got ${actualHash}`);
+    }
+
+    fs.renameSync(partPath, params.destinationPath);
+
+    db.prepare(
+      `UPDATE download_jobs
+       SET status = 'completed', bytes_downloaded = ?, actual_hash = ?,
+           hash_verified = ?, error_message = NULL, completed_at = datetime('now')
+       WHERE id = ?`
+    ).run(bytesDownloaded, actualHash, hashVerified ? 1 : 0, jobId);
+
+    // Register in `models` table and apply Civitai enrichment if applicable
+    db.prepare(
+      `INSERT INTO models
+        (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, download_url, hf_repo_id, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'filesystem', ?, ?, datetime('now'))
+       ON CONFLICT(filename) DO UPDATE SET
+         model_type = excluded.model_type,
+         file_path = excluded.file_path,
+         file_size = excluded.file_size,
+         sha256_hash = excluded.sha256_hash,
+         autov2_hash = excluded.autov2_hash,
+         is_installed = 1,
+         download_url = excluded.download_url,
+         hf_repo_id = COALESCE(excluded.hf_repo_id, models.hf_repo_id),
+         last_seen_at = datetime('now')`
+    ).run(
+      params.modelName,
+      params.safeFilename,
+      params.effectiveModelType,
+      params.destinationPath,
+      bytesDownloaded,
+      actualHash.toLowerCase(),
+      actualHash.slice(0, 10).toLowerCase(),
+      params.sourceUrl,
+      params.hfRepoId || null
+    );
+
+    const savedRow = db
+      .prepare('SELECT id FROM models WHERE LOWER(filename) = LOWER(?)')
+      .get(params.safeFilename) as { id: number } | undefined;
+
+    if (savedRow && params.provider === 'civitai') {
+      try {
+        if (params.civitaiMeta) {
+          const meta: CivitaiNormalizedMeta = {
+            civitaiId: params.civitaiMeta.civitaiId ?? null,
+            civitaiVersionId: params.civitaiMeta.civitaiVersionId ?? null,
+            civitaiUrl: params.civitaiMeta.civitaiUrl ?? null,
+            baseModel: params.civitaiMeta.baseModel ?? null,
+            trainedWords: Array.isArray(params.civitaiMeta.trainedWords)
+              ? params.civitaiMeta.trainedWords
+              : [],
+            recommendedWeight: params.civitaiMeta.recommendedWeight ?? null,
+            civitaiDescription: params.civitaiMeta.civitaiDescription ?? null,
+            previewImages: Array.isArray(params.civitaiMeta.previewImages)
+              ? params.civitaiMeta.previewImages
+              : [],
+          };
+          const cacheKey = `m${savedRow.id}_${meta.civitaiVersionId || actualHash.slice(0, 10).toLowerCase()}`;
+          const cachedPreviews = await cacheModelPreviewImages(cacheKey, meta.previewImages);
+          applyCivitaiEnrichmentToModel(savedRow.id, meta, cachedPreviews);
+        } else {
+          await fetchAndEnrichModelFromCivitai(savedRow.id);
+        }
+      } catch {
+        // Do not fail completed model download if optional Civitai enrichment fails
+      }
+    }
+
+    await syncModelInventory();
+  } catch (err: any) {
+    if (fs.existsSync(partPath)) {
+      try {
+        fs.unlinkSync(partPath);
+      } catch {
+        // ignore cleanup error
+      }
+    }
+    if (params.deferAuthErrorToCaller && (err?.httpStatus === 401 || err?.httpStatus === 403)) {
+      throw err;
+    }
+    db.prepare(
+      `UPDATE download_jobs
+       SET status = 'failed', error_message = ?, completed_at = datetime('now')
+       WHERE id = ?`
+    ).run(err?.message || 'Download error', jobId);
+  }
+}
+
+/**
+ * Initiates or schedules a server-side model download after explicit user confirmation.
+ * Validates destination path, checks duplicate overwrite protection, and either schedules for later
+ * or streams immediately to a .part file with SHA-256 verification.
  */
 export async function startConfirmedModelDownload(params: {
   provider: 'civitai' | 'huggingface' | 'direct';
@@ -435,6 +632,7 @@ export async function startConfirmedModelDownload(params: {
   allowOverwrite?: boolean;
   hfRepoId?: string | null;
   civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
+  scheduledFor?: string | null;
 }): Promise<any> {
   // Sanitize filename and subfolder against path traversal
   const safeFilename = path.basename(params.filename.trim());
@@ -445,9 +643,9 @@ export async function startConfirmedModelDownload(params: {
   const defaultFolder = MODEL_TYPE_TO_DEFAULT_SUBFOLDER[params.modelType] || 'checkpoints';
   const safeSubfolder = (params.subfolder || defaultFolder)
     .replace(/[^a-zA-Z0-9_-]/g, '')
-    .toLowerCase();
+    .toLowerCase() as ComfyModelSubfolder;
   const effectiveModelType: ModelType =
-    SUBFOLDER_TO_MODEL_TYPE[safeSubfolder as ComfyModelSubfolder] || params.modelType;
+    SUBFOLDER_TO_MODEL_TYPE[safeSubfolder] || params.modelType;
 
   const targetDir = path.join(appConfig.downloadsDir, safeSubfolder);
   const resolvedRoot = path.resolve(appConfig.downloadsDir);
@@ -466,11 +664,32 @@ export async function startConfirmedModelDownload(params: {
     );
   }
 
+  let scheduledIso: string | null = null;
+  if (params.scheduledFor && String(params.scheduledFor).trim()) {
+    const parsedMs = Date.parse(String(params.scheduledFor).trim());
+    if (!Number.isFinite(parsedMs)) {
+      throw new Error('Invalid scheduledFor timestamp.');
+    }
+    if (parsedMs > Date.now() + 5000) {
+      scheduledIso = new Date(parsedMs).toISOString();
+    }
+  }
+
+  const payloadJson = JSON.stringify({
+    subfolder: safeSubfolder,
+    allowOverwrite: Boolean(params.allowOverwrite),
+    hfRepoId: params.hfRepoId || null,
+    civitaiMeta: params.civitaiMeta || null,
+    retryCount: 0,
+  } satisfies ScheduledDownloadPayload);
+
+  const initialStatus = scheduledIso ? 'scheduled' : 'downloading';
+
   const info = db
     .prepare(
       `INSERT INTO download_jobs
-        (provider, model_name, model_type, source_url, destination_path, expected_hash, status)
-       VALUES (?, ?, ?, ?, ?, ?, 'downloading')`
+        (provider, model_name, model_type, source_url, destination_path, expected_hash, status, scheduled_for, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       params.provider,
@@ -478,157 +697,28 @@ export async function startConfirmedModelDownload(params: {
       effectiveModelType,
       params.sourceUrl,
       destinationPath,
-      params.expectedHash || null
+      params.expectedHash || null,
+      initialStatus,
+      scheduledIso,
+      payloadJson
     );
   const jobId = Number(info.lastInsertRowid);
 
-  // Stream download asynchronously on the server
-  setImmediate(async () => {
-    const partPath = `${destinationPath}.part`;
-    try {
-      const headers: Record<string, string> = {};
-      if (params.provider === 'civitai' && appConfig.civitaiApiKey) {
-        headers.Authorization = `Bearer ${appConfig.civitaiApiKey}`;
-      } else if (params.provider === 'huggingface' && appConfig.hfApiToken) {
-        headers.Authorization = `Bearer ${appConfig.hfApiToken}`;
-      }
-
-      let res = await fetch(params.sourceUrl, { headers });
-      if ((!res.ok || !res.body) && /^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(params.sourceUrl)) {
-        const altDomain: CivitaiDomain = /civitai\.red/i.test(params.sourceUrl)
-          ? 'civitai.com'
-          : 'civitai.red';
-        const altUrl = rewriteCivitaiDownloadUrl(params.sourceUrl, altDomain);
-        const retryRes = await fetch(altUrl, { headers });
-        if (retryRes.ok && retryRes.body) {
-          res = retryRes;
-        }
-      }
-      if (!res.ok || !res.body) {
-        throw new Error(`Download failed with HTTP ${res.status}`);
-      }
-
-      const totalBytes = Number(res.headers.get('content-length') || 0);
-      db.prepare('UPDATE download_jobs SET total_bytes = ? WHERE id = ?').run(totalBytes, jobId);
-
-      const hash = crypto.createHash('sha256');
-      const fileStream = fs.createWriteStream(partPath);
-      let bytesDownloaded = 0;
-      let lastUpdate = Date.now();
-
-      const nodeReadable = Readable.fromWeb(res.body as any);
-      for await (const chunk of nodeReadable) {
-        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        hash.update(buf);
-        fileStream.write(buf);
-        bytesDownloaded += buf.length;
-
-        if (Date.now() - lastUpdate > 400) {
-          db.prepare('UPDATE download_jobs SET bytes_downloaded = ? WHERE id = ?').run(
-            bytesDownloaded,
-            jobId
-          );
-          lastUpdate = Date.now();
-        }
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        fileStream.end((err?: Error | null) => (err ? reject(err) : resolve()));
-      });
-
-      const actualHash = hash.digest('hex').toUpperCase();
-      const expected = params.expectedHash ? params.expectedHash.trim().toUpperCase() : null;
-      const hashVerified = expected ? actualHash === expected || actualHash.startsWith(expected) : true;
-
-      if (expected && !hashVerified) {
-        fs.unlinkSync(partPath);
-        throw new Error(`Hash mismatch: expected ${expected}, got ${actualHash}`);
-      }
-
-      fs.renameSync(partPath, destinationPath);
-
-      db.prepare(
-        `UPDATE download_jobs
-         SET status = 'completed', bytes_downloaded = ?, actual_hash = ?,
-             hash_verified = ?, completed_at = datetime('now')
-         WHERE id = ?`
-      ).run(bytesDownloaded, actualHash, hashVerified ? 1 : 0, jobId);
-
-      // Register in `models` table and apply Civitai enrichment if applicable
-      db.prepare(
-        `INSERT INTO models
-          (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, download_url, hf_repo_id, last_seen_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'filesystem', ?, ?, datetime('now'))
-         ON CONFLICT(filename) DO UPDATE SET
-           model_type = excluded.model_type,
-           file_path = excluded.file_path,
-           file_size = excluded.file_size,
-           sha256_hash = excluded.sha256_hash,
-           autov2_hash = excluded.autov2_hash,
-           is_installed = 1,
-           download_url = excluded.download_url,
-           hf_repo_id = COALESCE(excluded.hf_repo_id, models.hf_repo_id),
-           last_seen_at = datetime('now')`
-      ).run(
-        params.modelName,
+  if (!scheduledIso) {
+    setImmediate(() => {
+      executeDownloadJob(jobId, {
+        provider: params.provider,
+        modelName: params.modelName,
         safeFilename,
         effectiveModelType,
         destinationPath,
-        bytesDownloaded,
-        actualHash.toLowerCase(),
-        actualHash.slice(0, 10).toLowerCase(),
-        params.sourceUrl,
-        params.hfRepoId || null
-      );
-
-      const savedRow = db
-        .prepare('SELECT id FROM models WHERE LOWER(filename) = LOWER(?)')
-        .get(safeFilename) as { id: number } | undefined;
-
-      if (savedRow && params.provider === 'civitai') {
-        try {
-          if (params.civitaiMeta) {
-            const meta: CivitaiNormalizedMeta = {
-              civitaiId: params.civitaiMeta.civitaiId ?? null,
-              civitaiVersionId: params.civitaiMeta.civitaiVersionId ?? null,
-              civitaiUrl: params.civitaiMeta.civitaiUrl ?? null,
-              baseModel: params.civitaiMeta.baseModel ?? null,
-              trainedWords: Array.isArray(params.civitaiMeta.trainedWords)
-                ? params.civitaiMeta.trainedWords
-                : [],
-              recommendedWeight: params.civitaiMeta.recommendedWeight ?? null,
-              civitaiDescription: params.civitaiMeta.civitaiDescription ?? null,
-              previewImages: Array.isArray(params.civitaiMeta.previewImages)
-                ? params.civitaiMeta.previewImages
-                : [],
-            };
-            const cacheKey = `m${savedRow.id}_${meta.civitaiVersionId || actualHash.slice(0, 10).toLowerCase()}`;
-            const cachedPreviews = await cacheModelPreviewImages(cacheKey, meta.previewImages);
-            applyCivitaiEnrichmentToModel(savedRow.id, meta, cachedPreviews);
-          } else {
-            await fetchAndEnrichModelFromCivitai(savedRow.id);
-          }
-        } catch {
-          // Do not fail completed model download if optional Civitai enrichment fails
-        }
-      }
-
-      await syncModelInventory();
-    } catch (err: any) {
-      if (fs.existsSync(partPath)) {
-        try {
-          fs.unlinkSync(partPath);
-        } catch {
-          // ignore cleanup error
-        }
-      }
-      db.prepare(
-        `UPDATE download_jobs
-         SET status = 'failed', error_message = ?, completed_at = datetime('now')
-         WHERE id = ?`
-      ).run(err?.message || 'Download error', jobId);
-    }
-  });
+        sourceUrl: params.sourceUrl,
+        expectedHash: params.expectedHash || null,
+        hfRepoId: params.hfRepoId || null,
+        civitaiMeta: params.civitaiMeta || null,
+      }).catch(() => {});
+    });
+  }
 
   return db.prepare('SELECT * FROM download_jobs WHERE id = ?').get(jobId);
 }

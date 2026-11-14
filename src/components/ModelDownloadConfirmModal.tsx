@@ -1,6 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Check, FileCode2, FolderGit2, Info, Loader2, Search } from 'lucide-react';
+import { Check, Clock, FileCode2, FolderGit2, Info, Loader2, Search } from 'lucide-react';
 import { formatBytes } from '../shared/utils.ts';
+import {
+  formatUnlockCountdown,
+  formatUnlockLocalTime,
+} from './models/earlyAccessUtils.ts';
 import type {
   ComfyModelSubfolder,
   ExternalModelFileOption,
@@ -68,6 +72,10 @@ interface ModelDownloadConfirmModalProps {
   setCustomFilename: (name: string) => void;
   allowOverwrite: boolean;
   setAllowOverwrite: (allow: boolean) => void;
+  scheduleDownload: boolean;
+  setScheduleDownload: (schedule: boolean) => void;
+  scheduledForInput: string;
+  setScheduledForInput: (val: string) => void;
   dlError: string | null;
   isSubmitting: boolean;
   onClose: () => void;
@@ -88,6 +96,10 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
   setCustomFilename,
   allowOverwrite,
   setAllowOverwrite,
+  scheduleDownload,
+  setScheduleDownload,
+  scheduledForInput,
+  setScheduledForInput,
   dlError,
   isSubmitting,
   onClose,
@@ -246,6 +258,28 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
             </div>
           )}
 
+          {/* Civitai Early Access Info & Delayed Schedule Option */}
+          {pendingDownload.isEarlyAccessActive && (
+            <div className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-500/10 border border-amber-500/35 text-amber-200 text-[11px]">
+              <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <div className="font-medium text-amber-100">
+                  Civitai Early Access Active
+                  {pendingDownload.earlyAccessEndsAt
+                    ? ` · Unlocks ${formatUnlockLocalTime(pendingDownload.earlyAccessEndsAt)} (${formatUnlockCountdown(pendingDownload.earlyAccessEndsAt)})`
+                    : ''}
+                </div>
+                <p className="text-amber-200/80">
+                  Immediate downloads may return HTTP 403 unless unlocked with Buzz on your Civitai account
+                  {typeof pendingDownload.earlyAccessConfig?.downloadPrice === 'number'
+                    ? ` (${pendingDownload.earlyAccessConfig.downloadPrice} Buzz)`
+                    : ''}
+                  . Scheduling automatically starts once early access ends.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Destination Subfolder & Filename */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -276,14 +310,43 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
             </div>
           </div>
 
-          <label className="inline-flex items-center gap-2 text-zinc-300 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={allowOverwrite}
-              onChange={(e) => setAllowOverwrite(e.target.checked)}
-            />
-            <span>Explicitly allow overwriting if file already exists in destination folder</span>
-          </label>
+          <div className="space-y-2.5 pt-1">
+            <label className="inline-flex items-center gap-2 text-zinc-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={scheduleDownload}
+                onChange={(e) => setScheduleDownload(e.target.checked)}
+              />
+              <span>
+                {pendingDownload.isEarlyAccessActive
+                  ? 'Schedule download until Early Access unlocks'
+                  : 'Schedule download for a later time'}
+              </span>
+            </label>
+
+            {scheduleDownload && (
+              <div className="pl-5 flex flex-wrap items-center gap-2">
+                <label className="text-zinc-400">Run at (local time):</label>
+                <input
+                  type="datetime-local"
+                  value={scheduledForInput}
+                  onChange={(e) => setScheduledForInput(e.target.value)}
+                  className="px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-zinc-100"
+                />
+              </div>
+            )}
+
+            <div>
+              <label className="inline-flex items-center gap-2 text-zinc-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allowOverwrite}
+                  onChange={(e) => setAllowOverwrite(e.target.checked)}
+                />
+                <span>Explicitly allow overwriting if file already exists in destination folder</span>
+              </label>
+            </div>
+          </div>
 
           {dlError && <p className="text-rose-400 font-medium">{dlError}</p>}
         </div>
@@ -299,11 +362,21 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
           </button>
           <button
             type="button"
-            disabled={isSubmitting || !customFilename.trim()}
+            disabled={isSubmitting || !customFilename.trim() || (scheduleDownload && !scheduledForInput)}
             onClick={onConfirm}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium rounded-lg cursor-pointer"
+            className={`px-4 py-2 disabled:opacity-50 text-white font-medium rounded-lg cursor-pointer ${
+              scheduleDownload
+                ? 'bg-amber-600 hover:bg-amber-500'
+                : 'bg-indigo-600 hover:bg-indigo-500'
+            }`}
           >
-            {isSubmitting ? 'Starting...' : 'Confirm & Start Download'}
+            {isSubmitting
+              ? scheduleDownload
+                ? 'Scheduling...'
+                : 'Starting...'
+              : scheduleDownload
+              ? 'Confirm & Schedule Download'
+              : 'Confirm & Start Download'}
           </button>
         </div>
       </div>

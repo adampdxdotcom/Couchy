@@ -149,6 +149,72 @@ export function rewriteCivitaiDownloadUrl(
   return raw.replace(/^https?:\/\/(www\.)?civitai\.(com|red)\//i, `https://${domain}/`);
 }
 
+export interface CivitaiEarlyAccessInfo {
+  earlyAccessEndsAt: string | null;
+  isEarlyAccessActive: boolean;
+  availability: string | null;
+  earlyAccessConfig: {
+    downloadPrice?: number | null;
+    timeframe?: number | null;
+  } | null;
+}
+
+/**
+ * Extracts Early Access unlock timestamp, availability, and pricing config from a Civitai model version payload.
+ */
+export function extractCivitaiEarlyAccessInfo(versionObj: any): CivitaiEarlyAccessInfo {
+  const rawEnds = versionObj?.earlyAccessEndsAt;
+  let earlyAccessEndsAt: string | null = null;
+  let endsAtMs = NaN;
+
+  if (typeof rawEnds === 'string' && rawEnds.trim()) {
+    endsAtMs = Date.parse(rawEnds);
+    if (Number.isFinite(endsAtMs)) {
+      earlyAccessEndsAt = new Date(endsAtMs).toISOString();
+    }
+  }
+
+  const availability =
+    typeof versionObj?.availability === 'string' && versionObj.availability.trim()
+      ? versionObj.availability.trim()
+      : null;
+
+  const rawConfig = versionObj?.earlyAccessConfig;
+  const earlyAccessConfig =
+    rawConfig && typeof rawConfig === 'object'
+      ? {
+          downloadPrice:
+            typeof rawConfig.downloadPrice === 'number' ? rawConfig.downloadPrice : null,
+          timeframe: typeof rawConfig.timeframe === 'number' ? rawConfig.timeframe : null,
+        }
+      : null;
+
+  const isFutureEnd = Number.isFinite(endsAtMs) && endsAtMs > Date.now();
+  const isEarlyAccessActive = isFutureEnd || availability === 'EarlyAccess';
+
+  return {
+    earlyAccessEndsAt,
+    isEarlyAccessActive,
+    availability,
+    earlyAccessConfig,
+  };
+}
+
+/**
+ * Computes a UTC ISO timestamp slightly after `earlyAccessEndsAt` (default +60s clock-skew buffer).
+ */
+export function computeScheduledUnlockIso(
+  earlyAccessEndsAt: string | null | undefined,
+  bufferSeconds = 60
+): string {
+  const now = Date.now();
+  const parsed = earlyAccessEndsAt ? Date.parse(earlyAccessEndsAt) : NaN;
+  const targetMs = Number.isFinite(parsed)
+    ? Math.max(parsed + bufferSeconds * 1000, now + bufferSeconds * 1000)
+    : now + 60 * 60 * 1000;
+  return new Date(targetMs).toISOString();
+}
+
 function decodeHtmlEntities(input: string): string {
   const named: Record<string, string> = {
     '&amp;': '&',

@@ -53,7 +53,7 @@ export function useModelDownloaderState(
     );
   }, [downloads, activePreviewDownloads]);
 
-  // Poll while any model download is active and refresh inventory once finished
+  // Poll every 1.5s while any model download is actively streaming
   const hasActiveDownload =
     downloads.some((d) => d.status === 'downloading') || activePreviewDownloads.length > 0;
   useEffect(() => {
@@ -72,6 +72,16 @@ export function useModelDownloaderState(
     }, 1500);
     return () => clearInterval(timer);
   }, [hasActiveDownload, onRefreshInventory]);
+
+  // Gently refresh every 15s while Early Access scheduled jobs are waiting
+  const hasScheduledDownload = downloads.some((d) => d.status === 'scheduled');
+  useEffect(() => {
+    if (!hasScheduledDownload || hasActiveDownload) return;
+    const timer = setInterval(() => {
+      refreshDownloads();
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [hasScheduledDownload, hasActiveDownload]);
 
   const handleExternalSearch = async (e?: React.FormEvent, customQ?: string) => {
     if (e) e.preventDefault();

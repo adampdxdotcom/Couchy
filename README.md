@@ -290,6 +290,34 @@ docker compose logs -f comfyui-gallery
 
 ---
 
+## Civitai & Model Downloading
+
+Open **LoRAs & Models &rarr; Civitai & Hugging Face Downloader** to search, resolve, and stream models directly to your host `model-downloads` folder with server-side SHA-256 verification.
+
+### 1. Civitai API Key (`CIVITAI_API_KEY`)
+- Public Civitai searches work without authentication, **but many models (including NSFW/mature, early-access, or creator-gated weights) return HTTP `401` / `403` unless authenticated**.
+- Create a personal token in your Civitai **Account Settings &rarr; API Keys**, add `CIVITAI_API_KEY=your_token_here` to `.env`, and recreate the container (`docker compose up -d`).
+- Couchy forwards the token via Bearer authorization headers for both Civitai API metadata lookups and weight file downloads.
+
+### 2. Supported Smart Search Inputs
+The unified search bar under **Civitai & Hugging Face Downloader** automatically detects what you enter:
+- **Keyword Queries**: Searches Civitai (with optional type filter: LoRA, Checkpoint, Text Encoder/CLIP, ControlNet, VAE, Upscaler, Embedding) and Hugging Face Hub.
+- **Civitai URLs**: Paste any `civitai.com` or `civitai.red` model page URL (`/models/<id>`), version link (`?modelVersionId=<id>`), or direct download link (`/api/download/models/<id>`).
+- **SHA-256 & AutoV2 Hashes**: Paste either a full **64-character SHA-256** hash or a **10-character AutoV2** hash to locate an exact model version—useful when resolving **Missing Model Dependencies** flagged in indexed workflows.
+- **Hugging Face & Direct Links**: Paste an `owner/repo` ID, Hugging Face file URL, or direct `.safetensors` / `.gguf` / `.ckpt` link.
+
+### 3. `civitai.com` vs. `civitai.red` Detection & Link Healing
+- Models that are mature-gated or delisted on `civitai.com` are automatically retried against `civitai.red` across hash lookups, URL resolution, metadata enrichment, and file downloads.
+- Preview cards and detail pages label detected restricted models with **`Civitai.red`** so original links stay working.
+- Click **Heal Civitai Links** in the **LoRAs & Models** toolbar at any time to audit existing database records and repair broken `.com` / `.red` links.
+
+### 4. Destination Folders, Hash Verification & Post-Download Workflow
+- **Direct LoRA Downloads**: Civitai LoRAs download in one click straight into `/downloads/loras` (`./model-downloads/loras`). Multi-file Hugging Face repos and other model types open a confirmation modal to pick the exact file and ComfyUI subfolder (`checkpoints`, `diffusion_models`, `text_encoders`, `vae`, `controlnet`, `upscale_models`, `embeddings`).
+- **Safe Atomic Writes & SHA-256 Verification**: Downloads stream to a temporary `.part` file, verify the expected SHA-256 checksum on completion (if provided by Civitai or Hugging Face LFS), cache up to 4 WebP preview images locally, and automatically sync into Couchy's inventory.
+- **Active Stack & History Links**: Concurrent downloads stack newest-first as full-width preview cards with live progress and clear automatically once finished. In the **Download Queue & Hash Verification History**, completed Civitai downloads display their first cached preview thumbnail—click any completed **LoRA** name to jump straight into its **LoRA Detail Inspector** (`@mention` nickname, trigger words, strengths, category), or click other model types to locate them in **Model Inventory**.
+
+---
+
 ## Environment Variables Reference
 
 | Variable | Default in Container | Description |
@@ -304,7 +332,7 @@ docker compose logs -f comfyui-gallery
 | `BACKUP_PATH` | `/app/data/backups` | Persistent directory for SQLite database backups |
 | `LOGS_DIR` | `/app/data/logs` | Directory for size-capped rotating server logs (`couchy.log`, 5 MB &times; 2 files) |
 | `DOWNLOADS_DIR` | `/downloads` | Target directory for confirmed model downloads |
-| `CIVITAI_API_KEY` | *(Optional)* | API token for Civitai model search & metadata |
+| `CIVITAI_API_KEY` | *(Optional)* | Civitai API token for model search, metadata enrichment, and authenticated downloads |
 | `HF_API_TOKEN` | *(Optional)* | Hugging Face token for model downloads |
 
 ---

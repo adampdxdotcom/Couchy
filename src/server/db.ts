@@ -590,6 +590,15 @@ export function runMigrations(): void {
         CREATE INDEX IF NOT EXISTS idx_models_is_hidden ON models(is_hidden);
       `,
     },
+    {
+      version: 15,
+      name: 'download_jobs_early_access_schedule',
+      sql: `
+        ALTER TABLE download_jobs ADD COLUMN scheduled_for TEXT;
+        ALTER TABLE download_jobs ADD COLUMN payload_json TEXT;
+        CREATE INDEX IF NOT EXISTS idx_download_jobs_status_scheduled ON download_jobs(status, scheduled_for);
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

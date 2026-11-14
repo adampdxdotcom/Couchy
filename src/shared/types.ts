@@ -259,6 +259,13 @@ export interface ExternalModelSearchResult {
   description: string;
   availableFiles?: ExternalModelFileOption[];
   totalRepoFilesCount?: number;
+  earlyAccessEndsAt?: string | null;
+  isEarlyAccessActive?: boolean;
+  availability?: string | null;
+  earlyAccessConfig?: {
+    downloadPrice?: number | null;
+    timeframe?: number | null;
+  } | null;
 }
 
 export interface LoraExplorerItem {

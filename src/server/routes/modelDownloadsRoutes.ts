@@ -12,6 +12,10 @@ import {
   listHuggingFaceRepoFiles,
   resolveDirectModelUrl,
 } from '../services/modelDownloadResolverService.ts';
+import {
+  cancelScheduledDownload,
+  runScheduledDownloadNow,
+} from '../services/downloadSchedulerService.ts';
 
 export const modelDownloadsRouter = Router();
 
@@ -107,6 +111,7 @@ modelDownloadsRouter.post('/downloads/start', async (req, res) => {
       userConfirmed,
       hfRepoId,
       civitaiMeta,
+      scheduledFor,
     } = req.body || {};
 
     if (!userConfirmed) {
@@ -127,10 +132,47 @@ modelDownloadsRouter.post('/downloads/start', async (req, res) => {
       allowOverwrite: Boolean(allowOverwrite),
       hfRepoId: hfRepoId || null,
       civitaiMeta: civitaiMeta || null,
+      scheduledFor: scheduledFor || null,
     });
     res.json({ job });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || 'Failed to start download' });
+  }
+});
+
+/**
+ * POST /api/downloads/:id/run-now
+ * Immediately triggers a pending scheduled download job.
+ */
+modelDownloadsRouter.post('/downloads/:id/run-now', (req, res) => {
+  try {
+    const jobId = Number(req.params.id);
+    if (!Number.isFinite(jobId)) {
+      res.status(400).json({ error: 'Invalid download job id' });
+      return;
+    }
+    const job = runScheduledDownloadNow(jobId);
+    res.json({ job });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to trigger scheduled download' });
+  }
+});
+
+/**
+ * DELETE /api/downloads/:id
+ * Cancels and removes a pending scheduled download job.
+ */
+modelDownloadsRouter.delete('/downloads/:id', (req, res) => {
+  try {
+    const jobId = Number(req.params.id);
+    if (!Number.isFinite(jobId)) {
+      res.status(400).json({ error: 'Invalid download job id' });
+      return;
+    }
+    const result = cancelScheduledDownload(jobId);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to cancel scheduled download' });
   }
 });
 
@@ -172,6 +214,19 @@ modelDownloadsRouter.get('/downloads', (_req, res) => {
     if (job.provider === 'civitai' && matched?.preview_images_json) {
       const previews = parsePreviewImagesJson(matched.preview_images_json, matched.id);
       firstPreviewUrl = previews[0]?.url || null;
+    }
+
+    // For scheduled Civitai downloads not yet on disk, show staged Civitai thumbnail if stored
+    if (!firstPreviewUrl && job.provider === 'civitai' && job.status === 'scheduled' && job.payload_json) {
+      try {
+        const parsed = JSON.parse(job.payload_json);
+        const stagedUrl = parsed?.civitaiMeta?.previewImages?.[0]?.url;
+        if (typeof stagedUrl === 'string' && stagedUrl.trim()) {
+          firstPreviewUrl = stagedUrl.trim();
+        }
+      } catch {
+        // ignore invalid payload_json
+      }
     }
 
     return {

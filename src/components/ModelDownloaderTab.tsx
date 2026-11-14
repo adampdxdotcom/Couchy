@@ -1,16 +1,24 @@
 import React, { useState } from 'react';
 import {
+  Clock,
   ExternalLink,
   FolderGit2,
   HardDriveDownload,
   Layers,
   Loader2,
+  Play,
   Search,
   X,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
 import { DownloadHistoryList } from './models/DownloadHistoryList.tsx';
+import {
+  formatUnlockCountdown,
+  formatUnlockLocalTime,
+  getSuggestedScheduledIso,
+  toLocalDateTimeInputValue,
+} from './models/earlyAccessUtils.ts';
 import {
   COMFY_SUBFOLDER_OPTIONS,
   ModelDownloadConfirmModal,
@@ -102,6 +110,8 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   const [dlSubfolder, setDlSubfolder] = useState<ComfyModelSubfolder>('loras');
   const [customFilename, setCustomFilename] = useState('');
   const [allowOverwrite, setAllowOverwrite] = useState(false);
+  const [scheduleDownload, setScheduleDownload] = useState(false);
+  const [scheduledForInput, setScheduledForInput] = useState('');
   const [dlError, setDlError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [directStartingKey, setDirectStartingKey] = useState<string | null>(null);
@@ -112,20 +122,23 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     jobId: number,
     item: ExternalModelSearchResult,
     targetFilename: string,
-    targetSubfolder: string
+    targetSubfolder: string,
+    isScheduled = false
   ) => {
     const cardKey = `${item.provider}-${item.id}-${item.filename}`;
-    setActivePreviewDownloads((prev) => [
-      {
-        jobId,
-        cardKey,
-        item,
-        targetFilename,
-        targetSubfolder,
-        startedAt: Date.now(),
-      },
-      ...prev.filter((p) => p.cardKey !== cardKey && p.jobId !== jobId),
-    ]);
+    if (!isScheduled) {
+      setActivePreviewDownloads((prev) => [
+        {
+          jobId,
+          cardKey,
+          item,
+          targetFilename,
+          targetSubfolder,
+          startedAt: Date.now(),
+        },
+        ...prev.filter((p) => p.cardKey !== cardKey && p.jobId !== jobId),
+      ]);
+    }
     setSearchResults((prev) => {
       const remaining = prev.filter(
         (r) => `${r.provider}-${r.id}-${r.filename}` !== cardKey
@@ -137,13 +150,22 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     });
   };
 
-  const openDownloadModal = async (item: ExternalModelSearchResult) => {
+  const openDownloadModal = async (
+    item: ExternalModelSearchResult,
+    preferSchedule?: boolean
+  ) => {
     const initialFile = item.availableFiles?.[0] || null;
     const initialFolder = initialFile?.suggestedSubfolder || getDefaultSubfolderForItem(item);
+    const shouldSchedule =
+      preferSchedule !== undefined ? preferSchedule : Boolean(item.isEarlyAccessActive);
+    const defaultIso = getSuggestedScheduledIso(item.earlyAccessEndsAt);
     setPendingDownload(item);
     setSelectedFile(initialFile);
     setDlSubfolder(initialFolder);
     setCustomFilename(initialFile?.filename || item.filename);
+    setAllowOverwrite(false);
+    setScheduleDownload(shouldSchedule);
+    setScheduledForInput(toLocalDateTimeInputValue(defaultIso));
     setDlError(null);
 
     // Fetch full recursive tree + LFS SHA-256 hashes for Hugging Face repos
@@ -182,7 +204,11 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     setDlError(null);
   };
 
-  const handleDirectLoraDownload = async (item: ExternalModelSearchResult, cardKey: string) => {
+  const handleDirectLoraDownload = async (
+    item: ExternalModelSearchResult,
+    cardKey: string,
+    scheduledForIso?: string | null
+  ) => {
     setDirectStartingKey(cardKey);
     try {
       const primary = item.availableFiles?.[0];
@@ -211,16 +237,30 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                 previewImages: item.previewImages || [],
               }
             : null,
+        scheduledFor: scheduledForIso || null,
       });
       if (res?.job?.id) {
-        registerStartedDownload(Number(res.job.id), item, targetFilename, 'loras');
+        registerStartedDownload(
+          Number(res.job.id),
+          item,
+          targetFilename,
+          'loras',
+          res.job.status === 'scheduled'
+        );
       }
       await onRefreshDownloads();
-      onPushToast?.(`Started downloading ${targetFilename} to /downloads/loras`, 'info');
+      if (res?.job?.status === 'scheduled') {
+        onPushToast?.(
+          `Scheduled ${targetFilename} for ${formatUnlockLocalTime(res.job.scheduled_for)}`,
+          'success'
+        );
+      } else {
+        onPushToast?.(`Started downloading ${targetFilename} to /downloads/loras`, 'info');
+      }
     } catch (err: any) {
       const msg = err?.message || 'Download could not start';
       // If file already exists on disk, open modal with overwrite option & error visible
-      await openDownloadModal(item);
+      await openDownloadModal(item, Boolean(scheduledForIso));
       setDlError(msg);
     } finally {
       setDirectStartingKey(null);
@@ -237,6 +277,15 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
         folderMeta?.modelType || selectedFile?.modelType || pendingDownload.modelType;
       const targetFilename =
         customFilename.trim() || selectedFile?.filename || pendingDownload.filename;
+
+      let scheduledForIso: string | null = null;
+      if (scheduleDownload && scheduledForInput) {
+        const parsedMs = new Date(scheduledForInput).getTime();
+        if (!Number.isFinite(parsedMs) || parsedMs <= Date.now() + 5000) {
+          throw new Error('Please choose a future date/time for scheduled downloads.');
+        }
+        scheduledForIso = new Date(parsedMs).toISOString();
+      }
 
       const res = await api.startModelDownload({
         provider: pendingDownload.provider,
@@ -262,13 +311,21 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                 previewImages: pendingDownload.previewImages || [],
               }
             : null,
+        scheduledFor: scheduledForIso,
       });
       if (res?.job?.id) {
         registerStartedDownload(
           Number(res.job.id),
           pendingDownload,
           targetFilename,
-          dlSubfolder
+          dlSubfolder,
+          res.job.status === 'scheduled'
+        );
+      }
+      if (res?.job?.status === 'scheduled') {
+        onPushToast?.(
+          `Scheduled ${targetFilename} for ${formatUnlockLocalTime(res.job.scheduled_for)}`,
+          'success'
         );
       }
       setPendingDownload(null);
@@ -508,6 +565,24 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                               {item.versionName}
                             </span>
                           )}
+                          {item.isEarlyAccessActive && (
+                            <span
+                              title={
+                                item.earlyAccessEndsAt
+                                  ? `Unlocks at ${formatUnlockLocalTime(item.earlyAccessEndsAt)}`
+                                  : 'Civitai Early Access active'
+                              }
+                              className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-mono bg-amber-500/15 border border-amber-500/40 text-amber-300 rounded shrink-0"
+                            >
+                              <Clock className="w-3 h-3" />
+                              <span>
+                                Early Access
+                                {item.earlyAccessEndsAt
+                                  ? ` · Unlocks ${formatUnlockLocalTime(item.earlyAccessEndsAt)} (${formatUnlockCountdown(item.earlyAccessEndsAt)})`
+                                  : ''}
+                              </span>
+                            </span>
+                          )}
                         </div>
                         {item.creator && (
                           <div className="text-[11px] text-zinc-500">by {item.creator}</div>
@@ -631,6 +706,47 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                           item.modelType === 'lora' &&
                           (item.provider === 'civitai' || fileCount <= 1);
 
+                        if (item.isEarlyAccessActive) {
+                          const suggestedIso = getSuggestedScheduledIso(item.earlyAccessEndsAt);
+                          const unlockSummary = item.earlyAccessEndsAt
+                            ? `Unlocks ${formatUnlockLocalTime(item.earlyAccessEndsAt)} (${formatUnlockCountdown(item.earlyAccessEndsAt)})`
+                            : 'Check in 1h';
+
+                          return (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  isDirectLora
+                                    ? handleDirectLoraDownload(item, cardKey, suggestedIso)
+                                    : openDownloadModal(item, true)
+                                }
+                                className="flex-1 min-w-[200px] inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Clock className="w-4 h-4" />
+                                <span>
+                                  {isDirectLora
+                                    ? `Schedule LoRA (${unlockSummary})`
+                                    : `Schedule After Early Access (${unlockSummary})`}
+                                </span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  isDirectLora
+                                    ? handleDirectLoraDownload(item, cardKey, null)
+                                    : openDownloadModal(item, false)
+                                }
+                                title="Try downloading now (if already unlocked with Buzz)"
+                                className="inline-flex items-center justify-center gap-1.5 py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-200 font-medium rounded-lg transition-colors cursor-pointer shrink-0"
+                              >
+                                <Play className="w-3.5 h-3.5 text-indigo-400" />
+                                <span>Try Now</span>
+                              </button>
+                            </div>
+                          );
+                        }
+
                         if (isDirectLora) {
                           return (
                             <button
@@ -678,6 +794,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
         downloads={downloads}
         onRefreshDownloads={onRefreshDownloads}
         onInspectDownload={onInspectDownload}
+        onPushToast={onPushToast}
       />
 
       {/* Explicit User Confirmation & Multi-File Picker Modal */}
@@ -693,6 +810,10 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
           setCustomFilename={setCustomFilename}
           allowOverwrite={allowOverwrite}
           setAllowOverwrite={setAllowOverwrite}
+          scheduleDownload={scheduleDownload}
+          setScheduleDownload={setScheduleDownload}
+          scheduledForInput={scheduledForInput}
+          setScheduledForInput={setScheduledForInput}
           dlError={dlError}
           isSubmitting={isSubmitting}
           onClose={() => {

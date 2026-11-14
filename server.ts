@@ -21,14 +21,16 @@ import {
   isTaggerModelDownloaded,
   startVisualTaggerQueue,
 } from './src/server/services/visualTaggerService.ts';
+import { startDownloadScheduler } from './src/server/services/downloadSchedulerService.ts';
 
 async function startServer() {
   // 1. Run SQLite schema migrations & one-time prompt backfill
   runMigrations();
   backfillMissingImagePrompts(false);
 
-  // 2. Start filesystem monitoring
+  // 2. Start filesystem monitoring & scheduled download worker
   startFilesystemWatcher();
+  startDownloadScheduler();
 
   const app = express();
   app.use(express.json({ limit: '25mb' }));

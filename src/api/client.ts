@@ -361,10 +361,19 @@ export const api = {
     userConfirmed: boolean;
     hfRepoId?: string | null;
     civitaiMeta?: Record<string, any> | null;
+    scheduledFor?: string | null;
   }) =>
     requestJson<{ job: any }>('/api/downloads/start', {
       method: 'POST',
       body: JSON.stringify(payload),
+    }),
+
+  runScheduledDownloadNow: (id: number) =>
+    requestJson<{ job: any }>(`/api/downloads/${id}/run-now`, { method: 'POST' }),
+
+  cancelScheduledDownload: (id: number) =>
+    requestJson<{ ok: boolean; deletedId: number }>(`/api/downloads/${id}`, {
+      method: 'DELETE',
     }),
 
   listDownloads: () => requestJson<{ items: any[] }>('/api/downloads'),
