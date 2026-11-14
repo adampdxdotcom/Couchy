@@ -371,6 +371,12 @@ export const api = {
   runScheduledDownloadNow: (id: number) =>
     requestJson<{ job: any }>(`/api/downloads/${id}/run-now`, { method: 'POST' }),
 
+  rescheduleFailedDownload: (id: number, scheduledFor?: string | null) =>
+    requestJson<{ job: any }>(`/api/downloads/${id}/reschedule`, {
+      method: 'POST',
+      body: JSON.stringify({ scheduledFor: scheduledFor || null }),
+    }),
+
   cancelScheduledDownload: (id: number) =>
     requestJson<{ ok: boolean; deletedId: number }>(`/api/downloads/${id}`, {
       method: 'DELETE',

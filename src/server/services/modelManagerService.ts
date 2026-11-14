@@ -479,9 +479,51 @@ export async function executeDownloadJob(
 
     if (!res.ok || !res.body) {
       if ((res.status === 401 || res.status === 403) && params.provider === 'civitai') {
-        const authErr: any = new Error(
-          `Civitai returned HTTP ${res.status} (Early Access or Creator permission required — check CIVITAI_API_KEY or wait until early access ends)`
-        );
+        let discoveredEndsAt: string | null = null;
+        try {
+          const urlVerMatch = params.sourceUrl.match(/\/api\/download\/models\/(\d+)/i);
+          const versionId = params.civitaiMeta?.civitaiVersionId || (urlVerMatch ? urlVerMatch[1] : null);
+          if (versionId) {
+            const preferredDomain: CivitaiDomain = /civitai\.red/i.test(params.sourceUrl)
+              ? 'civitai.red'
+              : 'civitai.com';
+            const verRes = await fetchCivitaiJsonWithFallback(
+              `/api/v1/model-versions/${encodeURIComponent(String(versionId))}`,
+              getCivitaiHeaders(),
+              preferredDomain,
+              6000
+            );
+            if (verRes?.data) {
+              const ea = extractCivitaiEarlyAccessInfo(verRes.data);
+              if (ea.earlyAccessEndsAt && Date.parse(ea.earlyAccessEndsAt) > Date.now()) {
+                discoveredEndsAt = ea.earlyAccessEndsAt;
+                const row = db
+                  .prepare('SELECT payload_json FROM download_jobs WHERE id = ?')
+                  .get(jobId) as { payload_json: string | null } | undefined;
+                if (row) {
+                  let existingPayload: Record<string, any> = {};
+                  try {
+                    existingPayload = row.payload_json ? JSON.parse(row.payload_json) : {};
+                  } catch {
+                    existingPayload = {};
+                  }
+                  existingPayload.earlyAccessEndsAt = discoveredEndsAt;
+                  db.prepare('UPDATE download_jobs SET payload_json = ? WHERE id = ?').run(
+                    JSON.stringify(existingPayload),
+                    jobId
+                  );
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore lookup failure
+        }
+
+        const unlockHint = discoveredEndsAt
+          ? `Early Access active until ${new Date(discoveredEndsAt).toLocaleString()} — click Schedule After Unlock below to queue it automatically.`
+          : 'Early Access or Creator permission required — check CIVITAI_API_KEY or wait until early access ends';
+        const authErr: any = new Error(`Civitai returned HTTP ${res.status} (${unlockHint})`);
         authErr.httpStatus = res.status;
         if (params.deferAuthErrorToCaller) {
           throw authErr;

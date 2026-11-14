@@ -286,6 +286,75 @@ export function cancelScheduledDownload(jobId: number): { ok: true; deletedId: n
 }
 
 /**
+ * Converts a failed Civitai Early Access job into a scheduled job by looking up its live unlock timestamp.
+ */
+export async function rescheduleFailedDownload(
+  jobId: number,
+  explicitScheduledFor?: string | null
+): Promise<any> {
+  const job = db.prepare('SELECT * FROM download_jobs WHERE id = ?').get(jobId) as any;
+  if (!job) {
+    throw new Error('Download job not found.');
+  }
+  if (job.status !== 'failed') {
+    throw new Error(`Only failed jobs can be rescheduled (current status: ${job.status}).`);
+  }
+
+  let targetIso: string | null = null;
+  if (explicitScheduledFor && Date.parse(explicitScheduledFor) > Date.now() + 5000) {
+    targetIso = new Date(Date.parse(explicitScheduledFor)).toISOString();
+  }
+
+  const payload = parseJobPayload(job.payload_json) as ScheduledDownloadPayload & {
+    earlyAccessEndsAt?: string | null;
+  };
+  try {
+    const rawParsed = job.payload_json ? JSON.parse(job.payload_json) : {};
+    if (!targetIso && rawParsed?.earlyAccessEndsAt && Date.parse(rawParsed.earlyAccessEndsAt) > Date.now()) {
+      targetIso = new Date(Date.parse(rawParsed.earlyAccessEndsAt) + 60_000).toISOString();
+    }
+  } catch {
+    // ignore
+  }
+
+  // Probe Civitai version endpoint if we still don't have a future unlock time
+  if (!targetIso && job.provider === 'civitai') {
+    const urlVerMatch = String(job.source_url || '').match(/\/api\/download\/models\/(\d+)/i);
+    const versionId = payload.civitaiMeta?.civitaiVersionId || (urlVerMatch ? urlVerMatch[1] : null);
+    if (versionId) {
+      const preferredDomain: CivitaiDomain = String(job.source_url || '').includes('civitai.red')
+        ? 'civitai.red'
+        : 'civitai.com';
+      const verRes = await fetchCivitaiJsonWithFallback(
+        `/api/v1/model-versions/${encodeURIComponent(String(versionId))}`,
+        getCivitaiHeaders(),
+        preferredDomain,
+        8000
+      );
+      if (verRes?.data) {
+        const ea = extractCivitaiEarlyAccessInfo(verRes.data);
+        if (ea.earlyAccessEndsAt && Date.parse(ea.earlyAccessEndsAt) > Date.now()) {
+          targetIso = new Date(Date.parse(ea.earlyAccessEndsAt) + 60_000).toISOString();
+        }
+      }
+    }
+  }
+
+  if (!targetIso) {
+    targetIso = new Date(Date.now() + 60 * 60_000).toISOString();
+  }
+
+  const nextPayload = JSON.stringify({ ...payload, retryCount: 0 });
+  db.prepare(
+    `UPDATE download_jobs
+     SET status = 'scheduled', scheduled_for = ?, payload_json = ?, error_message = NULL, completed_at = NULL
+     WHERE id = ?`
+  ).run(targetIso, nextPayload, jobId);
+
+  return db.prepare('SELECT * FROM download_jobs WHERE id = ?').get(jobId);
+}
+
+/**
  * Starts the background interval polling due scheduled Civitai Early Access downloads.
  */
 export function startDownloadScheduler(): ReturnType<typeof setInterval> {

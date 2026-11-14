@@ -50,6 +50,22 @@ export const DownloadHistoryList: React.FC<DownloadHistoryListProps> = ({
     }
   };
 
+  const handleRescheduleFailed = async (job: any) => {
+    setBusyJobId(job.id);
+    try {
+      const res = await api.rescheduleFailedDownload(job.id, job.early_access_ends_at || null);
+      await onRefreshDownloads();
+      onPushToast?.(
+        `Scheduled ${job.model_name} for ${formatUnlockLocalTime(res.job?.scheduled_for)}`,
+        'success'
+      );
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Could not schedule download', 'error');
+    } finally {
+      setBusyJobId(null);
+    }
+  };
+
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
       <div className="flex items-center justify-between">
@@ -200,17 +216,31 @@ export const DownloadHistoryList: React.FC<DownloadHistoryListProps> = ({
                           </button>
                         </>
                       ) : (
-                        <span
-                          className={`font-mono tabular-nums shrink-0 ${
-                            d.status === 'failed'
-                              ? 'text-rose-400'
-                              : d.status === 'downloading'
-                              ? 'text-indigo-300'
-                              : 'text-zinc-300'
-                          }`}
-                        >
-                          {d.status} · {pct}%
-                        </span>
+                        <>
+                          {d.can_reschedule && (
+                            <button
+                              type="button"
+                              disabled={busyJobId === d.id}
+                              onClick={() => handleRescheduleFailed(d)}
+                              title="Look up Civitai Early Access end date and schedule automatic download"
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-600/20 hover:bg-amber-600/35 border border-amber-500/40 text-amber-200 disabled:opacity-50 cursor-pointer text-[11px]"
+                            >
+                              <Clock className="w-3 h-3 text-amber-400" />
+                              <span>Schedule After Unlock</span>
+                            </button>
+                          )}
+                          <span
+                            className={`font-mono tabular-nums shrink-0 ${
+                              d.status === 'failed'
+                                ? 'text-rose-400'
+                                : d.status === 'downloading'
+                                ? 'text-indigo-300'
+                                : 'text-zinc-300'
+                            }`}
+                          >
+                            {d.status} · {pct}%
+                          </span>
+                        </>
                       )}
                     </div>
                   </div>

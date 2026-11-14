@@ -161,16 +161,26 @@ export interface CivitaiEarlyAccessInfo {
 
 /**
  * Extracts Early Access unlock timestamp, availability, and pricing config from a Civitai model version payload.
+ * Handles both documented (`earlyAccessEndsAt`, `earlyAccessConfig`) and live API (`earlyAccessDeadline`, `paidAccess.endsAt`) fields.
  */
 export function extractCivitaiEarlyAccessInfo(versionObj: any): CivitaiEarlyAccessInfo {
-  const rawEnds = versionObj?.earlyAccessEndsAt;
+  const candidateDates = [
+    versionObj?.earlyAccessEndsAt,
+    versionObj?.earlyAccessDeadline,
+    versionObj?.paidAccess?.endsAt,
+  ];
+
   let earlyAccessEndsAt: string | null = null;
   let endsAtMs = NaN;
 
-  if (typeof rawEnds === 'string' && rawEnds.trim()) {
-    endsAtMs = Date.parse(rawEnds);
-    if (Number.isFinite(endsAtMs)) {
-      earlyAccessEndsAt = new Date(endsAtMs).toISOString();
+  for (const rawEnds of candidateDates) {
+    if (typeof rawEnds === 'string' && rawEnds.trim()) {
+      const parsed = Date.parse(rawEnds.trim());
+      if (Number.isFinite(parsed)) {
+        endsAtMs = parsed;
+        earlyAccessEndsAt = new Date(parsed).toISOString();
+        break;
+      }
     }
   }
 
@@ -180,13 +190,25 @@ export function extractCivitaiEarlyAccessInfo(versionObj: any): CivitaiEarlyAcce
       : null;
 
   const rawConfig = versionObj?.earlyAccessConfig;
+  const rawPaid = versionObj?.paidAccess;
+  const downloadPrice =
+    typeof rawConfig?.downloadPrice === 'number'
+      ? rawConfig.downloadPrice
+      : typeof rawPaid?.price === 'number'
+      ? rawPaid.price
+      : typeof rawPaid?.downloadPrice === 'number'
+      ? rawPaid.downloadPrice
+      : null;
+  const timeframe =
+    typeof rawConfig?.timeframe === 'number'
+      ? rawConfig.timeframe
+      : typeof versionObj?.earlyAccessTimeFrame === 'number'
+      ? versionObj.earlyAccessTimeFrame
+      : null;
+
   const earlyAccessConfig =
-    rawConfig && typeof rawConfig === 'object'
-      ? {
-          downloadPrice:
-            typeof rawConfig.downloadPrice === 'number' ? rawConfig.downloadPrice : null,
-          timeframe: typeof rawConfig.timeframe === 'number' ? rawConfig.timeframe : null,
-        }
+    downloadPrice !== null || timeframe !== null
+      ? { downloadPrice, timeframe }
       : null;
 
   const isFutureEnd = Number.isFinite(endsAtMs) && endsAtMs > Date.now();

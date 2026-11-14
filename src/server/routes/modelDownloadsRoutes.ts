@@ -14,6 +14,7 @@ import {
 } from '../services/modelDownloadResolverService.ts';
 import {
   cancelScheduledDownload,
+  rescheduleFailedDownload,
   runScheduledDownloadNow,
 } from '../services/downloadSchedulerService.ts';
 
@@ -159,6 +160,25 @@ modelDownloadsRouter.post('/downloads/:id/run-now', (req, res) => {
 });
 
 /**
+ * POST /api/downloads/:id/reschedule
+ * Converts a failed Civitai Early Access job into a scheduled job using its live unlock timestamp.
+ */
+modelDownloadsRouter.post('/downloads/:id/reschedule', async (req, res) => {
+  try {
+    const jobId = Number(req.params.id);
+    if (!Number.isFinite(jobId)) {
+      res.status(400).json({ error: 'Invalid download job id' });
+      return;
+    }
+    const scheduledFor = req.body?.scheduledFor ? String(req.body.scheduledFor) : null;
+    const job = await rescheduleFailedDownload(jobId, scheduledFor);
+    res.json({ job });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to reschedule download' });
+  }
+});
+
+/**
  * DELETE /api/downloads/:id
  * Cancels and removes a pending scheduled download job.
  */
@@ -216,18 +236,27 @@ modelDownloadsRouter.get('/downloads', (_req, res) => {
       firstPreviewUrl = previews[0]?.url || null;
     }
 
-    // For scheduled Civitai downloads not yet on disk, show staged Civitai thumbnail if stored
-    if (!firstPreviewUrl && job.provider === 'civitai' && job.status === 'scheduled' && job.payload_json) {
+    let parsedPayload: Record<string, any> | null = null;
+    if (job.payload_json) {
       try {
-        const parsed = JSON.parse(job.payload_json);
-        const stagedUrl = parsed?.civitaiMeta?.previewImages?.[0]?.url;
-        if (typeof stagedUrl === 'string' && stagedUrl.trim()) {
-          firstPreviewUrl = stagedUrl.trim();
-        }
+        parsedPayload = JSON.parse(job.payload_json);
       } catch {
-        // ignore invalid payload_json
+        parsedPayload = null;
       }
     }
+
+    // For scheduled or failed Civitai downloads not yet on disk, show staged Civitai thumbnail if stored
+    if (!firstPreviewUrl && job.provider === 'civitai' && parsedPayload?.civitaiMeta?.previewImages?.[0]?.url) {
+      const stagedUrl = parsedPayload.civitaiMeta.previewImages[0].url;
+      if (typeof stagedUrl === 'string' && stagedUrl.trim()) {
+        firstPreviewUrl = stagedUrl.trim();
+      }
+    }
+
+    const canReschedule =
+      job.status === 'failed' &&
+      job.provider === 'civitai' &&
+      /401|403|early access/i.test(String(job.error_message || ''));
 
     return {
       ...job,
@@ -236,6 +265,8 @@ modelDownloadsRouter.get('/downloads', (_req, res) => {
       installed_model_type: matched?.model_type ?? null,
       is_installed: matched ? Boolean(matched.is_installed) : false,
       first_preview_url: firstPreviewUrl,
+      early_access_ends_at: parsedPayload?.earlyAccessEndsAt ?? null,
+      can_reschedule: canReschedule,
     };
   });
 
