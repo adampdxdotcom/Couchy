@@ -33,12 +33,35 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
 }) => {
   const [subTab, setSubTab] = useState<'loras' | 'dependencies' | 'downloader'>('loras');
   const [selectedLoraName, setSelectedLoraName] = useState<string | null>(null);
+  const [highlightedModelFilename, setHighlightedModelFilename] = useState<string | null>(null);
   const [impactReport, setImpactReport] = useState<any | null>(null);
   const [fetchingModelId, setFetchingModelId] = useState<number | null>(null);
   const [isHealingLinks, setIsHealingLinks] = useState(false);
 
   const downloader = useModelDownloaderState(subTab, onRefresh);
-  const selectedLora = loras.find((l) => l.filename === selectedLoraName) || null;
+  const selectedLora =
+    loras.find((l) => l.filename.toLowerCase() === (selectedLoraName || '').toLowerCase()) || null;
+
+  const handleInspectDownload = async (job: any) => {
+    const dest = typeof job.destination_path === 'string' ? job.destination_path : '';
+    const fallbackFilename = dest.split(/[\\/]/).pop() || '';
+    const targetFilename = job.installed_filename || fallbackFilename;
+    const effectiveType = String(job.installed_model_type || job.model_type || '').toLowerCase();
+
+    if (effectiveType === 'lora' && targetFilename) {
+      const existsInLoras = loras.some(
+        (l) => l.filename.toLowerCase() === targetFilename.toLowerCase()
+      );
+      if (!existsInLoras) {
+        await onRefresh();
+      }
+      setSelectedLoraName(targetFilename);
+      return;
+    }
+
+    setHighlightedModelFilename(targetFilename || null);
+    setSubTab('dependencies');
+  };
 
   const handleLoadImpact = async (modelFilename: string) => {
     const res = await api.getModelImpact(modelFilename);
@@ -257,6 +280,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           missingModels={missingModels}
           fetchingModelId={fetchingModelId}
           impactReport={impactReport}
+          highlightedFilename={highlightedModelFilename}
           onLocateMissing={(q) => {
             downloader.setExtQuery(q);
             setSubTab('downloader');
@@ -283,6 +307,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           downloads={downloader.downloads}
           onSearch={downloader.handleExternalSearch}
           onRefreshDownloads={downloader.refreshDownloads}
+          onInspectDownload={handleInspectDownload}
           onPushToast={onPushToast}
         />
       )}

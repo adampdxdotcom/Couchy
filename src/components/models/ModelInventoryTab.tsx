@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { CheckCircle2, ExternalLink, ShieldCheck } from 'lucide-react';
 import { formatBytes } from '../../shared/utils.ts';
 import type { ModelInventoryItem } from '../../shared/types.ts';
@@ -8,6 +8,7 @@ interface ModelInventoryTabProps {
   missingModels: ModelInventoryItem[];
   fetchingModelId: number | null;
   impactReport: any | null;
+  highlightedFilename?: string | null;
   onLocateMissing: (query: string) => void;
   onFetchFromCivitai: (modelId: number) => void;
   onLoadImpact: (filename: string) => void;
@@ -22,10 +23,19 @@ export const ModelInventoryTab: React.FC<ModelInventoryTabProps> = ({
   missingModels,
   fetchingModelId,
   impactReport,
+  highlightedFilename,
   onLocateMissing,
   onFetchFromCivitai,
   onLoadImpact,
 }) => {
+  const highlightedRowRef = useRef<HTMLTableRowElement | null>(null);
+
+  useEffect(() => {
+    if (highlightedFilename && highlightedRowRef.current) {
+      highlightedRowRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [highlightedFilename, models.length]);
+
   return (
     <div className="space-y-6">
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
@@ -104,8 +114,16 @@ export const ModelInventoryTab: React.FC<ModelInventoryTabProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
-              {models.map((m) => (
-                <tr key={m.id}>
+              {models.map((m) => {
+                const isHighlighted =
+                  Boolean(highlightedFilename) &&
+                  m.filename.toLowerCase() === highlightedFilename!.toLowerCase();
+                return (
+                <tr
+                  key={m.id}
+                  ref={isHighlighted ? highlightedRowRef : undefined}
+                  className={isHighlighted ? 'bg-indigo-500/10 ring-1 ring-inset ring-indigo-500/40' : undefined}
+                >
                   <td className="py-2.5 px-3 font-mono text-zinc-200">{m.filename}</td>
                   <td className="py-2.5 px-3 capitalize text-zinc-300">{m.modelType}</td>
                   <td className="py-2.5 px-3 font-mono text-[11px] text-indigo-300">
@@ -167,7 +185,8 @@ export const ModelInventoryTab: React.FC<ModelInventoryTabProps> = ({
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
