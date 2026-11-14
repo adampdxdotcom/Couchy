@@ -108,7 +108,7 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
     <section className="p-5 bg-zinc-900/60 border border-zinc-800/90 rounded-xl space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-display font-semibold text-zinc-100">
-          04. Prompt Mode & LM Studio Set Agent
+          04. Prompt Mode &amp; Local LLM Set Agent
         </h2>
         <div className="flex items-center gap-1 p-1 bg-zinc-950 border border-zinc-800 rounded-lg">
           <button
@@ -131,18 +131,18 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
                 : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
-            Photo Set Theme (LM Studio)
+            Photo Set Theme (Local LLM)
           </button>
         </div>
       </div>
 
       {generationMode === 'single' ? (
         <div className="p-2.5 bg-zinc-950 border border-zinc-800/80 rounded-lg text-xs text-zinc-400">
-          <strong>Verbatim Mode:</strong> LM Studio is bypassed. Your prompt below is injected verbatim into Node #30_19 {generationCount} time{generationCount === 1 ? '' : 's'} with unique 64-bit seeds in Node #30_3.
+          <strong>Verbatim Mode:</strong> Local LLM is bypassed. Your prompt below is injected verbatim into Node #30_19 {generationCount} time{generationCount === 1 ? '' : 's'} with unique 64-bit seeds in Node #30_3.
         </div>
       ) : (
         <div className="p-2.5 bg-indigo-950/30 border border-indigo-800/50 rounded-lg text-xs text-indigo-200">
-          <strong>Theme Set Mode:</strong> Enter a theme and click <strong>Generate Set Prompts with LM Studio</strong>. LM Studio will script {generationCount} distinct prompts into the Outgoing Batch Queue on the right for you to preview and edit before sending to ComfyUI.
+          <strong>Theme Set Mode:</strong> Enter a theme and click <strong>Generate Set Prompts with Local LLM</strong>. The Local LLM will script {generationCount} distinct prompts into the Outgoing Batch Queue on the right for you to preview and edit before sending to ComfyUI.
         </div>
       )}
 
@@ -196,7 +196,7 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
           <label className="block text-xs font-medium text-zinc-300 mb-1">
             {generationMode === 'single'
               ? 'User Prompt (Sent Verbatim to Node #30_19 value)'
-              : 'Base Positive Style Prompt (Passed to LM Studio)'}
+              : 'Base Positive Style Prompt (Passed to Local LLM)'}
           </label>
           <textarea
             rows={3}
@@ -239,7 +239,7 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
           <div className="space-y-2 pt-2 border-t border-zinc-800/80">
             <div className="flex items-center justify-between">
               <label className="text-xs font-medium text-zinc-300">
-                LM Studio Guiding Prompt Template
+                Local LLM Guiding Prompt Template
               </label>
               <div className="flex items-center gap-2">
                 <button
@@ -284,7 +284,7 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
               <div className="p-3 bg-zinc-900/90 border border-zinc-800 rounded-lg space-y-2 text-[11px] font-mono text-zinc-300">
                 <div>
                   <span className="text-indigo-400 block mb-0.5">
-                    System Prompt Sent to LM Studio:
+                    System Prompt Sent to Local LLM:
                   </span>
                   <p className="whitespace-pre-wrap text-zinc-400">
                     {interpolatePromptClient(activeGuidingTemplate.systemPrompt, {
@@ -297,7 +297,7 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
                 </div>
                 <div className="pt-2 border-t border-zinc-800">
                   <span className="text-indigo-400 block mb-0.5">
-                    User Message Sent to LM Studio:
+                    User Message Sent to Local LLM:
                   </span>
                   <p className="whitespace-pre-wrap text-zinc-400">
                     {interpolatePromptClient(activeGuidingTemplate.userPromptTemplate, {
@@ -313,12 +313,12 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
             )}
           </div>
 
-          {/* LM Studio Connection & Model Bar */}
+          {/* Local LLM Connection & Model Bar */}
           <div className="space-y-3 pt-2 border-t border-zinc-800/80">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-200">
                 <Bot className="w-4 h-4 text-indigo-400" />
-                <span>LM Studio Local LLM</span>
+                <span>Local LLM (OpenAI-Compatible)</span>
               </div>
               <span className="text-[11px] text-zinc-400">
                 {lmStatus?.online ? 'Connected' : 'Offline (Fallback Ready)'}
@@ -328,7 +328,7 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <div>
                 <label className="block text-[11px] text-zinc-400 mb-1">
-                  LM Studio Endpoint
+                  Local LLM Endpoint
                 </label>
                 <div className="flex items-center gap-1">
                   <input
@@ -343,7 +343,7 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
                     onClick={onTestLmStudio}
                     disabled={isTestingLm}
                     className="p-1.5 bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 rounded text-zinc-300 cursor-pointer"
-                    title="Refresh LM Studio connection & models"
+                    title="Refresh Local LLM connection & models"
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isTestingLm ? 'animate-spin' : ''}`} />
                   </button>
@@ -385,8 +385,8 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
               <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
               <span>
                 {isGeneratingAgentPrompts
-                  ? `Scripting ${generationCount} Set Prompts via LM Studio...`
-                  : `Generate ${generationCount} Photo Set Prompts with LM Studio (Preview in Queue)`}
+                  ? `Scripting ${generationCount} Set Prompts via Local LLM...`
+                  : `Generate ${generationCount} Photo Set Prompts with Local LLM (Preview in Queue)`}
               </span>
             </button>
 

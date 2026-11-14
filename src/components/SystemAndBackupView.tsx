@@ -231,12 +231,12 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       setLmStatus(status);
       setGuidingFeedback(
         status.online
-          ? `LM Studio is online. Found ${status.availableModels.length} loaded model(s).`
-          : `LM Studio offline: ${status.error || 'Connection refused at ' + updated.baseUrl}`
+          ? `Local LLM is online. Found ${status.availableModels.length} loaded model(s).`
+          : `Local LLM offline: ${status.error || 'Connection refused at ' + updated.baseUrl}`
       );
       setTimeout(() => setGuidingFeedback(null), 4000);
     } catch (err: any) {
-      setGuidingFeedback(`LM Studio test failed: ${err.message}`);
+      setGuidingFeedback(`Local LLM test failed: ${err.message}`);
     } finally {
       setIsTestingLm(false);
     }

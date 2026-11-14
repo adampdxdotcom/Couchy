@@ -566,6 +566,7 @@ export interface LmStudioStatus {
   defaultConversationSystemPrompt?: string;
   availableModels: string[];
   guidingTemplates: LmStudioGuidingTemplate[];
+  apiKeyConfigured?: boolean;
   error: string | null;
 }
 

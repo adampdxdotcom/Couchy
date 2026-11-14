@@ -462,9 +462,9 @@ export default function App() {
         const prev = prevLmStudioOnlineRef.current;
         if (prev !== null) {
           if (prev === true && !res.online) {
-            pushToast('LM Studio Offline', 'warning');
+            pushToast('Local LLM Offline', 'warning');
           } else if (prev === false && res.online) {
-            pushToast('LM Studio Reconnected', 'success');
+            pushToast('Local LLM Reconnected', 'success');
           }
         }
         prevLmStudioOnlineRef.current = Boolean(res.online);
@@ -472,7 +472,7 @@ export default function App() {
         if (cancelled) return;
         const prev = prevLmStudioOnlineRef.current;
         if (prev !== null && prev === true) {
-          pushToast('LM Studio Offline', 'warning');
+          pushToast('Local LLM Offline', 'warning');
         }
         prevLmStudioOnlineRef.current = false;
         setLmStudioStatus((prevStatus) => ({ ...prevStatus, online: false }));
@@ -545,7 +545,7 @@ export default function App() {
   const handleOpenConversationForImage = useCallback(
     (img: ImageRecord) => {
       if (!lmStudioStatus.online) {
-        pushToast('LM Studio is offline — start LM Studio to use Conversation mode.', 'warning');
+        pushToast('Local LLM is offline — start your Local LLM server to use Conversation mode.', 'warning');
         return;
       }
 

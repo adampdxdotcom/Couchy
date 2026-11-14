@@ -260,7 +260,7 @@ generationRouter.post('/lmstudio/chat', async (req, res) => {
     });
     res.json(result);
   } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to converse with LM Studio.' });
+    res.status(400).json({ error: err?.message || 'Failed to converse with Local LLM.' });
   }
 });
 

@@ -350,7 +350,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
                       }`}
                     />
                     <span className="font-semibold text-zinc-200">
-                      LM Studio {lmStudioStatus.online ? 'Online' : 'Offline'}
+                      Local LLM {lmStudioStatus.online ? 'Online' : 'Offline'}
                     </span>
                   </div>
                   <span className="font-mono text-zinc-400 truncate max-w-[150px]">

@@ -228,7 +228,22 @@ export function updateLmStudioSettings(payload: {
 }
 
 /**
- * Checks connectivity to LM Studio (/v1/models) and lists loaded models + guiding templates.
+ * Builds request headers for the OpenAI-compatible Local LLM endpoint,
+ * attaching `Authorization: Bearer <token>` when `LOCAL_LLM_API_KEY` is configured on the server.
+ */
+function getLocalLlmHeaders(includeJsonContentType = false): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (includeJsonContentType) {
+    headers['Content-Type'] = 'application/json';
+  }
+  if (appConfig.localLlmApiKey) {
+    headers.Authorization = `Bearer ${appConfig.localLlmApiKey}`;
+  }
+  return headers;
+}
+
+/**
+ * Checks connectivity to Local LLM (/v1/models) and lists loaded models + guiding templates.
  */
 export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStudioStatus> {
   const settings = getLmStudioSettings();
@@ -239,7 +254,10 @@ export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStu
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3500);
-    const res = await fetch(modelsEndpoint, { signal: controller.signal });
+    const res = await fetch(modelsEndpoint, {
+      headers: getLocalLlmHeaders(false),
+      signal: controller.signal,
+    });
     clearTimeout(timer);
 
     if (!res.ok) {
@@ -269,6 +287,7 @@ export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStu
       defaultConversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
       availableModels,
       guidingTemplates,
+      apiKeyConfigured: Boolean(appConfig.localLlmApiKey),
       error: null,
     };
   } catch (err: any) {
@@ -281,7 +300,8 @@ export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStu
       defaultConversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
       availableModels: [],
       guidingTemplates,
-      error: err?.message || 'LM Studio server unreachable at ' + baseUrl,
+      apiKeyConfigured: Boolean(appConfig.localLlmApiKey),
+      error: err?.message || 'Local LLM server unreachable at ' + baseUrl,
     };
   }
 }
@@ -430,7 +450,7 @@ Rules:
     const modelToUse = params.modelOverride || settings.selectedModel || 'local-model';
     const res = await fetch(chatEndpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getLocalLlmHeaders(true),
       signal: controller.signal,
       body: JSON.stringify({
         model: modelToUse,
@@ -446,7 +466,7 @@ Rules:
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`LM Studio returned HTTP ${res.status}: ${errText}`);
+      throw new Error(`Local LLM returned HTTP ${res.status}: ${errText}`);
     }
 
     const data = (await res.json()) as any;
@@ -479,7 +499,7 @@ Rules:
     }
 
     if (parsedPrompts.length === 0) {
-      throw new Error('LM Studio response could not be parsed into individual prompts.');
+      throw new Error('Local LLM response could not be parsed into individual prompts.');
     }
 
     while (parsedPrompts.length < count) {
@@ -525,11 +545,11 @@ Rules:
     return {
       prompts: fallbackPrompts,
       usedLmStudio: false,
-      modelUsed: 'Built-in Photo Set Director (LM Studio Offline)',
+      modelUsed: 'Built-in Photo Set Director (Local LLM Offline)',
       guidingTemplateName: chosenGuiding?.name || 'Default Guiding Prompt',
       sentSystemPrompt,
       sentUserPrompt,
-      warning: `LM Studio unreachable (${err?.message || 'connection refused'}). Generated set variations using Couchy's built-in shot director so you can still preview or edit your set.`,
+      warning: `Local LLM unreachable (${err?.message || 'connection refused'}). Generated set variations using Couchy's built-in shot director so you can still preview or edit your set.`,
     };
   }
 }
@@ -670,7 +690,7 @@ export async function interrogateImageToPrompt(params: {
 }> {
   const status = await checkLmStudioStatus();
   if (!status.online) {
-    throw new Error('LM Studio is offline. Connect LM Studio to interrogate images.');
+    throw new Error('Local LLM is offline. Connect a Local LLM to interrogate images.');
   }
 
   const rawDataUrl = (params.imageBase64DataUrl || '').trim();
@@ -765,7 +785,7 @@ Rules:
 
       const visionRes = await fetch(chatEndpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getLocalLlmHeaders(true),
         signal: controller.signal,
         body: JSON.stringify({
           model: modelToUse,
@@ -838,7 +858,7 @@ Rules:
 
     const textRes = await fetch(chatEndpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getLocalLlmHeaders(true),
       signal: controller.signal,
       body: JSON.stringify({
         model: modelToUse,
@@ -857,7 +877,7 @@ Rules:
 
     if (!textRes.ok) {
       const errBody = await textRes.text();
-      throw new Error(`LM Studio returned HTTP ${textRes.status}: ${errBody}`);
+      throw new Error(`Local LLM returned HTTP ${textRes.status}: ${errBody}`);
     }
 
     const data = (await textRes.json()) as any;
@@ -913,7 +933,7 @@ export async function converseQuickGenPrompt(params: {
 }> {
   const status = await checkLmStudioStatus();
   if (!status.online) {
-    throw new Error('LM Studio is offline. Start LM Studio to use Conversation mode.');
+    throw new Error('Local LLM is offline. Start your Local LLM server to use Conversation mode.');
   }
 
   const settings = getLmStudioSettings();
@@ -1060,7 +1080,7 @@ export async function converseQuickGenPrompt(params: {
   try {
     const res = await fetch(chatEndpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getLocalLlmHeaders(true),
       signal: controller.signal,
       body: JSON.stringify({
         model: modelToUse,
@@ -1073,8 +1093,8 @@ export async function converseQuickGenPrompt(params: {
 
     if (!res.ok) {
       const errText = await res.text();
-      logger.error('LMStudio', `Conversation HTTP ${res.status}`, errText);
-      throw new Error(`LM Studio returned HTTP ${res.status}: ${errText}`);
+      logger.error('LocalLLM', `Conversation HTTP ${res.status}`, errText);
+      throw new Error(`Local LLM returned HTTP ${res.status}: ${errText}`);
     }
 
     const data = (await res.json()) as any;
@@ -1154,7 +1174,7 @@ export async function converseQuickGenPrompt(params: {
     }
 
     logger.info(
-      'LMStudio',
+      'LocalLLM',
       `Conversation turn completed (${data?.model || modelToUse}) | proposedPrompt=${Boolean(
         proposedPrompt
       )} | selectedLoras=${selectedLoras.length > 0 ? selectedLoras.join(', ') : 'none'}`

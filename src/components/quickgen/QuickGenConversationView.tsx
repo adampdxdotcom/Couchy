@@ -63,7 +63,7 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
           <div className="h-full flex flex-col items-center justify-center text-center px-4 text-zinc-400 space-y-1.5">
             <Bot className="w-6 h-6 text-indigo-400/70 stroke-1.5" />
             <p className="text-zinc-300 font-medium">
-              Brainstorm your image idea with the LM Studio Agent
+              Brainstorm your image idea with the Local LLM Agent
             </p>
             <p className="text-[11px] text-zinc-500 max-w-md">
               Describe a rough concept below and press Enter. When the Agent offers a prompt, click{' '}

@@ -249,7 +249,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                 {submitState.isInterrogating ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />
-                    <span>Downscaling to 1MP &amp; interrogating image via LM Studio...</span>
+                    <span>Downscaling to 1MP &amp; interrogating image via Local LLM...</span>
                   </>
                 ) : (
                   <>
@@ -372,7 +372,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                   title={
                     lmStudioOnline
                       ? 'Upload or drop an image to interrogate into a prompt (auto-downscales to 1MP)'
-                      : 'LM Studio is offline — connect LM Studio to interrogate images'
+                      : 'Local LLM is offline — connect a Local LLM to interrogate images'
                   }
                 >
                   {submitState.isInterrogating ? (
@@ -398,8 +398,8 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                   }`}
                   title={
                     lmStudioOnline
-                      ? 'Toggle LM Studio Agent to expand your prompt into a themed photo set'
-                      : 'LM Studio is offline — start LM Studio or check connection in System settings'
+                      ? 'Toggle Local LLM Agent to expand your prompt into a themed photo set'
+                      : 'Local LLM is offline — start your Local LLM server or check connection in System settings'
                   }
                 >
                   <Bot className="w-3.5 h-3.5" />

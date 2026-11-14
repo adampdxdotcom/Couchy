@@ -1,6 +1,6 @@
 # Couchy
 
-A local-first, self-hosted AI image gallery, character organization system, and prompt orchestration studio. Couchy connects directly to your [ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance and an optional local LLM (such as [LM Studio](https://lmstudio.ai/) or Ollama) to generate, organize, tag, and explore images with complete metadata provenance.
+A local-first, self-hosted AI image gallery, character organization system, and prompt orchestration studio. Couchy connects directly to your [ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance and an optional OpenAI-compatible Local LLM (such as Ollama, `llama.cpp`, KoboldCpp, vLLM, or LM Studio) to generate, organize, tag, and explore images with complete metadata provenance.
 
 Repository: **[https://github.com/adampdxdotcom/Couchy](https://github.com/adampdxdotcom/Couchy)**
 
@@ -43,10 +43,10 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
 - **Hybrid Image-to-Prompt Interrogation (Drag, Paste, or Upload)**:
   - **Drop, Paste, or Browse**: Drag and drop an image file onto the Quick Gen Box, paste an image from your clipboard (`Ctrl+V` / `Cmd+V`), or click the **Image Upload (`ImagePlus`)** button.
   - **1MP Downscaling & Auto Aspect Ratio**: The browser automatically downscales the reference image to at most ~1 Megapixel (`1,048,576` pixels) while preserving its aspect ratio, and sets the Quick Gen aspect ratio selector to the closest matching preset.
-  - **Hybrid Vision / WD14 + LLM Pipeline**:
-    - **Vision Model Loaded in LM Studio**: Sends the 1MP image directly to the local Vision Language Model (VLM) to synthesize a detailed prose prompt (independent of whether the `Agent` toggle is active).
-    - **Text-Only Model Loaded in LM Studio**: Runs the image through the local `wd-vit-tagger-v3` ONNX visual tagger first, then feeds the extracted tags into the local text LLM to write a natural prose prompt.
-    - Automatically disabled with a helpful tooltip whenever LM Studio is offline.
+  - **Hybrid Vision / WD14 + Local LLM Pipeline**:
+    - **Vision Model Loaded in Local LLM**: Sends the 1MP image directly to the local Vision Language Model (VLM) via `/v1/chat/completions` to synthesize a detailed prose prompt (independent of whether the `Agent` toggle is active).
+    - **Text-Only Model Loaded in Local LLM**: Runs the image through the local `wd-vit-tagger-v3` ONNX visual tagger first, then feeds the extracted tags into the local text LLM to write a natural prose prompt.
+    - Automatically disabled with a helpful tooltip whenever the Local LLM server is offline.
   - **Character-Aware Physical Trait Stripping**: If a character is already attached in the Quick Gen Box when you drop or upload a photo, Couchy automatically strips conflicting physical identity traits—such as hair color, eye color, permanent facial features (freckles, moles), skin tone, race/ethnicity, and body proportions—while keeping hairstyle structure, transient facial expressions/emotions (e.g., smiling, blushing), pose, clothing/NSFW state, lighting, and framing so the character's LoRA defines their appearance cleanly.
   - **Optional Reference Archiving**: Enable *"Save Uploaded Prompt Images"* in **System** to automatically save a copy of each 1MP downscaled reference image to `data/uploaded`.
 
@@ -118,6 +118,9 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
 - **LoRA `@Mention` Configuration**: Enable or disable Quick Gen `@mention` support strictly via each LoRA's checkbox while clicking a LoRA row opens its detail settings (custom nickname, category, trigger words, and default model/CLIP strengths). Character-classified LoRAs automatically display their linked character's portrait thumbnail.
 - **Unified Smart Downloader & Metadata Enrichment**:
   - Search Civitai (`.com` and `.red`) and Hugging Face Hub from a single smart search bar—supporting keyword queries, SHA-256 / 10-character AutoV2 hashes, `owner/repo` identifiers, and direct file or page URLs.
+  - **Civitai Multi-Version Selector**: Switch between any published version of a Civitai model (e.g., `v2.0 · Krea 2`, `v1.2 · Flux.1 D`) directly from a dropdown on the preview card—dynamically updating preview thumbnails, file size, SHA-256 hash, trigger words, recommended weight, and download target.
+  - **"Already Installed" Detection & Inspection**: Automatically cross-references search results and every Civitai version option against your local model inventory (matching by SHA-256 / AutoV2 hash, Civitai Version ID, or filename). Installed models and versions display a clickable **`Installed`** badge and **`Inspect Installed`** button to jump straight to the LoRA Detail Inspector or Model Inventory, plus a **`Re-download / Overwrite`** option.
+  - **Early Access Delayed / Scheduled Downloads**: Automatically detects Civitai Early Access models and unlock countdowns (`earlyAccessEndsAt`, `earlyAccessDeadline`, `paidAccess.endsAt`), allowing you to schedule downloads to run automatically once Early Access unlocks (with `Run Now`, `Schedule After Unlock`, and `Cancel` controls in the queue).
   - Browse multi-file Hugging Face repositories (`.safetensors`, `.gguf`, `.ckpt`, `.pt`, `.pth`, `.bin`, `.sft`) with automatic ComfyUI target folder inference, or download LoRAs in one click directly to `/downloads/loras`.
   - Automatically detects and heals `civitai.red` vs. `civitai.com` links for restricted or delisted models.
 
@@ -137,7 +140,7 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
 - Docker and Docker Compose installed ([Docker Engine](https://docs.docker.com/engine/install/))
 - A running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance (bare metal or containerized)
 - *(Optional)* An NVIDIA GPU with NVIDIA Container Toolkit installed for GPU-accelerated local ONNX tagging
-- *(Optional)* [LM Studio](https://lmstudio.ai/) or Ollama running locally for the Photo Set Agent
+- *(Optional)* Any OpenAI-compatible Local LLM server (Ollama, `llama.cpp`, KoboldCpp, vLLM, TabbyAPI, or LM Studio) for the Photo Set Agent, Conversation mode, and image interrogation
 
 ---
 
@@ -168,7 +171,8 @@ Edit `.env` to match your local setup:
 ```ini
 PORT=8080
 COMFYUI_URL=http://host.docker.internal:8188
-LM_STUDIO_URL=http://host.docker.internal:1234/v1
+LOCAL_LLM_URL=http://host.docker.internal:11434/v1
+LOCAL_LLM_API_KEY=
 COMFYUI_OUTPUT_DIR=/data/output
 COMFYUI_MODELS_DIR=/data/models
 DATABASE_PATH=/app/data/gallery.db
@@ -177,6 +181,8 @@ DOWNLOADS_DIR=/downloads
 CIVITAI_API_KEY=
 HF_API_TOKEN=
 ```
+
+> **Note on Local LLM Endpoints**: Under **System &rarr; Agent**, you can also switch or test your OpenAI-compatible endpoint at runtime using one-click presets for **Ollama (`:11434/v1`)**, **llama.cpp (`:8080/v1`)**, **KoboldCpp (`:5001/v1`)**, **vLLM (`:8000/v1`)**, or **Port 1234 (`:1234/v1`)**. If your LLM server requires authentication (e.g. `llama-server --api-key`, `vLLM --api-key`, TabbyAPI, or a remote proxy), set `LOCAL_LLM_API_KEY` in `.env` and Couchy will automatically attach `Authorization: Bearer <key>` on all `/v1/models` and `/v1/chat/completions` requests. (`LM_STUDIO_URL` remains supported as a backward-compatible alias for `LOCAL_LLM_URL`.)
 
 ---
 
@@ -311,8 +317,13 @@ The unified search bar under **Civitai & Hugging Face Downloader** automatically
 - Preview cards and detail pages label detected restricted models with **`Civitai.red`** so original links stay working.
 - Click **Heal Civitai Links** in the **LoRAs & Models** toolbar at any time to audit existing database records and repair broken `.com` / `.red` links.
 
-### 4. Destination Folders, Hash Verification & Post-Download Workflow
-- **Direct LoRA Downloads**: Civitai LoRAs download in one click straight into `/downloads/loras` (`./model-downloads/loras`). Multi-file Hugging Face repos and other model types open a confirmation modal to pick the exact file and ComfyUI subfolder (`checkpoints`, `diffusion_models`, `text_encoders`, `vae`, `controlnet`, `upscale_models`, `embeddings`).
+### 4. Multi-Version Selector, "Already Installed" Detection & Early Access Scheduling
+- **Civitai Version Selector**: When a Civitai model has multiple versions, use the version dropdown in the card header to switch between versions (showing version name, base model, `✓ Installed`, or `⏳ Early Access`). All card details, previews, trigger words, SHA-256 hashes, and download actions update immediately.
+- **Already Installed Detection**: Search results and version options are automatically matched against your installed local models by SHA-256 / AutoV2 hash, Civitai Version ID, or filename. Click the emerald **`Installed`** badge or **`Inspect Installed`** button to jump directly to the model's LoRA Detail Inspector or Model Inventory entry, or click **`Re-download / Overwrite`** if you want to replace the local file.
+- **Early Access Delayed Downloads**: For Civitai models currently in Early Access, Couchy displays the unlock timestamp and countdown and lets you schedule the download to start automatically once the Early Access window ends (or click **Try Now** if unlocked with Buzz). Scheduled jobs are persisted in SQLite and processed by a background scheduler with automatic retry on unlock transition.
+
+### 5. Destination Folders, Hash Verification & Post-Download Workflow
+- **Direct LoRA Downloads**: Non-installed Civitai LoRAs download in one click straight into `/downloads/loras` (`./model-downloads/loras`). Multi-file Hugging Face repos and other model types open a confirmation modal to pick the exact file and ComfyUI subfolder (`checkpoints`, `diffusion_models`, `text_encoders`, `vae`, `controlnet`, `upscale_models`, `embeddings`).
 - **Safe Atomic Writes & SHA-256 Verification**: Downloads stream to a temporary `.part` file, verify the expected SHA-256 checksum on completion (if provided by Civitai or Hugging Face LFS), cache up to 4 WebP preview images locally, and automatically sync into Couchy's inventory.
 - **Active Stack & History Links**: Concurrent downloads stack newest-first as full-width preview cards with live progress and clear automatically once finished. In the **Download Queue & Hash Verification History**, completed Civitai downloads display their first cached preview thumbnail—click any completed **LoRA** name to jump straight into its **LoRA Detail Inspector** (`@mention` nickname, trigger words, strengths, category), or click other model types to locate them in **Model Inventory**.
 
@@ -324,7 +335,8 @@ The unified search bar under **Civitai & Hugging Face Downloader** automatically
 |---|---|---|
 | `PORT` | `8080` | Internal HTTP server port |
 | `COMFYUI_URL` | `http://comfyui:8188` | ComfyUI HTTP endpoint (`http://host.docker.internal:8188` when ComfyUI is on the host) |
-| `LM_STUDIO_URL` | `http://host.docker.internal:1234/v1` | OpenAI-compatible endpoint for the LLM Photo Set Agent |
+| `LOCAL_LLM_URL` | `http://host.docker.internal:11434/v1` | OpenAI-compatible `/v1` endpoint for the Local LLM Agent (`LM_STUDIO_URL` and `LLM_BASE_URL` are also supported as aliases) |
+| `LOCAL_LLM_API_KEY` | *(Optional)* | Server-side Bearer API key (`Authorization: Bearer <key>`) for authenticated OpenAI-compatible LLM endpoints (`LLM_API_KEY` also supported) |
 | `COMFYUI_OUTPUT_DIR`| `/data/output` | Read-only mount of ComfyUI output directory |
 | `COMFYUI_MODELS_DIR`| `/data/models` | Read-only mount of ComfyUI models directory |
 | `DATABASE_PATH` | `/app/data/gallery.db` | Persistent SQLite database location |

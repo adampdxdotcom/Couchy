@@ -36,6 +36,7 @@ export interface AppConfig {
   port: number;
   comfyuiUrl: string;
   lmStudioUrl: string;
+  localLlmApiKey: string;
   comfyuiOutputDir: string;
   comfyuiModelsDir: string;
   databasePath: string;
@@ -53,7 +54,18 @@ export interface AppConfig {
 export const appConfig: AppConfig = {
   port: Number(process.env.PORT || 3000),
   comfyuiUrl: (process.env.COMFYUI_URL || 'http://comfyui:8188').replace(/\/+$/, ''),
-  lmStudioUrl: (process.env.LM_STUDIO_URL || 'http://localhost:1234/v1').replace(/\/+$/, ''),
+  lmStudioUrl: (
+    process.env.LOCAL_LLM_URL ||
+    process.env.LLM_BASE_URL ||
+    process.env.LM_STUDIO_URL ||
+    'http://localhost:1234/v1'
+  ).replace(/\/+$/, ''),
+  localLlmApiKey: (
+    process.env.LOCAL_LLM_API_KEY ||
+    process.env.LLM_API_KEY ||
+    process.env.LM_STUDIO_API_KEY ||
+    ''
+  ).trim(),
   comfyuiOutputDir: resolveStoragePath(process.env.COMFYUI_OUTPUT_DIR, '/data/output', 'mounted-data/output'),
   comfyuiModelsDir: resolveStoragePath(process.env.COMFYUI_MODELS_DIR, '/data/models', 'mounted-data/models'),
   databasePath: resolveDbFilePath(process.env.DATABASE_PATH),

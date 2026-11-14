@@ -256,7 +256,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
       setLmStatus(status);
       if (status.selectedModel) setLmModelInput(status.selectedModel);
       setAgentFeedback(
-        `LM Studio connection verified: ${status.availableModels?.length || 0} models available.`
+        `Local LLM connection verified: ${status.availableModels?.length || 0} models available.`
       );
     } catch (err: any) {
       setAgentFeedback(`Connection check failed: ${err.message}`);
@@ -283,13 +283,13 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
       if (res.prompts && res.prompts.length > 0) {
         setOutgoingPrompts(res.prompts);
         setAgentFeedback(
-          `LM Studio agent successfully generated ${res.prompts.length} distinct set prompts.`
+          `Local LLM agent successfully generated ${res.prompts.length} distinct set prompts.`
         );
       } else {
-        setAgentFeedback('LM Studio did not return prompt variations. Used fallback prompts.');
+        setAgentFeedback('Local LLM did not return prompt variations. Used fallback prompts.');
       }
     } catch (err: any) {
-      setAgentFeedback(`LM Studio Agent failed: ${err.message}`);
+      setAgentFeedback(`Local LLM Agent failed: ${err.message}`);
     } finally {
       setIsGeneratingAgentPrompts(false);
     }
@@ -371,7 +371,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
           </h1>
           <p className="text-xs text-zinc-400 mt-0.5">
             Configure multi-LoRA stacks (Node #50), Resolution Selector dimensions (Node #49), and
-            script photo sets using local LM Studio LLMs before sending batches to ComfyUI.
+            script photo sets using a Local LLM before sending batches to ComfyUI.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -382,7 +382,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 rounded-lg cursor-pointer transition-colors"
             >
               <Bot className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Configure LM Studio</span>
+              <span>Configure Local LLM</span>
             </button>
           )}
         </div>
@@ -480,7 +480,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
                 <p className="text-xs text-zinc-400">
                   {generationMode === 'single'
                     ? 'Verbatim single prompt dispatched across batch slots with unique 64-bit seeds'
-                    : 'LM Studio scripted prompt sequence for this themed photo set'}
+                    : 'Local LLM scripted prompt sequence for this themed photo set'}
                 </p>
               </div>
               <button

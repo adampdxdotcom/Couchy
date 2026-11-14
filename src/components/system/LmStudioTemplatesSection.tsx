@@ -75,15 +75,23 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
           <Bot className="w-4 h-4 text-indigo-400" />
           <div>
             <h2 className="text-sm font-display font-semibold text-zinc-100">
-              LM Studio Agent &amp; Guiding Prompt Templates (Database)
+              Local LLM Agent &amp; Guiding Prompt Templates (Database)
             </h2>
             <p className="text-zinc-400">
-              Configure your local LM Studio endpoint, Quick Gen Conversation prompt, and saved Guiding Prompt Templates for themed photo sets.
+              Configure your local OpenAI-compatible LLM endpoint, Quick Gen Conversation prompt, and saved Guiding Prompt Templates for themed photo sets.
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          {lmStatus?.apiKeyConfigured && (
+            <span
+              className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/35 text-emerald-300 font-mono text-[11px]"
+              title="Server-side Bearer API key is configured via LOCAL_LLM_API_KEY"
+            >
+              Bearer Auth Configured
+            </span>
+          )}
           <span className="text-zinc-400 font-mono">
             Status: {lmStatus?.online ? 'Connected' : 'Offline'}
           </span>
@@ -94,7 +102,7 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-medium rounded-lg cursor-pointer"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isTestingLm ? 'animate-spin' : ''}`} />
-            <span>{isTestingLm ? 'Testing...' : 'Save & Test LM Studio'}</span>
+            <span>{isTestingLm ? 'Testing...' : 'Save & Test Local LLM'}</span>
           </button>
         </div>
       </div>
@@ -105,24 +113,47 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
         </div>
       )}
 
-      {/* LM Studio Endpoint & Model Row */}
+      {/* Local LLM Endpoint & Model Row */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-zinc-400 mb-1">
-            LM Studio OpenAI-Compatible Endpoint URL
+        <div className="space-y-1.5">
+          <label className="block text-zinc-400">
+            Local LLM OpenAI-Compatible Endpoint URL
           </label>
           <input
             type="text"
             value={lmBaseUrl}
             onChange={(e) => setLmBaseUrl(e.target.value)}
-            placeholder="http://localhost:1234/v1"
+            placeholder="http://localhost:11434/v1"
             className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-zinc-100"
           />
+          <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-[11px] text-zinc-500">
+            <span>Presets:</span>
+            {[
+              { label: 'Ollama (:11434)', url: 'http://localhost:11434/v1' },
+              { label: 'llama.cpp (:8080)', url: 'http://localhost:8080/v1' },
+              { label: 'KoboldCpp (:5001)', url: 'http://localhost:5001/v1' },
+              { label: 'vLLM (:8000)', url: 'http://localhost:8000/v1' },
+              { label: 'Port 1234', url: 'http://localhost:1234/v1' },
+            ].map((preset) => (
+              <button
+                key={preset.url}
+                type="button"
+                onClick={() => setLmBaseUrl(preset.url)}
+                className={`px-2 py-0.5 rounded border font-mono transition-colors cursor-pointer ${
+                  lmBaseUrl.replace(/\/+$/, '') === preset.url
+                    ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
+                    : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+                }`}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
         </div>
 
         <div>
-          <label className="block text-zinc-400 mb-1">
-            Default LM Studio Model
+          <label className="block text-zinc-400 mb-1.5">
+            Default Local LLM Model
           </label>
           {lmStatus && lmStatus.availableModels.length > 0 ? (
             <select
@@ -141,7 +172,7 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
               type="text"
               value={lmSelectedModel}
               onChange={(e) => setLmSelectedModel(e.target.value)}
-              placeholder="local-model (auto-detected when LM Studio is running)"
+              placeholder="local-model (auto-detected when Local LLM is running)"
               className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-zinc-100"
             />
           )}

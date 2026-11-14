@@ -264,7 +264,7 @@ export function useQuickGenSubmit({
 
   const handleInterrogateImageFile = async (file: File) => {
     if (!lmStudioOnline) {
-      onPushToast('LM Studio is offline — start LM Studio to interrogate images.', 'warning');
+      onPushToast('Local LLM is offline — start your Local LLM server to interrogate images.', 'warning');
       return;
     }
     if (!file.type.startsWith('image/')) {
@@ -445,7 +445,7 @@ export function useQuickGenSubmit({
       setChatMessages((prev) => [...prev, assistantMsg]);
       focusInputAtEnd(30, false);
     } catch (err: any) {
-      onPushToast(err?.message || 'Failed to converse with LM Studio.', 'error');
+      onPushToast(err?.message || 'Failed to converse with Local LLM.', 'error');
     } finally {
       setIsChatting(false);
     }
