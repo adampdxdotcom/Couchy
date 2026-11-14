@@ -672,78 +672,83 @@ export default function App() {
   const visibleLoras = useMemo(() => loras.filter((l) => !l.isHidden), [loras]);
 
   return (
-    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-zinc-950 text-zinc-100 flex flex-col">
-      {/* 3-Zone Top Bar with Unified Status & Toast Message Area */}
-      <TopNavHeader
-        activeTab={activeTab}
-        onSelectTab={(tab) => {
-          if (tab === 'characters') {
-            setSelectedCharacterId(null);
-          }
-          setActiveTab(tab);
-          setIsMobileMenuOpen(false);
-        }}
-        comfyStatus={comfyStatus}
-        activeToast={activeToast}
-        messages={messages}
-        onClearMessages={() => {
-          setMessages([]);
-          setActiveToast(null);
-        }}
-        isMobileMenuOpen={isMobileMenuOpen}
-        onMobileMenuOpenChange={setIsMobileMenuOpen}
-        lmStudioStatus={lmStudioStatus}
-      />
+    <div className="min-h-screen w-full max-w-full overflow-x-clip bg-zinc-950 text-zinc-100 flex flex-col">
+      {/* Unified Sticky Chrome: Top Navigation across all tabs + Gallery Search/Filters flush below on Gallery */}
+      <div className="sticky top-0 z-40 w-full bg-zinc-950/95 backdrop-blur-md">
+        <TopNavHeader
+          activeTab={activeTab}
+          onSelectTab={(tab) => {
+            if (tab === 'characters') {
+              setSelectedCharacterId(null);
+            }
+            setActiveTab(tab);
+            setIsMobileMenuOpen(false);
+          }}
+          comfyStatus={comfyStatus}
+          activeToast={activeToast}
+          messages={messages}
+          onClearMessages={() => {
+            setMessages([]);
+            setActiveToast(null);
+          }}
+          isMobileMenuOpen={isMobileMenuOpen}
+          onMobileMenuOpenChange={setIsMobileMenuOpen}
+          lmStudioStatus={lmStudioStatus}
+        />
+
+        {activeTab === 'gallery' && (
+          <GalleryFilterBar
+            filters={filters}
+            onChange={(nextFilters) => {
+              setGalleryPage(1);
+              setFilters(nextFilters);
+            }}
+            onReset={() => {
+              setGalleryPage(1);
+              setFilters(INITIAL_FILTERS);
+            }}
+            layout={layout}
+            onLayoutChange={setLayout}
+            thumbScale={thumbScale}
+            onThumbScaleChange={setThumbScale}
+            totalMatching={images.length}
+            page={currentGalleryPage}
+            totalPages={totalGalleryPages}
+            onPageChange={handleGalleryPageChange}
+            infiniteScroll={infiniteScroll}
+            onInfiniteScrollChange={handleInfiniteScrollChange}
+            characters={characters}
+            loras={visibleLoras}
+            checkpoints={checkpoints}
+            collections={collections}
+            tags={tags}
+            savedSearches={savedSearches}
+            onSaveSearch={async (name) => {
+              await api.saveSearchPreset(name, filters.query, filters);
+              await loadMetadataAndEntities();
+              pushToast(`Saved search preset "${name}"`, 'success');
+            }}
+            onDeleteSavedSearch={async (id) => {
+              await api.deleteSearchPreset(id);
+              await loadMetadataAndEntities();
+              pushToast('Deleted saved search preset', 'info');
+            }}
+            onExportFilteredZip={() => {
+              pushToast('Preparing filtered ZIP archive...', 'info');
+              api.exportImagesZip({
+                filters,
+                archiveName: 'couchy-filtered-export',
+              });
+            }}
+            isHiddenOnMobile={isMobileMenuOpen}
+          />
+        )}
+      </div>
 
       {/* Main Content Area */}
-      <main className={`flex-1 w-full max-w-full min-w-0 overflow-x-hidden ${showQuickGenBar ? 'pb-36 md:pb-28' : ''}`}>
+      <main className={`flex-1 w-full max-w-full min-w-0 overflow-x-clip ${showQuickGenBar ? 'pb-36 md:pb-28' : ''}`}>
         {activeTab === 'gallery' && (
           <>
-            <GalleryFilterBar
-              filters={filters}
-              onChange={(nextFilters) => {
-                setGalleryPage(1);
-                setFilters(nextFilters);
-              }}
-              onReset={() => {
-                setGalleryPage(1);
-                setFilters(INITIAL_FILTERS);
-              }}
-              layout={layout}
-              onLayoutChange={setLayout}
-              thumbScale={thumbScale}
-              onThumbScaleChange={setThumbScale}
-              totalMatching={images.length}
-              page={currentGalleryPage}
-              totalPages={totalGalleryPages}
-              onPageChange={handleGalleryPageChange}
-              infiniteScroll={infiniteScroll}
-              onInfiniteScrollChange={handleInfiniteScrollChange}
-              characters={characters}
-              loras={visibleLoras}
-              checkpoints={checkpoints}
-              collections={collections}
-              tags={tags}
-              savedSearches={savedSearches}
-              onSaveSearch={async (name) => {
-                await api.saveSearchPreset(name, filters.query, filters);
-                await loadMetadataAndEntities();
-                pushToast(`Saved search preset "${name}"`, 'success');
-              }}
-              onDeleteSavedSearch={async (id) => {
-                await api.deleteSearchPreset(id);
-                await loadMetadataAndEntities();
-                pushToast('Deleted saved search preset', 'info');
-              }}
-              onExportFilteredZip={() => {
-                pushToast('Preparing filtered ZIP archive...', 'info');
-                api.exportImagesZip({
-                  filters,
-                  archiveName: 'couchy-filtered-export',
-                });
-              }}
-              isHiddenOnMobile={isMobileMenuOpen}
-            />
 
             <GalleryGridView
               images={images}

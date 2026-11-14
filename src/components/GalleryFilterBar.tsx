@@ -125,7 +125,7 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
 
   return (
     <section
-      className={`sticky top-[53px] sm:top-[57px] z-20 bg-zinc-950/95 backdrop-blur-md border-b border-zinc-800 px-4 sm:px-6 py-2.5 transition-all shadow-md space-y-3 ${
+      className={`relative z-20 bg-zinc-950/95 backdrop-blur-md border-b border-zinc-800 px-4 sm:px-6 py-2 transition-all shadow-md space-y-2.5 ${
         isHiddenOnMobile ? 'hidden md:block' : 'block'
       }`}
     >
@@ -286,7 +286,7 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
 
       {/* Expandable Sliding Filter Window (Hidden by default) */}
       {showFilters && (
-        <div className="pt-3 border-t border-zinc-800/80 space-y-3 text-xs animate-in fade-in duration-200">
+        <div className="pt-2.5 border-t border-zinc-800/80 space-y-3 text-xs max-h-[calc(100vh-8rem)] overflow-y-auto animate-in fade-in duration-200">
           {/* Quick Filters, Sorting, and View Modes Row */}
           <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2 border-b border-zinc-800/60">
             <div className="flex flex-wrap items-center gap-2">

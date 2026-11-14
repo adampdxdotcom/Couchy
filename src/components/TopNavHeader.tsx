@@ -156,7 +156,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
   };
 
   return (
-    <header className="relative flex items-center justify-between gap-3 sm:gap-6 px-3.5 sm:px-6 py-2.5 sm:py-3 bg-zinc-950 border-b border-zinc-800/80 sticky top-0 z-40">
+    <header className="relative z-30 flex items-center justify-between gap-3 sm:gap-6 px-3.5 sm:px-6 py-2 sm:py-2.5 bg-zinc-950 border-b border-zinc-800/80">
       {/* Zone 1: Mobile Hamburger Toggle & Brand Wordmark */}
       <div className="flex items-center gap-2 sm:gap-3 shrink-0">
         <button
@@ -414,7 +414,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
         <>
           {/* Scrim backdrop */}
           <div
-            className="fixed inset-0 top-[53px] sm:top-[57px] bg-black/85 backdrop-blur-sm z-30 md:hidden"
+            className="fixed inset-0 top-[49px] sm:top-[53px] bg-black/85 backdrop-blur-sm z-30 md:hidden"
             onClick={() => setMobileMenuOpenState(false)}
             aria-hidden="true"
           />
