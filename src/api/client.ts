@@ -312,6 +312,11 @@ export const api = {
       characters: any[];
     }>(`/api/models/${encodeURIComponent(name)}/impact`),
 
+  searchModels: (q: string, type = '') =>
+    requestJson<{ items: ExternalModelSearchResult[] }>(
+      `/api/models/search?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`
+    ),
+
   searchCivitai: (q: string, type = '') =>
     requestJson<{ items: ExternalModelSearchResult[] }>(
       `/api/models/search/civitai?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`

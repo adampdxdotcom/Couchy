@@ -6,8 +6,8 @@ import {
   FolderGit2,
   HardDriveDownload,
   Layers,
-  Link2,
   Loader2,
+  Search,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
@@ -23,8 +23,6 @@ import type {
 } from '../shared/types.ts';
 
 interface ModelDownloaderTabProps {
-  provider: 'civitai' | 'huggingface';
-  setProvider: (p: 'civitai' | 'huggingface') => void;
   extQuery: string;
   setExtQuery: (q: string) => void;
   extTypeFilter: string;
@@ -63,12 +61,10 @@ function getDefaultSubfolderForItem(item: ExternalModelSearchResult): ComfyModel
 }
 
 /**
- * Civitai, Hugging Face Hub, and Direct URL Model Downloader with multi-file repo picker
- * and full ComfyUI destination folder support.
+ * Unified smart Model Downloader searching Civitai and Hugging Face Hub,
+ * resolving hashes, owner/repo IDs, and direct URLs from a single search bar.
  */
 export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
-  provider,
-  setProvider,
   extQuery,
   setExtQuery,
   extTypeFilter,
@@ -81,10 +77,6 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   onRefreshDownloads,
   onPushToast,
 }) => {
-  const [directUrl, setDirectUrl] = useState('');
-  const [isResolvingUrl, setIsResolvingUrl] = useState(false);
-  const [urlError, setUrlError] = useState<string | null>(null);
-
   const [pendingDownload, setPendingDownload] = useState<ExternalModelSearchResult | null>(null);
   const [selectedFile, setSelectedFile] = useState<ExternalModelFileOption | null>(null);
   const [isLoadingRepoFiles, setIsLoadingRepoFiles] = useState(false);
@@ -139,22 +131,6 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     setDlSubfolder(file.suggestedSubfolder);
     setCustomFilename(file.filename);
     setDlError(null);
-  };
-
-  const handleResolveDirectUrl = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!directUrl.trim()) return;
-    setIsResolvingUrl(true);
-    setUrlError(null);
-    try {
-      const res = await api.resolveModelUrl(directUrl.trim());
-      setDirectUrl('');
-      await openDownloadModal(res.item);
-    } catch (err: any) {
-      setUrlError(err?.message || 'Could not resolve model URL');
-    } finally {
-      setIsResolvingUrl(false);
-    }
   };
 
   const handleDirectLoraDownload = async (item: ExternalModelSearchResult, cardKey: string) => {
@@ -245,96 +221,41 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Direct URL / Repo Paste Bar */}
-      <form
-        onSubmit={handleResolveDirectUrl}
-        className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-2 text-xs"
-      >
-        <div className="flex items-center gap-2 text-zinc-300 font-medium">
-          <Link2 className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Direct URL or Hugging Face Repository</span>
-          <span className="text-zinc-500 font-normal">
-            — Paste a Civitai page/download URL, Hugging Face file/repo link, or{' '}
-            <code className="font-mono text-zinc-400">owner/repo</code>
-          </span>
-        </div>
-        <div className="flex flex-wrap items-center gap-2.5">
-          <input
-            type="text"
-            value={directUrl}
-            onChange={(e) => setDirectUrl(e.target.value)}
-            placeholder="https://huggingface.co/comfyanonymous/flux_text_encoders/blob/main/t5xxl_fp8_e4m3fn.safetensors or https://civitai.com/models/..."
-            className="flex-1 min-w-[260px] px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 font-mono"
-          />
-          <button
-            type="submit"
-            disabled={isResolvingUrl || !directUrl.trim()}
-            className="px-4 py-2 bg-zinc-800 hover:bg-indigo-600 disabled:opacity-50 text-zinc-100 font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
-          >
-            {isResolvingUrl ? 'Resolving...' : 'Fetch & Review URL'}
-          </button>
-        </div>
-        {urlError && <p className="text-rose-400">{urlError}</p>}
-      </form>
-
-      {/* Search Form */}
+      {/* Single Unified Smart Search Bar */}
       <form
         onSubmit={(e) => onSearch(e)}
         className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap items-center gap-3 text-xs"
       >
-        <div className="flex items-center p-0.5 bg-zinc-950 border border-zinc-800 rounded-lg">
-          <button
-            type="button"
-            onClick={() => setProvider('civitai')}
-            className={`px-3 py-1.5 rounded-md font-medium cursor-pointer ${
-              provider === 'civitai' ? 'bg-indigo-600 text-white' : 'text-zinc-400'
-            }`}
-          >
-            Civitai API
-          </button>
-          <button
-            type="button"
-            onClick={() => setProvider('huggingface')}
-            className={`px-3 py-1.5 rounded-md font-medium cursor-pointer ${
-              provider === 'huggingface' ? 'bg-indigo-600 text-white' : 'text-zinc-400'
-            }`}
-          >
-            Hugging Face Hub
-          </button>
+        <div className="relative flex-1 min-w-[260px]">
+          <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={extQuery}
+            onChange={(e) => setExtQuery(e.target.value)}
+            placeholder="Search Civitai & Hugging Face, or paste a hash, owner/repo, or direct URL..."
+            className="w-full pl-9 pr-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
+          />
         </div>
 
-        <input
-          type="text"
-          value={extQuery}
-          onChange={(e) => setExtQuery(e.target.value)}
-          placeholder={
-            provider === 'civitai'
-              ? 'Search Civitai models or paste SHA-256 / AutoV2 hash...'
-              : 'Search Hugging Face repos (e.g. flux_text_encoders, controlnet, gguf) or owner/repo...'
-          }
-          className="flex-1 min-w-[240px] px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-        />
-
-        {provider === 'civitai' && (
-          <select
-            value={extTypeFilter}
-            onChange={(e) => setExtTypeFilter(e.target.value)}
-            className="px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200"
-          >
-            <option value="">All Model Types</option>
-            <option value="lora">LoRA / LoCon / DoRA</option>
-            <option value="checkpoint">Checkpoint / UNET Base</option>
-            <option value="controlnet">ControlNet</option>
-            <option value="vae">VAE</option>
-            <option value="upscaler">Upscaler</option>
-            <option value="embedding">Embedding / Textual Inversion</option>
-          </select>
-        )}
+        <select
+          value={extTypeFilter}
+          onChange={(e) => setExtTypeFilter(e.target.value)}
+          className="px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200"
+        >
+          <option value="">All Model Types</option>
+          <option value="lora">LoRA / LoCon / DoRA</option>
+          <option value="checkpoint">Checkpoint / UNET Base</option>
+          <option value="clip">Text Encoder / CLIP / T5</option>
+          <option value="controlnet">ControlNet</option>
+          <option value="vae">VAE</option>
+          <option value="upscaler">Upscaler</option>
+          <option value="embedding">Embedding / Textual Inversion</option>
+        </select>
 
         <button
           type="submit"
           disabled={isSearchingExt}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer"
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-medium rounded-lg cursor-pointer whitespace-nowrap shrink-0"
         >
           {isSearchingExt ? 'Searching...' : 'Search Models'}
         </button>
@@ -354,6 +275,12 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
             const hasThumb = Boolean(item.previewImageUrl && !brokenImages[cardKey]);
             const fileCount = item.totalRepoFilesCount || item.availableFiles?.length || 1;
             const targetFolder = getDefaultSubfolderForItem(item);
+            const providerLabel =
+              item.provider === 'civitai'
+                ? 'Civitai'
+                : item.provider === 'huggingface'
+                ? 'Hugging Face'
+                : 'Direct URL';
 
             return (
               <div
@@ -385,11 +312,14 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                     )}
 
                     <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
+                      <span className="px-2 py-0.5 rounded bg-zinc-950/85 border border-zinc-700/80 font-mono text-[10px] text-zinc-200">
+                        {providerLabel}
+                      </span>
                       <span className="px-2 py-0.5 rounded bg-zinc-950/85 border border-zinc-700/80 font-mono text-[10px] text-emerald-300">
                         /{targetFolder}
                       </span>
                       {fileCount > 1 && (
-                        <span className="px-2 py-0.5 rounded bg-zinc-950/85 border border-zinc-700/80 font-mono text-[10px] text-zinc-200">
+                        <span className="px-2 py-0.5 rounded bg-zinc-950/85 border border-zinc-700/80 font-mono text-[10px] text-zinc-300">
                           {fileCount} files
                         </span>
                       )}

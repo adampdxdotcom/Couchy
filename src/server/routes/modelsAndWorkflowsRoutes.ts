@@ -16,6 +16,7 @@ import {
 import {
   searchCivitaiModels,
   searchHuggingFaceModels,
+  smartSearchModels,
   startConfirmedModelDownload,
 } from '../services/modelManagerService.ts';
 import {
@@ -351,6 +352,21 @@ modelsAndWorkflowsRouter.get('/models/:name/impact', (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to compute model impact report' });
+  }
+});
+
+/**
+ * GET /api/models/search
+ * Unified smart search across Civitai, Hugging Face Hub, hashes, owner/repo IDs, and direct URLs.
+ */
+modelsAndWorkflowsRouter.get('/models/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '');
+    const type = String(req.query.type || '');
+    const items = await smartSearchModels(q, type);
+    res.json({ items });
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message || 'Model search failed' });
   }
 });
 

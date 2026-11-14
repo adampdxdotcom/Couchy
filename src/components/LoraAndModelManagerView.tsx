@@ -64,7 +64,6 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   const [brokenThumbs, setBrokenThumbs] = useState<Record<string, boolean>>({});
 
   // Model Downloader State
-  const [provider, setProvider] = useState<'civitai' | 'huggingface'>('civitai');
   const [extQuery, setExtQuery] = useState('');
   const [extTypeFilter, setExtTypeFilter] = useState('');
   const [searchResults, setSearchResults] = useState<ExternalModelSearchResult[]>([]);
@@ -138,10 +137,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
     setIsSearchingExt(true);
     setSearchError(null);
     try {
-      const res =
-        provider === 'civitai'
-          ? await api.searchCivitai(qToUse, extTypeFilter)
-          : await api.searchHuggingFace(qToUse);
+      const res = await api.searchModels(qToUse, extTypeFilter);
       setSearchResults(res.items || []);
     } catch (err: any) {
       setSearchError(err.message || 'External model search failed');
@@ -960,8 +956,6 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       {/* Sub-Tab 3: Civitai & Hugging Face Downloader */}
       {subTab === 'downloader' && (
         <ModelDownloaderTab
-          provider={provider}
-          setProvider={setProvider}
           extQuery={extQuery}
           setExtQuery={setExtQuery}
           extTypeFilter={extTypeFilter}

@@ -187,7 +187,10 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
 /**
  * Searches Hugging Face Hub API for model weight repositories (.safetensors, .gguf, .ckpt, .pth, etc.).
  */
-export async function searchHuggingFaceModels(query: string): Promise<ExternalModelSearchResult[]> {
+export async function searchHuggingFaceModels(
+  query: string,
+  typeFilter?: string
+): Promise<ExternalModelSearchResult[]> {
   const trimmed = query.trim();
 
   // If query is an exact owner/repo or Hugging Face URL, resolve it directly first
@@ -215,9 +218,24 @@ export async function searchHuggingFaceModels(query: string): Promise<ExternalMo
     }
   }
 
+  const typeHint =
+    typeFilter === 'clip'
+      ? 'text_encoders clip safetensors'
+      : typeFilter === 'diffusion'
+      ? 'gguf diffusion safetensors'
+      : typeFilter
+      ? `${typeFilter} safetensors`
+      : 'safetensors comfyui';
+
+  const searchTerm = trimmed
+    ? typeFilter === 'clip' && !/clip|t5|encoder/i.test(trimmed)
+      ? `${trimmed} clip`
+      : trimmed
+    : typeHint;
+
   const url = new URL('https://huggingface.co/api/models');
-  url.searchParams.set('search', trimmed || 'safetensors comfyui');
-  url.searchParams.set('limit', '12');
+  url.searchParams.set('search', searchTerm);
+  url.searchParams.set('limit', '10');
   url.searchParams.set('full', 'true');
 
   const res = await fetch(url.toString(), { headers });
@@ -257,7 +275,18 @@ export async function searchHuggingFaceModels(query: string): Promise<ExternalMo
     }
 
     if (availableFiles.length === 0) continue;
-    const primary = availableFiles[0];
+
+    const matchingFile = typeFilter
+      ? availableFiles.find(
+          (f) =>
+            f.modelType === typeFilter ||
+            (typeFilter === 'checkpoint' && f.modelType === 'diffusion') ||
+            (typeFilter === 'diffusion' && f.modelType === 'checkpoint')
+        )
+      : availableFiles[0];
+
+    if (typeFilter && !matchingFile) continue;
+    const primary = matchingFile || availableFiles[0];
 
     results.push({
       provider: 'huggingface',
@@ -281,6 +310,65 @@ export async function searchHuggingFaceModels(query: string): Promise<ExternalMo
   }
 
   return results;
+}
+
+/**
+ * Unified smart model search that automatically routes URLs, Hugging Face owner/repo IDs,
+ * SHA-256/AutoV2 hashes, and general keyword queries across Civitai and Hugging Face.
+ */
+export async function smartSearchModels(
+  query: string,
+  typeFilter?: string
+): Promise<ExternalModelSearchResult[]> {
+  const trimmed = query.trim();
+
+  // 1. Direct URL (Civitai, Hugging Face, or direct weight file URL)
+  if (/^https?:\/\//i.test(trimmed)) {
+    const resolved = await resolveDirectModelUrl(trimmed);
+    return [resolved];
+  }
+
+  // 2. Hugging Face owner/repo identifier
+  const hfRepo = parseHuggingFaceRepoAndFile(trimmed);
+  if (hfRepo) {
+    const resolved = await resolveDirectModelUrl(trimmed);
+    return [resolved];
+  }
+
+  // 3. SHA-256 or AutoV2 hash (10 to 64 hex chars) -> Check Civitai hash endpoint first
+  if (/^[a-fA-F0-9]{10,64}$/.test(trimmed)) {
+    const civitaiHashMatches = await searchCivitaiModels(trimmed, typeFilter);
+    if (civitaiHashMatches.length > 0) {
+      return civitaiHashMatches;
+    }
+  }
+
+  // 4. Keyword search across Civitai and Hugging Face in parallel
+  const shouldQueryCivitai = typeFilter !== 'clip';
+  const [civitaiRes, hfRes] = await Promise.allSettled([
+    shouldQueryCivitai ? searchCivitaiModels(trimmed, typeFilter) : Promise.resolve([]),
+    searchHuggingFaceModels(trimmed, typeFilter),
+  ]);
+
+  const combined: ExternalModelSearchResult[] = [];
+  if (civitaiRes.status === 'fulfilled') {
+    combined.push(...civitaiRes.value);
+  }
+  if (hfRes.status === 'fulfilled') {
+    combined.push(...hfRes.value);
+  }
+
+  if (
+    combined.length === 0 &&
+    civitaiRes.status === 'rejected' &&
+    hfRes.status === 'rejected'
+  ) {
+    throw new Error(
+      civitaiRes.reason?.message || hfRes.reason?.message || 'External model search failed'
+    );
+  }
+
+  return combined;
 }
 
 /**
