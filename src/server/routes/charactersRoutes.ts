@@ -230,26 +230,52 @@ charactersRouter.post('/:id/loras', (req, res) => {
       return;
     }
 
+    // Block non-character classifications on linked character LoRAs
+    if (loraCategory !== undefined && loraCategory !== null && String(loraCategory) !== 'character') {
+      res.status(400).json({ error: 'Linked character LoRAs must use the "character" classification.' });
+      return;
+    }
+
     const cleanName = String(loraName).trim();
     const modelRow = db
-      .prepare('SELECT id, sha256_hash FROM models WHERE LOWER(filename) = LOWER(?) LIMIT 1')
-      .get(cleanName) as { id: number; sha256_hash: string | null } | undefined;
+      .prepare('SELECT id, sha256_hash, lora_category FROM models WHERE LOWER(filename) = LOWER(?) LIMIT 1')
+      .get(cleanName) as { id: number; sha256_hash: string | null; lora_category: string | null } | undefined;
+
+    let resolvedModelId = modelRow?.id ?? null;
+
+    // Auto-classify as 'character' in LoRA Explorer only if not yet classified
+    if (modelRow) {
+      db.prepare(
+        `UPDATE models
+         SET lora_category = 'character'
+         WHERE id = ?
+           AND COALESCE(NULLIF(TRIM(lora_category), ''), 'unclassified') = 'unclassified'`
+      ).run(modelRow.id);
+    } else {
+      const insertModel = db
+        .prepare(
+          `INSERT INTO models (name, filename, model_type, lora_category, is_installed)
+           VALUES (?, ?, 'lora', 'character', 0)`
+        )
+        .run(cleanName.replace(/\.(safetensors|pt|ckpt)$/i, ''), cleanName);
+      resolvedModelId = Number(insertModel.lastInsertRowid);
+    }
 
     db.prepare(
       `INSERT INTO character_loras
         (character_id, model_id, lora_name, lora_hash, lora_category, appearance_label, trigger_word, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, 'character', ?, ?, ?)
        ON CONFLICT(character_id, lora_name) DO UPDATE SET
-         lora_category = excluded.lora_category,
+         model_id = COALESCE(character_loras.model_id, excluded.model_id),
+         lora_category = 'character',
          appearance_label = excluded.appearance_label,
          trigger_word = excluded.trigger_word,
          notes = excluded.notes`
     ).run(
       charId,
-      modelRow?.id ?? null,
+      resolvedModelId,
       cleanName,
       modelRow?.sha256_hash ?? null,
-      loraCategory || 'character',
       appearanceLabel || 'Default',
       triggerWord !== undefined ? String(triggerWord).trim() : '',
       notes || ''

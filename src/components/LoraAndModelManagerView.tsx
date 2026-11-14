@@ -32,6 +32,14 @@ interface LoraAndModelManagerViewProps {
   onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
+function getLoraCoverUrl(lora: LoraExplorerItem): string | null {
+  if (lora.loraCategory === 'character') {
+    const charPortrait = lora.characters.find((c) => c.portraitThumbnailUrl)?.portraitThumbnailUrl;
+    if (charPortrait) return charPortrait;
+  }
+  return lora.previewImages?.[0]?.url || null;
+}
+
 /**
  * Combined LoRA Explorer (Grid & List), LoRA Detail Inspector,
  * Model Inventory & Missing Dependencies, and Civitai / Hugging Face Downloader.
@@ -402,8 +410,8 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           ) : explorerLayout === 'grid' ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {filteredLoras.map((l) => {
-                const coverUrl = l.previewImages?.[0]?.url || null;
-                const hasThumb = Boolean(coverUrl && !brokenThumbs[l.filename]);
+                const coverUrl = getLoraCoverUrl(l);
+                const hasThumb = Boolean(coverUrl && !brokenThumbs[coverUrl]);
 
                 return (
                   <div
@@ -423,7 +431,9 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                             className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
                             loading="lazy"
                             onError={() =>
-                              setBrokenThumbs((prev) => ({ ...prev, [l.filename]: true }))
+                              setBrokenThumbs((prev) =>
+                                coverUrl ? { ...prev, [coverUrl]: true } : prev
+                              )
                             }
                           />
                         ) : (
@@ -594,7 +604,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                 </thead>
                 <tbody className="divide-y divide-zinc-800/70">
                   {filteredLoras.map((l) => {
-                    const coverUrl = l.previewImages?.[0]?.url || null;
+                    const coverUrl = getLoraCoverUrl(l);
                     return (
                       <tr
                         key={l.filename}
@@ -626,13 +636,15 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
                           onClick={() => setSelectedLoraName(l.filename)}
                         >
                           <div className="flex items-center gap-3">
-                            {coverUrl && !brokenThumbs[l.filename] ? (
+                            {coverUrl && !brokenThumbs[coverUrl] ? (
                               <img
                                 src={coverUrl}
                                 alt={l.name}
                                 className="w-9 h-9 rounded object-cover border border-zinc-800 shrink-0"
                                 onError={() =>
-                                  setBrokenThumbs((prev) => ({ ...prev, [l.filename]: true }))
+                                  setBrokenThumbs((prev) =>
+                                    coverUrl ? { ...prev, [coverUrl]: true } : prev
+                                  )
                                 }
                               />
                             ) : (

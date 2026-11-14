@@ -5,6 +5,7 @@ import {
   enrichSingleImageWithSeries,
 } from './seriesService.ts';
 import { parsePreviewImagesJson } from './civitaiMetadataService.ts';
+import { getCharacterPortraitThumbnailMap } from './characterService.ts';
 import type {
   GalleryFilterState,
   ImageRecord,
@@ -711,6 +712,8 @@ export function listLoraExplorerItems(): LoraExplorerItem[] {
     )
     .all() as any[];
 
+  const portraitMap = getCharacterPortraitThumbnailMap();
+
   const getChars = db.prepare(`
     SELECT c.id, c.name, cl.appearance_label AS appearanceLabel
     FROM character_loras cl
@@ -718,45 +721,59 @@ export function listLoraExplorerItems(): LoraExplorerItem[] {
     WHERE LOWER(cl.lora_name) = LOWER(?)
   `);
 
-  return rows.map((r) => ({
-    name: r.name,
-    modelId: r.modelId ?? null,
-    filename: r.filename,
-    filePath: r.filePath ?? null,
-    fileSize: r.fileSize ?? null,
-    sha256Hash: r.sha256Hash ?? null,
-    autov2Hash: r.autov2Hash ?? null,
-    loraCategory: r.loraCategory || 'unclassified',
-    isInstalled: Boolean(r.isInstalled),
-    isHidden: Boolean(r.isHidden),
-    downloadUrl: r.downloadUrl ?? null,
-    civitaiId: r.civitaiId ?? null,
-    civitaiVersionId: r.civitaiVersionId ?? null,
-    civitaiUrl: r.civitaiUrl ?? null,
-    baseModel: r.baseModel ?? null,
-    recommendedWeight:
-      r.recommendedWeight !== null && r.recommendedWeight !== undefined
-        ? Number(r.recommendedWeight)
-        : null,
-    civitaiDescription: r.civitaiDescription ?? null,
-    previewImages: parsePreviewImagesJson(r.previewImagesJson, r.modelId),
-    civitaiFetchedAt: r.civitaiFetchedAt ?? null,
-    hfRepoId: r.hfRepoId ?? null,
-    userNotes: r.userNotes ?? null,
-    nickname: r.nickname || null,
-    mentionEnabled: Boolean(r.mentionEnabled),
-    defaultModelStrength: Number(r.defaultModelStrength ?? 1.0),
-    defaultClipStrength: Number(r.defaultClipStrength ?? 1.0),
-    triggerWord: r.triggerWord || null,
-    llmDescription: r.llmDescription || null,
-    imageCount: Number(r.imageCount || 0),
-    workflowCount: Number(r.workflowCount || 0),
-    averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
-    minModelStrength: r.minModelStrength !== null ? Number(Number(r.minModelStrength).toFixed(2)) : null,
-    maxModelStrength: r.maxModelStrength !== null ? Number(Number(r.maxModelStrength).toFixed(2)) : null,
-    avgModelStrength: r.avgModelStrength !== null ? Number(Number(r.avgModelStrength).toFixed(2)) : null,
-    minClipStrength: r.minClipStrength !== null ? Number(Number(r.minClipStrength).toFixed(2)) : null,
-    maxClipStrength: r.maxClipStrength !== null ? Number(Number(r.maxClipStrength).toFixed(2)) : null,
-    characters: getChars.all(r.filename) as { id: number; name: string; appearanceLabel: string }[],
-  }));
+  return rows.map((r) => {
+    const linkedChars = (
+      getChars.all(r.filename) as { id: number; name: string; appearanceLabel: string }[]
+    ).map((c) => ({
+      ...c,
+      portraitThumbnailUrl: portraitMap.get(c.id) ?? null,
+    }));
+
+    return {
+      name: r.name,
+      modelId: r.modelId ?? null,
+      filename: r.filename,
+      filePath: r.filePath ?? null,
+      fileSize: r.fileSize ?? null,
+      sha256Hash: r.sha256Hash ?? null,
+      autov2Hash: r.autov2Hash ?? null,
+      loraCategory: r.loraCategory || 'unclassified',
+      isInstalled: Boolean(r.isInstalled),
+      isHidden: Boolean(r.isHidden),
+      downloadUrl: r.downloadUrl ?? null,
+      civitaiId: r.civitaiId ?? null,
+      civitaiVersionId: r.civitaiVersionId ?? null,
+      civitaiUrl: r.civitaiUrl ?? null,
+      baseModel: r.baseModel ?? null,
+      recommendedWeight:
+        r.recommendedWeight !== null && r.recommendedWeight !== undefined
+          ? Number(r.recommendedWeight)
+          : null,
+      civitaiDescription: r.civitaiDescription ?? null,
+      previewImages: parsePreviewImagesJson(r.previewImagesJson, r.modelId),
+      civitaiFetchedAt: r.civitaiFetchedAt ?? null,
+      hfRepoId: r.hfRepoId ?? null,
+      userNotes: r.userNotes ?? null,
+      nickname: r.nickname || null,
+      mentionEnabled: Boolean(r.mentionEnabled),
+      defaultModelStrength: Number(r.defaultModelStrength ?? 1.0),
+      defaultClipStrength: Number(r.defaultClipStrength ?? 1.0),
+      triggerWord: r.triggerWord || null,
+      llmDescription: r.llmDescription || null,
+      imageCount: Number(r.imageCount || 0),
+      workflowCount: Number(r.workflowCount || 0),
+      averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
+      minModelStrength:
+        r.minModelStrength !== null ? Number(Number(r.minModelStrength).toFixed(2)) : null,
+      maxModelStrength:
+        r.maxModelStrength !== null ? Number(Number(r.maxModelStrength).toFixed(2)) : null,
+      avgModelStrength:
+        r.avgModelStrength !== null ? Number(Number(r.avgModelStrength).toFixed(2)) : null,
+      minClipStrength:
+        r.minClipStrength !== null ? Number(Number(r.minClipStrength).toFixed(2)) : null,
+      maxClipStrength:
+        r.maxClipStrength !== null ? Number(Number(r.maxClipStrength).toFixed(2)) : null,
+      characters: linkedChars,
+    };
+  });
 }

@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { api } from '../../api/client.ts';
 import type {
   CharacterProfile,
-  LoraCategory,
   LoraExplorerItem,
   WorkflowLibraryItem,
 } from '../../shared/types.ts';
@@ -25,7 +24,6 @@ export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProp
   const [linkLoraName, setLinkLoraName] = useState('');
   const [linkLoraAppearance, setLinkLoraAppearance] = useState('Default');
   const [linkLoraTriggerWord, setLinkLoraTriggerWord] = useState('');
-  const [linkLoraCategory, setLinkLoraCategory] = useState<LoraCategory>('character');
   const [linkWorkflowId, setLinkWorkflowId] = useState('');
   const [linkWorkflowRole, setLinkWorkflowRole] = useState('Canonical Portrait');
 
@@ -86,7 +84,7 @@ export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProp
                         loraName: l.loraName,
                         appearanceLabel: l.appearanceLabel,
                         triggerWord: nextTrig,
-                        loraCategory: l.loraCategory,
+                        loraCategory: 'character',
                         notes: l.notes,
                       });
                       await onRefresh();
@@ -128,17 +126,12 @@ export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProp
             className="w-full min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
           />
           <div className="flex items-center gap-2 min-w-0">
-            <select
-              value={linkLoraCategory}
-              onChange={(e) => setLinkLoraCategory(e.target.value as LoraCategory)}
-              className="flex-1 min-w-0 px-2 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
+            <div
+              className="flex-1 min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950/60 border border-zinc-800 rounded text-zinc-400 truncate"
+              title="Linked character LoRAs are locked to the Character classification"
             >
-              <option value="character">Character</option>
-              <option value="clothing">Clothing / Outfit</option>
-              <option value="style">Style</option>
-              <option value="pose">Pose</option>
-              <option value="other">Other</option>
-            </select>
+              Type: <span className="text-zinc-200 font-medium">Character</span>
+            </div>
             <button
               type="button"
               onClick={async () => {
@@ -147,7 +140,7 @@ export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProp
                   loraName: linkLoraName.trim(),
                   appearanceLabel: linkLoraAppearance.trim() || 'Default',
                   triggerWord: linkLoraTriggerWord.trim(),
-                  loraCategory: linkLoraCategory,
+                  loraCategory: 'character',
                 });
                 setLinkLoraName('');
                 setLinkLoraTriggerWord('');

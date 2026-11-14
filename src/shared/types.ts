@@ -264,7 +264,12 @@ export interface LoraExplorerItem {
   avgModelStrength: number | null;
   minClipStrength: number | null;
   maxClipStrength: number | null;
-  characters: { id: number; name: string; appearanceLabel: string }[];
+  characters: {
+    id: number;
+    name: string;
+    appearanceLabel: string;
+    portraitThumbnailUrl?: string | null;
+  }[];
   nickname?: string | null;
   mentionEnabled?: boolean;
   defaultModelStrength?: number;

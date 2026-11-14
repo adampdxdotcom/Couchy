@@ -41,6 +41,75 @@ export function getCharacterProfileById(characterId: number): CharacterProfile |
   return buildCharacterProfile(row);
 }
 
+export function resolveCharacterPortraitId(row: {
+  id: number;
+  portrait_image_id?: number | null;
+  portrait_content_hash?: string | null;
+  resolved_portrait_id?: number | null;
+}): number | null {
+  let portraitId = row.resolved_portrait_id || null;
+  const hasExplicitPortrait = Boolean(row.portrait_image_id || row.portrait_content_hash);
+
+  if (hasExplicitPortrait && !portraitId) {
+    if (row.portrait_content_hash) {
+      const imgByHash = db
+        .prepare('SELECT id FROM images WHERE content_hash = ? AND is_missing = 0 LIMIT 1')
+        .get(row.portrait_content_hash) as { id: number } | undefined;
+      if (imgByHash) portraitId = imgByHash.id;
+    }
+    if (!portraitId && row.portrait_image_id) {
+      const imgById = db
+        .prepare('SELECT id FROM images WHERE id = ? LIMIT 1')
+        .get(row.portrait_image_id) as { id: number } | undefined;
+      if (imgById) portraitId = imgById.id;
+    }
+  }
+
+  // Fallback to highest-rated or latest confirmed appearance only when no portrait was explicitly chosen
+  if (!portraitId && !hasExplicitPortrait) {
+    const fallbackImg = db
+      .prepare(
+        `
+        SELECT i.id
+        FROM image_characters ic
+        JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+        LEFT JOIN ratings r ON r.content_hash = i.content_hash
+        WHERE ic.character_id = ? AND ic.status = 'confirmed'
+        ORDER BY COALESCE(r.rating, 0) DESC, i.file_mtime DESC
+        LIMIT 1
+      `
+      )
+      .get(row.id) as { id: number } | undefined;
+    if (fallbackImg) portraitId = fallbackImg.id;
+  }
+
+  return portraitId;
+}
+
+export function getCharacterPortraitThumbnailMap(): Map<number, string | null> {
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        c.id,
+        c.portrait_image_id,
+        c.portrait_content_hash,
+        img.id AS resolved_portrait_id
+      FROM characters c
+      LEFT JOIN images img ON (c.portrait_content_hash IS NOT NULL AND img.content_hash = c.portrait_content_hash)
+        OR (c.portrait_image_id IS NOT NULL AND img.id = c.portrait_image_id)
+    `
+    )
+    .all() as any[];
+
+  const map = new Map<number, string | null>();
+  for (const row of rows) {
+    const portraitId = resolveCharacterPortraitId(row);
+    map.set(row.id, portraitId ? `/api/images/${portraitId}/thumbnail` : null);
+  }
+  return map;
+}
+
 function buildCharacterProfile(row: any): CharacterProfile {
   const aliases = db
     .prepare('SELECT id, alias FROM character_aliases WHERE character_id = ? ORDER BY alias ASC')
@@ -120,43 +189,7 @@ function buildCharacterProfile(row: any): CharacterProfile {
     )
     .get(row.id) as any;
 
-  // Portrait resolution:
-  // If the user has specifically chosen a portrait, prioritize it and NEVER overwrite with fallback.
-  let portraitId = row.resolved_portrait_id || null;
-  const hasExplicitPortrait = Boolean(row.portrait_image_id || row.portrait_content_hash);
-
-  if (hasExplicitPortrait && !portraitId) {
-    if (row.portrait_content_hash) {
-      const imgByHash = db
-        .prepare('SELECT id FROM images WHERE content_hash = ? AND is_missing = 0 LIMIT 1')
-        .get(row.portrait_content_hash) as { id: number } | undefined;
-      if (imgByHash) portraitId = imgByHash.id;
-    }
-    if (!portraitId && row.portrait_image_id) {
-      const imgById = db
-        .prepare('SELECT id FROM images WHERE id = ? LIMIT 1')
-        .get(row.portrait_image_id) as { id: number } | undefined;
-      if (imgById) portraitId = imgById.id;
-    }
-  }
-
-  // Automatic portrait fallback (highest-rated or latest generation) ONLY when NO portrait has ever been chosen
-  if (!portraitId && !hasExplicitPortrait) {
-    const fallbackImg = db
-      .prepare(
-        `
-        SELECT i.id
-        FROM image_characters ic
-        JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
-        LEFT JOIN ratings r ON r.content_hash = i.content_hash
-        WHERE ic.character_id = ? AND ic.status = 'confirmed'
-        ORDER BY COALESCE(r.rating, 0) DESC, i.file_mtime DESC
-        LIMIT 1
-      `
-      )
-      .get(row.id) as { id: number } | undefined;
-    if (fallbackImg) portraitId = fallbackImg.id;
-  }
+  const portraitId = resolveCharacterPortraitId(row);
 
   return {
     id: row.id,
@@ -657,9 +690,4 @@ export function updateLoraCategory(loraName: string, category: LoraCategory, not
        lora_category = excluded.lora_category,
        user_notes = COALESCE(excluded.user_notes, models.user_notes)`
   ).run(loraName.replace(/\.(safetensors|pt|ckpt)$/i, ''), loraName, category, notes ?? null);
-
-  db.prepare('UPDATE character_loras SET lora_category = ? WHERE LOWER(lora_name) = LOWER(?)').run(
-    category,
-    loraName
-  );
 }

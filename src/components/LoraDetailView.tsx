@@ -73,6 +73,10 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
     .slice(0, 6);
 
   const previews = lora.previewImages || [];
+  const characterPortraitUrl =
+    lora.loraCategory === 'character'
+      ? lora.characters.find((c) => c.portraitThumbnailUrl)?.portraitThumbnailUrl || null
+      : null;
   const hasRecommendedDiff =
     lora.recommendedWeight !== null &&
     lora.recommendedWeight !== undefined &&
@@ -160,23 +164,39 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
       {/* LoRA Overview Card */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <h1 className="text-2xl font-display font-bold text-zinc-100">{lora.name}</h1>
-              {lora.baseModel && (
-                <span className="px-2 py-0.5 text-[11px] font-mono bg-zinc-950 border border-zinc-700 text-indigo-300 rounded">
-                  {lora.baseModel}
-                </span>
-              )}
-              {lora.isHidden && (
-                <span className="text-xs font-medium text-amber-400">
-                  · Hidden from Couchy
-                </span>
-              )}
+          <div className="flex items-start gap-4 min-w-0">
+            {characterPortraitUrl && (
+              <button
+                type="button"
+                onClick={() => setLightboxUrl(characterPortraitUrl)}
+                className="w-16 h-16 rounded-xl overflow-hidden border border-zinc-700 hover:border-indigo-500/70 bg-zinc-950 shrink-0 cursor-pointer transition-colors"
+                title="View linked character portrait"
+              >
+                <img
+                  src={characterPortraitUrl}
+                  alt={lora.name}
+                  className="w-full h-full object-cover"
+                />
+              </button>
+            )}
+            <div className="space-y-1 min-w-0">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h1 className="text-2xl font-display font-bold text-zinc-100">{lora.name}</h1>
+                {lora.baseModel && (
+                  <span className="px-2 py-0.5 text-[11px] font-mono bg-zinc-950 border border-zinc-700 text-indigo-300 rounded">
+                    {lora.baseModel}
+                  </span>
+                )}
+                {lora.isHidden && (
+                  <span className="text-xs font-medium text-amber-400">
+                    · Hidden from Couchy
+                  </span>
+                )}
+              </div>
+              <p className="text-xs font-mono text-zinc-400 break-all">
+                {lora.filename} · {lora.filePath || 'Not locally installed'} · {formatBytes(lora.fileSize)}
+              </p>
             </div>
-            <p className="text-xs font-mono text-zinc-400">
-              {lora.filename} · {lora.filePath || 'Not locally installed'} · {formatBytes(lora.fileSize)}
-            </p>
           </div>
 
           <div className="flex items-center gap-3 text-xs">
@@ -266,9 +286,25 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
         </div>
 
         {lora.characters.length > 0 && (
-          <div className="text-xs text-zinc-300">
-            Linked Characters:{' '}
-            {lora.characters.map((c) => `${c.name} (${c.appearanceLabel})`).join(' · ')}
+          <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-300">
+            <span className="text-zinc-400">Linked Characters:</span>
+            {lora.characters.map((c) => (
+              <span
+                key={`${c.id}-${c.appearanceLabel}`}
+                className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-950 border border-zinc-800 text-zinc-200"
+              >
+                {c.portraitThumbnailUrl && (
+                  <img
+                    src={c.portraitThumbnailUrl}
+                    alt={c.name}
+                    className="w-4 h-4 rounded object-cover shrink-0"
+                  />
+                )}
+                <span>
+                  {c.name} ({c.appearanceLabel})
+                </span>
+              </span>
+            ))}
           </div>
         )}
       </div>
