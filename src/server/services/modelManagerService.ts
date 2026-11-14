@@ -13,7 +13,21 @@ import {
   normalizeCivitaiData,
   type CivitaiNormalizedMeta,
 } from './civitaiMetadataService.ts';
-import type { ExternalModelSearchResult, ModelType } from '../../shared/types.ts';
+import {
+  DOWNLOAD_WEIGHT_EXTS,
+  MODEL_TYPE_TO_DEFAULT_SUBFOLDER,
+  SUBFOLDER_TO_MODEL_TYPE,
+  extractCivitaiVersionFiles,
+  inferSubfolderAndTypeFromPath,
+  parseHuggingFaceRepoAndFile,
+  resolveDirectModelUrl,
+} from './modelDownloadResolverService.ts';
+import type {
+  ComfyModelSubfolder,
+  ExternalModelFileOption,
+  ExternalModelSearchResult,
+  ModelType,
+} from '../../shared/types.ts';
 
 export type { ExternalModelSearchResult };
 
@@ -21,33 +35,49 @@ export type { ExternalModelSearchResult };
  * Searches Civitai REST API for LoRAs and Checkpoints by query or SHA-256/AutoV2 hash.
  */
 export async function searchCivitaiModels(query: string, typeFilter?: string): Promise<ExternalModelSearchResult[]> {
+  const trimmed = query.trim();
+
+  // If user pasted a Civitai URL directly into search, resolve it
+  if (/^https?:\/\/(www\.)?civitai\.com\//i.test(trimmed)) {
+    const resolved = await resolveDirectModelUrl(trimmed);
+    return [resolved];
+  }
+
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (appConfig.civitaiApiKey) {
     headers.Authorization = `Bearer ${appConfig.civitaiApiKey}`;
   }
 
   // If query looks like a hash (10 to 64 hex chars), try hash lookup endpoint first
-  if (/^[a-fA-F0-9]{10,64}$/.test(query.trim())) {
+  if (/^[a-fA-F0-9]{10,64}$/.test(trimmed)) {
     try {
       const hashRes = await fetch(
-        `https://civitai.com/api/v1/model-versions/by-hash/${encodeURIComponent(query.trim())}`,
+        `https://civitai.com/api/v1/model-versions/by-hash/${encodeURIComponent(trimmed)}`,
         { headers }
       );
       if (hashRes.ok) {
         const ver = (await hashRes.json()) as any;
-        const primaryFile = (ver.files || [])[0];
+        const parentModel = ver.modelId
+          ? await fetchCivitaiParentModel(ver.modelId, headers)
+          : null;
+        const rawType = String(parentModel?.type || ver.model?.type || 'LORA');
+        const availableFiles = extractCivitaiVersionFiles(ver, rawType, ver.baseModel);
+        const primaryFile = availableFiles[0];
         if (primaryFile) {
-          const parentModel = ver.modelId
-            ? await fetchCivitaiParentModel(ver.modelId, headers)
-            : null;
           const meta = normalizeCivitaiData(
             parentModel || { id: ver.modelId, ...ver.model },
             ver,
-            primaryFile.name
+            primaryFile.filename
+          );
+          const inferred = inferSubfolderAndTypeFromPath(
+            primaryFile.filename,
+            [],
+            rawType,
+            meta.baseModel
           );
           const excerpt =
             meta.civitaiDescription?.slice(0, 220) ||
-            `Matched exact model hash ${query.trim()}`;
+            `Matched exact model hash ${trimmed}`;
 
           return [
             {
@@ -55,11 +85,10 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
               id: meta.civitaiId || String(ver.modelId || ver.id),
               versionId: meta.civitaiVersionId,
               civitaiUrl: meta.civitaiUrl,
-              name: parentModel?.name || ver.model?.name || primaryFile.name,
-              modelType:
-                String(parentModel?.type || ver.model?.type || '').toLowerCase() === 'checkpoint'
-                  ? 'checkpoint'
-                  : 'lora',
+              name: parentModel?.name || ver.model?.name || primaryFile.filename,
+              modelType: inferred.modelType,
+              suggestedSubfolder: inferred.suggestedSubfolder,
+              subfolderHint: inferred.subfolderHint || null,
               versionName: ver.name || 'v1.0',
               baseModel: meta.baseModel,
               trainedWords: meta.trainedWords,
@@ -67,15 +96,17 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
               previewImageUrl: meta.previewImages[0]?.url || null,
               previewImages: meta.previewImages,
               civitaiDescription: meta.civitaiDescription,
-              filename: primaryFile.name,
-              fileSize: primaryFile.sizeKB ? Math.round(primaryFile.sizeKB * 1024) : null,
-              sha256Hash: primaryFile.hashes?.SHA256 || null,
-              downloadUrl: primaryFile.downloadUrl || ver.downloadUrl,
+              filename: primaryFile.filename,
+              fileSize: primaryFile.fileSize,
+              sha256Hash: primaryFile.sha256Hash,
+              downloadUrl: primaryFile.downloadUrl,
               creator:
                 parentModel?.creator?.username ||
                 ver.model?.creator?.username ||
                 'Civitai Creator',
               description: excerpt,
+              availableFiles,
+              totalRepoFilesCount: availableFiles.length,
             },
           ];
         }
@@ -87,9 +118,16 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
 
   const url = new URL('https://civitai.com/api/v1/models');
   url.searchParams.set('limit', '12');
-  if (query.trim()) url.searchParams.set('query', query.trim());
+  if (trimmed) url.searchParams.set('query', trimmed);
   if (typeFilter === 'checkpoint') url.searchParams.set('types', 'Checkpoint');
-  else if (typeFilter === 'lora') url.searchParams.set('types', 'LORA');
+  else if (typeFilter === 'lora') {
+    url.searchParams.append('types', 'LORA');
+    url.searchParams.append('types', 'LoCon');
+    url.searchParams.append('types', 'DoRA');
+  } else if (typeFilter === 'controlnet') url.searchParams.set('types', 'Controlnet');
+  else if (typeFilter === 'vae') url.searchParams.set('types', 'VAE');
+  else if (typeFilter === 'upscaler') url.searchParams.set('types', 'Upscaler');
+  else if (typeFilter === 'embedding') url.searchParams.set('types', 'TextualInversion');
 
   const res = await fetch(url.toString(), { headers });
   if (!res.ok) {
@@ -101,11 +139,18 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
   for (const item of data.items || []) {
     const latestVer = (item.modelVersions || [])[0];
     if (!latestVer) continue;
-    const file = (latestVer.files || [])[0];
-    if (!file) continue;
+    const rawType = String(item.type || 'LORA');
+    const availableFiles = extractCivitaiVersionFiles(latestVer, rawType, latestVer.baseModel);
+    const primaryFile = availableFiles[0];
+    if (!primaryFile) continue;
 
-    const fallbackFilename = file.name || `${item.name.replace(/\s+/g, '_')}.safetensors`;
-    const meta = normalizeCivitaiData(item, latestVer, fallbackFilename);
+    const meta = normalizeCivitaiData(item, latestVer, primaryFile.filename);
+    const inferred = inferSubfolderAndTypeFromPath(
+      primaryFile.filename,
+      [],
+      rawType,
+      meta.baseModel
+    );
 
     results.push({
       provider: 'civitai',
@@ -113,7 +158,9 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
       versionId: meta.civitaiVersionId,
       civitaiUrl: meta.civitaiUrl,
       name: item.name,
-      modelType: String(item.type).toLowerCase() === 'checkpoint' ? 'checkpoint' : 'lora',
+      modelType: inferred.modelType,
+      suggestedSubfolder: inferred.suggestedSubfolder,
+      subfolderHint: inferred.subfolderHint || null,
       versionName: latestVer.name || 'Latest',
       baseModel: meta.baseModel,
       trainedWords: meta.trainedWords,
@@ -121,14 +168,16 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
       previewImageUrl: meta.previewImages[0]?.url || null,
       previewImages: meta.previewImages,
       civitaiDescription: meta.civitaiDescription,
-      filename: fallbackFilename,
-      fileSize: file.sizeKB ? Math.round(file.sizeKB * 1024) : null,
-      sha256Hash: file.hashes?.SHA256 || null,
-      downloadUrl: file.downloadUrl || latestVer.downloadUrl,
+      filename: primaryFile.filename,
+      fileSize: primaryFile.fileSize,
+      sha256Hash: primaryFile.sha256Hash,
+      downloadUrl: primaryFile.downloadUrl,
       creator: item.creator?.username || 'Unknown',
       description:
         meta.civitaiDescription?.slice(0, 220) ||
         String(item.description || '').replace(/<[^>]+>/g, '').slice(0, 220),
+      availableFiles,
+      totalRepoFilesCount: availableFiles.length,
     });
   }
 
@@ -136,16 +185,38 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
 }
 
 /**
- * Searches Hugging Face Hub API for Safetensors LoRAs and Checkpoints.
+ * Searches Hugging Face Hub API for model weight repositories (.safetensors, .gguf, .ckpt, .pth, etc.).
  */
 export async function searchHuggingFaceModels(query: string): Promise<ExternalModelSearchResult[]> {
+  const trimmed = query.trim();
+
+  // If query is an exact owner/repo or Hugging Face URL, resolve it directly first
+  const directRepo = parseHuggingFaceRepoAndFile(trimmed);
+  if (directRepo && /^https?:\/\//i.test(trimmed)) {
+    const resolved = await resolveDirectModelUrl(trimmed);
+    return [resolved];
+  }
+
   const headers: Record<string, string> = {};
   if (appConfig.hfApiToken) {
     headers.Authorization = `Bearer ${appConfig.hfApiToken}`;
   }
 
+  const results: ExternalModelSearchResult[] = [];
+  const seenRepos = new Set<string>();
+
+  if (directRepo) {
+    try {
+      const resolved = await resolveDirectModelUrl(directRepo.repoId);
+      results.push(resolved);
+      seenRepos.add(resolved.id.toLowerCase());
+    } catch {
+      // continue to search query
+    }
+  }
+
   const url = new URL('https://huggingface.co/api/models');
-  url.searchParams.set('search', query.trim() || 'safetensors lora');
+  url.searchParams.set('search', trimmed || 'safetensors comfyui');
   url.searchParams.set('limit', '12');
   url.searchParams.set('full', 'true');
 
@@ -154,30 +225,58 @@ export async function searchHuggingFaceModels(query: string): Promise<ExternalMo
     throw new Error(`Hugging Face API returned HTTP ${res.status}`);
   }
   const items = (await res.json()) as any[];
-  const results: ExternalModelSearchResult[] = [];
 
   for (const repo of items || []) {
+    const repoId = String(repo.id || '');
+    if (!repoId || seenRepos.has(repoId.toLowerCase())) continue;
+
+    const tags: string[] = Array.isArray(repo.tags) ? repo.tags : [];
     const siblings = Array.isArray(repo.siblings) ? repo.siblings : [];
-    const safetensorFile = siblings.find((s: any) =>
-      String(s.rfilename || '').endsWith('.safetensors')
-    );
-    const filename = safetensorFile
-      ? path.basename(safetensorFile.rfilename)
-      : `${String(repo.id).replace('/', '_')}.safetensors`;
-    const rfile = safetensorFile ? safetensorFile.rfilename : 'model.safetensors';
+    const availableFiles: ExternalModelFileOption[] = [];
+
+    for (const s of siblings) {
+      const rfilename = String(s.rfilename || '');
+      const ext = path.extname(rfilename).toLowerCase();
+      if (!DOWNLOAD_WEIGHT_EXTS.has(ext)) continue;
+
+      const inferred = inferSubfolderAndTypeFromPath(rfilename, tags);
+      const encodedPath = rfilename
+        .split('/')
+        .map((seg) => encodeURIComponent(seg))
+        .join('/');
+
+      availableFiles.push({
+        rfilename,
+        filename: path.basename(rfilename),
+        fileSize: typeof s.size === 'number' ? s.size : s.lfs?.size ?? null,
+        sha256Hash: s.lfs?.oid ? String(s.lfs.oid).toUpperCase() : null,
+        downloadUrl: `https://huggingface.co/${repoId}/resolve/main/${encodedPath}`,
+        modelType: inferred.modelType,
+        suggestedSubfolder: inferred.suggestedSubfolder,
+      });
+    }
+
+    if (availableFiles.length === 0) continue;
+    const primary = availableFiles[0];
 
     results.push({
       provider: 'huggingface',
-      id: repo.id,
-      name: repo.id,
-      modelType: (repo.tags || []).includes('lora') ? 'lora' : 'checkpoint',
+      id: repoId,
+      hfRepoId: repoId,
+      name: repoId,
+      modelType: primary.modelType,
+      suggestedSubfolder: primary.suggestedSubfolder,
       versionName: 'main',
-      filename,
-      fileSize: null,
-      sha256Hash: null,
-      downloadUrl: `https://huggingface.co/${repo.id}/resolve/main/${rfile}`,
-      creator: String(repo.id).split('/')[0] || 'HuggingFace',
-      description: `Hugging Face repository ${repo.id} (${repo.downloads || 0} downloads)`,
+      filename: primary.filename,
+      fileSize: primary.fileSize,
+      sha256Hash: primary.sha256Hash,
+      downloadUrl: primary.downloadUrl,
+      creator: repoId.split('/')[0] || 'HuggingFace',
+      description: `Hugging Face repository ${repoId} (${repo.downloads || 0} downloads · ${
+        availableFiles.length
+      } weight file${availableFiles.length === 1 ? '' : 's'})`,
+      availableFiles,
+      totalRepoFilesCount: availableFiles.length,
     });
   }
 
@@ -190,7 +289,7 @@ export async function searchHuggingFaceModels(query: string): Promise<ExternalMo
  * and verifies SHA-256 hash upon completion.
  */
 export async function startConfirmedModelDownload(params: {
-  provider: 'civitai' | 'huggingface';
+  provider: 'civitai' | 'huggingface' | 'direct';
   modelName: string;
   filename: string;
   modelType: ModelType;
@@ -198,6 +297,7 @@ export async function startConfirmedModelDownload(params: {
   expectedHash?: string | null;
   subfolder?: string;
   allowOverwrite?: boolean;
+  hfRepoId?: string | null;
   civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
 }): Promise<any> {
   // Sanitize filename and subfolder against path traversal
@@ -206,9 +306,13 @@ export async function startConfirmedModelDownload(params: {
     throw new Error('Invalid destination filename.');
   }
 
-  const safeSubfolder = (params.subfolder || params.modelType)
+  const defaultFolder = MODEL_TYPE_TO_DEFAULT_SUBFOLDER[params.modelType] || 'checkpoints';
+  const safeSubfolder = (params.subfolder || defaultFolder)
     .replace(/[^a-zA-Z0-9_-]/g, '')
     .toLowerCase();
+  const effectiveModelType: ModelType =
+    SUBFOLDER_TO_MODEL_TYPE[safeSubfolder as ComfyModelSubfolder] || params.modelType;
+
   const targetDir = path.join(appConfig.downloadsDir, safeSubfolder);
   const resolvedRoot = path.resolve(appConfig.downloadsDir);
   const resolvedTargetDir = path.resolve(targetDir);
@@ -235,7 +339,7 @@ export async function startConfirmedModelDownload(params: {
     .run(
       params.provider,
       params.modelName,
-      params.modelType,
+      effectiveModelType,
       params.sourceUrl,
       destinationPath,
       params.expectedHash || null
@@ -307,25 +411,28 @@ export async function startConfirmedModelDownload(params: {
       // Register in `models` table and apply Civitai enrichment if applicable
       db.prepare(
         `INSERT INTO models
-          (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, download_url, last_seen_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'filesystem', ?, datetime('now'))
+          (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, download_url, hf_repo_id, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'filesystem', ?, ?, datetime('now'))
          ON CONFLICT(filename) DO UPDATE SET
+           model_type = excluded.model_type,
            file_path = excluded.file_path,
            file_size = excluded.file_size,
            sha256_hash = excluded.sha256_hash,
            autov2_hash = excluded.autov2_hash,
            is_installed = 1,
            download_url = excluded.download_url,
+           hf_repo_id = COALESCE(excluded.hf_repo_id, models.hf_repo_id),
            last_seen_at = datetime('now')`
       ).run(
         params.modelName,
         safeFilename,
-        params.modelType,
+        effectiveModelType,
         destinationPath,
         bytesDownloaded,
         actualHash.toLowerCase(),
         actualHash.slice(0, 10).toLowerCase(),
-        params.sourceUrl
+        params.sourceUrl,
+        params.hfRepoId || null
       );
 
       const savedRow = db

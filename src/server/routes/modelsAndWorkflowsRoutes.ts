@@ -19,6 +19,10 @@ import {
   startConfirmedModelDownload,
 } from '../services/modelManagerService.ts';
 import {
+  listHuggingFaceRepoFiles,
+  resolveDirectModelUrl,
+} from '../services/modelDownloadResolverService.ts';
+import {
   fetchAndEnrichModelFromCivitai,
   resolveSafeModelPreviewPath,
 } from '../services/civitaiMetadataService.ts';
@@ -378,6 +382,38 @@ modelsAndWorkflowsRouter.get('/models/search/huggingface', async (req, res) => {
 });
 
 /**
+ * GET /api/models/huggingface/files
+ * Lists all downloadable model weight files in a Hugging Face repository (recursive tree + LFS SHA-256).
+ */
+modelsAndWorkflowsRouter.get('/models/huggingface/files', async (req, res) => {
+  try {
+    const repo = String(req.query.repo || '').trim();
+    if (!repo) {
+      res.status(400).json({ error: 'repo query parameter is required' });
+      return;
+    }
+    const data = await listHuggingFaceRepoFiles(repo);
+    res.json(data);
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message || 'Failed to list Hugging Face repository files' });
+  }
+});
+
+/**
+ * POST /api/models/resolve-url
+ * Resolves a pasted Civitai URL, Hugging Face URL/repo, or direct weight link into a downloadable item.
+ */
+modelsAndWorkflowsRouter.post('/models/resolve-url', async (req, res) => {
+  try {
+    const url = String(req.body?.url || '').trim();
+    const item = await resolveDirectModelUrl(url);
+    res.json({ item });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to resolve model URL' });
+  }
+});
+
+/**
  * POST /api/downloads/start
  * Starts a confirmed server-side model download with SHA-256 verification.
  */
@@ -393,6 +429,7 @@ modelsAndWorkflowsRouter.post('/downloads/start', async (req, res) => {
       subfolder,
       allowOverwrite,
       userConfirmed,
+      hfRepoId,
       civitaiMeta,
     } = req.body || {};
 
@@ -410,6 +447,7 @@ modelsAndWorkflowsRouter.post('/downloads/start', async (req, res) => {
       expectedHash,
       subfolder,
       allowOverwrite: Boolean(allowOverwrite),
+      hfRepoId: hfRepoId || null,
       civitaiMeta: civitaiMeta || null,
     });
     res.json({ job });

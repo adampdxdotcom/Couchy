@@ -2,6 +2,8 @@ import type {
   AspectRatioPreset,
   CharacterProfile,
   ComfyUiLiveStatus,
+  ExternalModelFileOption,
+  ExternalModelSearchResult,
   GalleryFilterState,
   GenerationBatchRecord,
   GenerationLoraSelection,
@@ -311,15 +313,31 @@ export const api = {
     }>(`/api/models/${encodeURIComponent(name)}/impact`),
 
   searchCivitai: (q: string, type = '') =>
-    requestJson<{ items: any[] }>(
+    requestJson<{ items: ExternalModelSearchResult[] }>(
       `/api/models/search/civitai?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`
     ),
 
   searchHuggingFace: (q: string) =>
-    requestJson<{ items: any[] }>(`/api/models/search/huggingface?q=${encodeURIComponent(q)}`),
+    requestJson<{ items: ExternalModelSearchResult[] }>(
+      `/api/models/search/huggingface?q=${encodeURIComponent(q)}`
+    ),
+
+  listHuggingFaceRepoFiles: (repo: string) =>
+    requestJson<{
+      repoId: string;
+      tags: string[];
+      downloads: number;
+      files: ExternalModelFileOption[];
+    }>(`/api/models/huggingface/files?repo=${encodeURIComponent(repo)}`),
+
+  resolveModelUrl: (url: string) =>
+    requestJson<{ item: ExternalModelSearchResult }>('/api/models/resolve-url', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
 
   startModelDownload: (payload: {
-    provider: 'civitai' | 'huggingface';
+    provider: 'civitai' | 'huggingface' | 'direct';
     modelName: string;
     filename: string;
     modelType: string;
@@ -328,6 +346,7 @@ export const api = {
     subfolder?: string;
     allowOverwrite?: boolean;
     userConfirmed: boolean;
+    hfRepoId?: string | null;
     civitaiMeta?: Record<string, any> | null;
   }) =>
     requestJson<{ job: any }>('/api/downloads/start', {

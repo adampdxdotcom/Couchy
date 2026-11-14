@@ -212,13 +212,38 @@ export interface ModelPreviewImage {
   sourceUrl?: string | null;
 }
 
+export type ComfyModelSubfolder =
+  | 'loras'
+  | 'checkpoints'
+  | 'diffusion_models'
+  | 'unet'
+  | 'text_encoders'
+  | 'clip'
+  | 'vae'
+  | 'controlnet'
+  | 'upscale_models'
+  | 'embeddings';
+
+export interface ExternalModelFileOption {
+  rfilename: string;
+  filename: string;
+  fileSize: number | null;
+  sha256Hash: string | null;
+  downloadUrl: string;
+  modelType: ModelType;
+  suggestedSubfolder: ComfyModelSubfolder;
+}
+
 export interface ExternalModelSearchResult {
-  provider: 'civitai' | 'huggingface';
+  provider: 'civitai' | 'huggingface' | 'direct';
   id: string;
   versionId?: string | null;
   civitaiUrl?: string | null;
+  hfRepoId?: string | null;
   name: string;
   modelType: ModelType;
+  suggestedSubfolder?: ComfyModelSubfolder;
+  subfolderHint?: string | null;
   versionName: string;
   baseModel?: string | null;
   trainedWords?: string[];
@@ -232,6 +257,8 @@ export interface ExternalModelSearchResult {
   downloadUrl: string;
   creator: string;
   description: string;
+  availableFiles?: ExternalModelFileOption[];
+  totalRepoFilesCount?: number;
 }
 
 export interface LoraExplorerItem {

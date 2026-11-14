@@ -34,11 +34,12 @@ const MODEL_DIR_TYPE_MAP: Record<string, ModelType> = {
   upscale_models: 'upscaler',
   embeddings: 'embedding',
   clip: 'clip',
+  text_encoders: 'clip',
   unet: 'diffusion',
   diffusion_models: 'diffusion',
 };
 
-const MODEL_EXTS = new Set(['.safetensors', '.ckpt', '.pt', '.pth', '.bin']);
+const MODEL_EXTS = new Set(['.safetensors', '.ckpt', '.pt', '.pth', '.bin', '.gguf', '.sft']);
 
 /**
  * Tests connection to the configured ComfyUI instance and updates comfyui_instances.
@@ -138,7 +139,7 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
               (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, last_seen_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'filesystem', datetime('now'))
              ON CONFLICT(filename) DO UPDATE SET
-               model_type = CASE WHEN models.model_type = 'other' THEN excluded.model_type ELSE models.model_type END,
+               model_type = CASE WHEN excluded.model_type != 'other' THEN excluded.model_type ELSE models.model_type END,
                file_path = excluded.file_path,
                file_size = excluded.file_size,
                sha256_hash = COALESCE(excluded.sha256_hash, models.sha256_hash),
@@ -147,7 +148,7 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
                source_type = 'filesystem',
                last_seen_at = datetime('now')`
           ).run(
-            entry.name.replace(/\.(safetensors|ckpt|pt|pth|bin)$/i, ''),
+            entry.name.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, ''),
             entry.name,
             currentType,
             full,
@@ -186,7 +187,7 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
                ON CONFLICT(filename) DO UPDATE SET
                  is_installed = 1,
                  last_seen_at = datetime('now')`
-            ).run(filename.replace(/\.(safetensors|ckpt|pt)$/i, ''), filename, mType);
+            ).run(filename.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, ''), filename, mType);
             seenInstalledFilenames.add(filename.toLowerCase());
           }
         }
@@ -198,7 +199,11 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
       extractList('ControlNetLoader', 'control_net_name', 'controlnet');
       extractList('UpscaleModelLoader', 'model_name', 'upscaler');
       extractList('CLIPLoader', 'clip_name', 'clip');
+      extractList('DualCLIPLoader', 'clip_name1', 'clip');
+      extractList('DualCLIPLoader', 'clip_name2', 'clip');
+      extractList('CLIPLoaderGGUF', 'clip_name', 'clip');
       extractList('UNETLoader', 'unet_name', 'diffusion');
+      extractList('UnetLoaderGGUF', 'unet_name', 'diffusion');
     }
   } catch {
     // Offline operation is expected and supported

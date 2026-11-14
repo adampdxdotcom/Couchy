@@ -2,12 +2,23 @@ import React, { useState } from 'react';
 import {
   ExternalLink,
   FileWarning,
+  FolderGit2,
   HardDriveDownload,
   Layers,
+  Link2,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
-import type { ExternalModelSearchResult } from '../shared/types.ts';
+import {
+  COMFY_SUBFOLDER_OPTIONS,
+  ModelDownloadConfirmModal,
+} from './ModelDownloadConfirmModal.tsx';
+import type {
+  ComfyModelSubfolder,
+  ExternalModelFileOption,
+  ExternalModelSearchResult,
+  ModelType,
+} from '../shared/types.ts';
 
 interface ModelDownloaderTabProps {
   provider: 'civitai' | 'huggingface';
@@ -24,9 +35,33 @@ interface ModelDownloaderTabProps {
   onRefreshDownloads: () => Promise<void>;
 }
 
+function getDefaultSubfolderForItem(item: ExternalModelSearchResult): ComfyModelSubfolder {
+  if (item.suggestedSubfolder) return item.suggestedSubfolder;
+  switch (item.modelType) {
+    case 'lora':
+      return 'loras';
+    case 'checkpoint':
+      return 'checkpoints';
+    case 'diffusion':
+      return 'diffusion_models';
+    case 'clip':
+      return 'text_encoders';
+    case 'vae':
+      return 'vae';
+    case 'controlnet':
+      return 'controlnet';
+    case 'upscaler':
+      return 'upscale_models';
+    case 'embedding':
+      return 'embeddings';
+    default:
+      return 'checkpoints';
+  }
+}
+
 /**
- * Civitai & Hugging Face model search cards with preview thumbnails, Base Model badges,
- * trigger words, recommended weights, original Civitai page links, and download confirmation.
+ * Civitai, Hugging Face Hub, and Direct URL Model Downloader with multi-file repo picker
+ * and full ComfyUI destination folder support.
  */
 export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   provider,
@@ -42,26 +77,101 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   onSearch,
   onRefreshDownloads,
 }) => {
+  const [directUrl, setDirectUrl] = useState('');
+  const [isResolvingUrl, setIsResolvingUrl] = useState(false);
+  const [urlError, setUrlError] = useState<string | null>(null);
+
   const [pendingDownload, setPendingDownload] = useState<ExternalModelSearchResult | null>(null);
-  const [dlSubfolder, setDlSubfolder] = useState('loras');
+  const [selectedFile, setSelectedFile] = useState<ExternalModelFileOption | null>(null);
+  const [isLoadingRepoFiles, setIsLoadingRepoFiles] = useState(false);
+  const [dlSubfolder, setDlSubfolder] = useState<ComfyModelSubfolder>('loras');
+  const [customFilename, setCustomFilename] = useState('');
   const [allowOverwrite, setAllowOverwrite] = useState(false);
   const [dlError, setDlError] = useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
+
+  const openDownloadModal = async (item: ExternalModelSearchResult) => {
+    const initialFile = item.availableFiles?.[0] || null;
+    const initialFolder = initialFile?.suggestedSubfolder || getDefaultSubfolderForItem(item);
+    setPendingDownload(item);
+    setSelectedFile(initialFile);
+    setDlSubfolder(initialFolder);
+    setCustomFilename(initialFile?.filename || item.filename);
+    setDlError(null);
+
+    // Fetch full recursive tree + LFS SHA-256 hashes for Hugging Face repos
+    if (item.provider === 'huggingface' && item.id) {
+      setIsLoadingRepoFiles(true);
+      try {
+        const repoTree = await api.listHuggingFaceRepoFiles(item.id);
+        if (repoTree.files.length > 0) {
+          const matched =
+            repoTree.files.find((f) => f.filename === item.filename) || repoTree.files[0];
+          setPendingDownload((prev) =>
+            prev && prev.id === item.id
+              ? {
+                  ...prev,
+                  availableFiles: repoTree.files,
+                  totalRepoFilesCount: repoTree.files.length,
+                }
+              : prev
+          );
+          setSelectedFile(matched);
+          setDlSubfolder(matched.suggestedSubfolder);
+          setCustomFilename(matched.filename);
+        }
+      } catch {
+        // Keep existing sibling list if tree endpoint fails
+      } finally {
+        setIsLoadingRepoFiles(false);
+      }
+    }
+  };
+
+  const handleSelectFile = (file: ExternalModelFileOption) => {
+    setSelectedFile(file);
+    setDlSubfolder(file.suggestedSubfolder);
+    setCustomFilename(file.filename);
+    setDlError(null);
+  };
+
+  const handleResolveDirectUrl = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!directUrl.trim()) return;
+    setIsResolvingUrl(true);
+    setUrlError(null);
+    try {
+      const res = await api.resolveModelUrl(directUrl.trim());
+      setDirectUrl('');
+      await openDownloadModal(res.item);
+    } catch (err: any) {
+      setUrlError(err?.message || 'Could not resolve model URL');
+    } finally {
+      setIsResolvingUrl(false);
+    }
+  };
 
   const handleConfirmDownload = async () => {
     if (!pendingDownload) return;
     setDlError(null);
+    setIsSubmitting(true);
     try {
+      const folderMeta = COMFY_SUBFOLDER_OPTIONS.find((o) => o.value === dlSubfolder);
+      const effectiveType: ModelType =
+        folderMeta?.modelType || selectedFile?.modelType || pendingDownload.modelType;
+
       await api.startModelDownload({
         provider: pendingDownload.provider,
         modelName: pendingDownload.name,
-        filename: pendingDownload.filename,
-        modelType: pendingDownload.modelType,
-        sourceUrl: pendingDownload.downloadUrl,
-        expectedHash: pendingDownload.sha256Hash || null,
+        filename: customFilename.trim() || selectedFile?.filename || pendingDownload.filename,
+        modelType: effectiveType,
+        sourceUrl: selectedFile?.downloadUrl || pendingDownload.downloadUrl,
+        expectedHash: selectedFile ? selectedFile.sha256Hash : pendingDownload.sha256Hash || null,
         subfolder: dlSubfolder,
         allowOverwrite,
         userConfirmed: true,
+        hfRepoId: pendingDownload.hfRepoId || null,
         civitaiMeta:
           pendingDownload.provider === 'civitai'
             ? {
@@ -77,14 +187,50 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
             : null,
       });
       setPendingDownload(null);
+      setSelectedFile(null);
       await onRefreshDownloads();
     } catch (err: any) {
       setDlError(err.message || 'Download could not start');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
     <div className="space-y-6">
+      {/* Direct URL / Repo Paste Bar */}
+      <form
+        onSubmit={handleResolveDirectUrl}
+        className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-2 text-xs"
+      >
+        <div className="flex items-center gap-2 text-zinc-300 font-medium">
+          <Link2 className="w-3.5 h-3.5 text-indigo-400" />
+          <span>Direct URL or Hugging Face Repository</span>
+          <span className="text-zinc-500 font-normal">
+            — Paste a Civitai page/download URL, Hugging Face file/repo link, or{' '}
+            <code className="font-mono text-zinc-400">owner/repo</code>
+          </span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <input
+            type="text"
+            value={directUrl}
+            onChange={(e) => setDirectUrl(e.target.value)}
+            placeholder="https://huggingface.co/comfyanonymous/flux_text_encoders/blob/main/t5xxl_fp8_e4m3fn.safetensors or https://civitai.com/models/..."
+            className="flex-1 min-w-[260px] px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 font-mono"
+          />
+          <button
+            type="submit"
+            disabled={isResolvingUrl || !directUrl.trim()}
+            className="px-4 py-2 bg-zinc-800 hover:bg-indigo-600 disabled:opacity-50 text-zinc-100 font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          >
+            {isResolvingUrl ? 'Resolving...' : 'Fetch & Review URL'}
+          </button>
+        </div>
+        {urlError && <p className="text-rose-400">{urlError}</p>}
+      </form>
+
+      {/* Search Form */}
       <form
         onSubmit={(e) => onSearch(e)}
         className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex flex-wrap items-center gap-3 text-xs"
@@ -114,7 +260,11 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
           type="text"
           value={extQuery}
           onChange={(e) => setExtQuery(e.target.value)}
-          placeholder="Search model name or paste SHA-256 / AutoV2 hash..."
+          placeholder={
+            provider === 'civitai'
+              ? 'Search Civitai models or paste SHA-256 / AutoV2 hash...'
+              : 'Search Hugging Face repos (e.g. flux_text_encoders, controlnet, gguf) or owner/repo...'
+          }
           className="flex-1 min-w-[240px] px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
         />
 
@@ -124,9 +274,13 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
             onChange={(e) => setExtTypeFilter(e.target.value)}
             className="px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200"
           >
-            <option value="">All Types</option>
-            <option value="lora">LoRA</option>
-            <option value="checkpoint">Checkpoint</option>
+            <option value="">All Model Types</option>
+            <option value="lora">LoRA / LoCon / DoRA</option>
+            <option value="checkpoint">Checkpoint / UNET Base</option>
+            <option value="controlnet">ControlNet</option>
+            <option value="vae">VAE</option>
+            <option value="upscaler">Upscaler</option>
+            <option value="embedding">Embedding / Textual Inversion</option>
           </select>
         )}
 
@@ -151,6 +305,8 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
           {searchResults.map((item) => {
             const cardKey = `${item.provider}-${item.id}-${item.filename}`;
             const hasThumb = Boolean(item.previewImageUrl && !brokenImages[cardKey]);
+            const fileCount = item.totalRepoFilesCount || item.availableFiles?.length || 1;
+            const targetFolder = getDefaultSubfolderForItem(item);
 
             return (
               <div
@@ -173,9 +329,24 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                     ) : (
                       <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-zinc-600 bg-gradient-to-br from-zinc-950 to-zinc-900">
                         <Layers className="w-6 h-6" />
-                        <span className="text-[11px] font-mono">No preview image</span>
+                        <span className="text-[11px] font-mono">
+                          {item.provider === 'huggingface'
+                            ? `${fileCount} weight file${fileCount === 1 ? '' : 's'} in repo`
+                            : 'No preview image'}
+                        </span>
                       </div>
                     )}
+
+                    <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
+                      <span className="px-2 py-0.5 rounded bg-zinc-950/85 border border-zinc-700/80 font-mono text-[10px] text-emerald-300">
+                        /{targetFolder}
+                      </span>
+                      {fileCount > 1 && (
+                        <span className="px-2 py-0.5 rounded bg-zinc-950/85 border border-zinc-700/80 font-mono text-[10px] text-zinc-200">
+                          {fileCount} files
+                        </span>
+                      )}
+                    </div>
 
                     {item.civitaiUrl && (
                       <a
@@ -194,7 +365,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                   {/* Card Details */}
                   <div className="p-4 space-y-2">
                     <div className="flex items-start justify-between gap-2">
-                      <h4 className="text-sm font-display font-semibold text-zinc-100 leading-snug">
+                      <h4 className="text-sm font-display font-semibold text-zinc-100 leading-snug break-all">
                         {item.name}
                       </h4>
                       {item.baseModel && (
@@ -207,7 +378,9 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                     <div className="text-[11px] font-mono text-zinc-400 flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       <span className="uppercase text-indigo-300">{item.modelType}</span>
                       <span>·</span>
-                      <span className="truncate max-w-[180px]">{item.filename}</span>
+                      <span className="truncate max-w-[180px]" title={item.filename}>
+                        {item.filename}
+                      </span>
                       <span>·</span>
                       <span>{formatBytes(item.fileSize)}</span>
                     </div>
@@ -246,15 +419,20 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                 <div className="px-4 pb-4 pt-1">
                   <button
                     type="button"
-                    onClick={() => {
-                      setPendingDownload(item);
-                      setDlSubfolder(item.modelType === 'checkpoint' ? 'checkpoints' : 'loras');
-                      setDlError(null);
-                    }}
+                    onClick={() => openDownloadModal(item)}
                     className="w-full inline-flex items-center justify-center gap-1.5 py-2 bg-zinc-800 hover:bg-indigo-600 text-zinc-100 font-medium rounded-lg transition-colors cursor-pointer"
                   >
-                    <HardDriveDownload className="w-3.5 h-3.5" />
-                    <span>Review & Download</span>
+                    {fileCount > 1 || item.provider === 'huggingface' ? (
+                      <>
+                        <FolderGit2 className="w-3.5 h-3.5" />
+                        <span>Browse Files &amp; Download ({fileCount})</span>
+                      </>
+                    ) : (
+                      <>
+                        <HardDriveDownload className="w-3.5 h-3.5" />
+                        <span>Review &amp; Download</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
@@ -267,7 +445,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-display font-semibold text-zinc-100">
-            Server-Side Download Queue & Hash Verification History
+            Server-Side Download Queue &amp; Hash Verification History
           </h3>
           <button
             type="button"
@@ -323,84 +501,27 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
         )}
       </div>
 
-      {/* Explicit User Confirmation Modal Before Downloading */}
+      {/* Explicit User Confirmation & Multi-File Picker Modal */}
       {pendingDownload && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-xl max-w-md w-full p-6 space-y-4 text-xs">
-            <h3 className="text-base font-display font-semibold text-zinc-100">
-              Confirm Server-Side Model Download
-            </h3>
-            <p className="text-zinc-400">
-              Models are downloaded server-side into your writable downloads volume, verified via SHA-256, and automatically enriched with Civitai metadata and cached preview thumbnails.
-            </p>
-            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 space-y-1 font-mono">
-              <div className="text-zinc-200">Model: {pendingDownload.name}</div>
-              <div className="text-zinc-400">File: {pendingDownload.filename}</div>
-              <div className="text-zinc-400">Size: {formatBytes(pendingDownload.fileSize)}</div>
-              {pendingDownload.baseModel && (
-                <div className="text-indigo-300">Base Model: {pendingDownload.baseModel}</div>
-              )}
-              {pendingDownload.trainedWords && pendingDownload.trainedWords.length > 0 && (
-                <div className="text-amber-300 truncate">
-                  Triggers: {pendingDownload.trainedWords.join(', ')}
-                </div>
-              )}
-              {pendingDownload.recommendedWeight !== null &&
-                pendingDownload.recommendedWeight !== undefined && (
-                  <div className="text-indigo-300">
-                    Rec. Weight: {pendingDownload.recommendedWeight.toFixed(2)}x
-                  </div>
-                )}
-              {pendingDownload.sha256Hash && (
-                <div className="text-emerald-400 truncate">
-                  SHA256: {pendingDownload.sha256Hash}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-zinc-300 mb-1">Destination Subfolder</label>
-              <select
-                value={dlSubfolder}
-                onChange={(e) => setDlSubfolder(e.target.value)}
-                className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-              >
-                <option value="loras">/downloads/loras</option>
-                <option value="checkpoints">/downloads/checkpoints</option>
-                <option value="vae">/downloads/vae</option>
-                <option value="controlnet">/downloads/controlnet</option>
-              </select>
-            </div>
-
-            <label className="inline-flex items-center gap-2 text-zinc-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={allowOverwrite}
-                onChange={(e) => setAllowOverwrite(e.target.checked)}
-              />
-              <span>Explicitly allow overwriting if file already exists</span>
-            </label>
-
-            {dlError && <p className="text-rose-400">{dlError}</p>}
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setPendingDownload(null)}
-                className="px-3.5 py-2 bg-zinc-800 text-zinc-300 rounded-lg cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmDownload}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer"
-              >
-                Confirm & Start Download
-              </button>
-            </div>
-          </div>
-        </div>
+        <ModelDownloadConfirmModal
+          pendingDownload={pendingDownload}
+          selectedFile={selectedFile}
+          onSelectFile={handleSelectFile}
+          isLoadingRepoFiles={isLoadingRepoFiles}
+          dlSubfolder={dlSubfolder}
+          setDlSubfolder={setDlSubfolder}
+          customFilename={customFilename}
+          setCustomFilename={setCustomFilename}
+          allowOverwrite={allowOverwrite}
+          setAllowOverwrite={setAllowOverwrite}
+          dlError={dlError}
+          isSubmitting={isSubmitting}
+          onClose={() => {
+            setPendingDownload(null);
+            setSelectedFile(null);
+          }}
+          onConfirm={handleConfirmDownload}
+        />
       )}
     </div>
   );
