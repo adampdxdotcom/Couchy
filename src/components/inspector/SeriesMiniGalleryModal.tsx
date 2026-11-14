@@ -8,11 +8,16 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import type { ImageSeriesItem, QueuedGhostCardItem } from '../../shared/types.ts';
+import type {
+  ImageSeriesItem,
+  ImageSeriesKind,
+  QueuedGhostCardItem,
+} from '../../shared/types.ts';
 
 interface SeriesMiniGalleryModalProps {
   items: ImageSeriesItem[];
   activeImageId: number;
+  seriesKind?: ImageSeriesKind;
   pendingGhosts?: QueuedGhostCardItem[];
   onClose: () => void;
   onSelectIteration: (imageId: number) => void;
@@ -28,6 +33,7 @@ interface SeriesMiniGalleryModalProps {
 export const SeriesMiniGalleryModal: React.FC<SeriesMiniGalleryModalProps> = ({
   items,
   activeImageId,
+  seriesKind = 'iterative',
   pendingGhosts = [],
   onClose,
   onSelectIteration,
@@ -37,6 +43,7 @@ export const SeriesMiniGalleryModal: React.FC<SeriesMiniGalleryModalProps> = ({
 }) => {
   const [busyId, setBusyId] = useState<number | null>(null);
   const posterIndex = items.findIndex((it) => it.isFavorite);
+  const isMultiShot = seriesKind === 'multi_shot';
 
   return (
     <div
@@ -62,6 +69,7 @@ export const SeriesMiniGalleryModal: React.FC<SeriesMiniGalleryModalProps> = ({
               </h3>
               <p className="text-[11px] text-zinc-400 font-mono tabular-nums">
                 {items.length} {items.length === 1 ? 'image' : 'images'}
+                {isMultiShot && <span className="text-indigo-300"> · Multi-shot set</span>}
                 {pendingGhosts.length > 0 && (
                   <span className="text-indigo-300"> · +{pendingGhosts.length} in queue</span>
                 )}
@@ -191,7 +199,9 @@ export const SeriesMiniGalleryModal: React.FC<SeriesMiniGalleryModalProps> = ({
                           }}
                           className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-500/10 hover:bg-amber-500/20 border border-amber-400/30 text-amber-200 text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-50"
                           title={
-                            isLatest
+                            isMultiShot
+                              ? `Start a new iterative conversation stack from Shot #${idx + 1}`
+                              : isLatest
                               ? 'Continue conversation from this latest step'
                               : `Branch new series stack from Step #${idx + 1}`
                           }
@@ -201,7 +211,9 @@ export const SeriesMiniGalleryModal: React.FC<SeriesMiniGalleryModalProps> = ({
                           ) : (
                             <MessageSquare className="w-3 h-3" />
                           )}
-                          <span>{isLatest ? 'Chat' : `Branch`}</span>
+                          <span>
+                            {isMultiShot ? 'Iterate' : isLatest ? 'Chat' : 'Branch'}
+                          </span>
                         </button>
                       )}
 

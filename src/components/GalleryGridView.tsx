@@ -721,23 +721,34 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                     ))}
                   </div>
                   <div className="flex items-center gap-1">
-                    {onOpenConversation && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onOpenConversation(img);
-                        }}
-                        className="p-1 text-amber-300 hover:text-amber-200 hover:bg-zinc-800/80 rounded transition-colors cursor-pointer"
-                        title={
-                          img.chatSnapshot && img.chatSnapshot.length > 0
-                            ? 'Continue Conversation in Quick Gen'
-                            : 'Iterate on this image in Quick Gen Conversation mode'
-                        }
-                      >
-                        <MessageSquare className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+                    {onOpenConversation && (() => {
+                      const isMultiShotSet = img.seriesKind === 'multi_shot' && (img.seriesCount || 1) > 1;
+                      return (
+                        <button
+                          type="button"
+                          disabled={isMultiShotSet}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (isMultiShotSet) return;
+                            onOpenConversation(img);
+                          }}
+                          className={`p-1 rounded transition-colors ${
+                            isMultiShotSet
+                              ? 'text-amber-300/35 cursor-not-allowed'
+                              : 'text-amber-300 hover:text-amber-200 hover:bg-zinc-800/80 cursor-pointer'
+                          }`}
+                          title={
+                            isMultiShotSet
+                              ? 'Multi-shot set — open the Inspector & Series Mini Gallery to iterate on a specific shot'
+                              : img.chatSnapshot && img.chatSnapshot.length > 0
+                              ? 'Continue Conversation in Quick Gen'
+                              : 'Iterate on this image in Quick Gen Conversation mode'
+                          }
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                        </button>
+                      );
+                    })()}
                     {onReusePrompt && (
                       <button
                         type="button"

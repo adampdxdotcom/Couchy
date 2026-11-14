@@ -44,7 +44,6 @@ export function useQuickGenSubmit({
 }: UseQuickGenSubmitParams) {
   const [prompt, setPrompt] = useState('');
   const [agentEnabled, setAgentEnabled] = useState(false);
-  const [conversationEnabled, setConversationEnabled] = useState(false);
   const [chatMessages, setChatMessages] = useState<QuickGenChatMessage[]>([]);
   const [activeSeriesId, setActiveSeriesId] = useState<number | null>(null);
   const [branchFromImageId, setBranchFromImageId] = useState<number | null>(null);
@@ -74,23 +73,12 @@ export function useQuickGenSubmit({
     };
   }, []);
 
-  // Auto-disable agent and conversation mode if LM Studio goes offline
+  // Auto-disable Agent (Conversation) mode if Local LLM goes offline
   useEffect(() => {
-    if (!lmStudioOnline) {
-      if (agentEnabled) setAgentEnabled(false);
-      if (conversationEnabled) setConversationEnabled(false);
+    if (!lmStudioOnline && agentEnabled) {
+      setAgentEnabled(false);
     }
-  }, [lmStudioOnline, agentEnabled, conversationEnabled]);
-
-  // Turn off conversation mode if Agent is turned off; lock batchCount to 1 in Conversation mode
-  useEffect(() => {
-    if (!agentEnabled && conversationEnabled) {
-      setConversationEnabled(false);
-    }
-    if (conversationEnabled && batchCount !== 1) {
-      setBatchCount(1);
-    }
-  }, [agentEnabled, conversationEnabled, batchCount]);
+  }, [lmStudioOnline, agentEnabled]);
 
   const pulseHighlight = (durationMs = 1400) => {
     if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
@@ -245,13 +233,12 @@ export function useQuickGenSubmit({
 
     if (prefillPayload.conversationMode) {
       setAgentEnabled(true);
-      setConversationEnabled(true);
       setBatchCount(1);
       setChatMessages(prefillPayload.chatMessages || []);
       setActiveSeriesId(prefillPayload.seriesId ?? null);
       setBranchFromImageId(prefillPayload.branchFromImageId ?? null);
     } else {
-      setConversationEnabled(false);
+      setAgentEnabled(false);
       setChatMessages([]);
       setActiveSeriesId(null);
       setBranchFromImageId(null);
@@ -334,7 +321,7 @@ export function useQuickGenSubmit({
       return remaining;
     });
 
-    if (conversationEnabled) {
+    if (agentEnabled) {
       const nextExcludedArray = Array.from(nextRemoved);
       setChatMessages((prev) => {
         if (prev.length === 0) return prev;
@@ -348,7 +335,7 @@ export function useQuickGenSubmit({
     }
   };
 
-  /** Sends a conversational turn to LM Studio when Conversation mode is active. */
+  /** Sends a conversational turn to Local LLM when Agent mode is active. */
   const handleSendChatTurn = async () => {
     const cleanInput = prompt.trim();
     if (!cleanInput || isChatting || isSubmitting) return;
@@ -515,8 +502,8 @@ export function useQuickGenSubmit({
         triggerWord,
         negativePrompt: '',
         loras: selectedLoras,
-        seriesId: activeSeriesId,
-        branchFromImageId: branchFromImageId,
+        seriesId: expandWithAgentSet ? null : activeSeriesId,
+        branchFromImageId: expandWithAgentSet ? null : branchFromImageId,
         chatSnapshot: snapshotForBatch,
       });
 
@@ -544,7 +531,6 @@ export function useQuickGenSubmit({
       setChatMessages([]);
       setActiveSeriesId(null);
       setBranchFromImageId(null);
-      setConversationEnabled(false);
       setAgentEnabled(false);
       setAttachedCharacter(null);
       setAttachedLoras([]);
@@ -573,7 +559,6 @@ export function useQuickGenSubmit({
     setChatMessages([]);
     setActiveSeriesId(null);
     setBranchFromImageId(null);
-    setConversationEnabled(false);
     setAgentEnabled(false);
     setAspectRatio(workflowDefaultAr);
     setMegapixels(workflowDefaultMp);
@@ -588,21 +573,21 @@ export function useQuickGenSubmit({
     }
   };
 
-  /** Primary Enter / Arrow button handler: chats if in Conversation mode, otherwise dispatches batch. */
+  /** Primary Enter / Arrow button handler: sends a chat turn when Agent is active, otherwise dispatches direct batch. */
   const handleSubmit = async (onAfterReset?: () => void) => {
-    if (conversationEnabled) {
+    if (agentEnabled) {
       await handleSendChatTurn();
       return;
     }
-    await dispatchBatchToComfy(prompt, agentEnabled, onAfterReset);
+    await dispatchBatchToComfy(prompt, false, onAfterReset);
   };
 
-  /** Submits a proposed prompt from Conversation mode and resets the Quick Gen dock. */
+  /** Submits a proposed prompt from Agent mode (expanding into themed shots if batchCount > 1) and resets Quick Gen. */
   const handleSubmitProposedPrompt = async (
     proposedPromptText: string,
     onAfterReset?: () => void
   ) => {
-    await dispatchBatchToComfy(proposedPromptText, false, onAfterReset);
+    await dispatchBatchToComfy(proposedPromptText, batchCount > 1, onAfterReset);
   };
 
   return {
@@ -610,8 +595,6 @@ export function useQuickGenSubmit({
     setPrompt,
     agentEnabled,
     setAgentEnabled,
-    conversationEnabled,
-    setConversationEnabled,
     chatMessages,
     setChatMessages,
     activeSeriesId,

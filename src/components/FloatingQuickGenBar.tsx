@@ -6,7 +6,6 @@ import {
   ChevronUp,
   ImagePlus,
   Loader2,
-  MessageSquare,
   Plus,
   Sliders,
   X,
@@ -42,7 +41,7 @@ interface FloatingQuickGenBarProps {
 
 /**
  * Floating Quick Generation Dock with @character / @lora mentions,
- * drag-and-drop image interrogation, resolution settings, and LM Studio Agent & Conversation modes.
+ * drag-and-drop image interrogation, resolution settings, and interactive Local LLM Agent mode.
  */
 export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   characters,
@@ -86,7 +85,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   });
 
   const isPromptExpanded =
-    !submitState.conversationEnabled &&
+    !submitState.agentEnabled &&
     (submitState.isPromptFocused || submitState.prompt.trim().length > 0);
 
   // Close popovers when clicking outside
@@ -192,7 +191,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               megapixels={submitState.megapixels}
               workflowDefaultMp={submitState.workflowDefaultMp}
               batchCount={submitState.batchCount}
-              conversationEnabled={submitState.conversationEnabled}
+              agentEnabled={submitState.agentEnabled}
               onChangeAspectRatio={submitState.setAspectRatio}
               onChangeMegapixels={submitState.setMegapixels}
               onChangeBatchCount={submitState.setBatchCount}
@@ -267,8 +266,8 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               onRemoveLora={submitState.handleRemoveLora}
             />
 
-            {/* Inline Expanded Conversation Area (when Agent -> Conversation is active) */}
-            {submitState.conversationEnabled && (
+            {/* Inline Expanded Conversation Area (when Agent is active) */}
+            {submitState.agentEnabled && (
               <QuickGenConversationView
                 messages={submitState.chatMessages}
                 isChatting={submitState.isChatting}
@@ -289,7 +288,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             <div className="flex items-start gap-2">
               <textarea
                 ref={inputRef}
-                rows={submitState.conversationEnabled ? 2 : isPromptExpanded ? 4 : 1}
+                rows={submitState.agentEnabled ? 2 : isPromptExpanded ? 4 : 1}
                 value={submitState.prompt}
                 onChange={mentions.handlePromptChange}
                 onFocus={() => submitState.setIsPromptFocused(true)}
@@ -310,14 +309,14 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                   }
                 }}
                 placeholder={
-                  submitState.conversationEnabled
-                    ? 'Message the Agent about your image idea (Enter to send, @ for character/LoRA)...'
+                  submitState.agentEnabled
+                    ? 'Brainstorm your image or set idea with the Agent (Enter to send, @ for character/LoRA)...'
                     : lmStudioOnline
                     ? 'What do you want to create? (Type @ for character/LoRA, or drop/paste an image)'
                     : 'What do you want to create? (Type @ to mention a character or LoRA)'
                 }
                 className={`w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-sm resize-none focus:outline-none leading-relaxed transition-[height,min-height] duration-200 overflow-y-auto ${
-                  submitState.conversationEnabled
+                  submitState.agentEnabled
                     ? 'min-h-[2.75rem] max-h-24'
                     : isPromptExpanded
                     ? 'min-h-[5.5rem] max-h-36 sm:max-h-48'
@@ -387,7 +386,15 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                   disabled={!lmStudioOnline}
                   onClick={() => {
                     if (!lmStudioOnline) return;
-                    submitState.setAgentEnabled((prev) => !prev);
+                    submitState.setAgentEnabled((prev) => {
+                      const next = !prev;
+                      if (next) {
+                        setTimeout(() => {
+                          inputRef.current?.focus({ preventScroll: true });
+                        }, 30);
+                      }
+                      return next;
+                    });
                   }}
                   className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 ${
                     !lmStudioOnline
@@ -398,34 +405,13 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                   }`}
                   title={
                     lmStudioOnline
-                      ? 'Toggle Local LLM Agent to expand your prompt into a themed photo set'
+                      ? 'Toggle Local LLM Agent to brainstorm prompts (or expand into x2–x8 themed set shots)'
                       : 'Local LLM is offline — start your Local LLM server or check connection in System settings'
                   }
                 >
                   <Bot className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Agent</span>
+                  <span>Agent</span>
                 </button>
-
-                {submitState.agentEnabled && lmStudioOnline && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      submitState.setConversationEnabled((prev) => !prev);
-                      setTimeout(() => {
-                        inputRef.current?.focus({ preventScroll: true });
-                      }, 30);
-                    }}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 cursor-pointer ${
-                      submitState.conversationEnabled
-                        ? 'bg-amber-500/20 border border-amber-400/60 text-amber-200'
-                        : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-transparent'
-                    }`}
-                    title="Toggle interactive Conversation mode to brainstorm and refine your prompt with the Agent"
-                  >
-                    <MessageSquare className="w-3.5 h-3.5" />
-                    <span>Conversation</span>
-                  </button>
-                )}
               </div>
 
               <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
@@ -465,7 +451,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                   }
                   className="w-8 h-8 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-zinc-800 disabled:bg-zinc-800 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0 shadow-sm"
                   title={
-                    submitState.conversationEnabled
+                    submitState.agentEnabled
                       ? 'Send message to Agent'
                       : 'Submit quick generation'
                   }

@@ -63,12 +63,13 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
           <div className="h-full flex flex-col items-center justify-center text-center px-4 text-zinc-400 space-y-1.5">
             <Bot className="w-6 h-6 text-indigo-400/70 stroke-1.5" />
             <p className="text-zinc-300 font-medium">
-              Brainstorm your image idea with the Local LLM Agent
+              Brainstorm your image or photo set idea with the Local LLM Agent
             </p>
             <p className="text-[11px] text-zinc-500 max-w-md">
               Describe a rough concept below and press Enter. When the Agent offers a prompt, click{' '}
-              <span className="text-indigo-300 font-medium">Submit</span> to generate it or keep
-              chatting to refine details.
+              <span className="text-indigo-300 font-medium">Submit</span> for a single shot or select{' '}
+              <span className="text-indigo-300 font-mono">x2–x8</span> in settings to expand it into a
+              themed multi-shot set.
             </p>
           </div>
         ) : (
@@ -94,7 +95,9 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
                         Proposed Prompt
                       </span>
                       {batchCount > 1 && (
-                        <span className="font-mono text-zinc-400">x{batchCount} shots</span>
+                        <span className="font-mono text-indigo-300/90">
+                          x{batchCount} themed variations
+                        </span>
                       )}
                     </div>
                     <p className="text-xs text-zinc-100 bg-zinc-900/80 border border-zinc-800/80 rounded-lg p-2 font-sans whitespace-pre-wrap break-words select-all">
@@ -114,16 +117,24 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
                         disabled={isSubmitting || isChatting}
                         onClick={() => onSubmitPrompt(msg.proposedPrompt!)}
                         className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-xs transition-colors cursor-pointer shadow-sm"
-                        title="Submit this prompt to ComfyUI and reset Quick Gen"
+                        title={
+                          batchCount > 1
+                            ? `Expand this prompt into ${batchCount} themed shot variations and queue as a set stack`
+                            : 'Submit this prompt to ComfyUI and reset Quick Gen'
+                        }
                       >
                         {isSubmitting ? (
                           <>
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            <span>Submitting...</span>
+                            <span>
+                              {batchCount > 1 ? 'Expanding & Submitting...' : 'Submitting...'}
+                            </span>
                           </>
                         ) : (
                           <>
-                            <span>Submit{batchCount > 1 ? ` (x${batchCount})` : ''}</span>
+                            <span>
+                              {batchCount > 1 ? `Submit Set (x${batchCount})` : 'Submit'}
+                            </span>
                             <ArrowRight className="w-3.5 h-3.5" />
                           </>
                         )}

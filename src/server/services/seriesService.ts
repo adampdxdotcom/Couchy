@@ -2,6 +2,7 @@ import { db } from '../db.ts';
 import type {
   ImageRecord,
   ImageSeriesItem,
+  ImageSeriesKind,
   QuickGenChatMessage,
 } from '../../shared/types.ts';
 
@@ -86,13 +87,15 @@ export function attachGeneratedImageToSeries(params: {
         : null;
 
     if (!targetSeriesId && sourceId) {
-      // Check if sourceId already belongs to a series (prefer one where it is the latest step)
+      // Check if sourceId already belongs to an iterative series (never auto-append onto a multi_shot set)
       const candidates = db
         .prepare(
           `SELECT isi.series_id, isi.step_order,
                   (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
            FROM image_series_items isi
+           JOIN image_series s ON s.id = isi.series_id
            WHERE isi.image_id = ?
+             AND COALESCE(s.series_kind, 'iterative') != 'multi_shot'
            ORDER BY (isi.step_order = max_step) DESC, isi.series_id DESC`
         )
         .all(sourceId) as { series_id: number; step_order: number; max_step: number }[];
@@ -102,6 +105,17 @@ export function attachGeneratedImageToSeries(params: {
     }
 
     // Case 1: Target series exists
+    if (targetSeriesId) {
+      const seriesRow = db
+        .prepare(`SELECT id, series_kind FROM image_series WHERE id = ?`)
+        .get(targetSeriesId) as { id: number; series_kind?: string | null } | undefined;
+
+      // Never append or copy parallel sibling shots when branching/upscaling from a multi_shot set
+      if (seriesRow?.series_kind === 'multi_shot' && sourceId) {
+        targetSeriesId = null;
+      }
+    }
+
     if (targetSeriesId) {
       const seriesRow = db
         .prepare(`SELECT id FROM image_series WHERE id = ?`)
@@ -164,7 +178,7 @@ export function attachGeneratedImageToSeries(params: {
           }
 
           const newSeriesInfo = db
-            .prepare(`INSERT INTO image_series (poster_image_id) VALUES (NULL)`)
+            .prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (NULL, 'iterative')`)
             .run();
           const newSeriesId = Number(newSeriesInfo.lastInsertRowid);
 
@@ -234,7 +248,7 @@ export function attachGeneratedImageToSeries(params: {
       const initialPosterId = favRow?.is_favorite ? sourceId : null;
 
       const newSeriesInfo = db
-        .prepare(`INSERT INTO image_series (poster_image_id) VALUES (?)`)
+        .prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (?, 'iterative')`)
         .run(initialPosterId);
       const newSeriesId = Number(newSeriesInfo.lastInsertRowid);
 
@@ -258,7 +272,7 @@ export function attachGeneratedImageToSeries(params: {
       }
 
       const newSeriesInfo = db
-        .prepare(`INSERT INTO image_series (poster_image_id) VALUES (NULL)`)
+        .prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (NULL, 'iterative')`)
         .run();
       const newSeriesId = Number(newSeriesInfo.lastInsertRowid);
       db.prepare(
@@ -381,7 +395,9 @@ export function preserveFailedGenerationConversation(itemId: number): {
               `SELECT isi.series_id,
                       (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
                FROM image_series_items isi
+               JOIN image_series s ON s.id = isi.series_id
                WHERE isi.image_id = ?
+                 AND COALESCE(s.series_kind, 'iterative') != 'multi_shot'
                ORDER BY (isi.step_order = max_step) DESC, isi.series_id DESC
                LIMIT 1`
             )
@@ -450,13 +466,15 @@ export function attachUpscaledImageToSeries(
 ): number | null {
   if (!sourceImageId || !derivedImageId || sourceImageId === derivedImageId) return null;
 
-  // Carry forward the source image's chat snapshot if it has one
+  // Carry forward the source image's iterative series & chat snapshot (branch off multi_shot sets into a new iterative stack)
   const existingRow = db
     .prepare(
-      `SELECT series_id, step_order, chat_snapshot_json,
+      `SELECT isi.series_id, isi.step_order, isi.chat_snapshot_json,
               (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
        FROM image_series_items isi
+       JOIN image_series s ON s.id = isi.series_id
        WHERE isi.image_id = ?
+         AND COALESCE(s.series_kind, 'iterative') != 'multi_shot'
        ORDER BY (isi.step_order = max_step) DESC, isi.series_id DESC
        LIMIT 1`
     )
@@ -517,6 +535,7 @@ export function setExclusiveSeriesFavorite(imageId: number, isFavorite: boolean)
 
 interface RawSeriesMemberRow {
   series_id: number;
+  series_kind: string | null;
   poster_image_id: number | null;
   image_id: number;
   step_order: number;
@@ -529,6 +548,10 @@ interface RawSeriesMemberRow {
   is_missing: number;
   is_favorite: number;
   rating: number;
+}
+
+function normalizeSeriesKind(raw: string | null | undefined): ImageSeriesKind {
+  return raw === 'multi_shot' ? 'multi_shot' : 'iterative';
 }
 
 function buildSeriesItemRecord(r: RawSeriesMemberRow): ImageSeriesItem {
@@ -558,7 +581,7 @@ export function enrichSingleImageWithSeries(
 ): ImageRecord {
   const memberships = db
     .prepare(
-      `SELECT isi.series_id, isi.step_order, s.poster_image_id,
+      `SELECT isi.series_id, isi.step_order, s.poster_image_id, s.series_kind,
               (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
        FROM image_series_items isi
        JOIN image_series s ON s.id = isi.series_id
@@ -572,6 +595,7 @@ export function enrichSingleImageWithSeries(
     series_id: number;
     step_order: number;
     poster_image_id: number | null;
+    series_kind: string | null;
     max_step: number;
   }[];
 
@@ -579,6 +603,7 @@ export function enrichSingleImageWithSeries(
     return {
       ...img,
       seriesId: null,
+      seriesKind: 'iterative',
       seriesCount: 1,
       seriesItems: [],
       chatSnapshot: [],
@@ -586,10 +611,11 @@ export function enrichSingleImageWithSeries(
   }
 
   const chosenSeriesId = memberships[0].series_id;
+  const chosenSeriesKind = normalizeSeriesKind(memberships[0].series_kind);
   const memberRows = db
     .prepare(
       `SELECT
-         isi.series_id, s.poster_image_id, isi.image_id, isi.step_order,
+         isi.series_id, s.series_kind, s.poster_image_id, isi.image_id, isi.step_order,
          isi.chat_snapshot_json, isi.created_at AS item_created_at,
          i.filename, i.content_hash, i.width, i.height, i.is_missing,
          COALESCE(r.is_favorite, 0) AS is_favorite,
@@ -609,6 +635,7 @@ export function enrichSingleImageWithSeries(
   return {
     ...img,
     seriesId: chosenSeriesId,
+    seriesKind: chosenSeriesKind,
     seriesCount: seriesItems.length,
     seriesItems,
     chatSnapshot: matchingItem?.chatSnapshot || [],
@@ -627,7 +654,7 @@ export function collapseSeriesInGalleryPool(pool: ImageRecord[]): ImageRecord[] 
   const allSeriesMemberRows = db
     .prepare(
       `SELECT
-         isi.series_id, s.poster_image_id, isi.image_id, isi.step_order,
+         isi.series_id, s.series_kind, s.poster_image_id, isi.image_id, isi.step_order,
          isi.chat_snapshot_json, isi.created_at AS item_created_at,
          i.filename, i.content_hash, i.width, i.height, i.is_missing,
          COALESCE(r.is_favorite, 0) AS is_favorite,
@@ -691,12 +718,14 @@ export function collapseSeriesInGalleryPool(pool: ImageRecord[]): ImageRecord[] 
 
     const seriesItems = members.map(buildSeriesItemRecord);
     const repItem = seriesItems.find((si) => si.imageId === posterMember.image_id);
+    const seriesKind = normalizeSeriesKind(members[0]?.series_kind);
 
     // Use the latest member's fileMtime when sorting by newest if the poster is an older hearted step,
     // or keep baseRecord fields while attaching full seriesItems
     result.push({
       ...baseRecord,
       seriesId,
+      seriesKind,
       seriesCount: seriesItems.length,
       seriesItems,
       chatSnapshot: repItem?.chatSnapshot || [],

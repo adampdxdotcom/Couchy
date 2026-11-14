@@ -515,12 +515,12 @@ generationRouter.post('/submit-batch', async (req, res) => {
         ? JSON.stringify(chatSnapshot)
         : null;
 
-    // Auto-create a shared stack series whenever a multi-image batch (>1 shot) is submitted
+    // Auto-create a shared multi-shot stack series whenever a multi-image batch (>1 shot) is submitted
     // from either Quick Gen or Generation Studio without continuing/branching an existing series.
     let effectiveSeriesId = seriesId ? Number(seriesId) : null;
     if (!effectiveSeriesId && !branchFromImageId && promptList.length > 1) {
       const createdSeries = db
-        .prepare(`INSERT INTO image_series (poster_image_id) VALUES (NULL)`)
+        .prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (NULL, 'multi_shot')`)
         .run();
       effectiveSeriesId = Number(createdSeries.lastInsertRowid);
     }

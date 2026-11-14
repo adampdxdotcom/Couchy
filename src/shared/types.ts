@@ -97,6 +97,8 @@ export interface ImageCollectionItem {
   name: string;
 }
 
+export type ImageSeriesKind = 'iterative' | 'multi_shot';
+
 export interface ImageSeriesItem {
   seriesId: number;
   imageId: number;
@@ -163,6 +165,7 @@ export interface ImageRecord {
   collections: ImageCollectionItem[];
   // Iteration Series / Conversation Stack
   seriesId?: number | null;
+  seriesKind?: ImageSeriesKind;
   seriesCount?: number;
   seriesItems?: ImageSeriesItem[];
   chatSnapshot?: QuickGenChatMessage[];

@@ -1,6 +1,11 @@
 import React from 'react';
 import { Heart, Layers, LayoutGrid, MessageSquare } from 'lucide-react';
-import type { ImageRecord, ImageSeriesItem, QueuedGhostCardItem } from '../../shared/types.ts';
+import type {
+  ImageRecord,
+  ImageSeriesItem,
+  ImageSeriesKind,
+  QueuedGhostCardItem,
+} from '../../shared/types.ts';
 
 interface SeriesIterationsStripProps {
   items: ImageSeriesItem[];
@@ -9,6 +14,7 @@ interface SeriesIterationsStripProps {
     ImageRecord,
     'id' | 'seriesId' | 'filename' | 'thumbnailUrl' | 'originalUrl' | 'width' | 'height' | 'isFavorite' | 'rating' | 'createdAt' | 'chatSnapshot'
   >;
+  seriesKind?: ImageSeriesKind;
   pendingGhosts?: QueuedGhostCardItem[];
   onSelectIteration: (imageId: number) => void;
   onContinueConversation?: () => void;
@@ -25,6 +31,7 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
   items,
   activeImageId,
   activeImage,
+  seriesKind = 'iterative',
   pendingGhosts = [],
   onSelectIteration,
   onContinueConversation,
@@ -63,7 +70,8 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
   );
   const totalWithPending = Math.max(displayItems.length + pendingGhosts.length, maxBatchTotal);
   const activeIdx = displayItems.findIndex((it) => it.imageId === activeImageId);
-  const isMiddleStep = activeIdx >= 0 && activeIdx < displayItems.length - 1;
+  const isMultiShot = seriesKind === 'multi_shot';
+  const isMiddleStep = !isMultiShot && activeIdx >= 0 && activeIdx < displayItems.length - 1;
 
   return (
     <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 space-y-2.5 min-w-0">
@@ -73,10 +81,16 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
           <span className="text-[11px] font-display font-semibold text-zinc-200 uppercase tracking-wider truncate">
             Series Stack ({activeIdx >= 0 ? `${activeIdx + 1} of ${totalWithPending}` : totalWithPending})
           </span>
-          {isMiddleStep && (
-            <span className="text-[10px] font-mono text-amber-300/90 hidden sm:inline">
-              · Branching splits new stack
+          {isMultiShot ? (
+            <span className="text-[10px] font-mono text-indigo-300/90 hidden sm:inline">
+              · Multi-shot set (branches new stack)
             </span>
+          ) : (
+            isMiddleStep && (
+              <span className="text-[10px] font-mono text-amber-300/90 hidden sm:inline">
+                · Branching splits new stack
+              </span>
+            )
           )}
         </div>
 
@@ -104,13 +118,21 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
               onClick={onContinueConversation}
               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-500/15 hover:bg-amber-500/25 border border-amber-400/40 text-amber-200 text-[11px] font-medium transition-colors cursor-pointer shrink-0"
               title={
-                isMiddleStep
+                isMultiShot
+                  ? 'Start a new iterative conversation stack from this shot (leaves multi-shot set intact)'
+                  : isMiddleStep
                   ? 'Branch a new conversation stack from this iteration (carries history up to this step)'
                   : 'Continue conversation from this latest iteration'
               }
             >
               <MessageSquare className="w-3 h-3" />
-              <span>{isMiddleStep ? `Branch #${activeIdx + 1}` : 'Continue Chat'}</span>
+              <span>
+                {isMultiShot
+                  ? `Iterate #${activeIdx >= 0 ? activeIdx + 1 : 1}`
+                  : isMiddleStep
+                  ? `Branch #${activeIdx + 1}`
+                  : 'Continue Chat'}
+              </span>
             </button>
           )}
         </div>

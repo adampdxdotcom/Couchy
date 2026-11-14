@@ -287,6 +287,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 items={activeImage.seriesItems || []}
                 activeImageId={activeImage.id}
                 activeImage={activeImage}
+                seriesKind={activeImage.seriesKind}
                 pendingGhosts={matchingPendingGhosts}
                 onSelectIteration={(nextId) => setSelectedIterationId(nextId)}
                 onContinueConversation={
@@ -354,6 +355,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 ]
           }
           activeImageId={activeImage.id}
+          seriesKind={activeImage.seriesKind}
           pendingGhosts={matchingPendingGhosts}
           onClose={() => setShowSeriesMiniGallery(false)}
           onSelectIteration={(nextId) => setSelectedIterationId(nextId)}

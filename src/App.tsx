@@ -561,8 +561,9 @@ export default function App() {
           ? Math.max(0.5, Math.min(10.0, Math.round(((img.width * img.height) / 1_000_000) * 2) / 2))
           : undefined;
 
+      const isFromMultiShot = img.seriesKind === 'multi_shot';
       let initialChatMessages: QuickGenChatMessage[] = [];
-      if (img.chatSnapshot && img.chatSnapshot.length > 0) {
+      if (!isFromMultiShot && img.chatSnapshot && img.chatSnapshot.length > 0) {
         initialChatMessages = img.chatSnapshot;
       } else {
         const promptText = (img.positivePrompt || '').trim();
@@ -571,7 +572,9 @@ export default function App() {
             {
               id: `seed-${img.id}`,
               role: 'assistant',
-              content: 'Loaded prompt from this image. How would you like to iterate on it?',
+              content: isFromMultiShot
+                ? 'Loaded this shot from the photo set. How would you like to iterate on it?'
+                : 'Loaded prompt from this image. How would you like to iterate on it?',
               proposedPrompt: promptText,
             },
           ];
@@ -592,7 +595,7 @@ export default function App() {
         batchCount: 1,
         conversationMode: true,
         chatMessages: initialChatMessages,
-        seriesId: img.seriesId ?? null,
+        seriesId: isFromMultiShot ? null : (img.seriesId ?? null),
         branchFromImageId: img.id,
         timestamp: Date.now(),
       });
@@ -602,7 +605,9 @@ export default function App() {
         setActiveTab('gallery');
       }
       pushToast(
-        img.seriesId
+        isFromMultiShot
+          ? 'Started new Conversation stack from set shot in Quick Gen'
+          : img.seriesId
           ? 'Reopened image series conversation in Quick Gen'
           : 'Started Conversation stack from image in Quick Gen',
         'info'

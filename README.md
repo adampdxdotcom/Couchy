@@ -50,32 +50,30 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
   - **Character-Aware Physical Trait Stripping**: If a character is already attached in the Quick Gen Box when you drop or upload a photo, Couchy automatically strips conflicting physical identity traits—such as hair color, eye color, permanent facial features (freckles, moles), skin tone, race/ethnicity, and body proportions—while keeping hairstyle structure, transient facial expressions/emotions (e.g., smiling, blushing), pose, clothing/NSFW state, lighting, and framing so the character's LoRA defines their appearance cleanly.
   - **Optional Reference Archiving**: Enable *"Save Uploaded Prompt Images"* in **System** to automatically save a copy of each 1MP downscaled reference image to `data/uploaded`.
 
-- **Local LLM Photo Set Agent (`Agent` Toggle)**:
-  - Toggle the **Agent** button to have your local LLM expand a single prompt or high-level narrative instruction into a cohesive multi-image sequence across your selected batch count:
-    > *"The character should grow increasingly tired through the series"*
-    > or *"Shift the scene from golden hour sunlight to midnight rain over 6 shots"*
-  - Preserves your attached character's trigger words, LoRA context, and visual continuity across every generated frame.
-
-- **Interactive Agent Conversation Mode (`Agent` &rarr; `Conversation`)**:
-  - When **Agent** is enabled, click the **Conversation** button to expand the Quick Gen dock into a 12–15 line inline conversation view (no separate chat window).
+- **Local LLM Agent & Conversation Mode (`Agent` Toggle)**:
+  - Toggle the **Agent** button directly in the Quick Gen Box to open an inline 12–15 line interactive conversation view (no separate chat window).
   - Brainstorm lighting, framing, wardrobe, mood, and scene details back-and-forth with your local LLM (sending up to the last 10 messages of context per turn). Use **Clear** in the chat header at any time to reset the thread.
   - Whenever the LLM has a ready-to-generate prompt, it presents a **Proposed Prompt** card with a one-click **Submit** button—or you can keep chatting to refine it further.
-  - Multi-image batch generation is automatically locked to `x1` during Conversation mode. Submitting a proposed prompt dispatches the job to ComfyUI, clears the conversation, and returns the Quick Gen box to its compact default state.
-  - The guiding system prompt for Conversation mode is fully editable (with a **Reset to Default** option) under **System &rarr; Agent**.
+  - **Single Shot (`x1`) vs. Multi-Shot Set (`x2`–`x8`)**:
+    - At **`x1`**, clicking **Submit** dispatches the refined prompt verbatim as a single generation (starting or continuing an iterative conversation stack).
+    - At **`x2`–`x8`**, clicking **Submit Set (`xN`)** expands the refined prompt into `N` cohesive, varied shots along the theme (preserving attached character trigger words and LoRA context) and groups them into a **multi-shot set stack**.
+    - Generation count automatically resets back to `x1` after submission or whenever reopening Conversation from an existing image or stack.
+  - The guiding system prompts for **Agent** (themed photo sets & interactive Conversation mode) are customizable under **System &rarr; Agent**.
 
-- **Stacked Image Iterations, Conversation History & Branching**:
-  - **Persistent Conversation Snapshots**: Every image generated in Conversation mode saves its conversation history snapshot and links iterations into a stacked **Image Series**.
-  - **Continue or Start a Stack from Any Image**: Click the **Conversation (`MessageSquare`)** icon on any gallery card—or click **Continue Chat** / **Branch #N** inside the **Series Stack** section of the Image Inspector—to reopen that iteration's saved conversation in Quick Gen (or start a new stack seeded from a standalone image's prompt and character).
+- **Stacked Image Iterations, Multi-Shot Sets & Branching**:
+  - **Iterative Stacks vs. Multi-Shot Sets**:
+    - **Iterative Stacks** link progressive refinements (`x1`) and save full conversation history snapshots across steps. Click the yellow **Conversation (`MessageSquare`)** icon on a card, or use **Continue Chat** / **Branch #N** inside the Inspector, to continue or branch off the stack.
+    - **Multi-Shot Sets** group parallel shots generated as a batch (`x2`–`x8`). On Main Gallery and Character Gallery previews, the yellow Conversation bubble is shown in a **disabled** state on multi-shot set cards so ambiguous whole-set edits are prevented; open the card's **Image Inspector** or **Series Mini Gallery** (`Gallery` button) and click **Iterate** / **Iterate #N** on a specific shot to start a new `x1` iterative conversation stack seeded directly from that shot's prompt without altering the original set.
   - **Continue from Latest vs. Branch from Middle**:
     - **Continuing from the latest iteration** renders a translucent live **Pending** / `%` progress overlay directly on that existing stack's card in the Main Gallery and Character Gallery (plus a simplified `#N` **Pending** / `%` preview tile inside the Inspector's **Series Stack** strip) and appends the finished image to the same stack.
-    - **Branching from a middle iteration** (e.g., **Branch #3** of `5`) spawns a separate new gallery card during generation and splits off a **new series stack** upon completion, copying the ancestor lineage (`#1..#3`) and conversation edit history into the new stack while leaving the original stack untouched.
-  - **Automatic Upscale Stacking**: Upscaling any image from the Inspector (`POST /api/images/:id/upscale`) renders the same live **Pending** / `%` overlay on the source card (and preview tile in the **Series Stack** strip) and automatically appends the upscaled result onto the source stack regardless of whether it originated in Conversation mode.
+    - **Branching from a middle iteration** (e.g., **Branch #3** of `5`) or iterating from a shot inside a multi-shot set spawns a separate new gallery card during generation and splits off a **new iterative series stack** upon completion while leaving the original stack untouched.
+  - **Automatic Upscale Stacking**: Upscaling any image from the Inspector (`POST /api/images/:id/upscale`) renders the same live **Pending** / `%` overlay on the source card (and preview tile in the **Series Stack** strip) and automatically stacks the upscaled result with its source image.
   - **Exclusive Poster / Hearted Image**: Within an image stack, only one iteration can be hearted/favorited at a time. That hearted image acts as the stack's **Poster Image** in both the Main Gallery and Character Gallery; if no iteration is hearted, the most recent iteration is shown.
 
 - **Workflow, Aspect Ratio & Batch Size Selector**:
   - Click the workflow/ratio pill (e.g., `2:3 · 3MP · x1`) to open the quick settings popover:
     - **Aspect Ratio Presets**: `1:1`, `9:16`, `16:9`, `3:4`, `4:3`, `2:3`, and `3:2` (mapped directly to your workflow's resolution/aspect node).
-    - **Number of Generations**: `x1`, `x2`, `x4`, `x6`, or `x8` images per batch (locked to `x1` when Conversation mode is enabled).
+    - **Number of Generations**: `x1`, `x2`, `x4`, `x6`, or `x8` images per batch (when **Agent** is active, `x2`–`x8` expands the proposed prompt into themed shot variations).
     - **Resolution**: From `0.5 MP` up to `10.0 MP` selectable. Up to `3.0 MP` renders natively; higher targets automatically trigger the inline `4x` ESRGAN upscale + downscale pass.
   - Automatically displays and uses the attached character's preferred workflow if configured, or falls back to your default ComfyUI workflow.
 

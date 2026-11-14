@@ -599,6 +599,27 @@ export function runMigrations(): void {
         CREATE INDEX IF NOT EXISTS idx_download_jobs_status_scheduled ON download_jobs(status, scheduled_for);
       `,
     },
+    {
+      version: 16,
+      name: 'image_series_kind',
+      sql: `
+        ALTER TABLE image_series ADD COLUMN series_kind TEXT NOT NULL DEFAULT 'iterative';
+        UPDATE image_series
+        SET series_kind = 'multi_shot'
+        WHERE id IN (
+          SELECT gb.series_id
+          FROM generation_batches gb
+          WHERE gb.series_id IS NOT NULL
+            AND gb.total_count > 1
+            AND gb.branch_from_image_id IS NULL
+            AND (
+              SELECT COUNT(*)
+              FROM generation_batches gb2
+              WHERE gb2.series_id = gb.series_id
+            ) = 1
+        );
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');
