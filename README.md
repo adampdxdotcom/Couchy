@@ -35,10 +35,10 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
   - Click the **Quick Gen** tab handle to minimize the dock out of the way (displaying a preview snippet if a draft prompt is present) or expand it on demand.
   - Automatically expands the prompt input box when focused or populated, and submits on `Enter` (`Shift+Enter` for new lines).
 
-- **`@Character` Mention Picker & Auto-LoRA Attachment**:
-  - Type `@` anywhere in the prompt (or click the **`+`** button) to open a two-column searchable character & image picker.
-  - Filter characters by name, alias, LoRA filename, or trigger word using keyboard navigation (`ArrowUp`, `ArrowDown`, `Enter`/`Tab`, `Escape`) or mouse hover to preview character portraits and recent confirmed images.
-  - Selecting a character attaches a removable **Character Pill Badge** above the prompt and automatically injects that character's configured LoRAs, model/CLIP weights, trigger words, and preferred default workflow on submission.
+- **`@Character` & `@LoRA` Mention Picker & Auto-Attachment**:
+  - Type `@` anywhere in the prompt (or click the **`+`** button) to open a two-column searchable `@Character` & `@LoRA` picker (`All`, `Characters`, and `LoRAs` tabs).
+  - Direct **Character** and **LoRA** matches rank at the top of the list above matching reference image prompts, with keyboard navigation (`ArrowUp`, `ArrowDown`, `Enter`/`Tab`, `Escape`) or mouse hover to preview portraits, confirmed reference images, and prompt snippets.
+  - Selecting a character or mention-enabled LoRA attaches a removable **Pill Badge** above the prompt and automatically injects configured LoRAs, model/CLIP weights, trigger words, and preferred default workflow on submission.
 
 - **Hybrid Image-to-Prompt Interrogation (Drag, Paste, or Upload)**:
   - **Drop, Paste, or Browse**: Drag and drop an image file onto the Quick Gen Box, paste an image from your clipboard (`Ctrl+V` / `Cmd+V`), or click the **Image Upload (`ImagePlus`)** button.
@@ -100,7 +100,13 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
   - Specific Character, Checkpoint, and LoRA filters
   - Aspect ratio and resolution dimensions
   - Sort orders: Newest, Oldest, Highest Rated, Recently Favorited, File Size, and Checkpoint
-- **Full-Screen Inspector & Series Thumbnail Strip**: Click any image to open the Inspector (click the preview image itself to expand or exit full screen). The metadata sidebar shows **Assigned Character** (with portrait thumbnail), followed by **Workflow & Reproducibility** (with `Run Workflow` and `4x` ESRGAN `Upscale`), and—when viewing a stacked series or active job—the **Series Stack** thumbnail strip directly underneath with live `#N` **Pending** / `%` preview tiles, iteration switching, poster hearting, and **Continue Chat** / **Branch #N** controls above the prompts, parameters, LoRAs, visual keywords, and notes.
+- **Full-Screen Inspector, Loupe Magnifier, Series Stacks & A/B Split-Screen Comparison**:
+  - Click any image to open the Inspector (click the preview image itself to expand or exit full screen, or toggle the **Loupe** magnifier in the bottom bar with `2×`, `4×`, and `1:1 Native` presets and click-to-pin locking). The metadata sidebar shows **Assigned Character** (with portrait thumbnail), followed by **Workflow & Reproducibility** (with `Run Workflow` and `4x` ESRGAN `Upscale`), and—when viewing a stacked series or active job—the **Series Stack** thumbnail strip (plus a full contact-sheet **Series Mini Gallery** modal) with live `#N` **Pending** / `%` preview tiles, iteration switching, poster hearting, and **Continue Chat** / **Branch #N** controls above the prompts, parameters, LoRAs, visual keywords, and notes.
+  - Click **Compare** in the Inspector header (next to `X`) to enter **A/B Split-Screen Comparison**:
+    - **Smart Pre-Fill & Stack Picker**: Automatically loads the previous or favorited iteration from an active series stack into Slot B, or click **Compare with...** to browse stacked gallery cards with search and Character, LoRA, Rating, and Favorites filters. Switch individual steps within each stack via the per-slot series strip inside the bottom drawer.
+    - **Side-by-Side & Overlay Wipe Modes**: Switch between a clean two-pane view and an interactive **Overlay Wipe** slider with a draggable vertical divider inside a shared `object-contain` container. Toggle between **Fit (Normalized)** visual framing and **100% Native** pixel resolution inspection with zero overlays obscuring the images.
+    - **Synced Dual & Split Loupe Inspector**: Toggle **Loupe** (`2×`, `4×`, `1:1 Native`) in Split Mode to project a synchronized **Dual Mirrored Lens** across both panes in Side-by-Side mode or a **Split `[A | B]` Lens** in Overlay Wipe mode. Click anywhere on the image to pin/lock the lens in place while rating, hearting, or inspecting diffs.
+    - **Collapsible Bottom Diff Drawer**: Starts collapsed to preserve full canvas space; expand to inspect side-by-side diffs only (word-level positive prompt diff, negative prompt diff, differing parameters/resolution, and added/removed/weight-changed LoRAs) with per-slot **Star Rating**, **Heart**, **Reuse**, and **Reject** actions, plus **Swap** and two-stage `Esc` exit (`Picker` &rarr; `Exit Split` &rarr; `Close Inspector`).
 
 ### 4. Workflows & Dynamic Node Mapper
 - **Import Any ComfyUI Workflow**: Import API or visual workflow JSON files directly.
@@ -109,6 +115,7 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
 
 ### 5. LoRA & Model Management
 - **Directory Scanning**: Live indexing of your ComfyUI models directory.
+- **LoRA `@Mention` Configuration**: Enable or disable Quick Gen `@mention` support strictly via each LoRA's checkbox while clicking a LoRA row opens its detail settings (custom nickname, category, trigger words, and default model/CLIP strengths).
 - **Metadata Enrichment**: Integration with Civitai and Hugging Face to fetch model preview cards, recommended base models, and trigger words.
 
 ### 6. Local ONNX Visual Keyword Tagger
@@ -245,6 +252,7 @@ docker compose logs -f comfyui-gallery
 | `DATABASE_PATH` | `/app/data/gallery.db` | Persistent SQLite database location |
 | `THUMBNAIL_PATH` | `/data/thumbnails` | Directory for cached WebP thumbnails |
 | `BACKUP_PATH` | `/app/data/backups` | Persistent directory for SQLite database backups |
+| `LOGS_DIR` | `/app/data/logs` | Directory for size-capped rotating server logs (`couchy.log`, 5 MB &times; 2 files) |
 | `DOWNLOADS_DIR` | `/downloads` | Target directory for confirmed model downloads |
 | `CIVITAI_API_KEY` | *(Optional)* | API token for Civitai model search & metadata |
 | `HF_API_TOKEN` | *(Optional)* | Hugging Face token for model downloads |

@@ -3,14 +3,21 @@ import {
   ArrowLeftRight,
   Columns2,
   ImagePlus,
-  RotateCcw,
+  Lock,
+  Search,
   SlidersHorizontal,
+  Unlock,
   X,
-  ZoomIn,
-  ZoomOut,
 } from 'lucide-react';
 import type { ImageRecord } from '../../shared/types.ts';
 import { SplitCompareDiffDrawer } from './SplitCompareDiffDrawer.tsx';
+import {
+  clientPointToImageUV,
+  SingleLoupeLens,
+  SplitWipeLoupeLens,
+  type LoupeMagnification,
+  type LoupeUV,
+} from './LoupeOverlay.tsx';
 
 export type SplitCompareMode = 'side_by_side' | 'overlay_wipe';
 export type SplitFramingMode = 'fit' | 'native';
@@ -31,7 +38,8 @@ interface SplitCompareViewProps {
 
 /**
  * Full-width A/B Split-Screen Comparison stage supporting Side-by-Side and Overlay Wipe modes,
- * Normalized Fit vs 100% Native pixel framing, roughed-in Zoom/Pan controls, and a collapsed-by-default diff drawer.
+ * Normalized Fit vs 100% Native pixel framing, Dual Mirrored & Split Loupe Inspector,
+ * and a collapsed-by-default diff drawer.
  */
 export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
   imageA,
@@ -52,7 +60,24 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
   const [isDraggingWipe, setIsDraggingWipe] = useState(false);
   const [isDiffDrawerOpen, setIsDiffDrawerOpen] = useState(false);
 
+  // Loupe Inspector state
+  const [loupeEnabled, setLoupeEnabled] = useState(false);
+  const [loupeMag, setLoupeMag] = useState<LoupeMagnification>('2x');
+  const [loupeUV, setLoupeUV] = useState<LoupeUV | null>(null);
+  const [loupePinned, setLoupePinned] = useState(false);
+
+  // Side-by-Side pane & image refs
+  const paneARef = useRef<HTMLDivElement | null>(null);
+  const imgARef = useRef<HTMLImageElement | null>(null);
+  const paneBRef = useRef<HTMLDivElement | null>(null);
+  const imgBRef = useRef<HTMLImageElement | null>(null);
+
+  // Overlay Wipe container & image refs
   const wipeContainerRef = useRef<HTMLDivElement | null>(null);
+  const wipeImgARef = useRef<HTMLImageElement | null>(null);
+  const wipeImgBRef = useRef<HTMLImageElement | null>(null);
+  const wipeDownStartXRef = useRef<number | null>(null);
+  const wipeMovedRef = useRef<boolean>(false);
 
   const updateWipeFromClientX = (clientX: number) => {
     const el = wipeContainerRef.current;
@@ -66,21 +91,124 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
   const handleWipePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
-    setIsDraggingWipe(true);
-    updateWipeFromClientX(e.clientX);
+    wipeDownStartXRef.current = e.clientX;
+    wipeMovedRef.current = false;
+
+    if (!loupeEnabled) {
+      setIsDraggingWipe(true);
+      updateWipeFromClientX(e.clientX);
+      return;
+    }
+
+    // When Loupe is active, grabbing near the vertical divider drags the wipe line immediately;
+    // clicking elsewhere pins/unpins the Loupe (unless the user drags horizontally).
+    const el = wipeContainerRef.current;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      const dividerX = rect.left + (wipePercent / 100) * rect.width;
+      if (Math.abs(e.clientX - dividerX) <= 24) {
+        setIsDraggingWipe(true);
+        wipeMovedRef.current = true;
+      }
+    }
   };
 
   const handleWipePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDraggingWipe) return;
-    updateWipeFromClientX(e.clientX);
+    if (
+      loupeEnabled &&
+      wipeDownStartXRef.current !== null &&
+      !isDraggingWipe &&
+      Math.abs(e.clientX - wipeDownStartXRef.current) > 6
+    ) {
+      setIsDraggingWipe(true);
+      wipeMovedRef.current = true;
+    }
+
+    if (isDraggingWipe) {
+      updateWipeFromClientX(e.clientX);
+    }
+
+    if (loupeEnabled && !loupePinned && !isDraggingWipe) {
+      const nextUV = clientPointToImageUV(
+        e.clientX,
+        e.clientY,
+        wipeContainerRef.current,
+        wipeImgARef.current,
+        imageA.width,
+        imageA.height
+      );
+      if (nextUV) setLoupeUV(nextUV);
+    }
   };
 
   const handleWipePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!isDraggingWipe) return;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
+
+    if (loupeEnabled && !wipeMovedRef.current && !isDraggingWipe) {
+      const clickedUV = clientPointToImageUV(
+        e.clientX,
+        e.clientY,
+        wipeContainerRef.current,
+        wipeImgARef.current,
+        imageA.width,
+        imageA.height
+      );
+      if (clickedUV) {
+        setLoupeUV(clickedUV);
+        setLoupePinned((prev) => !prev);
+      }
+    }
+
     setIsDraggingWipe(false);
+    wipeDownStartXRef.current = null;
+    wipeMovedRef.current = false;
+  };
+
+  const handleSidePanePointerMove = (
+    e: React.PointerEvent<HTMLDivElement>,
+    slot: 'A' | 'B'
+  ) => {
+    if (!loupeEnabled || loupePinned) return;
+    const containerEl = slot === 'A' ? paneARef.current : paneBRef.current;
+    const imgEl = slot === 'A' ? imgARef.current : imgBRef.current;
+    const targetImg = slot === 'A' ? imageA : imageB;
+    if (!targetImg) return;
+
+    const nextUV = clientPointToImageUV(
+      e.clientX,
+      e.clientY,
+      containerEl,
+      imgEl,
+      targetImg.width,
+      targetImg.height
+    );
+    if (nextUV) setLoupeUV(nextUV);
+  };
+
+  const handleSidePaneClick = (
+    e: React.MouseEvent<HTMLDivElement>,
+    slot: 'A' | 'B'
+  ) => {
+    if (!loupeEnabled) return;
+    const containerEl = slot === 'A' ? paneARef.current : paneBRef.current;
+    const imgEl = slot === 'A' ? imgARef.current : imgBRef.current;
+    const targetImg = slot === 'A' ? imageA : imageB;
+    if (!targetImg) return;
+
+    const clickedUV = clientPointToImageUV(
+      e.clientX,
+      e.clientY,
+      containerEl,
+      imgEl,
+      targetImg.width,
+      targetImg.height
+    );
+    if (clickedUV) {
+      setLoupeUV(clickedUV);
+      setLoupePinned((prev) => !prev);
+    }
   };
 
   const nativeW = Math.max(imageA.width || 0, imageB?.width || 0, 1024);
@@ -90,7 +218,7 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
     <div className="flex-1 flex flex-col min-h-0 w-full h-full bg-zinc-950 select-none overflow-hidden">
       {/* Top Split Toolbar */}
       <div className="px-3 sm:px-5 py-2.5 bg-zinc-900/95 border-b border-zinc-800 flex flex-wrap items-center justify-between gap-2.5 shrink-0 z-20">
-        {/* Left: Comparison Mode & Framing Mode */}
+        {/* Left: Comparison Mode, Framing Mode & Loupe Inspector */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex items-center p-0.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs">
             <button
@@ -152,36 +280,84 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
             </button>
           </div>
 
-          {/* Roughed-in Pan/Zoom Toolbar (Phase 2 placeholder, non-interactive until synced pan/zoom is added) */}
-          <div
-            className="hidden xl:inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-zinc-950/70 border border-zinc-800/80 rounded-lg text-[11px] text-zinc-500 opacity-60"
-            title="Synced Pan & Zoom controls (coming in next iteration)"
-          >
+          {/* Loupe Inspector Controls */}
+          <div className="inline-flex items-center p-0.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs">
             <button
               type="button"
-              disabled
-              className="p-1 cursor-not-allowed"
-              aria-label="Zoom out (coming soon)"
+              onClick={() => {
+                setLoupeEnabled((prev) => {
+                  const next = !prev;
+                  if (next && !loupeUV) {
+                    setLoupeUV({ u: 0.5, v: 0.38 });
+                  }
+                  if (!next) {
+                    setLoupePinned(false);
+                  }
+                  return next;
+                });
+              }}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                loupeEnabled
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-zinc-400 hover:text-zinc-100'
+              }`}
+              title="Toggle synced A/B Loupe magnifier (hover to inspect, click image to pin/unpin)"
             >
-              <ZoomOut className="w-3.5 h-3.5" />
+              <Search className="w-3.5 h-3.5" />
+              <span>Loupe</span>
             </button>
-            <span className="px-1.5 font-mono tabular-nums">100%</span>
-            <button
-              type="button"
-              disabled
-              className="p-1 cursor-not-allowed"
-              aria-label="Zoom in (coming soon)"
-            >
-              <ZoomIn className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              disabled
-              className="p-1 cursor-not-allowed"
-              aria-label="Reset zoom (coming soon)"
-            >
-              <RotateCcw className="w-3 h-3" />
-            </button>
+
+            {loupeEnabled && (
+              <>
+                <div className="h-4 w-px bg-zinc-800 mx-0.5" />
+                {(['2x', '4x', 'native'] as LoupeMagnification[]).map((mag) => (
+                  <button
+                    key={mag}
+                    type="button"
+                    onClick={() => setLoupeMag(mag)}
+                    className={`px-2 py-1 rounded font-mono text-[11px] transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                      loupeMag === mag
+                        ? 'bg-zinc-800 text-indigo-300 font-semibold'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    title={
+                      mag === 'native'
+                        ? '1:1 Native pixel magnification inside loupe'
+                        : `${mag.toUpperCase()} display magnification inside loupe`
+                    }
+                  >
+                    {mag === 'native' ? '1:1' : mag.toUpperCase()}
+                  </button>
+                ))}
+
+                <button
+                  type="button"
+                  onClick={() => setLoupePinned((prev) => !prev)}
+                  className={`inline-flex items-center gap-1 px-2 py-1 ml-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                    loupePinned
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                      : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                  title={
+                    loupePinned
+                      ? 'Loupe is pinned — click here or on the image to unpin'
+                      : 'Click on the image (or here) to lock the Loupe in place'
+                  }
+                >
+                  {loupePinned ? (
+                    <>
+                      <Lock className="w-3 h-3" />
+                      <span>Pinned</span>
+                    </>
+                  ) : (
+                    <>
+                      <Unlock className="w-3 h-3" />
+                      <span className="hidden lg:inline">Click image to pin</span>
+                    </>
+                  )}
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -219,7 +395,7 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
         </div>
       </div>
 
-      {/* Main Comparison Canvas (100% width, zero overlays on the images themselves) */}
+      {/* Main Comparison Canvas (100% width, zero action button overlays on the images themselves) */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         {compareMode === 'side_by_side' ? (
           <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-zinc-800/80 overflow-hidden">
@@ -237,13 +413,22 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
               </div>
 
               <div
-                className={`flex-1 min-h-0 p-2 sm:p-3 flex ${
+                ref={paneARef}
+                onPointerMove={(e) => handleSidePanePointerMove(e, 'A')}
+                onPointerLeave={() => {
+                  if (loupeEnabled && !loupePinned) setLoupeUV(null);
+                }}
+                onClick={(e) => handleSidePaneClick(e, 'A')}
+                className={`relative flex-1 min-h-0 p-2 sm:p-3 flex ${
+                  loupeEnabled ? 'cursor-crosshair' : ''
+                } ${
                   framingMode === 'native'
                     ? 'overflow-auto items-start justify-start'
                     : 'overflow-hidden items-center justify-center'
                 }`}
               >
                 <img
+                  ref={imgARef}
                   src={imageA.originalUrl}
                   alt={imageA.filename}
                   referrerPolicy="no-referrer"
@@ -254,6 +439,18 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
                       : 'w-full h-full object-contain'
                   }
                 />
+
+                {loupeEnabled && loupeUV && (
+                  <SingleLoupeLens
+                    image={imageA}
+                    uv={loupeUV}
+                    magnification={loupeMag}
+                    isPinned={loupePinned}
+                    slotLabel="A"
+                    containerRef={paneARef}
+                    imgRef={imgARef}
+                  />
+                )}
               </div>
             </div>
 
@@ -276,13 +473,22 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
 
               {imageB ? (
                 <div
-                  className={`flex-1 min-h-0 p-2 sm:p-3 flex ${
+                  ref={paneBRef}
+                  onPointerMove={(e) => handleSidePanePointerMove(e, 'B')}
+                  onPointerLeave={() => {
+                    if (loupeEnabled && !loupePinned) setLoupeUV(null);
+                  }}
+                  onClick={(e) => handleSidePaneClick(e, 'B')}
+                  className={`relative flex-1 min-h-0 p-2 sm:p-3 flex ${
+                    loupeEnabled ? 'cursor-crosshair' : ''
+                  } ${
                     framingMode === 'native'
                       ? 'overflow-auto items-start justify-start'
                       : 'overflow-hidden items-center justify-center'
                   }`}
                 >
                   <img
+                    ref={imgBRef}
                     src={imageB.originalUrl}
                     alt={imageB.filename}
                     referrerPolicy="no-referrer"
@@ -293,6 +499,18 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
                         : 'w-full h-full object-contain'
                     }
                   />
+
+                  {loupeEnabled && loupeUV && (
+                    <SingleLoupeLens
+                      image={imageB}
+                      uv={loupeUV}
+                      magnification={loupeMag}
+                      isPinned={loupePinned}
+                      slotLabel="B"
+                      containerRef={paneBRef}
+                      imgRef={imgBRef}
+                    />
+                  )}
                 </div>
               ) : (
                 <div className="flex-1 min-h-0 p-6 flex flex-col items-center justify-center text-center gap-3">
@@ -357,17 +575,25 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
                   onPointerMove={handleWipePointerMove}
                   onPointerUp={handleWipePointerUp}
                   onPointerCancel={handleWipePointerUp}
+                  onPointerLeave={() => {
+                    if (loupeEnabled && !loupePinned && !isDraggingWipe) {
+                      setLoupeUV(null);
+                    }
+                  }}
                   style={
                     framingMode === 'native'
                       ? { width: `${nativeW}px`, height: `${nativeH}px` }
                       : undefined
                   }
-                  className={`relative touch-none cursor-ew-resize overflow-hidden bg-zinc-950 ${
+                  className={`relative touch-none ${
+                    loupeEnabled ? 'cursor-crosshair' : 'cursor-ew-resize'
+                  } overflow-hidden bg-zinc-950 ${
                     framingMode === 'native' ? 'shrink-0 m-auto' : 'w-full h-full'
                   }`}
                 >
                   {/* Image A clipped to left of divider */}
                   <img
+                    ref={wipeImgARef}
                     src={imageA.originalUrl}
                     alt={imageA.filename}
                     referrerPolicy="no-referrer"
@@ -378,6 +604,7 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
 
                   {/* Image B clipped to right of divider */}
                   <img
+                    ref={wipeImgBRef}
                     src={imageB.originalUrl}
                     alt={imageB.filename}
                     referrerPolicy="no-referrer"
@@ -395,6 +622,20 @@ export const SplitCompareView: React.FC<SplitCompareViewProps> = ({
                       <ArrowLeftRight className="w-3.5 h-3.5" />
                     </div>
                   </div>
+
+                  {/* Split [A | B] Loupe in Overlay Wipe Mode */}
+                  {loupeEnabled && loupeUV && (
+                    <SplitWipeLoupeLens
+                      imageA={imageA}
+                      imageB={imageB}
+                      uv={loupeUV}
+                      magnification={loupeMag}
+                      isPinned={loupePinned}
+                      containerRef={wipeContainerRef}
+                      imgARef={wipeImgARef}
+                      imgBRef={wipeImgBRef}
+                    />
+                  )}
                 </div>
               </div>
             ) : (

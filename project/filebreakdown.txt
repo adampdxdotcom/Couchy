@@ -25,7 +25,8 @@ ENTRY POINTS & SHARED
 
 SERVER: CORE, WORKFLOWS & ROUTES
 - `src/server/config.ts` — Runtime path/URL/API-key resolver (`appConfig`) & `ensureDirectories()`.
-- `src/server/db.ts` — SQLite schema/migrations (v1–v9) and default workflow/template seeding.
+- `src/server/db.ts` — SQLite schema/migrations (v1–v12) and default workflow/template seeding.
+- `src/server/logger.ts` — Dual terminal + size-capped rotating file logger (`couchy.log` / `couchy.log.1`, 5 MB max × 2 files).
 - `src/server/workflows/primary_workflow.json` — Primary Krea2_turbo API graph (with #51–#54 upscale).
 - `src/server/workflows/upscale_workflow.json` — Standalone single-image upscale API graph.
 - `src/server/routes/imagesRoutes.ts` — Gallery query, thumbnails/files, annotations, ZIP export, upscale, WD14 tag actions.
@@ -55,8 +56,14 @@ FRONTEND: TOP-LEVEL VIEWS & INSPECTOR
 - `src/components/GalleryFilterBar.tsx` — Sticky boolean search bar, expandable multi-criteria filter drawer, layout/sort controls, presets.
 - `src/components/GalleryGridView.tsx` — Standard/Masonry/Compact gallery grid, series stack badges, translucent pending overlays, live ghost cards, infinite scroll, bulk bar.
 - `src/components/gallery/PendingGhostOverlay.tsx` — Translucent Pending/progress overlay rendered on series stack cards during active generations/upscales.
-- `src/components/ImageInspectorDrawer.tsx` — Split-pane lightbox & metadata/LoRA/tag inspector with standalone Upscale & Conversation actions.
-- `src/components/inspector/SeriesIterationsStrip.tsx` — Bottom-docked series thumbnail strip in the Inspector for switching & branching iterations.
+- `src/components/ImageInspectorDrawer.tsx` — Split-pane lightbox & metadata/LoRA/tag inspector with single-image Loupe, standalone Upscale, Conversation & Compare (`SplitCompareView`) mode controls.
+- `src/components/inspector/SeriesIterationsStrip.tsx` — Series thumbnail strip in the Inspector for switching & branching iterations (with optional Gallery modal disable in Split Mode).
+- `src/components/inspector/SeriesMiniGalleryModal.tsx` — Contact-sheet modal for side-by-side series stack curation, poster hearting, branching, and iteration deletion.
+- `src/components/inspector/SplitCompareView.tsx` — Full-width A/B Split-Screen stage supporting Side-by-Side and draggable Overlay Wipe modes, Fit vs. 100% Native framing, synced Loupe, and Swap/Exit controls.
+- `src/components/inspector/LoupeOverlay.tsx` — Painted-rectangle UV mapper, Single/Mirrored Loupe lens (`SingleLoupeLens`), and Split `[A|B]` Overlay Wipe lens (`SplitWipeLoupeLens`) with `2×`/`4×`/`1:1` magnification and click-to-pin locking.
+- `src/components/inspector/SplitCompareDiffDrawer.tsx` — Collapsible-by-default bottom diff drawer highlighting prompt/parameter/LoRA differences with per-slot Star/Heart/Reuse/Reject & series-step controls.
+- `src/components/inspector/ComparePickerModal.tsx` — Searchable stacked-gallery image picker modal (`Compare with...`) with Character, LoRA, Rating, and Favorites filters.
+- `src/components/inspector/splitCompareUtils.ts` — Smart series pre-fill selector, LCS word-level prompt diff, and generation parameter/LoRA diff utilities.
 - `src/components/CharacterExplorerView.tsx` — Container switching between character roster and individual character profile views.
 - `src/components/GenerationStudioView.tsx` — 4-step Photo Set Director orchestrator, outgoing shot queue preview, and batch history.
 - `src/components/LoraAndModelManagerView.tsx` — LoRA Explorer (`@mention`/nickname/category), Missing Dependencies/Inventory, model downloader.
@@ -65,7 +72,7 @@ FRONTEND: TOP-LEVEL VIEWS & INSPECTOR
 - `src/components/FloatingQuickGenBar.tsx` — Collapsible cross-tab Quick Gen dock shell composing `src/components/quickgen/*`.
 
 FRONTEND: QUICK GEN (`src/components/quickgen`)
-- `src/components/quickgen/quickGenUtils.ts` — `QuickGenPrefill`/mention types, LoRA key helpers, 1MP canvas downscaler, mention builder.
+- `src/components/quickgen/quickGenUtils.ts` — `QuickGenPrefill`/mention types, LoRA key helpers, 1MP canvas downscaler, and mention builder (ranking Characters & LoRAs above prompt matches).
 - `src/components/quickgen/QuickGenMentionPopover.tsx` — Two-column `@Character` & `@LoRA` search/tab popover with preview pane.
 - `src/components/quickgen/QuickGenSettingsPopover.tsx` — Node #49 Aspect Ratio grid, 0.5–10.0 MP slider (`3MP + Upscale` badge), batch count.
 - `src/components/quickgen/QuickGenAttachmentsBar.tsx` — Attached character and visible `@mentioned` LoRA pills with removal controls.
