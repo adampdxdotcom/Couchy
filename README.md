@@ -205,9 +205,9 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       # Adjust host paths (left side) to your local system paths:
-      - /opt/docker/Couchy/data/thumbnails:/data/thumbnails
-      - /opt/baremetal/ComfyUI/output:/data/output:ro
-      - /opt/baremetal/ComfyUI/models:/data/models:ro
+      - /path/to/Couchy/data/thumbnails:/data/thumbnails
+      - /path/to/ComfyUI/output:/data/output:ro
+      - /path/to/ComfyUI/models:/data/models:ro
       - ./gallery-data:/app/data
       - ./model-downloads:/downloads
 
@@ -233,14 +233,14 @@ services:
 
 ### Step 4: Configure ComfyUI `extra_model_paths.yaml` (For Downloaded Models)
 
-To keep your primary ComfyUI installation safe, Couchy mounts `/opt/baremetal/ComfyUI/models` as **read-only (`:ro`)** and writes all models downloaded through the Couchy UI into `./model-downloads` (mounted at `/downloads` inside the container) using standard ComfyUI subfolder names.
+To keep your primary ComfyUI installation safe, Couchy mounts `/path/to/ComfyUI/models` as **read-only (`:ro`)** and writes all models downloaded through the Couchy UI into `./model-downloads` (mounted at `/downloads` inside the container) using standard ComfyUI subfolder names.
 
-To let ComfyUI discover and load models from `model-downloads` alongside your main models folder, create or edit `extra_model_paths.yaml` in the root of your ComfyUI directory (e.g., `/opt/baremetal/ComfyUI/extra_model_paths.yaml`):
+To let ComfyUI discover and load models from `model-downloads` alongside your main models folder, create or edit `extra_model_paths.yaml` in the root of your ComfyUI directory (e.g., `/path/to/ComfyUI/extra_model_paths.yaml`):
 
 ```yaml
 couchy_downloads:
     # Absolute path on your host to Couchy's model-downloads directory
-    base_path: /opt/docker/Couchy/model-downloads/
+    base_path: /path/to/Couchy/model-downloads/
 
     # Standard checkpoints (.safetensors / .ckpt)
     checkpoints: checkpoints/
