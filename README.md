@@ -114,9 +114,12 @@ The **Quick Gen Box** is a floating bottom dock designed for fast, frictionless 
 - **Default Presets**: Set any workflow as the primary default across the Generation Studio and Quick Gen dock (e.g. Krea2 Turbo).
 
 ### 5. LoRA & Model Management
-- **Directory Scanning**: Live indexing of your ComfyUI models directory.
-- **LoRA `@Mention` Configuration**: Enable or disable Quick Gen `@mention` support strictly via each LoRA's checkbox while clicking a LoRA row opens its detail settings (custom nickname, category, trigger words, and default model/CLIP strengths).
-- **Metadata Enrichment**: Integration with Civitai and Hugging Face to fetch model preview cards, recommended base models, and trigger words.
+- **Directory Scanning**: Live indexing of both your primary ComfyUI models directory (`/data/models`) and your downloaded models directory (`/downloads`) across all ComfyUI subfolders (`loras`, `checkpoints`, `diffusion_models`, `unet`, `text_encoders`, `clip`, `vae`, `controlnet`, `upscale_models`, `embeddings`).
+- **LoRA `@Mention` Configuration**: Enable or disable Quick Gen `@mention` support strictly via each LoRA's checkbox while clicking a LoRA row opens its detail settings (custom nickname, category, trigger words, and default model/CLIP strengths). Character-classified LoRAs automatically display their linked character's portrait thumbnail.
+- **Unified Smart Downloader & Metadata Enrichment**:
+  - Search Civitai (`.com` and `.red`) and Hugging Face Hub from a single smart search bar—supporting keyword queries, SHA-256 / 10-character AutoV2 hashes, `owner/repo` identifiers, and direct file or page URLs.
+  - Browse multi-file Hugging Face repositories (`.safetensors`, `.gguf`, `.ckpt`, `.pt`, `.pth`, `.bin`, `.sft`) with automatic ComfyUI target folder inference, or download LoRAs in one click directly to `/downloads/loras`.
+  - Automatically detects and heals `civitai.red` vs. `civitai.com` links for restricted or delisted models.
 
 ### 6. Local ONNX Visual Keyword Tagger
 - Optional built-in `wd-vit-tagger-v3` ONNX model (stored locally in `/app/data/local_models`).
@@ -221,7 +224,54 @@ services:
 
 ---
 
-### Step 4: Build and Start Couchy
+### Step 4: Configure ComfyUI `extra_model_paths.yaml` (For Downloaded Models)
+
+To keep your primary ComfyUI installation safe, Couchy mounts `/opt/baremetal/ComfyUI/models` as **read-only (`:ro`)** and writes all models downloaded through the Couchy UI into `./model-downloads` (mounted at `/downloads` inside the container) using standard ComfyUI subfolder names.
+
+To let ComfyUI discover and load models from `model-downloads` alongside your main models folder, create or edit `extra_model_paths.yaml` in the root of your ComfyUI directory (e.g., `/opt/baremetal/ComfyUI/extra_model_paths.yaml`):
+
+```yaml
+couchy_downloads:
+    # Absolute path on your host to Couchy's model-downloads directory
+    base_path: /opt/docker/Couchy/model-downloads/
+
+    # Standard checkpoints (.safetensors / .ckpt)
+    checkpoints: checkpoints/
+
+    # Modern DiT / UNET / GGUF base models (Flux, Wan, Qwen, Chroma, HiDream, etc.)
+    diffusion_models: |
+        diffusion_models/
+        unet/
+    unet: |
+        unet/
+        diffusion_models/
+
+    # Text encoders (CLIP-L, CLIP-G, T5-XXL, UMT5, Qwen2.5-VL, GGUF CLIPs)
+    clip: |
+        clip/
+        text_encoders/
+    text_encoders: |
+        text_encoders/
+        clip/
+
+    # LoRAs, VAEs, ControlNets, Upscalers, and Embeddings
+    loras: loras/
+    vae: vae/
+    controlnet: controlnet/
+    upscale_models: upscale_models/
+    embeddings: embeddings/
+```
+
+- **Automatic Folder Creation**: You do **not** need to manually create the subfolders inside `model-downloads` before downloading—Couchy automatically creates the target subfolder (`loras`, `text_encoders`, `diffusion_models`, etc.) whenever a download starts.
+- **Optional Pre-Creation**: If you want all folders present on disk immediately so ComfyUI logs zero missing-directory warnings on startup, you can run:
+  ```bash
+  mkdir -p /opt/docker/Couchy/model-downloads/{loras,checkpoints,diffusion_models,unet,text_encoders,clip,vae,controlnet,upscale_models,embeddings}
+  ```
+- Restart ComfyUI once after creating `extra_model_paths.yaml` (or press **`R`** in the ComfyUI web UI to refresh node definitions after new downloads finish).
+
+---
+
+### Step 5: Build and Start Couchy
 
 ```bash
 docker compose up -d --build
