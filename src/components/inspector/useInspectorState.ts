@@ -18,7 +18,19 @@ interface UseInspectorStateParams {
   onClose: () => void;
   onPrev?: () => void;
   onNext?: () => void;
-  onUpdated: () => void;
+  onUpdated: () => void | Promise<void>;
+  onRateImage?: (imageId: number, rating: number) => Promise<void> | void;
+  onToggleFavoriteImage?: (imageId: number, nextFavorite: boolean) => Promise<void> | void;
+  onRejectImage?: (imageId: number, nextRejected: boolean) => Promise<void> | void;
+  onAdvanceAfterReject?: (rejectedCardId: number) => void;
+  onNavigateToImage?: (imageId: number) => void;
+}
+
+export interface InspectorCurationFeedback {
+  text: string;
+  tone?: 'info' | 'warning' | 'success';
+  undoImageId?: number;
+  undoWasStackStep?: boolean;
 }
 
 const getSuggestedUpscaleMp = (mp: number): number => {
@@ -28,7 +40,7 @@ const getSuggestedUpscaleMp = (mp: number): number => {
 
 /**
  * Coordinates inspector detail fetching, live queue sync, upscale/workflow
- * reproduction actions, A/B split-compare transitions, and keyboard shortcuts.
+ * reproduction actions, A/B split-compare transitions, Loupe state, and fast curation hotkeys.
  */
 export function useInspectorState({
   image,
@@ -38,8 +50,18 @@ export function useInspectorState({
   onPrev,
   onNext,
   onUpdated,
+  onRateImage,
+  onToggleFavoriteImage,
+  onRejectImage,
+  onAdvanceAfterReject,
+  onNavigateToImage,
 }: UseInspectorStateParams) {
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const [loupeEnabled, setLoupeEnabled] = useState(false);
+  const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  const [curationFeedback, setCurationFeedback] = useState<InspectorCurationFeedback | null>(null);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [selectedIterationId, setSelectedIterationId] = useState<number>(image.id);
   const [slotASeriesContextId, setSlotASeriesContextId] = useState<number | null>(
     image.seriesId ?? null
@@ -83,7 +105,26 @@ export function useInspectorState({
     getSuggestedUpscaleMp(currentMegapixels)
   );
 
-  // Sync selectedIterationId and reset mode state when outer image prop changes
+  const showCurationFeedback = useCallback((next: InspectorCurationFeedback) => {
+    setCurationFeedback(next);
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
+    }
+    feedbackTimerRef.current = setTimeout(() => {
+      setCurationFeedback(null);
+      feedbackTimerRef.current = null;
+    }, next.undoImageId ? 4500 : 2200);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current) {
+        clearTimeout(feedbackTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Sync selectedIterationId and reset per-image mode state when outer image prop changes
   useEffect(() => {
     setDetailData(null);
     setSelectedIterationId(image.id);
@@ -160,12 +201,194 @@ export function useInspectorState({
     prevPendingCountRef.current = matchingPendingGhosts.length;
   }, [matchingPendingGhosts.length, selectedIterationId, slotASeriesContextId]);
 
-  // Keyboard navigation (two-stage Escape in Split Mode; suppress arrow keys in Split Mode & modals)
+  const handleRateActiveImage = useCallback(
+    async (targetRating: number) => {
+      const nextRating =
+        targetRating === 0 ? 0 : activeImage.rating === targetRating ? 0 : targetRating;
+
+      setDetailData((prev) =>
+        prev?.image
+          ? {
+              ...prev,
+              image: {
+                ...prev.image,
+                rating: nextRating,
+                seriesItems: prev.image.seriesItems?.map((si) =>
+                  si.imageId === activeImage.id ? { ...si, rating: nextRating } : si
+                ),
+              },
+            }
+          : prev
+      );
+      showCurationFeedback({
+        text: nextRating > 0 ? `Rated ★ ${nextRating}` : 'Rating cleared',
+        tone: 'info',
+      });
+
+      if (onRateImage) {
+        await onRateImage(activeImage.id, nextRating);
+      } else {
+        await api.updateImageAnnotations(activeImage.id, { rating: nextRating });
+        await onUpdated();
+      }
+    },
+    [activeImage.id, activeImage.rating, onRateImage, onUpdated, showCurationFeedback]
+  );
+
+  const handleToggleFavoriteActiveImage = useCallback(async () => {
+    const nextFavorite = !activeImage.isFavorite;
+    setDetailData((prev) =>
+      prev?.image
+        ? {
+            ...prev,
+            image: {
+              ...prev.image,
+              isFavorite: nextFavorite,
+              seriesItems: prev.image.seriesItems?.map((si) => ({
+                ...si,
+                isFavorite:
+                  si.imageId === activeImage.id
+                    ? nextFavorite
+                    : nextFavorite
+                    ? false
+                    : si.isFavorite,
+              })),
+            },
+          }
+        : prev
+    );
+    showCurationFeedback({
+      text: nextFavorite ? 'Added to Favorites' : 'Removed from Favorites',
+      tone: 'success',
+    });
+
+    if (onToggleFavoriteImage) {
+      await onToggleFavoriteImage(activeImage.id, nextFavorite);
+    } else {
+      await api.updateImageAnnotations(activeImage.id, { isFavorite: nextFavorite });
+      await onUpdated();
+    }
+  }, [activeImage.id, activeImage.isFavorite, onToggleFavoriteImage, onUpdated, showCurationFeedback]);
+
+  const handleRejectActiveImage = useCallback(
+    async (autoAdvance: boolean) => {
+      const targetId = activeImage.id;
+      const nextRejected = !activeImage.isRejected;
+
+      if (!nextRejected) {
+        setDetailData((prev) =>
+          prev?.image ? { ...prev, image: { ...prev.image, isRejected: false } } : prev
+        );
+        showCurationFeedback({ text: 'Restored from Rejected', tone: 'success' });
+        if (onRejectImage) {
+          await onRejectImage(targetId, false);
+        } else {
+          await api.updateImageAnnotations(targetId, { isRejected: false });
+          await onUpdated();
+        }
+        return;
+      }
+
+      const seriesItems = activeImage.seriesItems || [];
+      const currentStepIdx = seriesItems.findIndex((it) => it.imageId === targetId);
+      const remainingSteps = seriesItems.filter((it) => it.imageId !== targetId);
+
+      // If rejecting an individual step within a multi-item stack, move to an adjacent step in the stack
+      if (autoAdvance && remainingSteps.length > 0 && currentStepIdx >= 0) {
+        const nextStep =
+          seriesItems[currentStepIdx + 1] || seriesItems[currentStepIdx - 1] || remainingSteps[0];
+        showCurationFeedback({
+          text: `Rejected Step #${currentStepIdx + 1}`,
+          tone: 'warning',
+          undoImageId: targetId,
+          undoWasStackStep: true,
+        });
+        await api.updateImageAnnotations(targetId, { isRejected: true });
+        setSelectedIterationId(nextStep.imageId);
+        await onUpdated();
+        return;
+      }
+
+      // Rejecting a standalone image (or final step of a stack): auto-advance to next/prev gallery item
+      if (autoAdvance && onAdvanceAfterReject) {
+        showCurationFeedback({
+          text: 'Image rejected',
+          tone: 'warning',
+          undoImageId: targetId,
+          undoWasStackStep: false,
+        });
+        onAdvanceAfterReject(image.id);
+        if (onRejectImage) {
+          await onRejectImage(targetId, true);
+        } else {
+          await api.updateImageAnnotations(targetId, { isRejected: true });
+          await onUpdated();
+        }
+        return;
+      }
+
+      setDetailData((prev) =>
+        prev?.image ? { ...prev, image: { ...prev.image, isRejected: true } } : prev
+      );
+      showCurationFeedback({
+        text: 'Image rejected',
+        tone: 'warning',
+        undoImageId: targetId,
+        undoWasStackStep: false,
+      });
+      if (onRejectImage) {
+        await onRejectImage(targetId, true);
+      } else {
+        await api.updateImageAnnotations(targetId, { isRejected: true });
+        await onUpdated();
+      }
+    },
+    [
+      activeImage.id,
+      activeImage.isRejected,
+      activeImage.seriesItems,
+      image.id,
+      onAdvanceAfterReject,
+      onRejectImage,
+      onUpdated,
+      showCurationFeedback,
+    ]
+  );
+
+  const handleUndoReject = useCallback(
+    async (undoImageId: number, wasStackStep?: boolean) => {
+      setCurationFeedback(null);
+      if (onRejectImage) {
+        await onRejectImage(undoImageId, false);
+      } else {
+        await api.updateImageAnnotations(undoImageId, { isRejected: false });
+        await onUpdated();
+      }
+      if (wasStackStep) {
+        setSelectedIterationId(undoImageId);
+        refreshActiveDetail(undoImageId, slotASeriesContextId);
+      } else if (onNavigateToImage) {
+        onNavigateToImage(undoImageId);
+      }
+    },
+    [onNavigateToImage, onRejectImage, onUpdated, refreshActiveDetail, slotASeriesContextId]
+  );
+
+  // Keyboard navigation & fast curation hotkeys
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)
+      ) {
+        return;
+      }
+
       if (e.key === 'Escape') {
-        if (showComparePicker) {
+        if (showShortcutsHelp) {
+          setShowShortcutsHelp(false);
+        } else if (showComparePicker) {
           setShowComparePicker(false);
         } else if (showSeriesMiniGallery) {
           setShowSeriesMiniGallery(false);
@@ -176,14 +399,103 @@ export function useInspectorState({
         } else {
           onClose();
         }
+        return;
       }
-      if (showComparePicker || showSeriesMiniGallery || isSplitMode) return;
-      if (e.key === 'ArrowLeft' && onPrev) onPrev();
-      if (e.key === 'ArrowRight' && onNext) onNext();
+
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (showComparePicker || isSplitMode) return;
+
+      if (e.key === 's' || e.key === 'S') {
+        const hasStack =
+          (activeImage.seriesItems?.length || 0) > 1 || matchingPendingGhosts.length > 0;
+        if (hasStack || showSeriesMiniGallery) {
+          e.preventDefault();
+          setShowSeriesMiniGallery((prev) => !prev);
+        }
+        return;
+      }
+
+      if (showSeriesMiniGallery) return;
+
+      if (e.key === '?') {
+        e.preventDefault();
+        setShowShortcutsHelp((prev) => !prev);
+        return;
+      }
+
+      if (e.key === 'ArrowLeft' && onPrev) {
+        e.preventDefault();
+        onPrev();
+        return;
+      }
+      if (e.key === 'ArrowRight' && onNext) {
+        e.preventDefault();
+        onNext();
+        return;
+      }
+
+      if (e.key === '[' || e.key === ']') {
+        const items = activeImage.seriesItems || [];
+        if (items.length > 1) {
+          const idx = items.findIndex((it) => it.imageId === activeImage.id);
+          if (idx >= 0) {
+            const nextIdx = e.key === '[' ? idx - 1 : idx + 1;
+            if (nextIdx >= 0 && nextIdx < items.length) {
+              e.preventDefault();
+              setSelectedIterationId(items[nextIdx].imageId);
+            }
+          }
+        }
+        return;
+      }
+
+      if (e.key >= '0' && e.key <= '5') {
+        e.preventDefault();
+        void handleRateActiveImage(Number(e.key));
+        return;
+      }
+
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        void handleToggleFavoriteActiveImage();
+        return;
+      }
+
+      if (e.key === 'x' || e.key === 'X' || e.key === 'Delete') {
+        e.preventDefault();
+        void handleRejectActiveImage(true);
+        return;
+      }
+
+      if (e.key === 'l' || e.key === 'L') {
+        e.preventDefault();
+        setLoupeEnabled((prev) => !prev);
+        return;
+      }
+
+      if (e.key === ' ') {
+        e.preventDefault();
+        setIsFullScreen((prev) => !prev);
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose, onPrev, onNext, isFullScreen, isSplitMode, showSeriesMiniGallery, showComparePicker]);
+  }, [
+    activeImage.id,
+    activeImage.seriesItems,
+    handleRateActiveImage,
+    handleRejectActiveImage,
+    handleToggleFavoriteActiveImage,
+    isFullScreen,
+    isSplitMode,
+    matchingPendingGhosts.length,
+    onClose,
+    onNext,
+    onPrev,
+    showComparePicker,
+    showSeriesMiniGallery,
+    showShortcutsHelp,
+  ]);
 
   const handleSaveNotes = async () => {
     await api.updateImageAnnotations(activeImage.id, { notes });
@@ -285,6 +597,16 @@ export function useInspectorState({
   return {
     isFullScreen,
     setIsFullScreen,
+    loupeEnabled,
+    setLoupeEnabled,
+    showShortcutsHelp,
+    setShowShortcutsHelp,
+    curationFeedback,
+    setCurationFeedback,
+    handleRateActiveImage,
+    handleToggleFavoriteActiveImage,
+    handleRejectActiveImage,
+    handleUndoReject,
     selectedIterationId,
     setSelectedIterationId,
     detailData,

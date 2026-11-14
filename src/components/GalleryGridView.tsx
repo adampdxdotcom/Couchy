@@ -65,7 +65,7 @@ interface GalleryGridViewProps {
   layout: GalleryViewLayout;
   thumbScale: 'sm' | 'md' | 'lg';
   selectedIds: Set<number>;
-  onToggleSelect: (id: number) => void;
+  onToggleSelect: (id: number, shiftKey?: boolean) => void;
   onSelectAll: () => void;
   onClearSelection: () => void;
   onOpenInspector: (image: ImageRecord) => void;
@@ -653,9 +653,10 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                   <div className="flex items-center gap-1.5">
                     <button
                       type="button"
-                      onClick={() => onToggleSelect(img.id)}
+                      onClick={(e) => onToggleSelect(img.id, e.shiftKey)}
                       aria-label={`Select ${img.filename}`}
-                      className={`pointer-events-auto p-1.5 rounded-md bg-black/65 backdrop-blur-xs text-zinc-100 hover:bg-black/85 transition-opacity cursor-pointer mobile-show-actions ${
+                      title="Select image (Shift+Click for range)"
+                      className={`pointer-events-auto p-1.5 rounded-md bg-black/65 backdrop-blur-xs text-zinc-100 hover:bg-black/85 transition-opacity cursor-pointer select-none mobile-show-actions ${
                         isSelected
                           ? 'opacity-100 text-indigo-400'
                           : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'

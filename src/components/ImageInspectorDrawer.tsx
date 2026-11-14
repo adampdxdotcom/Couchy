@@ -1,5 +1,5 @@
 import React from 'react';
-import { Columns2, Heart, Star, Trash2, X } from 'lucide-react';
+import { Columns2, Heart, Keyboard, RotateCcw, Star, Trash2, X } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
@@ -27,7 +27,12 @@ interface ImageInspectorDrawerProps {
   onClose: () => void;
   onPrev?: () => void;
   onNext?: () => void;
-  onUpdated: () => void;
+  onUpdated: () => void | Promise<void>;
+  onRateImage?: (imageId: number, rating: number) => Promise<void> | void;
+  onToggleFavoriteImage?: (imageId: number, nextFavorite: boolean) => Promise<void> | void;
+  onRejectImage?: (imageId: number, nextRejected: boolean) => Promise<void> | void;
+  onAdvanceAfterReject?: (rejectedCardId: number) => void;
+  onNavigateToImage?: (imageId: number) => void;
   onOpenConversation?: (image: ImageRecord) => void;
   onReusePrompt?: (image: ImageRecord) => void;
   characters: CharacterProfile[];
@@ -50,6 +55,11 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   onPrev,
   onNext,
   onUpdated,
+  onRateImage,
+  onToggleFavoriteImage,
+  onRejectImage,
+  onAdvanceAfterReject,
+  onNavigateToImage,
   onOpenConversation,
   onReusePrompt,
   characters,
@@ -62,6 +72,15 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   const {
     isFullScreen,
     setIsFullScreen,
+    loupeEnabled,
+    setLoupeEnabled,
+    showShortcutsHelp,
+    setShowShortcutsHelp,
+    curationFeedback,
+    handleRateActiveImage,
+    handleToggleFavoriteActiveImage,
+    handleRejectActiveImage,
+    handleUndoReject,
     selectedIterationId,
     setSelectedIterationId,
     detailData,
@@ -105,6 +124,11 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     onPrev,
     onNext,
     onUpdated,
+    onRateImage,
+    onToggleFavoriteImage,
+    onRejectImage,
+    onAdvanceAfterReject,
+    onNavigateToImage,
   });
 
   return (
@@ -151,6 +175,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             outerImageId={image.id}
             isFullScreen={isFullScreen}
             onSetFullScreen={setIsFullScreen}
+            loupeEnabled={loupeEnabled}
+            onSetLoupeEnabled={setLoupeEnabled}
+            onClose={onClose}
             onPrev={onPrev}
             onNext={onNext}
           />
@@ -164,19 +191,14 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             {/* Inspector Header */}
             <div className="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-xs border-b border-zinc-800 px-4 sm:px-5 py-3.5 flex items-center justify-between gap-2 sm:gap-3">
               <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
-                <div className="flex items-center gap-1 shrink-0">
+                <div className="flex items-center gap-1 shrink-0" title="Rate 1–5 (Keys 1–5, 0 to clear)">
                   {[1, 2, 3, 4, 5].map((star) => (
                     <button
                       key={star}
                       type="button"
-                      onClick={async () => {
-                        await api.updateImageAnnotations(activeImage.id, {
-                          rating: activeImage.rating === star ? 0 : star,
-                        });
-                        refreshActiveDetail(activeImage.id);
-                        onUpdated();
-                      }}
+                      onClick={() => void handleRateActiveImage(star)}
                       className="p-0.5 cursor-pointer"
+                      title={`Rate ${star} star${star === 1 ? '' : 's'} (Key ${star})`}
                     >
                       <Star
                         className={`w-4 h-4 ${
@@ -191,13 +213,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
                 <button
                   type="button"
-                  onClick={async () => {
-                    await api.updateImageAnnotations(activeImage.id, {
-                      isFavorite: !activeImage.isFavorite,
-                    });
-                    refreshActiveDetail(activeImage.id);
-                    onUpdated();
-                  }}
+                  onClick={() => void handleToggleFavoriteActiveImage()}
                   className={`p-1.5 rounded-lg border cursor-pointer shrink-0 ${
                     activeImage.isFavorite
                       ? 'bg-rose-500/15 border-rose-500/40 text-rose-400'
@@ -205,8 +221,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   }`}
                   title={
                     (activeImage.seriesItems?.length || 0) > 1
-                      ? 'Set as Series Poster (only one image in a series can be favorited)'
-                      : 'Favorite'
+                      ? 'Set as Series Poster (F)'
+                      : 'Toggle Favorite (F)'
                   }
                 >
                   <Heart className={`w-4 h-4 ${activeImage.isFavorite ? 'fill-rose-400' : ''}`} />
@@ -214,20 +230,16 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
                 <button
                   type="button"
-                  onClick={async () => {
-                    await api.updateImageAnnotations(activeImage.id, {
-                      isRejected: !activeImage.isRejected,
-                    });
-                    refreshActiveDetail(activeImage.id);
-                    onUpdated();
-                  }}
+                  onClick={() => void handleRejectActiveImage(true)}
                   className={`p-1.5 rounded-lg border cursor-pointer shrink-0 ${
                     activeImage.isRejected
                       ? 'bg-rose-500/20 border-rose-500/50 text-rose-400'
                       : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-rose-300'
                   }`}
                   title={
-                    activeImage.isRejected ? 'Restore from Rejected' : 'Reject Image (Hide from Library)'
+                    activeImage.isRejected
+                      ? 'Restore from Rejected (X / Delete)'
+                      : 'Reject Image & Advance (X / Delete)'
                   }
                 >
                   <Trash2 className="w-4 h-4" />
@@ -236,7 +248,20 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 {renderDependencyLabel(activeImage.dependencyStatus)}
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="relative flex items-center gap-1.5 sm:gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowShortcutsHelp((prev) => !prev)}
+                  className={`p-1.5 rounded-lg border cursor-pointer shrink-0 transition-colors ${
+                    showShortcutsHelp
+                      ? 'bg-indigo-600/20 border-indigo-500/70 text-indigo-300'
+                      : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200'
+                  }`}
+                  title="Keyboard Shortcuts (?)"
+                >
+                  <Keyboard className="w-4 h-4" />
+                </button>
+
                 <button
                   type="button"
                   onClick={handleEnterSplitMode}
@@ -255,6 +280,27 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 >
                   <X className="w-4 h-4" />
                 </button>
+
+                {showShortcutsHelp && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute right-0 top-11 w-64 rounded-xl bg-zinc-950 border border-zinc-700/80 shadow-2xl p-3 text-[11px] text-zinc-300 space-y-1.5 z-30"
+                  >
+                    <div className="flex items-center justify-between pb-1 border-b border-zinc-800">
+                      <span className="font-display font-semibold text-zinc-100">Curation Shortcuts</span>
+                      <span className="text-zinc-500 font-mono">?</span>
+                    </div>
+                    <div className="flex justify-between"><span>Rate 1–5 / Clear</span><span className="font-mono text-zinc-400">1–5 / 0</span></div>
+                    <div className="flex justify-between"><span>Favorite / Poster</span><span className="font-mono text-zinc-400">F</span></div>
+                    <div className="flex justify-between"><span>Reject & Next</span><span className="font-mono text-zinc-400">X / Del</span></div>
+                    <div className="flex justify-between"><span>Toggle Loupe</span><span className="font-mono text-zinc-400">L</span></div>
+                    <div className="flex justify-between"><span>Stack Mini Gallery</span><span className="font-mono text-zinc-400">S</span></div>
+                    <div className="flex justify-between"><span>Fullscreen</span><span className="font-mono text-zinc-400">Space</span></div>
+                    <div className="flex justify-between"><span>Next / Prev Card</span><span className="font-mono text-zinc-400">← / →</span></div>
+                    <div className="flex justify-between"><span>Next / Prev Stack Step</span><span className="font-mono text-zinc-400">[ / ]</span></div>
+                    <div className="flex justify-between"><span>Close / Exit</span><span className="font-mono text-zinc-400">Esc</span></div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -413,6 +459,37 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
           }}
           onClose={() => setShowComparePicker(false)}
         />
+      )}
+
+      {/* Floating Curation Feedback Pill (visible in Inspector and Fullscreen Lightbox) */}
+      {curationFeedback && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className={`fixed bottom-14 left-1/2 -translate-x-1/2 z-[65] inline-flex items-center gap-2.5 px-3.5 py-1.5 rounded-full border shadow-2xl backdrop-blur-md text-xs font-medium ${
+            curationFeedback.tone === 'warning'
+              ? 'bg-rose-950/90 border-rose-500/60 text-rose-100'
+              : curationFeedback.tone === 'success'
+              ? 'bg-emerald-950/90 border-emerald-500/60 text-emerald-100'
+              : 'bg-zinc-900/95 border-zinc-700/80 text-zinc-100'
+          }`}
+        >
+          <span>{curationFeedback.text}</span>
+          {curationFeedback.undoImageId !== undefined && (
+            <button
+              type="button"
+              onClick={() =>
+                void handleUndoReject(
+                  curationFeedback.undoImageId!,
+                  curationFeedback.undoWasStackStep
+                )
+              }
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/15 hover:bg-white/25 text-white font-semibold cursor-pointer transition-colors"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Undo</span>
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

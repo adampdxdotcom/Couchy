@@ -86,6 +86,7 @@ export default function App() {
   const [healthData, setHealthData] = useState<any>(null);
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const lastSelectedAnchorIdRef = useRef<number | null>(null);
   const [inspectedImageId, setInspectedImageId] = useState<number | null>(null);
   const [selectedCharacterId, setSelectedCharacterId] = useState<number | null>(null);
   const [quickGenPrefill, setQuickGenPrefill] = useState<QuickGenPrefill | null>(null);
@@ -635,6 +636,16 @@ export default function App() {
     [allImages, pushToast, refreshAll]
   );
 
+  const handleQuickRate = useCallback(
+    async (id: number, rating: number) => {
+      setImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
+      setAllImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
+      await api.updateImageAnnotations(id, { rating });
+      pushToast(rating > 0 ? `Rated image ★ ${rating}` : 'Cleared image rating', 'info');
+    },
+    [pushToast]
+  );
+
   const handleQuickReject = useCallback(
     async (id: number, nextRejected: boolean) => {
       setAllImages((prev) =>
@@ -651,6 +662,9 @@ export default function App() {
       });
       try {
         await api.updateImageAnnotations(id, { isRejected: nextRejected });
+        if (!nextRejected && filters.rejectedMode === 'exclude') {
+          await refreshAll();
+        }
         pushToast(
           nextRejected
             ? 'Image rejected (hidden from standard library)'
@@ -664,6 +678,68 @@ export default function App() {
       }
     },
     [filters.rejectedMode, pushToast, refreshAll]
+  );
+
+  const handleToggleSelect = useCallback(
+    (id: number, shiftKey = false) => {
+      const anchorId = lastSelectedAnchorIdRef.current;
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        if (shiftKey && anchorId !== null) {
+          const anchorIdx = images.findIndex((img) => img.id === anchorId);
+          const targetIdx = images.findIndex((img) => img.id === id);
+          if (anchorIdx >= 0 && targetIdx >= 0) {
+            const start = Math.min(anchorIdx, targetIdx);
+            const end = Math.max(anchorIdx, targetIdx);
+            const shouldSelect = !prev.has(id);
+            for (let i = start; i <= end; i++) {
+              if (shouldSelect) next.add(images[i].id);
+              else next.delete(images[i].id);
+            }
+            return next;
+          }
+        }
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      lastSelectedAnchorIdRef.current = id;
+    },
+    [images]
+  );
+
+  // Press Escape in the Gallery grid to clear active multi-selection
+  useEffect(() => {
+    if (activeTab !== 'gallery' || inspectedImageId !== null || selectedIds.size === 0) {
+      return;
+    }
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)
+      ) {
+        return;
+      }
+      setSelectedIds(new Set());
+      lastSelectedAnchorIdRef.current = null;
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [activeTab, inspectedImageId, selectedIds.size]);
+
+  const handleAdvanceAfterReject = useCallback(
+    (rejectedCardId: number) => {
+      const idx = images.findIndex((img) => img.id === rejectedCardId);
+      if (idx < 0) {
+        setInspectedImageId(null);
+        return;
+      }
+      const nextCard = images[idx + 1] || images[idx - 1] || null;
+      setInspectedImageId(nextCard ? nextCard.id : null);
+    },
+    [images]
   );
 
   const inspectedImage =
@@ -767,16 +843,12 @@ export default function App() {
               layout={layout}
               thumbScale={thumbScale}
               selectedIds={selectedIds}
-              onToggleSelect={(id) => {
-                setSelectedIds((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(id)) next.delete(id);
-                  else next.add(id);
-                  return next;
-                });
-              }}
+              onToggleSelect={handleToggleSelect}
               onSelectAll={() => setSelectedIds(new Set(images.map((i) => i.id)))}
-              onClearSelection={() => setSelectedIds(new Set())}
+              onClearSelection={() => {
+                setSelectedIds(new Set());
+                lastSelectedAnchorIdRef.current = null;
+              }}
               onOpenInspector={(img) => setInspectedImageId(img.id)}
               onOpenCharacterGallery={(charId) => {
                 setSelectedCharacterId(charId);
@@ -785,14 +857,7 @@ export default function App() {
               }}
               onReusePrompt={handleReusePrompt}
               onOpenConversation={handleOpenConversationForImage}
-              onQuickRate={async (id, rating) => {
-                setImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
-                setAllImages((prev) =>
-                  prev.map((img) => (img.id === id ? { ...img, rating } : img))
-                );
-                await api.updateImageAnnotations(id, { rating });
-                pushToast(rating > 0 ? `Rated image ★ ${rating}` : 'Cleared image rating', 'info');
-              }}
+              onQuickRate={handleQuickRate}
               onQuickFavorite={handleQuickFavorite}
               onQuickReject={handleQuickReject}
               onBulkAction={async (payload) => {
@@ -942,6 +1007,11 @@ export default function App() {
               : undefined
           }
           onUpdated={refreshAll}
+          onRateImage={handleQuickRate}
+          onToggleFavoriteImage={handleQuickFavorite}
+          onRejectImage={handleQuickReject}
+          onAdvanceAfterReject={handleAdvanceAfterReject}
+          onNavigateToImage={(targetId) => setInspectedImageId(targetId)}
           onOpenConversation={handleOpenConversationForImage}
           onReusePrompt={handleReusePrompt}
           characters={characters}

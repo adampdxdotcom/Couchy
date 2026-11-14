@@ -22,38 +22,106 @@ interface InspectorSingleViewerProps {
   outerImageId: number;
   isFullScreen: boolean;
   onSetFullScreen: (next: boolean | ((prev: boolean) => boolean)) => void;
+  loupeEnabled: boolean;
+  onSetLoupeEnabled: (next: boolean | ((prev: boolean) => boolean)) => void;
+  onClose: () => void;
   onPrev?: () => void;
   onNext?: () => void;
 }
 
 /**
- * Full-resolution single-image lightbox viewport with interactive Loupe magnifier
- * and docked bottom metadata/download bar.
+ * Full-resolution single-image lightbox viewport with interactive Loupe magnifier,
+ * touch swipe navigation, and docked bottom metadata/download bar.
  */
 export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
   activeImage,
   outerImageId,
   isFullScreen,
   onSetFullScreen,
+  loupeEnabled,
+  onSetLoupeEnabled,
+  onClose,
   onPrev,
   onNext,
 }) => {
-  const [singleLoupeEnabled, setSingleLoupeEnabled] = useState(false);
   const [singleLoupeMag, setSingleLoupeMag] = useState<LoupeMagnification>('2x');
   const [singleLoupeUV, setSingleLoupeUV] = useState<LoupeUV | null>(null);
   const [singleLoupePinned, setSingleLoupePinned] = useState(false);
   const singleViewerPaneRef = useRef<HTMLDivElement | null>(null);
   const singleViewerImgRef = useRef<HTMLImageElement | null>(null);
+  const touchGestureRef = useRef<{
+    startX: number;
+    startY: number;
+    startTime: number;
+    multiTouch: boolean;
+  } | null>(null);
 
   useEffect(() => {
     setSingleLoupePinned(false);
   }, [outerImageId]);
 
+  // Seed centered Loupe UV whenever toggled on via hotkey (L) without prior pointer move
+  useEffect(() => {
+    if (loupeEnabled && !singleLoupeUV) {
+      setSingleLoupeUV({ u: 0.5, v: 0.38 });
+    }
+    if (!loupeEnabled) {
+      setSingleLoupePinned(false);
+    }
+  }, [loupeEnabled, singleLoupeUV]);
+
   return (
     <div
       ref={singleViewerPaneRef}
+      onTouchStart={(e) => {
+        if (loupeEnabled) {
+          touchGestureRef.current = null;
+          return;
+        }
+        if (e.touches.length !== 1) {
+          if (touchGestureRef.current) {
+            touchGestureRef.current.multiTouch = true;
+          }
+          return;
+        }
+        const t = e.touches[0];
+        touchGestureRef.current = {
+          startX: t.clientX,
+          startY: t.clientY,
+          startTime: Date.now(),
+          multiTouch: false,
+        };
+      }}
+      onTouchMove={(e) => {
+        if (e.touches.length > 1 && touchGestureRef.current) {
+          touchGestureRef.current.multiTouch = true;
+        }
+      }}
+      onTouchEnd={(e) => {
+        const gesture = touchGestureRef.current;
+        touchGestureRef.current = null;
+        if (!gesture || gesture.multiTouch || loupeEnabled || e.changedTouches.length === 0) {
+          return;
+        }
+        const elapsed = Date.now() - gesture.startTime;
+        if (elapsed > 700) return;
+
+        const t = e.changedTouches[0];
+        const dx = t.clientX - gesture.startX;
+        const dy = t.clientY - gesture.startY;
+        const absX = Math.abs(dx);
+        const absY = Math.abs(dy);
+
+        if (absX >= 60 && absX > absY * 1.35) {
+          if (dx < 0 && onNext) onNext();
+          else if (dx > 0 && onPrev) onPrev();
+        } else if (dy >= 85 && dy > absX * 1.4) {
+          if (isFullScreen) onSetFullScreen(false);
+          else onClose();
+        }
+      }}
       onPointerMove={(e) => {
-        if (!singleLoupeEnabled || singleLoupePinned) return;
+        if (!loupeEnabled || singleLoupePinned) return;
         const nextUV = clientPointToImageUV(
           e.clientX,
           e.clientY,
@@ -65,12 +133,12 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
         if (nextUV) setSingleLoupeUV(nextUV);
       }}
       onPointerLeave={() => {
-        if (singleLoupeEnabled && !singleLoupePinned) {
+        if (loupeEnabled && !singleLoupePinned) {
           setSingleLoupeUV(null);
         }
       }}
       onClick={(e) => {
-        if (singleLoupeEnabled) {
+        if (loupeEnabled) {
           const clickedUV = clientPointToImageUV(
             e.clientX,
             e.clientY,
@@ -87,8 +155,8 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
         }
         if (isFullScreen) onSetFullScreen(false);
       }}
-      className={`relative bg-zinc-950 flex items-center justify-center select-none overflow-hidden transition-all duration-200 ${
-        singleLoupeEnabled ? 'cursor-crosshair' : ''
+      className={`relative bg-zinc-950 flex items-center justify-center select-none overflow-hidden transition-all duration-200 touch-pan-y ${
+        loupeEnabled ? 'cursor-crosshair' : ''
       } ${
         isFullScreen
           ? 'fixed inset-0 z-50 p-2 sm:p-6 pb-14 sm:pb-14 bg-black/95 cursor-zoom-out'
@@ -139,19 +207,19 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
         referrerPolicy="no-referrer"
         draggable={false}
         onClick={(e) => {
-          if (singleLoupeEnabled) return;
+          if (loupeEnabled) return;
           e.stopPropagation();
           onSetFullScreen((prev) => !prev);
         }}
         className={`max-w-full max-h-full object-contain rounded transition-all duration-200 ${
-          singleLoupeEnabled
+          loupeEnabled
             ? 'cursor-crosshair'
             : isFullScreen
             ? 'cursor-zoom-out'
             : 'cursor-zoom-in active:scale-[0.99]'
         }`}
         title={
-          singleLoupeEnabled
+          loupeEnabled
             ? singleLoupePinned
               ? 'Click to unpin Loupe'
               : 'Click to pin Loupe at this spot'
@@ -162,7 +230,7 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
       />
 
       {/* Single-Image Loupe Lens */}
-      {singleLoupeEnabled && singleLoupeUV && (
+      {loupeEnabled && singleLoupeUV && (
         <SingleLoupeLens
           image={activeImage}
           uv={singleLoupeUV}
@@ -217,7 +285,7 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
             <button
               type="button"
               onClick={() => {
-                setSingleLoupeEnabled((prev) => {
+                onSetLoupeEnabled((prev) => {
                   const next = !prev;
                   if (next && !singleLoupeUV) {
                     setSingleLoupeUV({ u: 0.5, v: 0.38 });
@@ -229,17 +297,17 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
                 });
               }}
               className={`inline-flex items-center gap-1 px-2 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                singleLoupeEnabled
+                loupeEnabled
                   ? 'bg-indigo-600 text-white'
                   : 'text-zinc-400 hover:text-zinc-200'
               }`}
-              title="Toggle Loupe Magnifier (hover to inspect, click image to pin)"
+              title="Toggle Loupe Magnifier (L) — hover to inspect, click image to pin"
             >
               <Search className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Loupe</span>
             </button>
 
-            {singleLoupeEnabled && (
+            {loupeEnabled && (
               <>
                 <div className="h-3.5 w-px bg-zinc-800 mx-0.5" />
                 {(['2x', '4x', 'native'] as LoupeMagnification[]).map((mag) => (
@@ -276,9 +344,9 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
             )}
           </div>
 
-          {isFullScreen && !singleLoupeEnabled && (
+          {isFullScreen && !loupeEnabled && (
             <span className="text-[11px] text-zinc-500 hidden lg:inline">
-              Tap image or press ESC to exit full screen
+              Tap image, Space, or ESC to exit full screen
             </span>
           )}
           <a
