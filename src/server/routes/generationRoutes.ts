@@ -213,12 +213,13 @@ generationRouter.post('/lmstudio/generate-prompts', async (req, res) => {
       count,
       basePromptTemplate,
       guidingTemplateId,
+      expansionDirective,
       modelOverride,
       baseUrlOverride,
     } = req.body || {};
 
     if (!theme?.trim()) {
-      return res.status(400).json({ error: 'Please enter a photo set theme.' });
+      return res.status(400).json({ error: 'Please enter a photo set concept or theme.' });
     }
 
     const result = await generatePhotoSetPromptsWithAgent({
@@ -231,6 +232,7 @@ generationRouter.post('/lmstudio/generate-prompts', async (req, res) => {
         basePromptTemplate ||
         'masterpiece, best quality, portrait of {character}, {lora}, {theme}',
       guidingTemplateId: guidingTemplateId ? Number(guidingTemplateId) : undefined,
+      expansionDirective: typeof expansionDirective === 'string' ? expansionDirective : undefined,
       modelOverride,
       baseUrlOverride,
     });
@@ -243,11 +245,18 @@ generationRouter.post('/lmstudio/generate-prompts', async (req, res) => {
 
 /**
  * POST /api/generation/lmstudio/chat
- * Interactive multi-turn Quick Gen Conversation mode via LM Studio.
+ * Interactive multi-turn Quick Gen Agent Conversation mode via Local LLM.
  */
 generationRouter.post('/lmstudio/chat', async (req, res) => {
   try {
-    const { messages, characterName, characterDescription, loraNames, excludedLoras } = req.body || {};
+    const {
+      messages,
+      characterName,
+      characterDescription,
+      loraNames,
+      excludedLoras,
+      batchCount,
+    } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Please enter a message to start the conversation.' });
     }
@@ -257,6 +266,7 @@ generationRouter.post('/lmstudio/chat', async (req, res) => {
       characterDescription: characterDescription ? String(characterDescription) : undefined,
       loraNames: Array.isArray(loraNames) ? loraNames.map(String) : [],
       excludedLoras: Array.isArray(excludedLoras) ? excludedLoras.map(String) : [],
+      batchCount: batchCount ? Number(batchCount) : 1,
     });
     res.json(result);
   } catch (err: any) {

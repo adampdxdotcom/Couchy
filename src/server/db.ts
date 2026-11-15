@@ -639,6 +639,13 @@ export function runMigrations(): void {
           ON downloaded_model_copies(verified_at);
       `,
     },
+    {
+      version: 18,
+      name: 'lm_studio_batch_expansion_prompt',
+      sql: `
+        ALTER TABLE lm_studio_settings ADD COLUMN batch_expansion_prompt TEXT NOT NULL DEFAULT '';
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');
@@ -695,7 +702,7 @@ Help the user develop and refine their image idea through brief, natural convers
 
 3. Inside <proposed_prompt>, write a single cohesive, descriptive text-to-image paragraph detailing framing, pose, lighting, environment, wardrobe, and atmosphere. Specify concrete, locked visual anchors rather than broad labels: exact garment cuts, colors, fabrics, straps/closures, footwear, and accessories; specific room surfaces, 3–5 fixed background props/furniture with their spatial locations; and consistent lighting direction and color temperature. Use explicit, concrete visual language wherever necessary for accurate image generation. Favor spatial relationships, physical positioning, anatomy, and observable details over suggestive or literary language.
 
-4. Refer to the subject neutrally (e.g., "the subject", "they", "a person") when a character is attached, and NEVER include character names or model/LoRA filenames (such as .safetensors).
+4. Never include character names or model/LoRA filenames (such as .safetensors) in <proposed_prompt>. When a character profile is attached, use gender/pronouns matching their Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing a personal name.
 
 5. Describe visible actions, not labels. When describing physical interactions, intimacy, or sexual activity, never rely solely on the name of an act, position, or technique. Translate the action into concrete, visually observable details that an image-generation model can actually render.
 
@@ -737,27 +744,66 @@ Remove poetic filler or vague mood-only adjectives when they compete with import
 
 The final objective is a prompt that communicates exactly what the camera should capture and keeps the scene and wardrobe continuous across iterations, rather than simply naming what is happening.`;
 
+  const defaultBatchExpansionPrompt = `You are now expanding the approved Set Concept / Theme into {count} distinct, cohesive image generation prompts for a multi-shot set.
+
+Follow all visual translation, pronoun, character-safety, and concrete detail rules from your primary instructions, plus these expansion rules:
+1. Lock Invariants Across Every Shot: Preserve the approved wardrobe details (garment cuts, colors, fabrics, fasteners, footwear, accessories), environment/room props, lighting direction/color temperature, and visual style consistently across all {count} shots unless the concept explicitly calls for a progression.
+2. Vary Composition & Action: Give each shot a clearly distinct camera framing (e.g., wide environmental establishing shot, medium three-quarter candid, intimate close-up portrait, over-the-shoulder or dynamic low angle), body posture, physical action, and expression.
+3. Self-Contained Prompts: Every shot must be written as a complete, standalone text-to-image paragraph with no cross-references like "same outfit as shot 1".
+4. Never include character names or model/LoRA filenames (such as .safetensors).
+5. Output Format: Wrap each prompt in numbered XML tags <shot_1>...</shot_1> through <shot_{count}>...</shot_{count}> with no markdown code fences or extra commentary.`;
+
   // Seed default LM Studio settings if row 1 does not exist
   const existingLm = db
-    .prepare('SELECT id, conversation_system_prompt FROM lm_studio_settings WHERE id = 1')
-    .get() as { id: number; conversation_system_prompt?: string } | undefined;
+    .prepare(
+      'SELECT id, conversation_system_prompt, batch_expansion_prompt FROM lm_studio_settings WHERE id = 1'
+    )
+    .get() as
+    | { id: number; conversation_system_prompt?: string; batch_expansion_prompt?: string }
+    | undefined;
   if (!existingLm) {
     db.prepare(`
-      INSERT INTO lm_studio_settings (id, base_url, selected_model, system_prompt, conversation_system_prompt)
-      VALUES (1, ?, '', ?, ?)
+      INSERT INTO lm_studio_settings (id, base_url, selected_model, system_prompt, conversation_system_prompt, batch_expansion_prompt)
+      VALUES (1, ?, '', ?, ?, ?)
     `).run(
       appConfig.lmStudioUrl,
       `You are a creative photography director and Stable Diffusion / Flux prompt engineer.
 Given a Photo Set Theme and Base Scene Style, generate an array of distinct, cohesive image generation prompts for a full photo set.
-Refer to the subject neutrally (e.g. "they", "them", "the subject", "a person") without including specific character names or LoRA/model filenames.
+Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or LoRA/model filenames.
 Vary the camera framing (close-up portrait, medium candid, wide environmental shot, over-the-shoulder, dynamic angle), poses, lighting nuances, and micro-actions within the theme.
 Return ONLY a JSON array of prompt strings.`,
-      defaultConversationPrompt
+      defaultConversationPrompt,
+      defaultBatchExpansionPrompt
     );
-  } else if (!existingLm.conversation_system_prompt || !existingLm.conversation_system_prompt.trim()) {
-    db.prepare(
-      'UPDATE lm_studio_settings SET conversation_system_prompt = ? WHERE id = 1'
-    ).run(defaultConversationPrompt);
+  } else {
+    if (!existingLm.conversation_system_prompt || !existingLm.conversation_system_prompt.trim()) {
+      db.prepare(
+        'UPDATE lm_studio_settings SET conversation_system_prompt = ? WHERE id = 1'
+      ).run(defaultConversationPrompt);
+    } else {
+      // Migration: remove legacy forced they/them neutral-pronoun rule while preserving custom user edits
+      db.prepare(`
+        UPDATE lm_studio_settings
+        SET conversation_system_prompt = REPLACE(
+              conversation_system_prompt,
+              '4. Refer to the subject neutrally (e.g., "the subject", "they", "a person") when a character is attached, and NEVER include character names or model/LoRA filenames (such as .safetensors).',
+              '4. Never include character names or model/LoRA filenames (such as .safetensors) in <proposed_prompt>. When a character profile is attached, use gender/pronouns matching their Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing a personal name.'
+            ),
+            system_prompt = REPLACE(
+              system_prompt,
+              'Refer to the subject neutrally (e.g. "they", "them", "the subject", "a person") without including specific character names or LoRA/model filenames.',
+              'Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or LoRA/model filenames.'
+            )
+        WHERE id = 1
+          AND (conversation_system_prompt LIKE '%Refer to the subject neutrally%' OR system_prompt LIKE '%Refer to the subject neutrally%')
+      `).run();
+    }
+
+    if (!existingLm.batch_expansion_prompt || !existingLm.batch_expansion_prompt.trim()) {
+      db.prepare(
+        'UPDATE lm_studio_settings SET batch_expansion_prompt = ? WHERE id = 1'
+      ).run(defaultBatchExpansionPrompt);
+    }
   }
 
   // Seed multiple saved LM Studio Guiding Prompt Templates if none exist
@@ -775,15 +821,15 @@ Return ONLY a JSON array of prompt strings.`,
       `You are a creative photography director and ComfyUI prompt engineer.
 Your job is to take a Photo Set Theme and Base Scene Style, and write {count} distinct, cohesive image generation prompts for a multi-photo set.
 Vary the camera framing across the set (e.g., intimate close-up portrait, medium three-quarter candid, wide full-body environmental shot, dramatic over-the-shoulder angle), vary poses and micro-expressions, and enrich the lighting and background details to match the theme.
-Refer to the subject neutrally (e.g., "they", "them", "the subject", "a person") without including specific character names or model/LoRA filenames.
+Use gender/pronouns matching the attached Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or model/LoRA filenames.
 Return ONLY a valid JSON array of {count} prompt strings (e.g. ["prompt 1", "prompt 2"]) with no markdown formatting or extra commentary.`,
       `Generate {count} distinct image prompts for a cohesive photo set:
-Subject: The subject (refer to them using neutral terms like "they", "them", or "the subject")
+Subject: The subject (match the attached Character Profile's pronouns and presentation if provided, or use natural singular phrasing)
 Photo Set Theme: {theme}
 Base Scene Style: {base_prompt}
 
 Rules:
-- Refer to the subject neutrally (e.g. "they", "them", "the subject", "a person").
+- Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing personal names.
 - Do NOT include character names, model filenames, or file extensions (e.g. no .safetensors).
 - Focus on setting, lighting, framing, poses, and clothing/mood.
 - Return ONLY a JSON array of {count} complete prompt strings.`,
@@ -794,15 +840,15 @@ Rules:
       'Cinematic Storyboard Sequence',
       `You are a film director and cinematographer scripting a sequential {count}-shot storyboard for a character scene.
 Progress the scene chronologically across the {count} shots: start with an establishing atmospheric shot, move into medium action/interaction within the setting, then capture an emotional close-up and a dramatic climax angle.
-Refer to the subject neutrally (e.g. "they", "the subject") without including character names or LoRA filenames.
+Use gender/pronouns matching the attached Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or LoRA filenames.
 Return ONLY a valid JSON array of {count} prompt strings.`,
       `Create a {count}-shot sequential cinematic storyboard:
-Subject: The subject (refer to them using neutral terms like "they" or "the subject")
+Subject: The subject (match the attached Character Profile's pronouns and presentation if provided, or use natural singular phrasing)
 Scene / Theme: {theme}
 Visual Style Foundation: {base_prompt}
 
 Rules:
-- Refer to the subject neutrally (e.g. "they", "the subject").
+- Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing personal names.
 - Do NOT include character names or model/LoRA filenames.
 - Return ONLY a JSON array of {count} complete prompt strings.`,
       0
@@ -812,37 +858,80 @@ Rules:
       'Pose, Angle & Lighting Lookbook Variations',
       `You are a studio fashion & portrait photographer directing a {count}-image lookbook session.
 Keep the setting and theme ({theme}) consistent, but systematically vary the pose, camera lens (35mm, 50mm, 85mm, 135mm), camera angle (eye-level, low angle, profile, three-quarter), and lighting mood across all {count} prompts.
-Refer to the subject neutrally without hardcoding names or model filenames.
+Use gender/pronouns matching the attached Character Profile (or natural singular phrasing) without hardcoding names or model filenames.
 Return ONLY a valid JSON array of {count} prompt strings.`,
       `Generate {count} lookbook variation prompts:
-Subject: The subject (refer to them using neutral terms like "they" or "the subject")
+Subject: The subject (match the attached Character Profile's pronouns and presentation if provided, or use natural singular phrasing)
 Theme & Wardrobe Context: {theme}
 Base Prompt Template: {base_prompt}
 
 Rules:
-- Refer to the subject neutrally (e.g. "they", "the subject").
+- Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing personal names.
 - Do NOT include character names or model/LoRA filenames.
 - Return ONLY a JSON array of {count} complete prompt strings.`,
       0
     );
   }
 
-  // Migration: sanitize existing database templates so they do not prompt LLM for {lora} filenames or character names
+  // Migration: sanitize existing database templates so they do not prompt LLM for {lora} filenames, character names, or forced they/them phrasing
   try {
     db.prepare(`
       UPDATE lm_studio_prompt_templates
       SET system_prompt = REPLACE(
-            REPLACE(system_prompt, 'Keep the character ({character}) and LoRA triggers ({lora}) consistent in every prompt.', 'Refer to the subject neutrally (e.g. "they", "the subject") without including character names or LoRA filenames.'),
-            'a Character identity, and a Base Prompt Style', 'and a Base Scene Style'
+            REPLACE(
+              REPLACE(
+                REPLACE(
+                  REPLACE(
+                    system_prompt,
+                    'Keep the character ({character}) and LoRA triggers ({lora}) consistent in every prompt.',
+                    'Use gender/pronouns matching the attached Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or LoRA filenames.'
+                  ),
+                  'a Character identity, and a Base Prompt Style',
+                  'and a Base Scene Style'
+                ),
+                'Refer to the subject neutrally (e.g., "they", "them", "the subject", "a person") without including specific character names or model/LoRA filenames.',
+                'Use gender/pronouns matching the attached Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or model/LoRA filenames.'
+              ),
+              'Refer to the subject neutrally (e.g. "they", "the subject") without including character names or LoRA filenames.',
+              'Use gender/pronouns matching the attached Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or LoRA filenames.'
+            ),
+            'Refer to the subject neutrally without hardcoding names or model filenames.',
+            'Use gender/pronouns matching the attached Character Profile (or natural singular phrasing) without hardcoding names or model filenames.'
           ),
           user_prompt_template = REPLACE(
             REPLACE(
-              REPLACE(user_prompt_template, 'Character: {character}\nLoRA / Appearance Triggers: {lora}\n', 'Subject: The subject (refer to them using neutral terms like "they" or "the subject")\n'),
-              'Character: {character}\nLoRA Triggers: {lora}\n', 'Subject: The subject (refer to them using neutral terms like "they" or "the subject")\n'
+              REPLACE(
+                REPLACE(
+                  REPLACE(
+                    REPLACE(
+                      REPLACE(
+                        user_prompt_template,
+                        'Character: {character}\nLoRA / Appearance Triggers: {lora}\n',
+                        'Subject: The subject (match the attached Character Profile''s pronouns and presentation if provided, or use natural singular phrasing)\n'
+                      ),
+                      'Character: {character}\nLoRA Triggers: {lora}\n',
+                      'Subject: The subject (match the attached Character Profile''s pronouns and presentation if provided, or use natural singular phrasing)\n'
+                    ),
+                    'Character: {character}\n',
+                    ''
+                  ),
+                  'Subject: The subject (refer to them using neutral terms like "they", "them", or "the subject")',
+                  'Subject: The subject (match the attached Character Profile''s pronouns and presentation if provided, or use natural singular phrasing)'
+                ),
+                'Subject: The subject (refer to them using neutral terms like "they" or "the subject")',
+                'Subject: The subject (match the attached Character Profile''s pronouns and presentation if provided, or use natural singular phrasing)'
+              ),
+              '- Refer to the subject neutrally (e.g. "they", "them", "the subject", "a person").',
+              '- Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing personal names.'
             ),
-            'Character: {character}\n', ''
+            '- Refer to the subject neutrally (e.g. "they", "the subject").',
+            '- Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing personal names.'
           )
-      WHERE user_prompt_template LIKE '%{lora}%' OR user_prompt_template LIKE '%{character}%'
+      WHERE user_prompt_template LIKE '%{lora}%'
+         OR user_prompt_template LIKE '%{character}%'
+         OR system_prompt LIKE '%Refer to the subject neutrally%'
+         OR user_prompt_template LIKE '%Refer to the subject neutrally%'
+         OR user_prompt_template LIKE '%neutral terms like "they"%'
     `).run();
   } catch {
     // ignore if table doesn't have matching rows

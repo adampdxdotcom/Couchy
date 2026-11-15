@@ -6,7 +6,6 @@ import type {
   GenerationBatchRecord,
   GenerationLoraSelection,
   ImageRecord,
-  LmStudioGuidingTemplate,
   LmStudioStatus,
   LoraExplorerItem,
   ModelInventoryItem,
@@ -78,9 +77,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
   const [templateSaveFeedback, setTemplateSaveFeedback] = useState<string | null>(null);
 
-  // 5. LM Studio Guiding Templates & Connection State
-  const [guidingTemplates, setGuidingTemplates] = useState<LmStudioGuidingTemplate[]>([]);
-  const [selectedGuidingTemplateId, setSelectedGuidingTemplateId] = useState<number | null>(null);
+  // 5. Local LLM Connection & Unified Agent State
   const [lmStatus, setLmStatus] = useState<LmStudioStatus | null>(null);
   const [lmUrlInput, setLmUrlInput] = useState<string>('http://localhost:1234/v1');
   const [lmModelInput, setLmModelInput] = useState<string>('');
@@ -129,13 +126,6 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
         setPositivePromptTemplate(def.positiveTemplate);
         setNegativePrompt(def.negativeTemplate);
       }
-    });
-
-    api.listLmStudioGuidingTemplates().then((res) => {
-      const items = res.items || [];
-      setGuidingTemplates(items);
-      const def = items.find((g: LmStudioGuidingTemplate) => g.isDefault) || items[0];
-      if (def) setSelectedGuidingTemplateId(def.id);
     });
 
     api.getLmStudioStatus().then((status) => {
@@ -266,7 +256,6 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
   };
 
   const handleRunLmStudioAgent = async () => {
-    if (!selectedGuidingTemplateId) return;
     setIsGeneratingAgentPrompts(true);
     setAgentFeedback(null);
     try {
@@ -277,14 +266,16 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
         theme: themeText.trim() || 'Cinematic expressive portrait series',
         count: generationCount,
         basePromptTemplate: positivePromptTemplate,
-        guidingTemplateId: selectedGuidingTemplateId,
+        modelOverride: lmModelInput || undefined,
         baseUrlOverride: lmUrlInput || undefined,
       });
 
       if (res.prompts && res.prompts.length > 0) {
         setOutgoingPrompts(res.prompts);
         setAgentFeedback(
-          `Local LLM agent successfully generated ${res.prompts.length} distinct set prompts.`
+          res.usedLmStudio
+            ? `Unified Agent expanded concept into ${res.prompts.length} distinct set prompts.`
+            : res.warning || 'Local LLM unavailable; populated deterministic fallback variations.'
         );
       } else {
         setAgentFeedback('Local LLM did not return prompt variations. Used fallback prompts.');
@@ -446,9 +437,6 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
             templateSaveFeedback={templateSaveFeedback}
             themeText={themeText}
             onChangeThemeText={setThemeText}
-            guidingTemplates={guidingTemplates}
-            selectedGuidingTemplateId={selectedGuidingTemplateId}
-            onSelectGuidingTemplateId={setSelectedGuidingTemplateId}
             selectedCharacter={selectedCharacter}
             activeLoras={activeLoras}
             lmStatus={lmStatus}

@@ -271,10 +271,21 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               <QuickGenConversationView
                 messages={submitState.chatMessages}
                 isChatting={submitState.isChatting}
+                expandingMessageId={submitState.expandingMessageId}
                 isSubmitting={submitState.isSubmitting}
                 batchCount={submitState.batchCount}
                 onSubmitPrompt={(proposedPrompt) =>
                   submitState.handleSubmitProposedPrompt(proposedPrompt, mentions.resetMentions)
+                }
+                onPreviewExpand={submitState.handlePreviewExpandConcept}
+                onUpdateExpandedShot={submitState.handleUpdateExpandedPrompt}
+                onCloseExpandedPreview={submitState.handleCloseExpandedPreview}
+                onSubmitExpandedShots={(prompts, conceptTheme) =>
+                  submitState.handleSubmitExpandedPrompts(
+                    prompts,
+                    conceptTheme,
+                    mentions.resetMentions
+                  )
                 }
                 onClearChat={() => {
                   submitState.setChatMessages([]);

@@ -495,6 +495,7 @@ export const api = {
     selectedModel?: string;
     systemPrompt?: string;
     conversationSystemPrompt?: string;
+    batchExpansionPrompt?: string;
   }) =>
     requestJson<LmStudioStatus>('/api/generation/lmstudio/config', {
       method: 'POST',
@@ -530,6 +531,7 @@ export const api = {
     count: number;
     basePromptTemplate: string;
     guidingTemplateId?: number;
+    expansionDirective?: string;
     modelOverride?: string;
     baseUrlOverride?: string;
   }) =>
@@ -547,15 +549,22 @@ export const api = {
     }),
 
   chatQuickGenPrompt: (payload: {
-    messages: Array<{ role: 'user' | 'assistant'; content: string; proposedPrompt?: string | null }>;
+    messages: Array<{
+      role: 'user' | 'assistant';
+      content: string;
+      proposedPrompt?: string | null;
+      proposalKind?: 'prompt' | 'concept';
+    }>;
     characterName?: string;
     characterDescription?: string;
     loraNames?: string[];
     excludedLoras?: string[];
+    batchCount?: number;
   }) =>
     requestJson<{
       reply: string;
       proposedPrompt: string | null;
+      proposalKind?: 'prompt' | 'concept';
       selectedLoras?: string[];
       modelUsed: string;
     }>('/api/generation/lmstudio/chat', {

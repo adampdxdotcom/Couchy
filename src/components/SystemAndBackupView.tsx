@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { Bot, Database, RefreshCw, Server, Tags } from 'lucide-react';
 import { api } from '../api/client.ts';
 import type {
-  LmStudioGuidingTemplate,
   LmStudioStatus,
   VisualTaggerStatus,
 } from '../shared/types.ts';
@@ -100,19 +99,13 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   const [integrityOk, setIntegrityOk] = useState(true);
   const [backupMsg, setBackupMsg] = useState<string | null>(null);
 
-  // LM Studio & Guiding Prompt Templates State
+  // Local LLM & Unified Agent State
   const [lmStatus, setLmStatus] = useState<LmStudioStatus | null>(null);
   const [lmBaseUrl, setLmBaseUrl] = useState('http://localhost:1234/v1');
   const [lmSelectedModel, setLmSelectedModel] = useState('');
   const [conversationSystemPrompt, setConversationSystemPrompt] = useState('');
+  const [batchExpansionPrompt, setBatchExpansionPrompt] = useState('');
   const [isTestingLm, setIsTestingLm] = useState(false);
-
-  const [guidingTemplates, setGuidingTemplates] = useState<LmStudioGuidingTemplate[]>([]);
-  const [selectedGuidingId, setSelectedGuidingId] = useState<number | null>(null);
-  const [guidingName, setGuidingName] = useState('');
-  const [guidingSystemPrompt, setGuidingSystemPrompt] = useState('');
-  const [guidingUserTemplate, setGuidingUserTemplate] = useState('');
-  const [guidingIsDefault, setGuidingIsDefault] = useState(false);
   const [guidingFeedback, setGuidingFeedback] = useState<string | null>(null);
 
   const loadSystemDetails = async () => {
@@ -132,17 +125,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       setLmBaseUrl(lmRes.baseUrl || 'http://localhost:1234/v1');
       setLmSelectedModel(lmRes.selectedModel || lmRes.availableModels[0] || '');
       setConversationSystemPrompt(lmRes.conversationSystemPrompt || '');
-
-      const tpls = lmRes.guidingTemplates || [];
-      setGuidingTemplates(tpls);
-      if (tpls.length > 0 && !selectedGuidingId) {
-        const def = tpls.find((t) => t.isDefault) || tpls[0];
-        setSelectedGuidingId(def.id);
-        setGuidingName(def.name);
-        setGuidingSystemPrompt(def.systemPrompt);
-        setGuidingUserTemplate(def.userPromptTemplate);
-        setGuidingIsDefault(def.isDefault);
-      }
+      setBatchExpansionPrompt(lmRes.batchExpansionPrompt || '');
     } catch (err: any) {
       console.error('Failed to load system details:', err);
     }
@@ -151,72 +134,6 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   useEffect(() => {
     loadSystemDetails();
   }, []);
-
-  const handleSelectGuidingTemplate = (id: number) => {
-    const tpl = guidingTemplates.find((t) => t.id === id);
-    if (!tpl) return;
-    setSelectedGuidingId(tpl.id);
-    setGuidingName(tpl.name);
-    setGuidingSystemPrompt(tpl.systemPrompt);
-    setGuidingUserTemplate(tpl.userPromptTemplate);
-    setGuidingIsDefault(tpl.isDefault);
-    setGuidingFeedback(null);
-  };
-
-  const handleSaveGuidingTemplate = async (createAsNew = false) => {
-    if (!guidingName.trim() || !guidingSystemPrompt.trim()) {
-      setGuidingFeedback('Template name and system prompt are required.');
-      return;
-    }
-    try {
-      const res = await api.saveLmStudioGuidingTemplate({
-        id: createAsNew ? undefined : selectedGuidingId ?? undefined,
-        name: guidingName.trim(),
-        systemPrompt: guidingSystemPrompt.trim(),
-        userPromptTemplate: guidingUserTemplate.trim(),
-        isDefault: guidingIsDefault,
-      });
-      setGuidingTemplates(res.items);
-      setSelectedGuidingId(res.template.id);
-      setGuidingName(res.template.name);
-      setGuidingSystemPrompt(res.template.systemPrompt);
-      setGuidingUserTemplate(res.template.userPromptTemplate);
-      setGuidingIsDefault(res.template.isDefault);
-      setGuidingFeedback(
-        `Guiding template "${res.template.name}" ${createAsNew ? 'created' : 'saved'} successfully.`
-      );
-      setTimeout(() => setGuidingFeedback(null), 3500);
-    } catch (err: any) {
-      setGuidingFeedback(`Error saving template: ${err.message}`);
-    }
-  };
-
-  const handleDeleteGuidingTemplate = async () => {
-    if (!selectedGuidingId) return;
-    try {
-      const res = await api.deleteLmStudioGuidingTemplate(selectedGuidingId);
-      const items = res.items || [];
-      setGuidingTemplates(items);
-      if (items.length > 0) {
-        const next = items.find((t) => t.isDefault) || items[0];
-        setSelectedGuidingId(next.id);
-        setGuidingName(next.name);
-        setGuidingSystemPrompt(next.systemPrompt);
-        setGuidingUserTemplate(next.userPromptTemplate);
-        setGuidingIsDefault(next.isDefault);
-      } else {
-        setSelectedGuidingId(null);
-        setGuidingName('');
-        setGuidingSystemPrompt('');
-        setGuidingUserTemplate('');
-        setGuidingIsDefault(false);
-      }
-      setGuidingFeedback('Guiding template deleted.');
-      setTimeout(() => setGuidingFeedback(null), 3000);
-    } catch (err: any) {
-      setGuidingFeedback(`Error deleting template: ${err.message}`);
-    }
-  };
 
   const handleTestLmStudio = async () => {
     setIsTestingLm(true);
@@ -250,10 +167,10 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       });
       setLmStatus(updated);
       setConversationSystemPrompt(updated.conversationSystemPrompt);
-      setGuidingFeedback('Quick Gen Conversation System Prompt saved.');
+      setGuidingFeedback('Agent System Prompt saved.');
       setTimeout(() => setGuidingFeedback(null), 3000);
     } catch (err: any) {
-      setGuidingFeedback(`Error saving conversation prompt: ${err.message}`);
+      setGuidingFeedback(`Error saving Agent prompt: ${err.message}`);
     }
   };
 
@@ -264,10 +181,38 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       });
       setLmStatus(updated);
       setConversationSystemPrompt(updated.conversationSystemPrompt);
-      setGuidingFeedback('Quick Gen Conversation System Prompt reset to default.');
+      setGuidingFeedback('Agent System Prompt reset to default.');
       setTimeout(() => setGuidingFeedback(null), 3000);
     } catch (err: any) {
-      setGuidingFeedback(`Error resetting conversation prompt: ${err.message}`);
+      setGuidingFeedback(`Error resetting Agent prompt: ${err.message}`);
+    }
+  };
+
+  const handleSaveBatchExpansionPrompt = async () => {
+    try {
+      const updated = await api.updateLmStudioConfig({
+        batchExpansionPrompt: batchExpansionPrompt.trim(),
+      });
+      setLmStatus(updated);
+      setBatchExpansionPrompt(updated.batchExpansionPrompt);
+      setGuidingFeedback('Batch Expansion Instructions saved.');
+      setTimeout(() => setGuidingFeedback(null), 3000);
+    } catch (err: any) {
+      setGuidingFeedback(`Error saving batch expansion instructions: ${err.message}`);
+    }
+  };
+
+  const handleResetBatchExpansionPrompt = async () => {
+    try {
+      const updated = await api.updateLmStudioConfig({
+        batchExpansionPrompt: '',
+      });
+      setLmStatus(updated);
+      setBatchExpansionPrompt(updated.batchExpansionPrompt);
+      setGuidingFeedback('Batch Expansion Instructions reset to default.');
+      setTimeout(() => setGuidingFeedback(null), 3000);
+    } catch (err: any) {
+      setGuidingFeedback(`Error resetting batch expansion instructions: ${err.message}`);
     }
   };
 
@@ -476,20 +421,11 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
           setConversationSystemPrompt={setConversationSystemPrompt}
           onSaveConversationPrompt={handleSaveConversationPrompt}
           onResetConversationPrompt={handleResetConversationPrompt}
-          guidingTemplates={guidingTemplates}
-          selectedGuidingId={selectedGuidingId}
-          onSelectGuidingTemplate={handleSelectGuidingTemplate}
-          guidingName={guidingName}
-          setGuidingName={setGuidingName}
-          guidingIsDefault={guidingIsDefault}
-          setGuidingIsDefault={setGuidingIsDefault}
-          guidingSystemPrompt={guidingSystemPrompt}
-          setGuidingSystemPrompt={setGuidingSystemPrompt}
-          guidingUserTemplate={guidingUserTemplate}
-          setGuidingUserTemplate={setGuidingUserTemplate}
+          batchExpansionPrompt={batchExpansionPrompt}
+          setBatchExpansionPrompt={setBatchExpansionPrompt}
+          onSaveBatchExpansionPrompt={handleSaveBatchExpansionPrompt}
+          onResetBatchExpansionPrompt={handleResetBatchExpansionPrompt}
           guidingFeedback={guidingFeedback}
-          onSaveGuidingTemplate={handleSaveGuidingTemplate}
-          onDeleteGuidingTemplate={handleDeleteGuidingTemplate}
         />
       )}
 

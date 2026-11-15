@@ -48,6 +48,7 @@ export function useQuickGenSubmit({
   const [activeSeriesId, setActiveSeriesId] = useState<number | null>(null);
   const [branchFromImageId, setBranchFromImageId] = useState<number | null>(null);
   const [isChatting, setIsChatting] = useState(false);
+  const [expandingMessageId, setExpandingMessageId] = useState<string | null>(null);
 
   const [aspectRatio, setAspectRatio] = useState('2:3 (Portrait Photo)');
   const [megapixels, setMegapixels] = useState<number>(3.0);
@@ -358,11 +359,13 @@ export function useQuickGenSubmit({
           role: m.role,
           content: m.content,
           proposedPrompt: m.proposedPrompt ?? undefined,
+          proposalKind: m.proposalKind,
         })),
         characterName: attachedCharacter?.name || undefined,
         characterDescription: attachedCharacter?.description || undefined,
         loraNames: selectedLoras.map((l) => l.loraName),
         excludedLoras: currentRemovedKeys,
+        batchCount,
       });
 
       const resolvedPickedLoras: LoraExplorerItem[] = [];
@@ -425,6 +428,7 @@ export function useQuickGenSubmit({
         role: 'assistant',
         content: res.reply,
         proposedPrompt: res.proposedPrompt,
+        proposalKind: res.proposalKind,
         selectedLoras:
           resolvedPickedLoras.length > 0 ? resolvedPickedLoras.map((l) => l.filename) : undefined,
         excludedLoras: currentRemovedKeys.length > 0 ? currentRemovedKeys : undefined,
@@ -442,10 +446,12 @@ export function useQuickGenSubmit({
   const dispatchBatchToComfy = async (
     rawPromptText: string,
     expandWithAgentSet: boolean,
-    onAfterReset?: () => void
+    onAfterReset?: () => void,
+    preExpandedPrompts?: string[]
   ) => {
     const cleanPrompt = rawPromptText.trim();
-    if (!cleanPrompt || isSubmitting) return;
+    const cleanedPreExpanded = (preExpandedPrompts || []).map((p) => p.trim()).filter(Boolean);
+    if ((!cleanPrompt && cleanedPreExpanded.length === 0) || isSubmitting) return;
 
     if (!resolvedWorkflow) {
       onPushToast('System workflow is not loaded yet.', 'error');
@@ -457,7 +463,9 @@ export function useQuickGenSubmit({
       const { selectedLoras, triggerWord } = resolveActiveLoraStack();
 
       let promptsToRun: string[] = [];
-      if (expandWithAgentSet) {
+      if (cleanedPreExpanded.length > 0) {
+        promptsToRun = cleanedPreExpanded;
+      } else if (expandWithAgentSet) {
         const agentRes = await api.generateSetPromptsWithAgent({
           characterName: attachedCharacter?.name || '',
           characterDescription: attachedCharacter?.description || '',
@@ -491,19 +499,20 @@ export function useQuickGenSubmit({
         });
       }
 
+      const isMultiShotSet = expandWithAgentSet || cleanedPreExpanded.length > 1;
       const res = await api.submitGenerationBatch({
         characterId: attachedCharacter?.id || null,
         workflowId: resolvedWorkflow.id,
-        mode: expandWithAgentSet ? 'theme_set' : 'single',
-        themeTitle: cleanPrompt.slice(0, 80),
+        mode: isMultiShotSet ? 'theme_set' : 'single',
+        themeTitle: (cleanPrompt || promptsToRun[0] || '').slice(0, 80),
         aspectRatio,
         megapixels,
         prompts: promptsToRun,
         triggerWord,
         negativePrompt: '',
         loras: selectedLoras,
-        seriesId: expandWithAgentSet ? null : activeSeriesId,
-        branchFromImageId: expandWithAgentSet ? null : branchFromImageId,
+        seriesId: isMultiShotSet ? null : activeSeriesId,
+        branchFromImageId: isMultiShotSet ? null : branchFromImageId,
         chatSnapshot: snapshotForBatch,
       });
 
@@ -529,6 +538,7 @@ export function useQuickGenSubmit({
       // Reset Quick Gen box & conversation back to default state
       setPrompt('');
       setChatMessages([]);
+      setExpandingMessageId(null);
       setActiveSeriesId(null);
       setBranchFromImageId(null);
       setAgentEnabled(false);
@@ -550,6 +560,74 @@ export function useQuickGenSubmit({
     }
   };
 
+  /** Expands an approved Set Concept / Prompt into N editable shot prompts for preview. */
+  const handlePreviewExpandConcept = async (messageId: string, conceptText: string) => {
+    const cleanConcept = conceptText.trim();
+    if (!cleanConcept || expandingMessageId || isSubmitting || isChatting) return;
+    setExpandingMessageId(messageId);
+    try {
+      const { selectedLoras } = resolveActiveLoraStack();
+      const agentRes = await api.generateSetPromptsWithAgent({
+        characterName: attachedCharacter?.name || '',
+        characterDescription: attachedCharacter?.description || '',
+        loraNames: selectedLoras.map((l) => l.loraName),
+        theme: cleanConcept,
+        count: batchCount,
+        basePromptTemplate: '{theme}',
+      });
+      const expanded =
+        agentRes.prompts && agentRes.prompts.length > 0
+          ? agentRes.prompts
+          : Array.from({ length: batchCount }, () => cleanConcept);
+      setChatMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, expandedPrompts: expanded } : m))
+      );
+      if (!agentRes.usedLmStudio) {
+        onPushToast(
+          agentRes.warning || 'Local LLM unavailable for expansion; loaded fallback shot variations.',
+          'warning'
+        );
+      }
+    } catch (err: any) {
+      onPushToast(err?.message || 'Failed to expand concept into shots.', 'error');
+    } finally {
+      setExpandingMessageId(null);
+    }
+  };
+
+  /** Manually edits one shot prompt inside an expanded set preview. */
+  const handleUpdateExpandedPrompt = (messageId: string, shotIndex: number, nextValue: string) => {
+    setChatMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== messageId || !Array.isArray(m.expandedPrompts)) return m;
+        const nextList = [...m.expandedPrompts];
+        nextList[shotIndex] = nextValue;
+        return { ...m, expandedPrompts: nextList };
+      })
+    );
+  };
+
+  /** Closes the inline shot preview so the user can edit or re-expand the concept. */
+  const handleCloseExpandedPreview = (messageId: string) => {
+    setChatMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, expandedPrompts: undefined } : m))
+    );
+  };
+
+  /** Submits manually reviewed/edited shot prompts straight to ComfyUI. */
+  const handleSubmitExpandedPrompts = async (
+    promptsToSubmit: string[],
+    conceptTheme: string,
+    onAfterReset?: () => void
+  ) => {
+    const cleanPrompts = promptsToSubmit.map((p) => p.trim()).filter(Boolean);
+    if (cleanPrompts.length === 0) {
+      onPushToast('Add at least one non-empty shot prompt before submitting.', 'warning');
+      return;
+    }
+    await dispatchBatchToComfy(conceptTheme, true, onAfterReset, cleanPrompts);
+  };
+
   /** Completely clears the Quick Gen box (prompt, character, LoRAs, conversation, and settings). */
   const handleClearBox = (onAfterReset?: () => void) => {
     setPrompt('');
@@ -557,6 +635,7 @@ export function useQuickGenSubmit({
     setAttachedLoras([]);
     setRemovedLoraKeys(new Set());
     setChatMessages([]);
+    setExpandingMessageId(null);
     setActiveSeriesId(null);
     setBranchFromImageId(null);
     setAgentEnabled(false);
@@ -582,7 +661,7 @@ export function useQuickGenSubmit({
     await dispatchBatchToComfy(prompt, false, onAfterReset);
   };
 
-  /** Submits a proposed prompt from Agent mode (expanding into themed shots if batchCount > 1) and resets Quick Gen. */
+  /** Submits a proposed prompt/concept from Agent mode (blind-expanding if batchCount > 1) and resets Quick Gen. */
   const handleSubmitProposedPrompt = async (
     proposedPromptText: string,
     onAfterReset?: () => void
@@ -602,6 +681,7 @@ export function useQuickGenSubmit({
     branchFromImageId,
     setBranchFromImageId,
     isChatting,
+    expandingMessageId,
     aspectRatio,
     setAspectRatio,
     megapixels,
@@ -629,5 +709,9 @@ export function useQuickGenSubmit({
     handleClearBox,
     handleSubmit,
     handleSubmitProposedPrompt,
+    handlePreviewExpandConcept,
+    handleUpdateExpandedPrompt,
+    handleCloseExpandedPreview,
+    handleSubmitExpandedPrompts,
   };
 }

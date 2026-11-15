@@ -1,17 +1,52 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Bot,
+  ChevronDown,
+  ChevronRight,
+  Info,
+  Layers,
   MessageSquare,
-  Plus,
   RefreshCw,
   RotateCcw,
   Save,
-  Trash2,
 } from 'lucide-react';
-import type {
-  LmStudioGuidingTemplate,
-  LmStudioStatus,
-} from '../../shared/types.ts';
+import type { LmStudioStatus } from '../../shared/types.ts';
+
+const EXPANSION_STYLE_PRESETS: { label: string; text: string }[] = [
+  {
+    label: 'Editorial Variety',
+    text: `You are now expanding the approved Set Concept / Theme into {count} distinct, cohesive image generation prompts for a multi-shot set.
+
+Follow all visual translation, pronoun, character-safety, and concrete detail rules from your primary instructions, plus these expansion rules:
+1. Lock Invariants Across Every Shot: Preserve the approved wardrobe details (garment cuts, colors, fabrics, fasteners, footwear, accessories), environment/room props, lighting direction/color temperature, and visual style consistently across all {count} shots unless the concept explicitly calls for a progression.
+2. Vary Composition & Action: Give each shot a clearly distinct camera framing (e.g., wide environmental establishing shot, medium three-quarter candid, intimate close-up portrait, over-the-shoulder or dynamic low angle), body posture, physical action, and expression.
+3. Self-Contained Prompts: Every shot must be written as a complete, standalone text-to-image paragraph with no cross-references like "same outfit as shot 1".
+4. Never include character names or model/LoRA filenames (such as .safetensors).
+5. Output Format: Wrap each prompt in numbered XML tags <shot_1>...</shot_1> through <shot_{count}>...</shot_{count}> with no markdown code fences or extra commentary.`,
+  },
+  {
+    label: 'Storyboard Arc',
+    text: `You are now expanding the approved Set Concept / Theme into a chronological {count}-shot cinematic storyboard sequence.
+
+Follow all visual translation, pronoun, character-safety, and concrete detail rules from your primary instructions, plus these progression rules:
+1. Chronological Flow: Progress smoothly across the {count} shots—open with an establishing wide atmospheric shot, move into medium action/interaction within the setting, build toward a close-up emotional beat, and finish with a dramatic culminating angle.
+2. Lock Continuity: Carry forward the exact wardrobe details, room architecture, props, and lighting setup consistently from shot 1 through shot {count}.
+3. Self-Contained Prompts: Write each shot as a complete, standalone text-to-image paragraph with clear spatial positioning and contact points.
+4. Never include character names or model/LoRA filenames (such as .safetensors).
+5. Output Format: Wrap each prompt in numbered XML tags <shot_1>...</shot_1> through <shot_{count}>...</shot_{count}> with no markdown code fences or extra commentary.`,
+  },
+  {
+    label: 'Lookbook Angles',
+    text: `You are now expanding the approved Set Concept / Theme into {count} studio & editorial lookbook variations.
+
+Follow all visual translation, pronoun, character-safety, and concrete detail rules from your primary instructions, plus these lookbook rules:
+1. Keep Outfit & Set Locked: Preserve the exact garment details, fabrics, colors, lighting mood, and setting props verbatim across all {count} shots.
+2. Systematically Vary Camera & Pose: Rotate focal length (35mm, 50mm, 85mm, 135mm), camera angle (eye-level, low angle, profile, three-quarter, over-the-shoulder), and distinct body poses/head tilts across every shot.
+3. Self-Contained Prompts: Write each shot as a complete, standalone text-to-image paragraph.
+4. Never include character names or model/LoRA filenames (such as .safetensors).
+5. Output Format: Wrap each prompt in numbered XML tags <shot_1>...</shot_1> through <shot_{count}>...</shot_{count}> with no markdown code fences or extra commentary.`,
+  },
+];
 
 interface LmStudioTemplatesSectionProps {
   lmStatus: LmStudioStatus | null;
@@ -25,20 +60,11 @@ interface LmStudioTemplatesSectionProps {
   setConversationSystemPrompt: (val: string) => void;
   onSaveConversationPrompt: () => Promise<void>;
   onResetConversationPrompt: () => Promise<void>;
-  guidingTemplates: LmStudioGuidingTemplate[];
-  selectedGuidingId: number | null;
-  onSelectGuidingTemplate: (id: number) => void;
-  guidingName: string;
-  setGuidingName: (val: string) => void;
-  guidingIsDefault: boolean;
-  setGuidingIsDefault: (val: boolean) => void;
-  guidingSystemPrompt: string;
-  setGuidingSystemPrompt: (val: string) => void;
-  guidingUserTemplate: string;
-  setGuidingUserTemplate: (val: string) => void;
+  batchExpansionPrompt: string;
+  setBatchExpansionPrompt: (val: string) => void;
+  onSaveBatchExpansionPrompt: () => Promise<void>;
+  onResetBatchExpansionPrompt: () => Promise<void>;
   guidingFeedback: string | null;
-  onSaveGuidingTemplate: (createAsNew: boolean) => Promise<void>;
-  onDeleteGuidingTemplate: () => Promise<void>;
 }
 
 export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> = ({
@@ -53,21 +79,14 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
   setConversationSystemPrompt,
   onSaveConversationPrompt,
   onResetConversationPrompt,
-  guidingTemplates,
-  selectedGuidingId,
-  onSelectGuidingTemplate,
-  guidingName,
-  setGuidingName,
-  guidingIsDefault,
-  setGuidingIsDefault,
-  guidingSystemPrompt,
-  setGuidingSystemPrompt,
-  guidingUserTemplate,
-  setGuidingUserTemplate,
+  batchExpansionPrompt,
+  setBatchExpansionPrompt,
+  onSaveBatchExpansionPrompt,
+  onResetBatchExpansionPrompt,
   guidingFeedback,
-  onSaveGuidingTemplate,
-  onDeleteGuidingTemplate,
 }) => {
+  const [showRuntimeContext, setShowRuntimeContext] = useState(false);
+
   return (
     <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 pb-4">
@@ -75,10 +94,10 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
           <Bot className="w-4 h-4 text-indigo-400" />
           <div>
             <h2 className="text-sm font-display font-semibold text-zinc-100">
-              Local LLM Agent &amp; Guiding Prompt Templates (Database)
+              Local LLM Agent Configuration
             </h2>
             <p className="text-zinc-400">
-              Configure your local OpenAI-compatible LLM endpoint, Quick Gen Conversation prompt, and saved Guiding Prompt Templates for themed photo sets.
+              One unified Agent powers Quick Gen brainstorming, batch Concept &rarr; Shot expansion (x2–x8), and Generation Studio sets.
             </p>
           </div>
         </div>
@@ -152,9 +171,7 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
         </div>
 
         <div>
-          <label className="block text-zinc-400 mb-1.5">
-            Default Local LLM Model
-          </label>
+          <label className="block text-zinc-400 mb-1.5">Default Local LLM Model</label>
           {lmStatus && lmStatus.availableModels.length > 0 ? (
             <select
               value={lmSelectedModel}
@@ -179,22 +196,22 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
         </div>
       </div>
 
-      {/* Quick Gen Conversation Mode Guiding Prompt */}
+      {/* Primary Agent System Prompt */}
       <div className="pt-3 border-t border-zinc-800/80 space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
             <label className="font-medium text-zinc-200">
-              Quick Gen Conversation System Prompt
+              Primary Agent System Prompt
             </label>
           </div>
           <span className="text-[11px] text-zinc-400 font-mono">
-            Used when Agent &rarr; Conversation is active in Quick Gen
+            Used in ALL Agent chat turns &amp; batch expansions
           </span>
         </div>
 
         <textarea
-          rows={6}
+          rows={7}
           value={conversationSystemPrompt}
           onChange={(e) => setConversationSystemPrompt(e.target.value)}
           className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 font-mono text-xs focus:outline-none focus:border-indigo-500"
@@ -204,15 +221,15 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
           <p className="text-[11px] text-zinc-400">
             Keep{' '}
             <code className="text-zinc-200">&lt;proposed_prompt&gt;...&lt;/proposed_prompt&gt;</code>{' '}
-            in the instructions so the Quick Gen conversation knows when to render a one-click{' '}
-            <span className="text-zinc-200 font-medium">Submit</span> button.
+            in the instructions for <code className="text-zinc-200">x1</code> mode (in{' '}
+            <code className="text-zinc-200">x2–x8</code> mode, Concept instructions are appended automatically).
           </p>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={onResetConversationPrompt}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium rounded-lg cursor-pointer"
-              title="Reset Conversation System Prompt to factory default"
+              title="Reset Primary Agent System Prompt to factory default"
             >
               <RotateCcw className="w-3.5 h-3.5" />
               <span>Reset Default</span>
@@ -223,125 +240,115 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>Save Conversation Prompt</span>
+              <span>Save Agent Prompt</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* Saved Guiding Prompt Templates Editor */}
-      <div className="pt-3 border-t border-zinc-800/80 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-          <div className="md:col-span-5">
-            <label className="block text-zinc-400 mb-1">
-              Select Saved Guiding Prompt Template ({guidingTemplates.length})
-            </label>
-            <select
-              value={selectedGuidingId ?? ''}
-              onChange={(e) => onSelectGuidingTemplate(Number(e.target.value))}
-              className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-            >
-              {guidingTemplates.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} {t.isDefault ? '(Default)' : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="md:col-span-4">
-            <label className="block text-zinc-400 mb-1">Template Name</label>
-            <input
-              type="text"
-              value={guidingName}
-              onChange={(e) => setGuidingName(e.target.value)}
-              className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-            />
-          </div>
-
-          <div className="md:col-span-3 flex items-center gap-2 pb-1">
-            <label className="inline-flex items-center gap-2 text-zinc-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={guidingIsDefault}
-                onChange={(e) => setGuidingIsDefault(e.target.checked)}
-                className="rounded border-zinc-700 text-indigo-600 focus:ring-indigo-500"
-              />
-              <span>Default Guiding Template</span>
-            </label>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="font-medium text-zinc-200">
-                System Prompt (Guides how the LLM scripts the photo set)
-              </label>
-              <span className="text-[11px] text-zinc-400 font-mono">role: &quot;system&quot;</span>
-            </div>
-            <textarea
-              rows={7}
-              value={guidingSystemPrompt}
-              onChange={(e) => setGuidingSystemPrompt(e.target.value)}
-              className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 font-mono text-xs focus:outline-none focus:border-indigo-500"
-            />
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="font-medium text-zinc-200">
-                User Payload Template (Variables: {'{character}'}, {'{lora}'}, {'{theme}'}, {'{count}'}, {'{base_prompt}'})
-              </label>
-              <span className="text-[11px] text-zinc-400 font-mono">role: &quot;user&quot;</span>
-            </div>
-            <textarea
-              rows={7}
-              value={guidingUserTemplate}
-              onChange={(e) => setGuidingUserTemplate(e.target.value)}
-              className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 font-mono text-xs focus:outline-none focus:border-indigo-500"
-            />
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-          <p className="text-[11px] text-zinc-400">
-            Placeholders <code className="text-zinc-200">{'{character}'}</code>,{' '}
-            <code className="text-zinc-200">{'{lora}'}</code>,{' '}
-            <code className="text-zinc-200">{'{theme}'}</code>,{' '}
-            <code className="text-zinc-200">{'{count}'}</code>, and{' '}
-            <code className="text-zinc-200">{'{base_prompt}'}</code> are automatically replaced when you generate a themed set in the Generation tab.
-          </p>
-
+      {/* Batch Expansion Instructions (x2-x8 & Generation Studio) */}
+      <div className="pt-3 border-t border-zinc-800/80 space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            {guidingTemplates.length > 1 && (
-              <button
-                type="button"
-                onClick={onDeleteGuidingTemplate}
-                className="inline-flex items-center gap-1.5 px-3 py-2 bg-zinc-950 hover:bg-red-950/50 text-zinc-400 hover:text-red-300 border border-zinc-800 rounded-lg cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete</span>
-              </button>
-            )}
+            <Layers className="w-3.5 h-3.5 text-indigo-400" />
+            <label className="font-medium text-zinc-200">
+              Batch Expansion Instructions (x2–x8 &amp; Generation Studio)
+            </label>
+          </div>
+          <span className="text-[11px] text-zinc-400 font-mono">
+            4096 max tokens &middot; 90s timeout &middot; &lt;shot_1&gt; tags
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="text-zinc-500 mr-1">Style Presets:</span>
+          {EXPANSION_STYLE_PRESETS.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              onClick={() => setBatchExpansionPrompt(preset.text)}
+              className={`px-2.5 py-1 rounded border transition-colors cursor-pointer ${
+                batchExpansionPrompt.trim() === preset.text.trim()
+                  ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
+                  : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+              }`}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+
+        <textarea
+          rows={6}
+          value={batchExpansionPrompt}
+          onChange={(e) => setBatchExpansionPrompt(e.target.value)}
+          className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100 font-mono text-xs focus:outline-none focus:border-indigo-500"
+        />
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-[11px] text-zinc-400">
+            Appended after your Primary Agent Prompt whenever expanding a Set Concept into{' '}
+            <code className="text-zinc-200">{'{count}'}</code> shots. Keep{' '}
+            <code className="text-zinc-200">&lt;shot_1&gt;...&lt;/shot_&#123;count&#125;&gt;</code>{' '}
+            so multi-shot quotes and detailed paragraphs parse reliably.
+          </p>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => onSaveGuidingTemplate(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-medium rounded-lg cursor-pointer"
+              onClick={onResetBatchExpansionPrompt}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium rounded-lg cursor-pointer"
+              title="Reset Batch Expansion Instructions to factory default"
             >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Save as New Template</span>
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset Default</span>
             </button>
             <button
               type="button"
-              onClick={() => onSaveGuidingTemplate(false)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer"
+              onClick={onSaveBatchExpansionPrompt}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg cursor-pointer"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>Save Guiding Template</span>
+              <span>Save Batch Instructions</span>
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Collapsible Runtime Context Explanation */}
+      <div className="pt-2 border-t border-zinc-800/80">
+        <button
+          type="button"
+          onClick={() => setShowRuntimeContext((prev) => !prev)}
+          className="inline-flex items-center gap-1.5 text-[11px] text-zinc-400 hover:text-zinc-200 cursor-pointer"
+        >
+          {showRuntimeContext ? (
+            <ChevronDown className="w-3.5 h-3.5" />
+          ) : (
+            <ChevronRight className="w-3.5 h-3.5" />
+          )}
+          <Info className="w-3.5 h-3.5 text-indigo-400" />
+          <span>Runtime Context Injected Automatically (do not duplicate in prompts)</span>
+        </button>
+
+        {showRuntimeContext && (
+          <div className="mt-2 p-3 rounded-lg bg-zinc-950 border border-zinc-800/90 text-[11px] text-zinc-400 space-y-1">
+            <p>
+              <span className="text-zinc-200 font-medium">1. Character Profile:</span> Attached character traits/description (clamped to 500 chars) + active character variant label, paired with rules to match profile pronouns without outputting names or filenames.
+            </p>
+            <p>
+              <span className="text-zinc-200 font-medium">2. Attached LoRA Descriptions:</span> Category &amp; Agent description of every currently attached LoRA (clamped to 240 chars) so scenes complement active LoRAs without writing trigger words into the prompt.
+            </p>
+            <p>
+              <span className="text-zinc-200 font-medium">3. Optional LoRA Catalog (Chat):</span> Curated non-character{' '}
+              <code className="text-zinc-300">@handle</code> LoRAs available for automatic selection via{' '}
+              <code className="text-zinc-300">&lt;selected_loras&gt;</code>.
+            </p>
+            <p>
+              <span className="text-zinc-200 font-medium">4. Batch Mode Directive:</span> When Quick Gen is set to{' '}
+              <code className="text-zinc-300">x2–x8</code>, the chat automatically receives Set Concept rules (<code className="text-zinc-300">&lt;proposed_concept&gt;</code>) before expansion.
+            </p>
+          </div>
+        )}
       </div>
     </section>
   );

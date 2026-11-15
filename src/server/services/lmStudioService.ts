@@ -23,7 +23,7 @@ Help the user develop and refine their image idea through brief, natural convers
 
 3. Inside <proposed_prompt>, write a single cohesive, descriptive text-to-image paragraph detailing framing, pose, lighting, environment, wardrobe, and atmosphere. Specify concrete, locked visual anchors rather than broad labels: exact garment cuts, colors, fabrics, straps/closures, footwear, and accessories; specific room surfaces, 3–5 fixed background props/furniture with their spatial locations; and consistent lighting direction and color temperature. Use explicit, concrete visual language wherever necessary for accurate image generation. Favor spatial relationships, physical positioning, anatomy, and observable details over suggestive or literary language.
 
-4. Refer to the subject neutrally (e.g., "the subject", "they", "a person") when a character is attached, and NEVER include character names or model/LoRA filenames (such as .safetensors).
+4. Never include character names or model/LoRA filenames (such as .safetensors) in <proposed_prompt>. When a character profile is attached, use gender/pronouns matching their Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing a personal name.
 
 5. Describe visible actions, not labels. When describing physical interactions, intimacy, or sexual activity, never rely solely on the name of an act, position, or technique. Translate the action into concrete, visually observable details that an image-generation model can actually render.
 
@@ -64,6 +64,15 @@ Prioritize:
 Remove poetic filler or vague mood-only adjectives when they compete with important spatial information, but never delete, summarize, or alter concrete wardrobe, material, or environment anchors established in earlier turns. Favor precise, unambiguous descriptions over flowery prose.
 
 The final objective is a prompt that communicates exactly what the camera should capture and keeps the scene and wardrobe continuous across iterations, rather than simply naming what is happening.`;
+
+export const DEFAULT_BATCH_EXPANSION_PROMPT = `You are now expanding the approved Set Concept / Theme into {count} distinct, cohesive image generation prompts for a multi-shot set.
+
+Follow all visual translation, pronoun, character-safety, and concrete detail rules from your primary instructions, plus these expansion rules:
+1. Lock Invariants Across Every Shot: Preserve the approved wardrobe details (garment cuts, colors, fabrics, fasteners, footwear, accessories), environment/room props, lighting direction/color temperature, and visual style consistently across all {count} shots unless the concept explicitly calls for a progression.
+2. Vary Composition & Action: Give each shot a clearly distinct camera framing (e.g., wide environmental establishing shot, medium three-quarter candid, intimate close-up portrait, over-the-shoulder or dynamic low angle), body posture, physical action, and expression.
+3. Self-Contained Prompts: Every shot must be written as a complete, standalone text-to-image paragraph with no cross-references like "same outfit as shot 1".
+4. Never include character names or model/LoRA filenames (such as .safetensors).
+5. Output Format: Wrap each prompt in numbered XML tags <shot_1>...</shot_1> through <shot_{count}>...</shot_{count}> with no markdown code fences or extra commentary.`;
 
 function mapGuidingRow(row: any): LmStudioGuidingTemplate {
   return {
@@ -169,6 +178,7 @@ export function getLmStudioSettings(): {
   selectedModel: string;
   systemPrompt: string;
   conversationSystemPrompt: string;
+  batchExpansionPrompt: string;
 } {
   const row = db.prepare('SELECT * FROM lm_studio_settings WHERE id = 1').get() as any;
   if (!row) {
@@ -178,6 +188,7 @@ export function getLmStudioSettings(): {
       systemPrompt:
         'You are a creative photography director and Stable Diffusion / Flux prompt engineer.',
       conversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+      batchExpansionPrompt: DEFAULT_BATCH_EXPANSION_PROMPT,
     };
   }
   return {
@@ -186,6 +197,8 @@ export function getLmStudioSettings(): {
     systemPrompt: row.system_prompt || '',
     conversationSystemPrompt:
       row.conversation_system_prompt?.trim() || DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+    batchExpansionPrompt:
+      row.batch_expansion_prompt?.trim() || DEFAULT_BATCH_EXPANSION_PROMPT,
   };
 }
 
@@ -197,11 +210,13 @@ export function updateLmStudioSettings(payload: {
   selectedModel?: string;
   systemPrompt?: string;
   conversationSystemPrompt?: string;
+  batchExpansionPrompt?: string;
 }): {
   baseUrl: string;
   selectedModel: string;
   systemPrompt: string;
   conversationSystemPrompt: string;
+  batchExpansionPrompt: string;
 } {
   const current = getLmStudioSettings();
   const nextUrl = (payload.baseUrl ?? current.baseUrl).replace(/\/+$/, '');
@@ -211,12 +226,16 @@ export function updateLmStudioSettings(payload: {
     payload.conversationSystemPrompt !== undefined
       ? payload.conversationSystemPrompt.trim() || DEFAULT_CONVERSATION_SYSTEM_PROMPT
       : current.conversationSystemPrompt;
+  const nextBatchExpansionPrompt =
+    payload.batchExpansionPrompt !== undefined
+      ? payload.batchExpansionPrompt.trim() || DEFAULT_BATCH_EXPANSION_PROMPT
+      : current.batchExpansionPrompt;
 
   db.prepare(
     `UPDATE lm_studio_settings
-     SET base_url = ?, selected_model = ?, system_prompt = ?, conversation_system_prompt = ?, updated_at = datetime('now')
+     SET base_url = ?, selected_model = ?, system_prompt = ?, conversation_system_prompt = ?, batch_expansion_prompt = ?, updated_at = datetime('now')
      WHERE id = 1`
-  ).run(nextUrl, nextModel, nextPrompt, nextConversationPrompt);
+  ).run(nextUrl, nextModel, nextPrompt, nextConversationPrompt, nextBatchExpansionPrompt);
 
   appConfig.lmStudioUrl = nextUrl;
   return {
@@ -224,6 +243,7 @@ export function updateLmStudioSettings(payload: {
     selectedModel: nextModel,
     systemPrompt: nextPrompt,
     conversationSystemPrompt: nextConversationPrompt,
+    batchExpansionPrompt: nextBatchExpansionPrompt,
   };
 }
 
@@ -285,6 +305,8 @@ export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStu
       systemPrompt: settings.systemPrompt,
       conversationSystemPrompt: settings.conversationSystemPrompt,
       defaultConversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+      batchExpansionPrompt: settings.batchExpansionPrompt,
+      defaultBatchExpansionPrompt: DEFAULT_BATCH_EXPANSION_PROMPT,
       availableModels,
       guidingTemplates,
       apiKeyConfigured: Boolean(appConfig.localLlmApiKey),
@@ -298,6 +320,8 @@ export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStu
       systemPrompt: settings.systemPrompt,
       conversationSystemPrompt: settings.conversationSystemPrompt,
       defaultConversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+      batchExpansionPrompt: settings.batchExpansionPrompt,
+      defaultBatchExpansionPrompt: DEFAULT_BATCH_EXPANSION_PROMPT,
       availableModels: [],
       guidingTemplates,
       apiKeyConfigured: Boolean(appConfig.localLlmApiKey),
@@ -488,7 +512,7 @@ function buildLlmCharacterAndLoraContext(params: {
   let characterBlock: string | null = null;
   if (params.characterName?.trim() || charDesc) {
     const parts: string[] = [
-      `An active character LoRA is attached and locked. Refer to the subject neutrally (e.g., "the subject", "they", or matching pronouns) and NEVER output the character's name or LoRA filenames.`,
+      `An active character LoRA is attached and locked. Match the gender/pronouns from the Character Profile (or use natural singular phrasing like "the subject", "a woman", or "a man") and NEVER output the character's name or LoRA filenames.`,
     ];
     if (appearanceLabels.length > 0) {
       parts.push(`Active Character Variant: ${Array.from(new Set(appearanceLabels)).join(', ')}`);
@@ -524,6 +548,7 @@ export async function generatePhotoSetPromptsWithAgent(params: {
   count: number;
   basePromptTemplate: string;
   guidingTemplateId?: number;
+  expansionDirective?: string;
   modelOverride?: string;
   baseUrlOverride?: string;
 }): Promise<{
@@ -536,35 +561,23 @@ export async function generatePhotoSetPromptsWithAgent(params: {
   warning?: string;
 }> {
   const settings = getLmStudioSettings();
-  const allGuiding = listLmStudioGuidingTemplates();
-  const chosenGuiding =
-    (params.guidingTemplateId
-      ? allGuiding.find((g) => g.id === Number(params.guidingTemplateId))
-      : null) ||
-    allGuiding.find((g) => g.isDefault) ||
-    allGuiding[0];
-
   const baseUrl = (params.baseUrlOverride || settings.baseUrl).replace(/\/+$/, '');
   const chatEndpoint = baseUrl.endsWith('/v1')
     ? `${baseUrl}/chat/completions`
     : `${baseUrl}/v1/chat/completions`;
 
   const count = Math.max(1, Math.min(20, Number(params.count) || 4));
-
-  // Clean lora names: remove raw .safetensors, .ckpt, .pt extensions so filenames are never sent
-  const cleanLoras = (params.loraNames || [])
-    .map((l) => l.replace(/\.(?:safetensors|ckpt|pt|bin)$/i, '').trim())
-    .filter(Boolean);
-  const loraSummary = cleanLoras.join(', ');
-
   const neutralSubject = 'the subject';
 
-  const resolvedBaseStyle = interpolatePromptTemplate(params.basePromptTemplate, {
-    characterName: neutralSubject,
-    loraSummary: '',
-    theme: params.theme,
-    count,
-  });
+  const resolvedBaseStyle =
+    params.basePromptTemplate && params.basePromptTemplate.trim() !== '{theme}'
+      ? interpolatePromptTemplate(params.basePromptTemplate, {
+          characterName: neutralSubject,
+          loraSummary: '',
+          theme: params.theme,
+          count,
+        })
+      : '';
 
   const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
     characterName: params.characterName,
@@ -572,50 +585,47 @@ export async function generatePhotoSetPromptsWithAgent(params: {
     loraNames: params.loraNames,
   });
 
-  const baseSystemPrompt = interpolatePromptTemplate(
-    chosenGuiding?.systemPrompt ||
-      `You are a creative photography director and ComfyUI prompt engineer.
-Your job is to take a Photo Set Theme and Base Scene Style, and write {count} distinct, cohesive image generation prompts for a multi-photo set.
-Vary the camera framing across the set (e.g. intimate close-up portrait, medium three-quarter shot, wide environmental shot, dramatic angle), vary poses and micro-actions, and enrich the lighting and environmental details.
-Refer to the subject neutrally (e.g., "they", "them", "the subject", "a person") without including specific character names or LoRA/model filenames.
-Return ONLY a valid JSON array of {count} prompt strings with no markdown formatting or extra commentary.`,
-    {
-      characterName: neutralSubject,
-      loraSummary: '',
-      theme: params.theme,
-      count,
-      basePrompt: resolvedBaseStyle,
-    }
-  );
+  const expansionDirectiveRaw =
+    params.expansionDirective?.trim() ||
+    settings.batchExpansionPrompt ||
+    DEFAULT_BATCH_EXPANSION_PROMPT;
 
-  const sentSystemPrompt = [baseSystemPrompt, characterBlock, attachedLoraBlock]
+  const expansionDirective = interpolatePromptTemplate(expansionDirectiveRaw, {
+    characterName: neutralSubject,
+    loraSummary: '',
+    theme: params.theme,
+    count,
+    basePrompt: resolvedBaseStyle || params.theme,
+  });
+
+  // Unified architecture: primary Agent System Prompt + Batch Expansion rules + Character/LoRA context
+  const sentSystemPrompt = [
+    settings.conversationSystemPrompt,
+    expansionDirective,
+    characterBlock,
+    attachedLoraBlock,
+  ]
     .filter(Boolean)
     .join('\n\n');
 
-  const sentUserPrompt = interpolatePromptTemplate(
-    chosenGuiding?.userPromptTemplate ||
-      `Generate {count} distinct image prompts for a cohesive photo set:
-Subject: The subject (refer to them using neutral terms such as "they", "them", or "the subject")
-Photo Set Theme: {theme}
-Base Scene Style: {base_prompt}
-
-Rules:
-- Refer to the subject neutrally (e.g. "they", "them", "the subject", "a person").
-- Do NOT include character names, model filenames, or file extensions (e.g. no .safetensors).
-- Focus on setting, lighting, framing, poses, and clothing/mood.
-- Return ONLY a JSON array of {count} complete prompt strings.`,
-    {
-      characterName: neutralSubject,
-      loraSummary: '',
-      theme: params.theme,
-      count,
-      basePrompt: resolvedBaseStyle,
-    }
+  const userLines = [
+    `Expand the following Set Concept / Theme into ${count} distinct, cohesive, standalone image generation prompts:`,
+    ``,
+    `Set Concept / Theme:`,
+    params.theme.trim(),
+  ];
+  if (resolvedBaseStyle && resolvedBaseStyle.trim() !== params.theme.trim()) {
+    userLines.push('', `Visual Style Foundation:`, resolvedBaseStyle.trim());
+  }
+  userLines.push(
+    '',
+    `Return ONLY ${count} prompts wrapped in <shot_1>...</shot_1> through <shot_${count}>...</shot_${count}> tags with no extra commentary.`
   );
+  const sentUserPrompt = userLines.join('\n');
 
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 35000);
+    const timer = setTimeout(() => controller.abort(), 90000);
 
     const modelToUse = params.modelOverride || settings.selectedModel || 'local-model';
     const res = await fetch(chatEndpoint, {
@@ -629,7 +639,7 @@ Rules:
           { role: 'user', content: sentUserPrompt },
         ],
         temperature: 0.75,
-        max_tokens: 2048,
+        max_tokens: 4096,
       }),
     });
     clearTimeout(timer);
@@ -644,24 +654,39 @@ Rules:
     const cleaned = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
     let parsedPrompts: string[] = [];
-    const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
-    if (jsonMatch) {
-      try {
-        const arr = JSON.parse(jsonMatch[0]);
-        if (Array.isArray(arr)) {
-          parsedPrompts = arr.map((item) => String(item).trim()).filter(Boolean);
+
+    // 1. Primary parser: <shot_1>...</shot_1> (or <shot>...</shot>) XML tags
+    const shotTagMatches = Array.from(
+      cleaned.matchAll(/<shot(?:_\d+)?>([\s\S]*?)<\/shot(?:_\d+)?>/gi)
+    );
+    if (shotTagMatches.length > 0) {
+      parsedPrompts = shotTagMatches
+        .map((m) => m[1].replace(/^["']|["']$/g, '').trim())
+        .filter(Boolean);
+    }
+
+    // 2. Secondary fallback: JSON array [...]
+    if (parsedPrompts.length === 0) {
+      const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        try {
+          const arr = JSON.parse(jsonMatch[0]);
+          if (Array.isArray(arr)) {
+            parsedPrompts = arr.map((item) => String(item).trim()).filter(Boolean);
+          }
+        } catch {
+          // fallback to line splitting below
         }
-      } catch {
-        // fallback to line splitting below
       }
     }
 
+    // 3. Tertiary fallback: numbered / bulleted lines
     if (parsedPrompts.length === 0) {
       parsedPrompts = cleaned
         .split('\n')
         .map((line) =>
           line
-            .replace(/^\s*(?:\d+[\.\)]\s*|[-*]\s*|Prompt\s*\d+:\s*)/i, '')
+            .replace(/^\s*(?:\d+[\.\)]\s*|[-*]\s*|Prompt\s*\d+:\s*|Shot\s*\d+:\s*)/i, '')
             .replace(/^["']|["'],?$/g, '')
             .trim()
         )
@@ -684,7 +709,7 @@ Rules:
       prompts: sanitizedPrompts,
       usedLmStudio: true,
       modelUsed: data?.model || modelToUse,
-      guidingTemplateName: chosenGuiding?.name || 'Default Guiding Prompt',
+      guidingTemplateName: 'Unified Agent + Batch Expansion',
       sentSystemPrompt,
       sentUserPrompt,
     };
@@ -716,7 +741,7 @@ Rules:
       prompts: fallbackPrompts,
       usedLmStudio: false,
       modelUsed: 'Built-in Photo Set Director (Local LLM Offline)',
-      guidingTemplateName: chosenGuiding?.name || 'Default Guiding Prompt',
+      guidingTemplateName: 'Unified Agent + Batch Expansion',
       sentSystemPrompt,
       sentUserPrompt,
       warning: `Local LLM unreachable (${err?.message || 'connection refused'}). Generated set variations using Couchy's built-in shot director so you can still preview or edit your set.`,
@@ -927,7 +952,7 @@ Describe the subject, ${
       : 'appearance, clothing (with exact colors and materials) or nudity/anatomical details (including explicit or NSFW elements if present), pose'
   }, camera framing, setting, lighting, and artistic style in one cohesive, vivid image generation prompt.${characterConstraintBlock}
 Rules:
-- Refer to the subject neutrally ("the subject", "a woman", "a man", "they") without inventing personal names.
+- Refer to the subject descriptively ("the subject", "a woman", "a man", etc.) without inventing personal names.
 - Never mention LoRA or checkpoint filenames.
 - Output ONLY the final image generation prompt text with no preamble, no quotes, and no markdown.`;
 
@@ -1081,14 +1106,21 @@ Rules:
  * Extracts any <proposed_prompt>...</proposed_prompt> block and optional <selected_loras>...</selected_loras> picks.
  */
 export async function converseQuickGenPrompt(params: {
-  messages: Array<{ role: 'user' | 'assistant'; content: string; proposedPrompt?: string | null }>;
+  messages: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    proposedPrompt?: string | null;
+    proposalKind?: 'prompt' | 'concept';
+  }>;
   characterName?: string;
   characterDescription?: string;
   loraNames?: string[];
   excludedLoras?: string[];
+  batchCount?: number;
 }): Promise<{
   reply: string;
   proposedPrompt: string | null;
+  proposalKind: 'prompt' | 'concept';
   selectedLoras: string[];
   modelUsed: string;
 }> {
@@ -1096,6 +1128,7 @@ export async function converseQuickGenPrompt(params: {
   if (!status.online) {
     throw new Error('Local LLM is offline. Start your Local LLM server to use Conversation mode.');
   }
+  const targetBatchCount = Math.max(1, Math.min(20, Number(params.batchCount) || 1));
 
   const settings = getLmStudioSettings();
   const baseUrl = settings.baseUrl.replace(/\/+$/, '');
@@ -1185,9 +1218,15 @@ export async function converseQuickGenPrompt(params: {
       `User-deselected LoRAs (respect the user's choice and do NOT select these again unless the user explicitly asks to re-enable them): ${displayExcluded.join(', ')}.`
     );
   }
-  contextNotes.push(
-    `Always wrap any ready-to-generate image prompt inside <proposed_prompt>...</proposed_prompt> tags.`
-  );
+  if (targetBatchCount > 1) {
+    contextNotes.push(
+      `BATCH SET CONCEPT MODE (x${targetBatchCount} shots): The user currently has batch count set to ${targetBatchCount} photos. Your goal in this conversation is to develop a cohesive Set Concept (locked wardrobe, setting/props, lighting, mood, and overall shot-to-shot arc/variety plan) rather than freezing a single static pose or camera angle. Wrap your approved Set Concept inside <proposed_concept>...</proposed_concept> tags so the user can expand it into ${targetBatchCount} distinct shots (or edit shots before queuing).`
+    );
+  } else {
+    contextNotes.push(
+      `Always wrap any ready-to-generate image prompt inside <proposed_prompt>...</proposed_prompt> tags.`
+    );
+  }
 
   const validMessages = params.messages.filter(
     (m) =>
@@ -1196,21 +1235,26 @@ export async function converseQuickGenPrompt(params: {
       Boolean(m.content?.trim() || m.proposedPrompt?.trim())
   );
 
-  // Re-attach <proposed_prompt> to assistant turns because UI storage keeps it outside `content`
+  // Re-attach <proposed_prompt> or <proposed_concept> to assistant turns because UI storage keeps it outside `content`
   const recentRaw = validMessages.slice(-10);
   const recentMessages = recentRaw.map((m) => {
     const baseContent = (m.content || '').trim();
     const promptBlock = m.proposedPrompt?.trim();
-    if (m.role === 'assistant' && promptBlock && !/<proposed_prompt>/i.test(baseContent)) {
+    const tag = m.proposalKind === 'concept' ? 'proposed_concept' : 'proposed_prompt';
+    if (
+      m.role === 'assistant' &&
+      promptBlock &&
+      !/<(?:proposed_prompt|proposed_concept)>/i.test(baseContent)
+    ) {
       const combined = baseContent
-        ? `${baseContent}\n\n<proposed_prompt>\n${promptBlock}\n</proposed_prompt>`
-        : `<proposed_prompt>\n${promptBlock}\n</proposed_prompt>`;
+        ? `${baseContent}\n\n<${tag}>\n${promptBlock}\n</${tag}>`
+        : `<${tag}>\n${promptBlock}\n</${tag}>`;
       return { role: m.role, content: combined };
     }
     return { role: m.role, content: baseContent };
   });
 
-  // If the latest proposedPrompt scrolled outside the 10-message window, pin it in context
+  // If the latest proposed block scrolled outside the 10-message window, pin it in context
   const latestPromptInAll = [...validMessages]
     .reverse()
     .find((m) => m.role === 'assistant' && m.proposedPrompt?.trim())
@@ -1218,7 +1262,8 @@ export async function converseQuickGenPrompt(params: {
   const latestPromptInRecent = recentRaw.some(
     (m) =>
       m.role === 'assistant' &&
-      (Boolean(m.proposedPrompt?.trim()) || /<proposed_prompt>/i.test(m.content || ''))
+      (Boolean(m.proposedPrompt?.trim()) ||
+        /<(?:proposed_prompt|proposed_concept)>/i.test(m.content || ''))
   );
   if (latestPromptInAll && !latestPromptInRecent) {
     contextNotes.push(
@@ -1234,7 +1279,7 @@ export async function converseQuickGenPrompt(params: {
   ];
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 35000);
+  const timer = setTimeout(() => controller.abort(), 90000);
   try {
     const res = await fetch(chatEndpoint, {
       method: 'POST',
@@ -1244,7 +1289,7 @@ export async function converseQuickGenPrompt(params: {
         model: modelToUse,
         messages: apiMessages,
         temperature: 0.7,
-        max_tokens: 900,
+        max_tokens: 1500,
       }),
     });
     clearTimeout(timer);
@@ -1301,13 +1346,31 @@ export async function converseQuickGenPrompt(params: {
       .trim();
 
     let proposedPrompt: string | null = null;
+    let proposalKind: 'prompt' | 'concept' = targetBatchCount > 1 ? 'concept' : 'prompt';
     let replyText = cleanedContent;
 
-    // 1. Primary extraction: <proposed_prompt>...</proposed_prompt>
-    const tagMatch = cleanedContent.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
-    if (tagMatch && tagMatch[1]?.trim()) {
+    // 1. Primary extraction: <proposed_concept>...</proposed_concept> or <proposed_prompt>...</proposed_prompt>
+    const conceptMatch = cleanedContent.match(
+      /<proposed_concept>([\s\S]*?)(?:<\/proposed_concept>|$)/i
+    );
+    const promptMatch = cleanedContent.match(
+      /<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i
+    );
+
+    if (conceptMatch && conceptMatch[1]?.trim()) {
+      proposalKind = 'concept';
       proposedPrompt = sanitizeAgentPrompt(
-        tagMatch[1].replace(/^["']|["']$/g, '').trim(),
+        conceptMatch[1].replace(/^["']|["']$/g, '').trim(),
+        params.characterName
+      );
+      replyText = cleanedContent
+        .replace(/<proposed_concept>[\s\S]*?(?:<\/proposed_concept>|$)/gi, '')
+        .replace(/<proposed_prompt>[\s\S]*?(?:<\/proposed_prompt>|$)/gi, '')
+        .trim();
+    } else if (promptMatch && promptMatch[1]?.trim()) {
+      proposalKind = targetBatchCount > 1 ? 'concept' : 'prompt';
+      proposedPrompt = sanitizeAgentPrompt(
+        promptMatch[1].replace(/^["']|["']$/g, '').trim(),
         params.characterName
       );
       replyText = cleanedContent
@@ -1315,7 +1378,7 @@ export async function converseQuickGenPrompt(params: {
         .trim();
     } else {
       // 2. Fallback: ```prompt ... ``` fenced block if model omitted XML tags
-      const fenceMatch = cleanedContent.match(/```(?:prompt|text)?\s*([\s\S]{25,}?)```/i);
+      const fenceMatch = cleanedContent.match(/```(?:prompt|concept|text)?\s*([\s\S]{25,}?)```/i);
       if (fenceMatch && fenceMatch[1]?.trim()) {
         proposedPrompt = sanitizeAgentPrompt(
           fenceMatch[1].replace(/^["']|["']$/g, '').trim(),
@@ -1326,14 +1389,17 @@ export async function converseQuickGenPrompt(params: {
     }
 
     if (!replyText && proposedPrompt) {
-      replyText = 'Here is a prompt based on our conversation. You can submit it or keep chatting to refine it:';
+      replyText =
+        proposalKind === 'concept'
+          ? 'Here is the set concept based on our conversation. You can preview/edit individual shots or expand & submit directly:'
+          : 'Here is a prompt based on our conversation. You can submit it or keep chatting to refine it:';
     } else if (!replyText) {
       replyText = 'Could you share a bit more about the scene, lighting, or mood you have in mind?';
     }
 
     logger.info(
       'LocalLLM',
-      `Conversation turn completed (${data?.model || modelToUse}) | proposedPrompt=${Boolean(
+      `Conversation turn completed (${data?.model || modelToUse}) | proposalKind=${proposalKind} | hasProposal=${Boolean(
         proposedPrompt
       )} | selectedLoras=${selectedLoras.length > 0 ? selectedLoras.join(', ') : 'none'}`
     );
@@ -1341,6 +1407,7 @@ export async function converseQuickGenPrompt(params: {
     return {
       reply: replyText,
       proposedPrompt,
+      proposalKind,
       selectedLoras,
       modelUsed: data?.model || modelToUse,
     };

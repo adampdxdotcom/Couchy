@@ -584,6 +584,8 @@ export interface QuickGenChatMessage {
   role: 'user' | 'assistant';
   content: string;
   proposedPrompt?: string | null;
+  proposalKind?: 'prompt' | 'concept';
+  expandedPrompts?: string[];
   selectedLoras?: string[];
   excludedLoras?: string[];
 }
@@ -595,6 +597,8 @@ export interface LmStudioStatus {
   systemPrompt: string;
   conversationSystemPrompt: string;
   defaultConversationSystemPrompt?: string;
+  batchExpansionPrompt: string;
+  defaultBatchExpansionPrompt?: string;
   availableModels: string[];
   guidingTemplates: LmStudioGuidingTemplate[];
   apiKeyConfigured?: boolean;

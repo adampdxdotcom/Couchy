@@ -12,11 +12,9 @@ import {
 import type {
   CharacterProfile,
   GenerationLoraSelection,
-  LmStudioGuidingTemplate,
   LmStudioStatus,
   PromptTemplate,
 } from '../../shared/types.ts';
-import { interpolatePrompt as interpolatePromptClient } from '../../shared/utils.ts';
 
 export interface PromptTemplateEditorProps {
   generationMode: 'single' | 'theme_set';
@@ -33,9 +31,6 @@ export interface PromptTemplateEditorProps {
   templateSaveFeedback: string | null;
   themeText: string;
   onChangeThemeText: (val: string) => void;
-  guidingTemplates: LmStudioGuidingTemplate[];
-  selectedGuidingTemplateId: number | null;
-  onSelectGuidingTemplateId: (id: number) => void;
   selectedCharacter: CharacterProfile | null;
   activeLoras: GenerationLoraSelection[];
   lmStatus: LmStudioStatus | null;
@@ -73,11 +68,8 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
   templateSaveFeedback,
   themeText,
   onChangeThemeText,
-  guidingTemplates,
-  selectedGuidingTemplateId,
-  onSelectGuidingTemplateId,
-  selectedCharacter,
-  activeLoras,
+  selectedCharacter: _selectedCharacter,
+  activeLoras: _activeLoras,
   lmStatus,
   lmUrlInput,
   onChangeLmUrl,
@@ -93,16 +85,7 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
   submitFeedback,
   onOpenSystemSettings,
 }) => {
-  const [showGuidingPreview, setShowGuidingPreview] = useState(false);
-
-  const activeGuidingTemplate = guidingTemplates.find(
-    (g) => g.id === selectedGuidingTemplateId
-  ) || guidingTemplates[0];
-
-  const loraTriggerSummary = activeLoras
-    .map((l) => l.triggerWord || l.loraName)
-    .filter(Boolean)
-    .join(', ');
+  const [showAgentPromptPreview, setShowAgentPromptPreview] = useState(false);
 
   return (
     <section className="p-5 bg-zinc-900/60 border border-zinc-800/90 rounded-xl space-y-4">
@@ -235,78 +218,59 @@ export const PromptTemplateEditor: React.FC<PromptTemplateEditorProps> = ({
             />
           </div>
 
-          {/* Guiding Prompt Template Selector */}
+          {/* Unified Agent Concept -> Expansion Info & Preview */}
           <div className="space-y-2 pt-2 border-t border-zinc-800/80">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-medium text-zinc-300">
-                Local LLM Guiding Prompt Template
-              </label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs font-medium text-zinc-300">
+                Unified Agent Concept &rarr; Batch Expansion
+              </span>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowGuidingPreview((prev) => !prev)}
+                  onClick={() => setShowAgentPromptPreview((prev) => !prev)}
                   className="inline-flex items-center gap-1 text-[11px] text-zinc-400 hover:text-zinc-200 cursor-pointer"
                 >
                   <Eye className="w-3 h-3" />
                   <span>
-                    {showGuidingPreview ? 'Hide Guiding Prompt' : 'Inspect Guiding Prompt'}
+                    {showAgentPromptPreview ? 'Hide Expansion Rules' : 'Inspect Expansion Rules'}
                   </span>
                 </button>
                 {onOpenSystemSettings && (
                   <>
-                    <span className="text-zinc-700">·</span>
+                    <span className="text-zinc-700">&middot;</span>
                     <button
                       type="button"
                       onClick={onOpenSystemSettings}
                       className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 cursor-pointer"
                     >
                       <Settings2 className="w-3 h-3" />
-                      <span>Edit Templates in System</span>
+                      <span>Edit in System &rarr; Agent</span>
                     </button>
                   </>
                 )}
               </div>
             </div>
 
-            <select
-              value={selectedGuidingTemplateId ?? ''}
-              onChange={(e) => onSelectGuidingTemplateId(Number(e.target.value))}
-              className="w-full px-3 py-1.5 text-xs bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-100"
-            >
-              {guidingTemplates.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name} {g.isDefault ? '(Default)' : ''}
-                </option>
-              ))}
-            </select>
+            <p className="text-[11px] text-zinc-400">
+              Uses your primary Agent System Prompt, Batch Expansion Instructions, attached Character Profile, and active LoRA descriptions.
+            </p>
 
-            {showGuidingPreview && activeGuidingTemplate && (
-              <div className="p-3 bg-zinc-900/90 border border-zinc-800 rounded-lg space-y-2 text-[11px] font-mono text-zinc-300">
+            {showAgentPromptPreview && lmStatus && (
+              <div className="p-3 bg-zinc-900/90 border border-zinc-800 rounded-lg space-y-2 text-[11px] font-mono text-zinc-300 max-h-56 overflow-y-auto">
                 <div>
                   <span className="text-indigo-400 block mb-0.5">
-                    System Prompt Sent to Local LLM:
+                    Primary Agent System Prompt:
                   </span>
                   <p className="whitespace-pre-wrap text-zinc-400">
-                    {interpolatePromptClient(activeGuidingTemplate.systemPrompt, {
-                      characterName: selectedCharacter?.name || 'Character',
-                      loraSummary: loraTriggerSummary,
-                      theme: themeText,
-                      count: generationCount,
-                    })}
+                    {lmStatus.conversationSystemPrompt}
                   </p>
                 </div>
                 <div className="pt-2 border-t border-zinc-800">
                   <span className="text-indigo-400 block mb-0.5">
-                    User Message Sent to Local LLM:
+                    Batch Expansion Instructions:
                   </span>
                   <p className="whitespace-pre-wrap text-zinc-400">
-                    {interpolatePromptClient(activeGuidingTemplate.userPromptTemplate, {
-                      characterName: selectedCharacter?.name || 'Character',
-                      loraSummary: loraTriggerSummary,
-                      theme: themeText,
-                      count: generationCount,
-                      basePrompt: positivePromptTemplate,
-                    })}
+                    {lmStatus.batchExpansionPrompt}
                   </p>
                 </div>
               </div>
