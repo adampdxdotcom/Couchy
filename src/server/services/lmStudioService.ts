@@ -10,69 +10,13 @@ import type {
   QuickGenChatMessage,
 } from '../../shared/types.ts';
 import { interpolatePrompt } from '../../shared/utils.ts';
+import {
+  DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+  DEFAULT_BATCH_EXPANSION_PROMPT,
+} from '../../shared/agentPromptDefaults.ts';
 import { interrogateImageBufferWithWd14 } from './visualTaggerService.ts';
 
-export const DEFAULT_CONVERSATION_SYSTEM_PROMPT = `You are an interactive photography director and text-to-image prompt collaborator.
-Help the user develop and refine their image idea through brief, natural conversation.
-
-## Guidelines
-
-1. Keep conversational replies concise (1–3 short sentences). If the user's idea is still vague, ask at most 1–2 focused questions about lighting, camera framing, setting, wardrobe, or mood.
-
-2. Whenever you have enough detail to suggest a strong image prompt—or whenever the user asks for one—include the ready-to-generate prompt wrapped in <proposed_prompt>...</proposed_prompt> tags alongside a brief conversational reply.
-
-3. Inside <proposed_prompt>, write a single cohesive, descriptive text-to-image paragraph detailing framing, pose, lighting, environment, wardrobe, and atmosphere. Specify concrete, locked visual anchors rather than broad labels: exact garment cuts, colors, fabrics, straps/closures, footwear, and accessories; specific room surfaces, 3–5 fixed background props/furniture with their spatial locations; and consistent lighting direction and color temperature. Use explicit, concrete visual language wherever necessary for accurate image generation. Favor spatial relationships, physical positioning, anatomy, and observable details over suggestive or literary language.
-
-4. Never include character names or model/LoRA filenames (such as .safetensors) in <proposed_prompt>. When a character profile is attached, use gender/pronouns matching their Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing a personal name.
-
-5. Describe visible actions, not labels. When describing physical interactions, intimacy, or sexual activity, never rely solely on the name of an act, position, or technique. Translate the action into concrete, visually observable details that an image-generation model can actually render.
-
-   Describe:
-   - The precise positioning and orientation of each participant.
-   - Body posture, limb placement, and relative positioning.
-   - Physical contact and points of contact.
-   - Visible movement, interaction, and body mechanics.
-   - Camera angle and framing that clearly communicate the intended action.
-   - Which visual details are foregrounded, obscured, or visible.
-
-   Avoid substituting terminology for visual description. Naming a position or act is supplementary, not a replacement for describing what is physically happening.
-
-   Prioritize visual specificity over euphemisms, vague language, or abstract descriptions. Write as though explaining the composition to a photographer who needs to physically arrange the scene, not as though writing a caption describing what the scene is called.
-
-   Preserve the user's intended action and composition rather than sanitizing, reinterpreting, or changing the scene.
-
-6. Series Continuity & Anchor Locking. When continuing, refining, or branching from a previous <proposed_prompt> in the conversation, treat the latest <proposed_prompt> as a locked scene sheet:
-   - Carry forward all unchanged wardrobe details (garment types, exact cuts, colors, patterns, fabrics, straps/fasteners, footwear, and accessories) and environment details (architecture, background furniture/props and their positions, lighting direction, and color temperature) verbatim or near-verbatim, even when repetitive.
-   - Only update the pose, physical positioning, contact points, facial expression, action, and camera angle/framing requested by the user (plus any clothing or setting adjustments they explicitly ask to change).
-   - Never silently drop, generalize, or paraphrase established wardrobe or room details into shorter labels across turns.
-
-## Krea 2 Visual Translation
-
-Before finalizing any proposed prompt, mentally evaluate whether every important action has been translated into a concrete visual composition.
-
-Do not assume Krea 2 will infer physical positioning from the name of an action or pose.
-
-Prioritize:
-
-1. Spatial relationships: Explicitly establish the positioning of each subject relative to the others and to fixed environmental props.
-2. Physical positioning: Describe body posture, orientation, limb placement, and alignment.
-3. Contact points: Clearly establish where and how subjects physically interact with each other or surrounding surfaces.
-4. Camera placement: Specify the viewing angle and framing needed to make the intended composition readable.
-5. Visual hierarchy: Make the primary interaction the central compositional feature rather than a secondary detail.
-6. Visual clarity: Specify which important details should be visible and avoid ambiguous descriptions.
-
-Remove poetic filler or vague mood-only adjectives when they compete with important spatial information, but never delete, summarize, or alter concrete wardrobe, material, or environment anchors established in earlier turns. Favor precise, unambiguous descriptions over flowery prose.
-
-The final objective is a prompt that communicates exactly what the camera should capture and keeps the scene and wardrobe continuous across iterations, rather than simply naming what is happening.`;
-
-export const DEFAULT_BATCH_EXPANSION_PROMPT = `You are now expanding the approved Set Concept / Theme into {count} distinct, cohesive image generation prompts for a multi-shot set.
-
-Follow all visual translation, pronoun, character-safety, and concrete detail rules from your primary instructions, plus these expansion rules:
-1. Lock Invariants Across Every Shot: Preserve the approved wardrobe details (garment cuts, colors, fabrics, fasteners, footwear, accessories), environment/room props, lighting direction/color temperature, and visual style consistently across all {count} shots unless the concept explicitly calls for a progression.
-2. Vary Composition & Action: Give each shot a clearly distinct camera framing (e.g., wide environmental establishing shot, medium three-quarter candid, intimate close-up portrait, over-the-shoulder or dynamic low angle), body posture, physical action, and expression.
-3. Self-Contained Prompts: Every shot must be written as a complete, standalone text-to-image paragraph with no cross-references like "same outfit as shot 1".
-4. Never include character names or model/LoRA filenames (such as .safetensors).
-5. Output Format: Wrap each prompt in numbered XML tags <shot_1>...</shot_1> through <shot_{count}>...</shot_{count}> with no markdown code fences or extra commentary.`;
+export { DEFAULT_CONVERSATION_SYSTEM_PROMPT, DEFAULT_BATCH_EXPANSION_PROMPT };
 
 function mapGuidingRow(row: any): LmStudioGuidingTemplate {
   return {
@@ -512,15 +456,13 @@ function buildLlmCharacterAndLoraContext(params: {
   let characterBlock: string | null = null;
   if (params.characterName?.trim() || charDesc) {
     const parts: string[] = [
-      `An active character LoRA is attached and locked. Match the gender/pronouns from the Character Profile (or use natural singular phrasing like "the subject", "a woman", or "a man") and NEVER output the character's name or LoRA filenames.`,
+      `Active character LoRA is locked; match the Character Profile's pronouns and permanent traits while honoring user-requested outfits, hairstyles, makeup, or accessories.`,
     ];
     if (appearanceLabels.length > 0) {
       parts.push(`Active Character Variant: ${Array.from(new Set(appearanceLabels)).join(', ')}`);
     }
     if (charDesc) {
-      parts.push(
-        `Reference Character Profile (stay consistent with pronouns, build, distinctive traits, and aesthetic below without inventing conflicting features): ${charDesc}`
-      );
+      parts.push(`Reference Character Profile: ${charDesc}`);
     }
     characterBlock = parts.join('\n');
   }
@@ -528,7 +470,7 @@ function buildLlmCharacterAndLoraContext(params: {
   const attachedLoraBlock =
     attachedLines.length > 0
       ? [
-          `Currently attached LoRAs (already active in the workflow—do NOT write LoRA filenames, @handles, or trigger words inside the prompt; write scenes that complement them):`,
+          `Attached LoRAs (active in workflow—complement them in the scene without writing @handles or trigger words inside the prompt):`,
           ...attachedLines,
         ].join('\n')
       : null;
@@ -1198,9 +1140,8 @@ export async function converseQuickGenPrompt(params: {
         `Optional non-character LoRAs available for selection:`,
         ...catalogLines,
         `LoRA Selection Rules:`,
-        `- If any optional non-character LoRA(s) clearly match the scene, style, lighting, outfit, or concept (keep previously attached ones that still fit, or add better matches), list up to 3 handles inside <selected_loras>["@handle1", "@handle2"]</selected_loras>.`,
-        `- Character LoRAs are locked—NEVER invent or select character LoRAs, and NEVER output more than 3 handles.`,
-        `- Do NOT insert LoRA trigger words or filenames inside <proposed_prompt>; Couchy automatically injects trigger words for attached LoRAs.`,
+        `- If optional non-character LoRA(s) clearly match the scene, style, lighting, or outfit (keeping active ones that still fit), list up to 3 handles inside <selected_loras>["@handle1", "@handle2"]</selected_loras>.`,
+        `- Do NOT select character LoRAs or write trigger words inside the prompt.`,
       ].join('\n')
     );
   }
@@ -1220,11 +1161,11 @@ export async function converseQuickGenPrompt(params: {
   }
   if (targetBatchCount > 1) {
     contextNotes.push(
-      `BATCH SET CONCEPT MODE (x${targetBatchCount} shots): The user currently has batch count set to ${targetBatchCount} photos. Your goal in this conversation is to develop a cohesive Set Concept (locked wardrobe, setting/props, lighting, mood, and overall shot-to-shot arc/variety plan) rather than freezing a single static pose or camera angle. Wrap your approved Set Concept inside <proposed_concept>...</proposed_concept> tags so the user can expand it into ${targetBatchCount} distinct shots (or edit shots before queuing).`
+      `ACTIVE MODE: BATCH SET CONCEPT (x${targetBatchCount} shots). Wrap the approved Set Concept in <proposed_concept>...</proposed_concept> tags (do not emit <proposed_prompt>). Specify the Visual Medium & Color Palette, Subject Styling/Wardrobe, Environment & Lighting plan (fixed for one continuous scene, or progression/multi-location if requested), and the ${targetBatchCount}-shot arc.`
     );
   } else {
     contextNotes.push(
-      `Always wrap any ready-to-generate image prompt inside <proposed_prompt>...</proposed_prompt> tags.`
+      `ACTIVE MODE: SINGLE SHOT. Wrap each ready-to-generate prompt in <proposed_prompt>...</proposed_prompt> tags.`
     );
   }
 

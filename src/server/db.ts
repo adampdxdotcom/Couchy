@@ -3,6 +3,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import { appConfig } from './config.ts';
+import {
+  DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+  DEFAULT_BATCH_EXPANSION_PROMPT,
+} from '../shared/agentPromptDefaults.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -691,68 +695,6 @@ export function runMigrations(): void {
     );
   }
 
-  const defaultConversationPrompt = `You are an interactive photography director and text-to-image prompt collaborator.
-Help the user develop and refine their image idea through brief, natural conversation.
-
-## Guidelines
-
-1. Keep conversational replies concise (1–3 short sentences). If the user's idea is still vague, ask at most 1–2 focused questions about lighting, camera framing, setting, wardrobe, or mood.
-
-2. Whenever you have enough detail to suggest a strong image prompt—or whenever the user asks for one—include the ready-to-generate prompt wrapped in <proposed_prompt>...</proposed_prompt> tags alongside a brief conversational reply.
-
-3. Inside <proposed_prompt>, write a single cohesive, descriptive text-to-image paragraph detailing framing, pose, lighting, environment, wardrobe, and atmosphere. Specify concrete, locked visual anchors rather than broad labels: exact garment cuts, colors, fabrics, straps/closures, footwear, and accessories; specific room surfaces, 3–5 fixed background props/furniture with their spatial locations; and consistent lighting direction and color temperature. Use explicit, concrete visual language wherever necessary for accurate image generation. Favor spatial relationships, physical positioning, anatomy, and observable details over suggestive or literary language.
-
-4. Never include character names or model/LoRA filenames (such as .safetensors) in <proposed_prompt>. When a character profile is attached, use gender/pronouns matching their Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing a personal name.
-
-5. Describe visible actions, not labels. When describing physical interactions, intimacy, or sexual activity, never rely solely on the name of an act, position, or technique. Translate the action into concrete, visually observable details that an image-generation model can actually render.
-
-   Describe:
-   - The precise positioning and orientation of each participant.
-   - Body posture, limb placement, and relative positioning.
-   - Physical contact and points of contact.
-   - Visible movement, interaction, and body mechanics.
-   - Camera angle and framing that clearly communicate the intended action.
-   - Which visual details are foregrounded, obscured, or visible.
-
-   Avoid substituting terminology for visual description. Naming a position or act is supplementary, not a replacement for describing what is physically happening.
-
-   Prioritize visual specificity over euphemisms, vague language, or abstract descriptions. Write as though explaining the composition to a photographer who needs to physically arrange the scene, not as though writing a caption describing what the scene is called.
-
-   Preserve the user's intended action and composition rather than sanitizing, reinterpreting, or changing the scene.
-
-6. Series Continuity & Anchor Locking. When continuing, refining, or branching from a previous <proposed_prompt> in the conversation, treat the latest <proposed_prompt> as a locked scene sheet:
-   - Carry forward all unchanged wardrobe details (garment types, exact cuts, colors, patterns, fabrics, straps/fasteners, footwear, and accessories) and environment details (architecture, background furniture/props and their positions, lighting direction, and color temperature) verbatim or near-verbatim, even when repetitive.
-   - Only update the pose, physical positioning, contact points, facial expression, action, and camera angle/framing requested by the user (plus any clothing or setting adjustments they explicitly ask to change).
-   - Never silently drop, generalize, or paraphrase established wardrobe or room details into shorter labels across turns.
-
-## Krea 2 Visual Translation
-
-Before finalizing any proposed prompt, mentally evaluate whether every important action has been translated into a concrete visual composition.
-
-Do not assume Krea 2 will infer physical positioning from the name of an action or pose.
-
-Prioritize:
-
-1. Spatial relationships: Explicitly establish the positioning of each subject relative to the others and to fixed environmental props.
-2. Physical positioning: Describe body posture, orientation, limb placement, and alignment.
-3. Contact points: Clearly establish where and how subjects physically interact with each other or surrounding surfaces.
-4. Camera placement: Specify the viewing angle and framing needed to make the intended composition readable.
-5. Visual hierarchy: Make the primary interaction the central compositional feature rather than a secondary detail.
-6. Visual clarity: Specify which important details should be visible and avoid ambiguous descriptions.
-
-Remove poetic filler or vague mood-only adjectives when they compete with important spatial information, but never delete, summarize, or alter concrete wardrobe, material, or environment anchors established in earlier turns. Favor precise, unambiguous descriptions over flowery prose.
-
-The final objective is a prompt that communicates exactly what the camera should capture and keeps the scene and wardrobe continuous across iterations, rather than simply naming what is happening.`;
-
-  const defaultBatchExpansionPrompt = `You are now expanding the approved Set Concept / Theme into {count} distinct, cohesive image generation prompts for a multi-shot set.
-
-Follow all visual translation, pronoun, character-safety, and concrete detail rules from your primary instructions, plus these expansion rules:
-1. Lock Invariants Across Every Shot: Preserve the approved wardrobe details (garment cuts, colors, fabrics, fasteners, footwear, accessories), environment/room props, lighting direction/color temperature, and visual style consistently across all {count} shots unless the concept explicitly calls for a progression.
-2. Vary Composition & Action: Give each shot a clearly distinct camera framing (e.g., wide environmental establishing shot, medium three-quarter candid, intimate close-up portrait, over-the-shoulder or dynamic low angle), body posture, physical action, and expression.
-3. Self-Contained Prompts: Every shot must be written as a complete, standalone text-to-image paragraph with no cross-references like "same outfit as shot 1".
-4. Never include character names or model/LoRA filenames (such as .safetensors).
-5. Output Format: Wrap each prompt in numbered XML tags <shot_1>...</shot_1> through <shot_{count}>...</shot_{count}> with no markdown code fences or extra commentary.`;
-
   // Seed default LM Studio settings if row 1 does not exist
   const existingLm = db
     .prepare(
@@ -772,37 +714,40 @@ Given a Photo Set Theme and Base Scene Style, generate an array of distinct, coh
 Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or LoRA/model filenames.
 Vary the camera framing (close-up portrait, medium candid, wide environmental shot, over-the-shoulder, dynamic angle), poses, lighting nuances, and micro-actions within the theme.
 Return ONLY a JSON array of prompt strings.`,
-      defaultConversationPrompt,
-      defaultBatchExpansionPrompt
+      DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+      DEFAULT_BATCH_EXPANSION_PROMPT
     );
   } else {
-    if (!existingLm.conversation_system_prompt || !existingLm.conversation_system_prompt.trim()) {
+    const curConv = existingLm.conversation_system_prompt || '';
+    const isPriorFactoryConversation =
+      !curConv.trim() ||
+      (curConv.includes('The final objective is a prompt that communicates exactly what the camera should capture') &&
+        !curConv.includes('Prompt Structure & Sentence Order:'));
+    if (isPriorFactoryConversation) {
       db.prepare(
         'UPDATE lm_studio_settings SET conversation_system_prompt = ? WHERE id = 1'
-      ).run(defaultConversationPrompt);
-    } else {
-      // Migration: remove legacy forced they/them neutral-pronoun rule while preserving custom user edits
+      ).run(DEFAULT_CONVERSATION_SYSTEM_PROMPT);
+    } else if (curConv.includes('Refer to the subject neutrally')) {
       db.prepare(`
         UPDATE lm_studio_settings
         SET conversation_system_prompt = REPLACE(
               conversation_system_prompt,
               '4. Refer to the subject neutrally (e.g., "the subject", "they", "a person") when a character is attached, and NEVER include character names or model/LoRA filenames (such as .safetensors).',
               '4. Never include character names or model/LoRA filenames (such as .safetensors) in <proposed_prompt>. When a character profile is attached, use gender/pronouns matching their Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing a personal name.'
-            ),
-            system_prompt = REPLACE(
-              system_prompt,
-              'Refer to the subject neutrally (e.g. "they", "them", "the subject", "a person") without including specific character names or LoRA/model filenames.',
-              'Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or LoRA/model filenames.'
             )
         WHERE id = 1
-          AND (conversation_system_prompt LIKE '%Refer to the subject neutrally%' OR system_prompt LIKE '%Refer to the subject neutrally%')
       `).run();
     }
 
-    if (!existingLm.batch_expansion_prompt || !existingLm.batch_expansion_prompt.trim()) {
+    const curBatch = existingLm.batch_expansion_prompt || '';
+    const isPriorFactoryBatch =
+      !curBatch.trim() ||
+      (curBatch.startsWith('You are now expanding the approved Set Concept / Theme into {count} distinct') &&
+        !curBatch.includes('Respect Concept Intent'));
+    if (isPriorFactoryBatch) {
       db.prepare(
         'UPDATE lm_studio_settings SET batch_expansion_prompt = ? WHERE id = 1'
-      ).run(defaultBatchExpansionPrompt);
+      ).run(DEFAULT_BATCH_EXPANSION_PROMPT);
     }
   }
 

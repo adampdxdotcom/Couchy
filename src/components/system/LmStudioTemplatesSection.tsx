@@ -11,42 +11,7 @@ import {
   Save,
 } from 'lucide-react';
 import type { LmStudioStatus } from '../../shared/types.ts';
-
-const EXPANSION_STYLE_PRESETS: { label: string; text: string }[] = [
-  {
-    label: 'Editorial Variety',
-    text: `You are now expanding the approved Set Concept / Theme into {count} distinct, cohesive image generation prompts for a multi-shot set.
-
-Follow all visual translation, pronoun, character-safety, and concrete detail rules from your primary instructions, plus these expansion rules:
-1. Lock Invariants Across Every Shot: Preserve the approved wardrobe details (garment cuts, colors, fabrics, fasteners, footwear, accessories), environment/room props, lighting direction/color temperature, and visual style consistently across all {count} shots unless the concept explicitly calls for a progression.
-2. Vary Composition & Action: Give each shot a clearly distinct camera framing (e.g., wide environmental establishing shot, medium three-quarter candid, intimate close-up portrait, over-the-shoulder or dynamic low angle), body posture, physical action, and expression.
-3. Self-Contained Prompts: Every shot must be written as a complete, standalone text-to-image paragraph with no cross-references like "same outfit as shot 1".
-4. Never include character names or model/LoRA filenames (such as .safetensors).
-5. Output Format: Wrap each prompt in numbered XML tags <shot_1>...</shot_1> through <shot_{count}>...</shot_{count}> with no markdown code fences or extra commentary.`,
-  },
-  {
-    label: 'Storyboard Arc',
-    text: `You are now expanding the approved Set Concept / Theme into a chronological {count}-shot cinematic storyboard sequence.
-
-Follow all visual translation, pronoun, character-safety, and concrete detail rules from your primary instructions, plus these progression rules:
-1. Chronological Flow: Progress smoothly across the {count} shots—open with an establishing wide atmospheric shot, move into medium action/interaction within the setting, build toward a close-up emotional beat, and finish with a dramatic culminating angle.
-2. Lock Continuity: Carry forward the exact wardrobe details, room architecture, props, and lighting setup consistently from shot 1 through shot {count}.
-3. Self-Contained Prompts: Write each shot as a complete, standalone text-to-image paragraph with clear spatial positioning and contact points.
-4. Never include character names or model/LoRA filenames (such as .safetensors).
-5. Output Format: Wrap each prompt in numbered XML tags <shot_1>...</shot_1> through <shot_{count}>...</shot_{count}> with no markdown code fences or extra commentary.`,
-  },
-  {
-    label: 'Lookbook Angles',
-    text: `You are now expanding the approved Set Concept / Theme into {count} studio & editorial lookbook variations.
-
-Follow all visual translation, pronoun, character-safety, and concrete detail rules from your primary instructions, plus these lookbook rules:
-1. Keep Outfit & Set Locked: Preserve the exact garment details, fabrics, colors, lighting mood, and setting props verbatim across all {count} shots.
-2. Systematically Vary Camera & Pose: Rotate focal length (35mm, 50mm, 85mm, 135mm), camera angle (eye-level, low angle, profile, three-quarter, over-the-shoulder), and distinct body poses/head tilts across every shot.
-3. Self-Contained Prompts: Write each shot as a complete, standalone text-to-image paragraph.
-4. Never include character names or model/LoRA filenames (such as .safetensors).
-5. Output Format: Wrap each prompt in numbered XML tags <shot_1>...</shot_1> through <shot_{count}>...</shot_{count}> with no markdown code fences or extra commentary.`,
-  },
-];
+import { BATCH_EXPANSION_PRESETS } from '../../shared/agentPromptDefaults.ts';
 
 interface LmStudioTemplatesSectionProps {
   lmStatus: LmStudioStatus | null;
@@ -262,7 +227,7 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
 
         <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
           <span className="text-zinc-500 mr-1">Style Presets:</span>
-          {EXPANSION_STYLE_PRESETS.map((preset) => (
+          {BATCH_EXPANSION_PRESETS.map((preset) => (
             <button
               key={preset.label}
               type="button"
