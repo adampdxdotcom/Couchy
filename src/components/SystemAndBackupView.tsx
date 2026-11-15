@@ -70,6 +70,9 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   const [saveUploadedPromptImages, setSaveUploadedPromptImages] = useState<boolean>(
     healthData?.config?.saveUploadedPromptImages === true
   );
+  const [galleryPillColorsEnabled, setGalleryPillColorsEnabled] = useState<boolean>(
+    healthData?.config?.galleryPillColorsEnabled === true
+  );
 
   // Visual Keyword Tagger (WD14 ONNX) State
   const [taggerStatus, setTaggerStatus] = useState<VisualTaggerStatus | null>(
@@ -84,12 +87,16 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
     if (healthData?.config?.saveUploadedPromptImages !== undefined) {
       setSaveUploadedPromptImages(healthData.config.saveUploadedPromptImages === true);
     }
+    if (healthData?.config?.galleryPillColorsEnabled !== undefined) {
+      setGalleryPillColorsEnabled(healthData.config.galleryPillColorsEnabled === true);
+    }
     if (healthData?.visualTagger) {
       setTaggerStatus(healthData.visualTagger);
     }
   }, [
     healthData?.config?.quickGenBoxEnabled,
     healthData?.config?.saveUploadedPromptImages,
+    healthData?.config?.galleryPillColorsEnabled,
     healthData?.visualTagger,
   ]);
 
@@ -228,6 +235,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       scheduledBackupHours: scheduledHours,
       quickGenBoxEnabled,
       saveUploadedPromptImages,
+      galleryPillColorsEnabled,
     });
     setBackupMsg('Configuration updated successfully.');
     setTimeout(() => setBackupMsg(null), 3000);
@@ -267,6 +275,24 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       await onRefreshAll();
     } catch (err: any) {
       setBackupMsg(`Failed to update uploaded prompt images setting: ${err.message}`);
+    }
+  };
+
+  const handleToggleGalleryPillColors = async (enabled: boolean) => {
+    setGalleryPillColorsEnabled(enabled);
+    try {
+      await api.updateConfig({
+        galleryPillColorsEnabled: enabled,
+      });
+      setBackupMsg(
+        enabled
+          ? 'Main gallery model & LoRA pill colors enabled.'
+          : 'Main gallery pill colors disabled (neutral pills).'
+      );
+      setTimeout(() => setBackupMsg(null), 2500);
+      await onRefreshAll();
+    } catch (err: any) {
+      setBackupMsg(`Failed to update gallery pill colors setting: ${err.message}`);
     }
   };
 
@@ -365,9 +391,11 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       <WorkspacePreferencesSection
         quickGenBoxEnabled={quickGenBoxEnabled}
         saveUploadedPromptImages={saveUploadedPromptImages}
+        galleryPillColorsEnabled={galleryPillColorsEnabled}
         uploadedImagesDir={healthData?.config?.uploadedImagesDir}
         onToggleQuickGenBox={handleToggleQuickGenBox}
         onToggleSaveUploadedPromptImages={handleToggleSaveUploadedPromptImages}
+        onToggleGalleryPillColors={handleToggleGalleryPillColors}
       />
 
       {/* System Sub-Tab Navigation */}

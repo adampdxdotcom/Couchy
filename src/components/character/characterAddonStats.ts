@@ -6,13 +6,14 @@ import type {
   ModelInventoryItem,
   PortraitCrop,
 } from '../../shared/types.ts';
-import { normalizeLoraKey } from '../quickgen/quickGenUtils.ts';
+import { getCleanModelMentionLabel, normalizeLoraKey } from '../quickgen/quickGenUtils.ts';
 
 export type AddonSortMode = 'most_used' | 'highest_rated';
 
 export interface FavoriteBaseModelItem {
   key: string;
   name: string;
+  displayName: string;
   count: number;
   sharePercent: number;
   avgRating: number;
@@ -298,9 +299,14 @@ export function computeCharacterAddonStats(params: {
       const isInstalled = matchedModel
         ? Boolean(matchedModel.isInstalled)
         : allModels.length === 0 || (Boolean(defaultCkptKey) && key === defaultCkptKey);
+      const canonicalName = matchedModel?.filename || item.name;
+      const displayName = matchedModel
+        ? getCleanModelMentionLabel(matchedModel)
+        : getCleanModelMentionLabel({ filename: item.name });
       return {
         key,
-        name: matchedModel?.filename || item.name,
+        name: canonicalName,
+        displayName,
         count: item.count,
         sharePercent: totalImages > 0 ? Math.round((item.count / totalImages) * 100) : 0,
         avgRating: item.ratedCount > 0 ? Math.round((item.ratingSum / item.ratedCount) * 10) / 10 : 0,

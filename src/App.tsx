@@ -834,6 +834,8 @@ export default function App() {
             <GalleryGridView
               images={images}
               loras={visibleLoras}
+              models={models}
+              galleryPillColorsEnabled={healthData?.config?.galleryPillColorsEnabled === true}
               ghostItems={activeGhostItems}
               filters={filters}
               page={currentGalleryPage}

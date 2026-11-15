@@ -27,7 +27,9 @@ import type {
   GalleryFilterState,
   ImageLoraRecord,
   ImageRecord,
+  LoraCategory,
   LoraExplorerItem,
+  ModelInventoryItem,
   QueuedGhostCardItem,
 } from '../shared/types.ts';
 import {
@@ -38,25 +40,35 @@ import {
 } from '../shared/utils.ts';
 import type { GalleryViewLayout } from './GalleryFilterBar.tsx';
 import { PendingGhostOverlay } from './gallery/PendingGhostOverlay.tsx';
+import { normalizeLoraKey, resolveBaseModelDisplayLabel } from './quickgen/quickGenUtils.ts';
 
-function formatLoraPillLabel(lora: ImageLoraRecord, explorerLoras: LoraExplorerItem[]): string {
-  const rawName = (lora.loraName || '').trim().replace(/^.*[\\/]/, '');
-  const cleanStem = rawName.replace(/\.(safetensors|pt|ckpt|bin)$/i, '');
-  const lowerRaw = rawName.toLowerCase();
-  const lowerStem = cleanStem.toLowerCase();
+function resolveGalleryLoraMeta(
+  lora: ImageLoraRecord,
+  explorerLoras: LoraExplorerItem[]
+): { label: string; category: LoraCategory } {
+  const key = normalizeLoraKey(lora.loraName || '');
+  const match = key
+    ? explorerLoras.find(
+        (l) => normalizeLoraKey(l.filename) === key || normalizeLoraKey(l.name) === key
+      )
+    : undefined;
 
-  const match = explorerLoras.find(
-    (l) => l.filename.toLowerCase() === lowerRaw || l.name.toLowerCase() === lowerStem
-  );
   const nick = (match?.nickname || '').trim().replace(/^@+/, '');
-  if (nick) return nick;
-  if (match?.name?.trim()) return match.name.trim();
-  return cleanStem || 'LoRA';
+  const cleanStem = (lora.loraName || '')
+    .trim()
+    .replace(/^.*[\\/]/, '')
+    .replace(/\.(safetensors|pt|ckpt|bin)$/i, '');
+  const label = nick || match?.name?.trim() || cleanStem || 'LoRA';
+  const category: LoraCategory = match?.loraCategory || lora.loraCategory || 'unclassified';
+
+  return { label, category };
 }
 
 interface GalleryGridViewProps {
   images: ImageRecord[];
   loras?: LoraExplorerItem[];
+  models?: ModelInventoryItem[];
+  galleryPillColorsEnabled?: boolean;
   ghostItems?: QueuedGhostCardItem[];
   filters?: GalleryFilterState;
   page: number;
@@ -124,6 +136,8 @@ export function renderDependencyLabel(status: DependencyStatus) {
 export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   images,
   loras = [],
+  models = [],
+  galleryPillColorsEnabled = false,
   ghostItems = [],
   filters,
   page,
@@ -598,7 +612,9 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                       )}
                       <span aria-hidden="true">·</span>
                       <span className="truncate max-w-[150px] font-sans">
-                        {ghost.checkpointName || 'No Checkpoint'}
+                        {ghost.checkpointName
+                          ? resolveBaseModelDisplayLabel(ghost.checkpointName, models)
+                          : 'No Checkpoint'}
                       </span>
                     </div>
                   </div>
@@ -848,16 +864,33 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                     </div>
                   )}
 
-                  {/* LoRA Pills */}
-                  {img.loras.length > 0 && (
+                  {/* Base Model & LoRA Pills */}
+                  {(Boolean(img.checkpointName) || img.loras.length > 0) && (
                     <div className="flex flex-wrap items-center gap-1">
+                      {img.checkpointName && (
+                        <span
+                          title={`Base Model: ${img.checkpointName}`}
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-medium truncate max-w-[150px] ${
+                            galleryPillColorsEnabled
+                              ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200'
+                              : 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200'
+                          }`}
+                        >
+                          {resolveBaseModelDisplayLabel(img.checkpointName, models)}
+                        </span>
+                      )}
                       {img.loras.map((lora, idx) => {
-                        const label = formatLoraPillLabel(lora, loras);
+                        const { label, category } = resolveGalleryLoraMeta(lora, loras);
+                        const pillColorClass = !galleryPillColorsEnabled
+                          ? 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200'
+                          : category === 'character'
+                          ? 'bg-indigo-950/70 border-indigo-500/40 text-indigo-200'
+                          : 'bg-amber-950/60 border-amber-500/40 text-amber-200';
                         return (
                           <span
                             key={`${lora.loraName}-${idx}`}
                             title={`${lora.loraName} (${lora.modelStrength.toFixed(1)}x)`}
-                            className="inline-flex items-center px-2 py-0.5 rounded-full bg-zinc-800/90 border border-zinc-700/80 text-[10px] font-medium text-zinc-200 truncate max-w-[150px]"
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-medium truncate max-w-[150px] ${pillColorClass}`}
                           >
                             {label}
                           </span>
@@ -866,7 +899,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                     </div>
                   )}
 
-                  {/* Image Details: Resolution, Ratio & Checkpoint Line */}
+                  {/* Image Details: Resolution & Ratio */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400 font-mono tabular-nums min-w-0">
                       <span>
@@ -878,10 +911,6 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                           <span>{formatImageAspectRatio(img.width, img.height)}</span>
                         </>
                       )}
-                      <span aria-hidden="true">·</span>
-                      <span className="truncate max-w-[150px] font-sans">
-                        {img.checkpointName || 'No Checkpoint'}
-                      </span>
                     </div>
                     {confirmedChars.length === 0 &&
                       suggestedChars.length === 0 &&

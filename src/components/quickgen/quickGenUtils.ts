@@ -106,6 +106,29 @@ export function normalizeLoraKey(name: string): string {
     .toLowerCase();
 }
 
+/**
+ * Resolves a base model checkpoint filename to its user-configured @nickname if present,
+ * falling back to its inventory name or stripped filename stem.
+ */
+export function resolveBaseModelDisplayLabel(
+  checkpointName?: string | null,
+  models: ModelInventoryItem[] = []
+): string {
+  if (!checkpointName) return 'Default Model';
+  const key = normalizeLoraKey(checkpointName);
+  if (key && models.length > 0) {
+    const match = models.find(
+      (m) =>
+        m.modelType !== 'lora' &&
+        (normalizeLoraKey(m.filename) === key || normalizeLoraKey(m.name) === key)
+    );
+    if (match) {
+      return getCleanModelMentionLabel(match);
+    }
+  }
+  return getCleanModelLabel(checkpointName);
+}
+
 /** Checks whether a LoRA filename belongs to the given CharacterProfile. */
 export function isCharacterLora(
   loraName: string,

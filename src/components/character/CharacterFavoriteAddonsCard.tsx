@@ -9,8 +9,8 @@ import type {
 } from '../../shared/types.ts';
 import { getModelAvailabilityInfo } from '../../shared/utils.ts';
 import {
-  getCleanModelLabel,
   MAX_SYSTEM_LORAS,
+  resolveBaseModelDisplayLabel,
   type QuickGenPrefillLora,
 } from '../quickgen/quickGenUtils.ts';
 import { CharacterPortraitImage } from './CharacterPortraitImage.tsx';
@@ -238,9 +238,9 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
               onClick={handleNewImageClick}
               title={`Open Quick Gen with ${character.name}, ${
                 selectedCheckpoint
-                  ? getCleanModelLabel(selectedCheckpoint)
+                  ? resolveBaseModelDisplayLabel(selectedCheckpoint, models)
                   : defaultCheckpoint
-                  ? `${getCleanModelLabel(defaultCheckpoint)} (default)`
+                  ? `${resolveBaseModelDisplayLabel(defaultCheckpoint, models)} (default)`
                   : 'default model'
               }${
                 selectedAddonKeys.size + (selectedFriendKey ? 1 : 0) > 0
@@ -307,7 +307,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                           }`}
                         />
                         <span className="font-medium truncate">
-                          {getCleanModelLabel(bm.name)}
+                          {bm.displayName}
                         </span>
                         {!bm.isInstalled ? (
                           <span className="text-[10px] font-mono text-amber-400/90 shrink-0">

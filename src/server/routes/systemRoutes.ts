@@ -56,6 +56,11 @@ systemRouter.get('/health', (_req, res) => {
     .get() as { value: string } | undefined;
   const saveUploadedPromptImages = saveUploadedRow ? saveUploadedRow.value === '1' : false;
 
+  const galleryPillColorsRow = db
+    .prepare("SELECT value FROM app_settings WHERE key = 'gallery_pill_colors_enabled'")
+    .get() as { value: string } | undefined;
+  const galleryPillColorsEnabled = galleryPillColorsRow ? galleryPillColorsRow.value === '1' : false;
+
   const cleanupSettings = getModelCleanupSettings();
 
   res.json({
@@ -80,6 +85,7 @@ systemRouter.get('/health', (_req, res) => {
       scheduledBackupHours: appConfig.scheduledBackupHours,
       quickGenBoxEnabled,
       saveUploadedPromptImages,
+      galleryPillColorsEnabled,
       autoCleanCopiedModels: cleanupSettings.enabled,
       autoCleanCopiedModelsHours: cleanupSettings.retentionHours,
     },
@@ -104,6 +110,7 @@ systemRouter.patch('/config', (req, res) => {
       scheduledBackupHours,
       quickGenBoxEnabled,
       saveUploadedPromptImages,
+      galleryPillColorsEnabled,
     } = req.body || {};
 
     if (comfyuiUrl && String(comfyuiUrl).trim()) {
@@ -144,6 +151,13 @@ systemRouter.patch('/config', (req, res) => {
          VALUES ('save_uploaded_prompt_images', ?, datetime('now'))
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
       ).run(saveUploadedPromptImages ? '1' : '0');
+    }
+    if (galleryPillColorsEnabled !== undefined) {
+      db.prepare(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('gallery_pill_colors_enabled', ?, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+      ).run(galleryPillColorsEnabled ? '1' : '0');
     }
 
     res.json({ ok: true, config: appConfig });

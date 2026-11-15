@@ -1,13 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Cpu, Layers, X } from 'lucide-react';
-import type { CharacterProfile, GenerationLoraSelection } from '../../shared/types.ts';
+import type {
+  CharacterProfile,
+  GenerationLoraSelection,
+  ModelInventoryItem,
+} from '../../shared/types.ts';
 import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
-import { getCleanLoraLabel, getCleanModelLabel } from './quickGenUtils.ts';
+import { getCleanLoraLabel, resolveBaseModelDisplayLabel } from './quickGenUtils.ts';
 
 interface QuickGenAttachmentsBarProps {
   attachedCharacter: CharacterProfile | null;
   attachedCheckpoint?: string | null;
   attachedLoras: GenerationLoraSelection[];
+  models?: ModelInventoryItem[];
   onRemoveCharacter: () => void;
   onRemoveCheckpoint?: () => void;
   onRemoveLora: (loraName: string) => void;
@@ -35,6 +40,7 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
   attachedCharacter,
   attachedCheckpoint,
   attachedLoras,
+  models = [],
   onRemoveCharacter,
   onRemoveCheckpoint,
   onRemoveLora,
@@ -189,7 +195,7 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
         >
           <Cpu className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
           <span className="font-medium text-emerald-100 truncate max-w-[180px] sm:max-w-[240px]">
-            {getCleanModelLabel(attachedCheckpoint)}
+            {resolveBaseModelDisplayLabel(attachedCheckpoint, models)}
           </span>
           {onRemoveCheckpoint && (
             <button
