@@ -430,6 +430,7 @@ export interface WorkflowLibraryItem {
   characters: { id: number; name: string; roleLabel: string }[];
   defaultMegapixels?: number | null;
   defaultAspectRatio?: string | null;
+  defaultCheckpoint?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -516,6 +517,9 @@ export interface GenerationLoraSelection {
   appearanceLabel?: string;
   nickname?: string;
   showPill?: boolean;
+  isCharacterPill?: boolean;
+  portraitThumbnailUrl?: string | null;
+  portraitCrop?: PortraitCrop | null;
 }
 
 export interface GenerationItemRecord {

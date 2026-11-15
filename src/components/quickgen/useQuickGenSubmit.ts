@@ -54,6 +54,7 @@ export function useQuickGenSubmit({
   const [megapixels, setMegapixels] = useState<number>(3.0);
   const [batchCount, setBatchCount] = useState<number>(1);
   const [attachedCharacter, setAttachedCharacter] = useState<CharacterProfile | null>(null);
+  const [attachedCheckpoint, setAttachedCheckpoint] = useState<string | null>(null);
   const [attachedLoras, setAttachedLoras] = useState<GenerationLoraSelection[]>([]);
   const [removedLoraKeys, setRemovedLoraKeys] = useState<Set<string>>(new Set());
   const [isHighlighted, setIsHighlighted] = useState(false);
@@ -193,6 +194,9 @@ export function useQuickGenSubmit({
 
     if (prefillPayload.prompt !== undefined) setPrompt(prefillPayload.prompt);
     if (prefillPayload.character !== undefined) setAttachedCharacter(prefillPayload.character);
+    setAttachedCheckpoint(
+      prefillPayload.checkpointName ? String(prefillPayload.checkpointName).trim() || null : null
+    );
 
     if (prefillPayload.loras !== undefined) {
       const reusedSelections: GenerationLoraSelection[] = [];
@@ -208,6 +212,15 @@ export function useQuickGenSubmit({
           (l) => l.filename.toLowerCase() === rawKey || l.name.toLowerCase() === cleanBase
         );
 
+        const prefillExtra = imgLora as {
+          triggerWord?: string;
+          nickname?: string;
+          showPill?: boolean;
+          isCharacterPill?: boolean;
+          portraitThumbnailUrl?: string | null;
+          portraitCrop?: CharacterProfile['portraitCrop'];
+        };
+
         reusedSelections.push({
           loraName: matchedExplorerLora?.filename || imgLora.loraName,
           modelStrength: Number(
@@ -216,12 +229,17 @@ export function useQuickGenSubmit({
           clipStrength: Number(
             imgLora.clipStrength ?? matchedExplorerLora?.defaultClipStrength ?? 1.0
           ),
-          triggerWord: matchedExplorerLora?.triggerWord || '',
-          nickname: getCleanLoraLabel(matchedExplorerLora || { loraName: imgLora.loraName }),
+          triggerWord: prefillExtra.triggerWord || matchedExplorerLora?.triggerWord || '',
+          nickname:
+            prefillExtra.nickname ||
+            getCleanLoraLabel(matchedExplorerLora || { loraName: imgLora.loraName }),
           showPill:
-            'showPill' in imgLora && imgLora.showPill !== undefined
-              ? Boolean(imgLora.showPill)
+            prefillExtra.showPill !== undefined
+              ? Boolean(prefillExtra.showPill)
               : Boolean(matchedExplorerLora?.mentionEnabled),
+          isCharacterPill: prefillExtra.isCharacterPill,
+          portraitThumbnailUrl: prefillExtra.portraitThumbnailUrl,
+          portraitCrop: prefillExtra.portraitCrop,
         });
       }
       setAttachedLoras(reusedSelections);
@@ -288,6 +306,10 @@ export function useQuickGenSubmit({
     } finally {
       setIsInterrogating(false);
     }
+  };
+
+  const handleRemoveCheckpoint = () => {
+    setAttachedCheckpoint(null);
   };
 
   const handleRemoveCharacter = () => {
@@ -531,6 +553,7 @@ export function useQuickGenSubmit({
         triggerWord,
         negativePrompt: '',
         loras: selectedLoras,
+        checkpointName: attachedCheckpoint || undefined,
         seriesId: isMultiShotSet ? null : activeSeriesId,
         branchFromImageId: isMultiShotSet ? null : branchFromImageId,
         chatSnapshot: snapshotForBatch,
@@ -563,6 +586,7 @@ export function useQuickGenSubmit({
       setBranchFromImageId(null);
       setAgentEnabled(false);
       setAttachedCharacter(null);
+      setAttachedCheckpoint(null);
       setAttachedLoras([]);
       setRemovedLoraKeys(new Set());
       setAspectRatio(workflowDefaultAr);
@@ -653,6 +677,7 @@ export function useQuickGenSubmit({
   const handleClearBox = (onAfterReset?: () => void) => {
     setPrompt('');
     setAttachedCharacter(null);
+    setAttachedCheckpoint(null);
     setAttachedLoras([]);
     setRemovedLoraKeys(new Set());
     setChatMessages([]);
@@ -711,6 +736,8 @@ export function useQuickGenSubmit({
     setBatchCount,
     attachedCharacter,
     setAttachedCharacter,
+    attachedCheckpoint,
+    setAttachedCheckpoint,
     attachedLoras,
     setAttachedLoras,
     setRemovedLoraKeys,
@@ -726,6 +753,7 @@ export function useQuickGenSubmit({
     workflowDefaultMp,
     handleInterrogateImageFile,
     handleRemoveCharacter,
+    handleRemoveCheckpoint,
     handleRemoveLora,
     handleUpdateLoraStrength,
     handleClearBox,

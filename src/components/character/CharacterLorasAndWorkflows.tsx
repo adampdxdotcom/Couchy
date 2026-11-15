@@ -4,14 +4,20 @@ import type {
   CharacterProfile,
   ImageRecord,
   LoraExplorerItem,
+  ModelInventoryItem,
 } from '../../shared/types.ts';
-import { CharacterFavoriteAddonsCard } from './CharacterFavoriteAddonsCard.tsx';
+import {
+  CharacterFavoriteAddonsCard,
+  type CharacterNewImagePayload,
+} from './CharacterFavoriteAddonsCard.tsx';
 
 interface CharacterLorasAndWorkflowsProps {
   character: CharacterProfile;
   allCharacters: CharacterProfile[];
   confirmedImages: ImageRecord[];
   loras: LoraExplorerItem[];
+  models?: ModelInventoryItem[];
+  defaultCheckpoint?: string | null;
   collections: { id: number; name: string }[];
   onRefresh: () => Promise<void>;
   onSelectCharacter?: (characterId: number) => void;
@@ -19,10 +25,7 @@ interface CharacterLorasAndWorkflowsProps {
     characterId: number,
     filter: { checkpoint?: string; loraName?: string }
   ) => void;
-  onSeedQuickGenAddon?: (
-    character: CharacterProfile,
-    addon: { loraName: string; modelStrength: number; clipStrength: number }
-  ) => void;
+  onLaunchNewImage?: (payload: CharacterNewImagePayload) => void;
 }
 
 export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProps> = ({
@@ -30,11 +33,13 @@ export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProp
   allCharacters,
   confirmedImages,
   loras,
+  models = [],
+  defaultCheckpoint = null,
   collections,
   onRefresh,
   onSelectCharacter,
   onFilterGalleryByAddon,
-  onSeedQuickGenAddon,
+  onLaunchNewImage,
 }) => {
   const [linkLoraName, setLinkLoraName] = useState('');
   const [linkLoraAppearance, setLinkLoraAppearance] = useState('Default');
@@ -173,11 +178,13 @@ export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProp
         allCharacters={allCharacters}
         confirmedImages={confirmedImages}
         loras={loras}
+        models={models}
+        defaultCheckpoint={defaultCheckpoint}
         collections={collections}
         onRefresh={onRefresh}
         onSelectCharacter={onSelectCharacter}
         onFilterGalleryByAddon={onFilterGalleryByAddon}
-        onSeedQuickGenAddon={onSeedQuickGenAddon}
+        onLaunchNewImage={onLaunchNewImage}
       />
     </div>
   );

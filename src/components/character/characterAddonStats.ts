@@ -3,6 +3,7 @@ import type {
   ImageRecord,
   LoraCategory,
   LoraExplorerItem,
+  ModelInventoryItem,
   PortraitCrop,
 } from '../../shared/types.ts';
 import { normalizeLoraKey } from '../quickgen/quickGenUtils.ts';
@@ -16,6 +17,7 @@ export interface FavoriteBaseModelItem {
   sharePercent: number;
   avgRating: number;
   favoriteCount: number;
+  isInstalled: boolean;
 }
 
 export interface FavoriteAddonLoraItem {
@@ -84,17 +86,37 @@ export function computeCharacterAddonStats(params: {
   confirmedImages: ImageRecord[];
   allCharacters: CharacterProfile[];
   allLoras: LoraExplorerItem[];
+  allModels?: ModelInventoryItem[];
+  defaultCheckpoint?: string | null;
   sortMode: AddonSortMode;
 }): {
   baseModels: FavoriteBaseModelItem[];
   addonLoras: FavoriteAddonLoraItem[];
   friends: CharacterFriendItem[];
 } {
-  const { character, confirmedImages, allCharacters, allLoras, sortMode } = params;
+  const {
+    character,
+    confirmedImages,
+    allCharacters,
+    allLoras,
+    allModels = [],
+    defaultCheckpoint,
+    sortMode,
+  } = params;
   const totalImages = confirmedImages.length;
 
   // Build normalized lookup maps
   const ownLoraKeys = new Set(character.loras.map((l) => normalizeLoraKey(l.loraName)).filter(Boolean));
+
+  const modelByKey = new Map<string, ModelInventoryItem>();
+  for (const m of allModels) {
+    if (m.modelType === 'lora') continue;
+    const k1 = normalizeLoraKey(m.filename);
+    const k2 = normalizeLoraKey(m.name);
+    if (k1 && !modelByKey.has(k1)) modelByKey.set(k1, m);
+    if (k2 && !modelByKey.has(k2)) modelByKey.set(k2, m);
+  }
+  const defaultCkptKey = defaultCheckpoint ? normalizeLoraKey(defaultCheckpoint) : '';
 
   const explorerByKey = new Map<string, LoraExplorerItem>();
   for (const item of allLoras) {
@@ -261,14 +283,21 @@ export function computeCharacterAddonStats(params: {
   }
 
   const baseModels: FavoriteBaseModelItem[] = Array.from(baseModelAcc.entries())
-    .map(([key, item]) => ({
-      key,
-      name: item.name,
-      count: item.count,
-      sharePercent: totalImages > 0 ? Math.round((item.count / totalImages) * 100) : 0,
-      avgRating: item.ratedCount > 0 ? Math.round((item.ratingSum / item.ratedCount) * 10) / 10 : 0,
-      favoriteCount: item.favoriteCount,
-    }))
+    .map(([key, item]) => {
+      const matchedModel = modelByKey.get(key);
+      const isInstalled = matchedModel
+        ? Boolean(matchedModel.isInstalled)
+        : allModels.length === 0 || (Boolean(defaultCkptKey) && key === defaultCkptKey);
+      return {
+        key,
+        name: matchedModel?.filename || item.name,
+        count: item.count,
+        sharePercent: totalImages > 0 ? Math.round((item.count / totalImages) * 100) : 0,
+        avgRating: item.ratedCount > 0 ? Math.round((item.ratingSum / item.ratedCount) * 10) / 10 : 0,
+        favoriteCount: item.favoriteCount,
+        isInstalled,
+      };
+    })
     .sort((a, b) => compareBySortMode(a, b, a.name, b.name, sortMode));
 
   const addonLoras: FavoriteAddonLoraItem[] = Array.from(addonAcc.entries())

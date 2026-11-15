@@ -4,12 +4,15 @@ import type {
   CharacterProfile,
   ImageRecord,
   LoraExplorerItem,
+  ModelInventoryItem,
   QueuedGhostCardItem,
   WorkflowLibraryItem,
 } from '../shared/types.ts';
+import { resolveDefaultWorkflow } from '../shared/utils.ts';
 import { CharacterRosterView } from './character/CharacterRosterView.tsx';
 import { CharacterProfileHeader } from './character/CharacterProfileHeader.tsx';
 import { CharacterLorasAndWorkflows } from './character/CharacterLorasAndWorkflows.tsx';
+import type { CharacterNewImagePayload } from './character/CharacterFavoriteAddonsCard.tsx';
 import { CharacterSuggestionsReview } from './character/CharacterSuggestionsReview.tsx';
 import { CharacterGallerySection } from './character/CharacterGallerySection.tsx';
 import { CreateCharacterModal } from './character/CreateCharacterModal.tsx';
@@ -20,6 +23,7 @@ interface CharacterExplorerViewProps {
   allImages: ImageRecord[];
   ghostItems?: QueuedGhostCardItem[];
   loras: LoraExplorerItem[];
+  models?: ModelInventoryItem[];
   workflows: WorkflowLibraryItem[];
   collections: { id: number; name: string }[];
   selectedCharacterId?: number | null;
@@ -30,10 +34,7 @@ interface CharacterExplorerViewProps {
     charId: number,
     addonFilter?: { checkpoint?: string; loraName?: string }
   ) => void;
-  onSeedQuickGenAddon?: (
-    character: CharacterProfile,
-    addon: { loraName: string; modelStrength: number; clipStrength: number }
-  ) => void;
+  onLaunchNewImage?: (payload: CharacterNewImagePayload) => void;
   onQuickRate: (id: number, rating: number) => void;
   onQuickFavorite?: (id: number, nextFav: boolean) => void;
   onReusePrompt?: (img: ImageRecord) => void;
@@ -50,6 +51,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   allImages,
   ghostItems = [],
   loras,
+  models = [],
   workflows,
   collections,
   selectedCharacterId: controlledCharId,
@@ -57,7 +59,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   onRefresh,
   onOpenImage,
   onFilterGalleryByCharacter,
-  onSeedQuickGenAddon,
+  onLaunchNewImage,
   onQuickRate,
   onQuickFavorite,
   onReusePrompt,
@@ -201,6 +203,8 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
           allCharacters={characters}
           confirmedImages={confirmedImages}
           loras={loras}
+          models={models}
+          defaultCheckpoint={resolveDefaultWorkflow(workflows)?.defaultCheckpoint ?? null}
           collections={collections}
           onRefresh={onRefresh}
           onSelectCharacter={(friendId) => {
@@ -208,7 +212,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           onFilterGalleryByAddon={(charId, filter) => onFilterGalleryByCharacter(charId, filter)}
-          onSeedQuickGenAddon={onSeedQuickGenAddon}
+          onLaunchNewImage={onLaunchNewImage}
         />
 
         <CharacterSuggestionsReview

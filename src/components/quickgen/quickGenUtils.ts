@@ -3,19 +3,28 @@ import type {
   ImageLoraRecord,
   ImageRecord,
   LoraExplorerItem,
+  PortraitCrop,
   QuickGenChatMessage,
 } from '../../shared/types.ts';
+
+export const MAX_SYSTEM_LORAS = 5;
 
 export interface QuickGenPrefillLora {
   loraName: string;
   modelStrength?: number;
   clipStrength?: number;
   showPill?: boolean;
+  triggerWord?: string;
+  nickname?: string;
+  isCharacterPill?: boolean;
+  portraitThumbnailUrl?: string | null;
+  portraitCrop?: PortraitCrop | null;
 }
 
 export interface QuickGenPrefill {
   prompt: string;
   character?: CharacterProfile | null;
+  checkpointName?: string | null;
   loras?: Array<ImageLoraRecord | QuickGenPrefillLora>;
   excludedLoras?: string[];
   aspectRatio?: string;
@@ -63,14 +72,25 @@ export function getCleanLoraLabel(
   return (lora.loraName || lora.filename || 'LoRA').replace(/\.(safetensors|pt|ckpt)$/i, '');
 }
 
-/** Normalizes a LoRA filename/path to a lowercase base key without extension. */
+/** Returns the clean display label for a base model / checkpoint filename. */
+export function getCleanModelLabel(name?: string | null): string {
+  if (!name) return 'Default Model';
+  return name
+    .trim()
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()!
+    .replace(/\.(safetensors|pt|ckpt|pth|bin|gguf|sft)$/i, '');
+}
+
+/** Normalizes a LoRA or model filename/path to a lowercase base key without extension. */
 export function normalizeLoraKey(name: string): string {
   return name
     .trim()
     .replace(/\\/g, '/')
     .split('/')
     .pop()!
-    .replace(/\.(safetensors|pt|ckpt)$/i, '')
+    .replace(/\.(safetensors|pt|ckpt|pth|bin|gguf|sft)$/i, '')
     .toLowerCase();
 }
 

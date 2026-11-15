@@ -894,6 +894,7 @@ export default function App() {
             allImages={allImages}
             ghostItems={activeGhostItems}
             loras={visibleLoras}
+            models={models}
             workflows={workflows}
             collections={collections}
             selectedCharacterId={selectedCharacterId}
@@ -910,22 +911,25 @@ export default function App() {
               });
               setActiveTab('gallery');
             }}
-            onSeedQuickGenAddon={(char, addon) => {
+            onLaunchNewImage={({ character: char, checkpointName, loras: pickedLoras }) => {
               setQuickGenPrefill({
                 prompt: '',
                 character: char,
-                loras: [
-                  {
-                    loraName: addon.loraName,
-                    modelStrength: addon.modelStrength,
-                    clipStrength: addon.clipStrength,
-                    showPill: true,
-                  },
-                ],
+                checkpointName: checkpointName || null,
+                loras: pickedLoras,
                 batchCount: 1,
                 timestamp: Date.now(),
               });
-              pushToast(`Prepared ${char.name} + addon LoRA in Quick Gen`, 'success');
+              const extraParts = [
+                checkpointName ? 'base model' : null,
+                pickedLoras.length > 0 ? `${pickedLoras.length} LoRA(s)` : null,
+              ].filter(Boolean);
+              pushToast(
+                extraParts.length > 0
+                  ? `Prepared ${char.name} + ${extraParts.join(' + ')} in Quick Gen`
+                  : `Prepared ${char.name} in Quick Gen`,
+                'success'
+              );
             }}
             onReusePrompt={handleReusePrompt}
             onOpenConversation={handleOpenConversationForImage}

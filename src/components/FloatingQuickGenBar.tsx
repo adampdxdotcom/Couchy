@@ -261,8 +261,10 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
             <QuickGenAttachmentsBar
               attachedCharacter={submitState.attachedCharacter}
+              attachedCheckpoint={submitState.attachedCheckpoint}
               attachedLoras={submitState.attachedLoras}
               onRemoveCharacter={submitState.handleRemoveCharacter}
+              onRemoveCheckpoint={submitState.handleRemoveCheckpoint}
               onRemoveLora={submitState.handleRemoveLora}
               onUpdateLoraStrength={submitState.handleUpdateLoraStrength}
             />
@@ -337,6 +339,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               />
               {(submitState.prompt.length > 0 ||
                 Boolean(submitState.attachedCharacter) ||
+                Boolean(submitState.attachedCheckpoint) ||
                 submitState.attachedLoras.length > 0 ||
                 submitState.chatMessages.length > 0) && (
                 <button
