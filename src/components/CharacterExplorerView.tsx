@@ -73,7 +73,6 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
     setInternalCharId(nextId);
     onSelectCharacterId?.(nextId);
   };
-  const [isHighestRatedExpanded, setIsHighestRatedExpanded] = useState(false);
   const [optimisticPortraitId, setOptimisticPortraitId] = useState<number | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showMergeModal, setShowMergeModal] = useState(false);
@@ -81,7 +80,6 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   const [selectedSuggestedIds, setSelectedSuggestedIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
-    setIsHighestRatedExpanded(false);
     setOptimisticPortraitId(null);
     setSelectedSuggestedIds(new Set());
   }, [selectedCharId]);
@@ -163,11 +161,8 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
       .sort((a, b) => b.rating - a.rating);
 
     // Target pool for Highest Rated: 5-star photos if any exist, otherwise 4+ star photos
-    const targetHighestRatedPool = fiveStarImages.length > 0 ? fiveStarImages : fourStarOrHigher;
-    const canExpandHighestRated = targetHighestRatedPool.length > 6;
-    const displayedHighestRated = isHighestRatedExpanded
-      ? targetHighestRatedPool
-      : targetHighestRatedPool.slice(0, 6);
+    const usesFiveStarOnly = fiveStarImages.length > 0;
+    const targetHighestRatedPool = usesFiveStarOnly ? fiveStarImages : fourStarOrHigher;
 
     const activePortraitId = optimisticPortraitId ?? selectedCharacter.portraitImageId;
     const isOptimisticSwitch =
@@ -185,6 +180,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
         <CharacterProfileHeader
           character={selectedCharacter}
           confirmedImages={confirmedImages}
+          loras={loras}
           currentPortraitThumb={currentPortraitThumb}
           currentPortraitCrop={currentPortraitCrop}
           onBack={() => setSelectedCharId(null)}
@@ -202,6 +198,9 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
           character={selectedCharacter}
           allCharacters={characters}
           confirmedImages={confirmedImages}
+          highestRatedImages={targetHighestRatedPool}
+          usesFiveStarOnly={usesFiveStarOnly}
+          activePortraitId={activePortraitId}
           loras={loras}
           models={models}
           defaultCheckpoint={resolveDefaultWorkflow(workflows)?.defaultCheckpoint ?? null}
@@ -213,6 +212,13 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
           }}
           onFilterGalleryByAddon={(charId, filter) => onFilterGalleryByCharacter(charId, filter)}
           onLaunchNewImage={onLaunchNewImage}
+          onOpenImage={onOpenImage}
+          onQuickRate={onQuickRate}
+          onQuickFavorite={onQuickFavorite}
+          onSetPortrait={handleSetPortrait}
+          onReusePrompt={onReusePrompt}
+          onOpenConversation={onOpenConversation}
+          onQuickReject={onQuickReject}
         />
 
         <CharacterSuggestionsReview
@@ -231,26 +237,6 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
           onOpenImage={onOpenImage}
           onRefresh={onRefresh}
         />
-
-        {displayedHighestRated.length > 0 && (
-          <CharacterGallerySection
-            title="Highest-Rated Generations"
-            images={displayedHighestRated}
-            character={selectedCharacter}
-            activePortraitId={activePortraitId}
-            onOpenImage={onOpenImage}
-            onQuickRate={onQuickRate}
-            onQuickFavorite={onQuickFavorite}
-            onSetPortrait={handleSetPortrait}
-            onReusePrompt={onReusePrompt}
-            onOpenConversation={onOpenConversation}
-            onQuickReject={onQuickReject}
-            isExpandable={canExpandHighestRated}
-            isExpanded={isHighestRatedExpanded}
-            onToggleExpand={() => setIsHighestRatedExpanded((prev) => !prev)}
-            totalPoolCount={targetHighestRatedPool.length}
-          />
-        )}
 
         <CharacterGallerySection
           title={`All Confirmed Images (${confirmedImages.length})`}

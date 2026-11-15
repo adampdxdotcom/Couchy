@@ -2,19 +2,27 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft,
   Download,
+  Layers,
   Loader2,
   Pencil,
+  Plus,
   ScanFace,
   Trash2,
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
-import type { CharacterProfile, ImageRecord, PortraitCrop } from '../../shared/types.ts';
+import type {
+  CharacterProfile,
+  ImageRecord,
+  LoraExplorerItem,
+  PortraitCrop,
+} from '../../shared/types.ts';
 import { CharacterPortraitImage } from './CharacterPortraitImage.tsx';
 import { PortraitCropModal } from './PortraitCropModal.tsx';
 
 interface CharacterProfileHeaderProps {
   character: CharacterProfile;
   confirmedImages: ImageRecord[];
+  loras?: LoraExplorerItem[];
   currentPortraitThumb: string | null;
   currentPortraitCrop?: PortraitCrop | null;
   onBack: () => void;
@@ -27,6 +35,7 @@ interface CharacterProfileHeaderProps {
 export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
   character,
   confirmedImages,
+  loras = [],
   currentPortraitThumb,
   currentPortraitCrop,
   onBack,
@@ -42,6 +51,9 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
   const [isAnalyzingPortrait, setIsAnalyzingPortrait] = useState(false);
   const [analyzeStatus, setAnalyzeStatus] = useState<string | null>(null);
   const [showCropModal, setShowCropModal] = useState(false);
+  const [showLinkLoraForm, setShowLinkLoraForm] = useState(false);
+  const [linkLoraName, setLinkLoraName] = useState('');
+  const [linkLoraTriggerWord, setLinkLoraTriggerWord] = useState('');
 
   useEffect(() => {
     setPersonalityInput(character.description);
@@ -54,6 +66,12 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
   useEffect(() => {
     setNotesInput(character.notes);
   }, [character.id, character.notes]);
+
+  useEffect(() => {
+    setShowLinkLoraForm(false);
+    setLinkLoraName('');
+    setLinkLoraTriggerWord('');
+  }, [character.id]);
 
   const handleAnalyzePortrait = async () => {
     if (isAnalyzingPortrait) return;
@@ -151,7 +169,7 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
               </button>
             )}
           </div>
-          <div className="text-xs text-zinc-400 space-y-1 font-mono tabular-nums">
+          <div className="text-xs text-zinc-400 space-y-1 font-mono tabular-nums w-full text-center lg:text-left">
             <div>Confirmed Images: {character.confirmedImageCount}</div>
             <div>Pending Suggestions: {character.suggestedImageCount}</div>
             <div>Avg Rating: ★ {character.averageRating}</div>
@@ -160,6 +178,136 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
             )}
             {character.latestGenerationDate && (
               <div>Latest Gen: {character.latestGenerationDate.slice(0, 10)}</div>
+            )}
+          </div>
+
+          {/* Linked Character LoRA(s) */}
+          <div className="w-full pt-2 border-t border-zinc-800/80 space-y-2 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-zinc-300">
+                <Layers className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span>Character LoRA ({character.loras.length})</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowLinkLoraForm((prev) => !prev)}
+                className="inline-flex items-center gap-1 text-[11px] text-indigo-400 hover:text-indigo-300 cursor-pointer"
+                title={showLinkLoraForm ? 'Close LoRA linker' : 'Link a character LoRA'}
+              >
+                <Plus className="w-3 h-3" />
+                <span>{showLinkLoraForm ? 'Close' : 'Link'}</span>
+              </button>
+            </div>
+
+            {character.loras.length === 0 && !showLinkLoraForm && (
+              <div className="text-[11px] text-zinc-500">No linked LoRA yet.</div>
+            )}
+
+            {character.loras.map((l) => (
+              <div
+                key={l.id}
+                className="bg-zinc-950/90 border border-zinc-800 rounded-lg p-2.5 space-y-1.5 min-w-0"
+              >
+                <div className="flex items-start justify-between gap-2 min-w-0">
+                  <div className="min-w-0 flex-1">
+                    <div
+                      className="font-mono text-[11px] text-zinc-200 truncate"
+                      title={l.loraName}
+                    >
+                      {l.loraName}
+                    </div>
+                    <div className="text-[10px] text-zinc-400">
+                      <span className={l.isInstalled ? 'text-emerald-400' : 'text-amber-400'}>
+                        {l.isInstalled ? 'Installed' : 'Missing'}
+                      </span>
+                      {l.appearanceLabel && l.appearanceLabel !== 'Default'
+                        ? ` · ${l.appearanceLabel}`
+                        : ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await api.unlinkLoraFromCharacter(character.id, l.id);
+                      await onRefresh();
+                    }}
+                    className="text-[11px] text-zinc-500 hover:text-rose-400 cursor-pointer shrink-0"
+                  >
+                    Unlink
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1.5 pt-1 border-t border-zinc-900 min-w-0">
+                  <span className="text-[10px] text-zinc-500 whitespace-nowrap shrink-0">
+                    Trigger:
+                  </span>
+                  <input
+                    key={`${character.id}-${l.id}-${l.triggerWord || ''}`}
+                    type="text"
+                    defaultValue={l.triggerWord || ''}
+                    placeholder="e.g. xmelx"
+                    onBlur={async (e) => {
+                      const nextTrig = e.target.value.trim();
+                      if (nextTrig === (l.triggerWord || '')) return;
+                      await api.linkLoraToCharacter(character.id, {
+                        loraName: l.loraName,
+                        appearanceLabel: l.appearanceLabel,
+                        triggerWord: nextTrig,
+                        loraCategory: 'character',
+                        notes: l.notes,
+                      });
+                      await onRefresh();
+                    }}
+                    className="flex-1 min-w-0 px-2 py-0.5 text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded text-indigo-200 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+            ))}
+
+            {showLinkLoraForm && (
+              <div className="bg-zinc-950/90 border border-zinc-800 rounded-lg p-2.5 space-y-2">
+                <input
+                  type="text"
+                  list="profile-known-loras-datalist"
+                  value={linkLoraName}
+                  onChange={(e) => setLinkLoraName(e.target.value)}
+                  placeholder="LoRA filename..."
+                  className="w-full min-w-0 px-2 py-1 text-[11px] bg-zinc-900 border border-zinc-800 rounded text-zinc-200"
+                />
+                <datalist id="profile-known-loras-datalist">
+                  {loras.map((l) => (
+                    <option key={l.filename} value={l.filename} />
+                  ))}
+                </datalist>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={linkLoraTriggerWord}
+                    onChange={(e) => setLinkLoraTriggerWord(e.target.value)}
+                    placeholder="Trigger word..."
+                    className="flex-1 min-w-0 px-2 py-1 text-[11px] font-mono bg-zinc-900 border border-zinc-800 rounded text-zinc-200"
+                  />
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!linkLoraName.trim()) return;
+                      await api.linkLoraToCharacter(character.id, {
+                        loraName: linkLoraName.trim(),
+                        appearanceLabel: 'Default',
+                        triggerWord: linkLoraTriggerWord.trim(),
+                        loraCategory: 'character',
+                      });
+                      setLinkLoraName('');
+                      setLinkLoraTriggerWord('');
+                      setShowLinkLoraForm(false);
+                      await onRefresh();
+                    }}
+                    className="px-2.5 py-1 text-[11px] bg-indigo-600 hover:bg-indigo-500 text-white rounded cursor-pointer shrink-0"
+                  >
+                    Link
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         </div>
