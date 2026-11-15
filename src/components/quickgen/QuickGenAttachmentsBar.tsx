@@ -1,6 +1,7 @@
 import React from 'react';
-import { Layers, User, X } from 'lucide-react';
+import { Layers, X } from 'lucide-react';
 import type { CharacterProfile, GenerationLoraSelection } from '../../shared/types.ts';
+import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
 import { getCleanLoraLabel } from './quickGenUtils.ts';
 
 interface QuickGenAttachmentsBarProps {
@@ -27,15 +28,12 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
       {attachedCharacter && (
         <div className="inline-flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full bg-indigo-950/70 border border-indigo-500/40 text-xs text-indigo-200 shadow-sm">
           <div className="w-5 h-5 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
-            {attachedCharacter.portraitThumbnailUrl ? (
-              <img
-                src={attachedCharacter.portraitThumbnailUrl}
-                alt={attachedCharacter.name}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <User className="w-3 h-3 text-indigo-300" />
-            )}
+            <CharacterPortraitImage
+              src={attachedCharacter.portraitThumbnailUrl}
+              alt={attachedCharacter.name}
+              crop={attachedCharacter.portraitCrop}
+              iconClassName="w-3 h-3 text-indigo-300"
+            />
           </div>
           <span className="font-medium">{attachedCharacter.name}</span>
           {attachedCharacter.loras[0]?.triggerWord && (

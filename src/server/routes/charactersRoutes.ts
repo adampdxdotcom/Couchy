@@ -12,6 +12,7 @@ import {
   runAssistedCharacterIdentificationForAll,
 } from '../services/characterService.ts';
 import { analyzeCharacterPortraitPhysicalTraits } from '../services/lmStudioService.ts';
+import { normalizePortraitCrop } from '../../shared/utils.ts';
 
 export const charactersRouter = Router();
 
@@ -119,6 +120,7 @@ const updateCharacterHandler = (req: any, res: any) => {
       physicalDescription,
       notes,
       portraitImageId,
+      portraitCrop,
       aliases,
       tagIds,
       collectionIds,
@@ -126,12 +128,15 @@ const updateCharacterHandler = (req: any, res: any) => {
 
     let portraitId = existing.portrait_image_id;
     let portraitHash = existing.portrait_content_hash;
+    let portraitChanged = false;
     if (portraitImageId !== undefined) {
       if (portraitImageId === null) {
+        portraitChanged = existing.portrait_image_id !== null || existing.portrait_content_hash !== null;
         portraitId = null;
         portraitHash = null;
       } else {
         portraitId = Number(portraitImageId);
+        portraitChanged = portraitId !== existing.portrait_image_id;
         const img = db
           .prepare('SELECT content_hash FROM images WHERE id = ?')
           .get(portraitId) as { content_hash: string } | undefined;
@@ -152,9 +157,22 @@ const updateCharacterHandler = (req: any, res: any) => {
       }
     }
 
+    let nextPortraitCropJson: string | null = existing.portrait_crop_json ?? null;
+    if (portraitCrop !== undefined) {
+      if (portraitCrop === null) {
+        nextPortraitCropJson = null;
+      } else {
+        const normalized = normalizePortraitCrop(portraitCrop);
+        nextPortraitCropJson = normalized ? JSON.stringify(normalized) : null;
+      }
+    } else if (portraitChanged) {
+      // Reset framing automatically when assigning a different portrait image
+      nextPortraitCropJson = null;
+    }
+
     db.prepare(
       `UPDATE characters
-       SET name = ?, description = ?, physical_description = ?, notes = ?, portrait_image_id = ?, portrait_content_hash = ?,
+       SET name = ?, description = ?, physical_description = ?, notes = ?, portrait_image_id = ?, portrait_content_hash = ?, portrait_crop_json = ?,
            updated_at = datetime('now')
        WHERE id = ?`
     ).run(
@@ -166,6 +184,7 @@ const updateCharacterHandler = (req: any, res: any) => {
       notes !== undefined ? String(notes) : existing.notes,
       portraitId,
       portraitHash,
+      nextPortraitCropJson,
       charId
     );
 

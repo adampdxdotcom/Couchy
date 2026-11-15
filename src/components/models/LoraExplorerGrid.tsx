@@ -1,6 +1,7 @@
 import React from 'react';
 import { ExternalLink, Eye, EyeOff, Layers } from 'lucide-react';
-import type { LoraExplorerItem } from '../../shared/types.ts';
+import type { LoraExplorerItem, PortraitCrop } from '../../shared/types.ts';
+import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
 
 export interface LoraExplorerListProps {
   loras: LoraExplorerItem[];
@@ -15,15 +16,34 @@ export interface LoraExplorerListProps {
 }
 
 /**
+ * Resolves the cover thumbnail URL and optional character portrait crop for a LoRA,
+ * prioritizing linked character portraits when classified as a character LoRA.
+ */
+export function getLoraCoverInfo(lora: LoraExplorerItem): {
+  url: string | null;
+  crop: PortraitCrop | null;
+} {
+  if (lora.loraCategory === 'character') {
+    const charMatch = lora.characters.find((c) => c.portraitThumbnailUrl);
+    if (charMatch?.portraitThumbnailUrl) {
+      return {
+        url: charMatch.portraitThumbnailUrl,
+        crop: charMatch.portraitCrop ?? null,
+      };
+    }
+  }
+  return {
+    url: lora.previewImages?.[0]?.url || null,
+    crop: null,
+  };
+}
+
+/**
  * Resolves the cover thumbnail URL for a LoRA, prioritizing linked character portraits
  * when classified as a character LoRA.
  */
 export function getLoraCoverUrl(lora: LoraExplorerItem): string | null {
-  if (lora.loraCategory === 'character') {
-    const charPortrait = lora.characters.find((c) => c.portraitThumbnailUrl)?.portraitThumbnailUrl;
-    if (charPortrait) return charPortrait;
-  }
-  return lora.previewImages?.[0]?.url || null;
+  return getLoraCoverInfo(lora).url;
 }
 
 /**
@@ -40,7 +60,7 @@ export const LoraExplorerGrid: React.FC<LoraExplorerListProps> = ({
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
       {loras.map((l) => {
-        const coverUrl = getLoraCoverUrl(l);
+        const { url: coverUrl, crop: coverCrop } = getLoraCoverInfo(l);
         const hasThumb = Boolean(coverUrl && !brokenThumbs[coverUrl]);
 
         return (
@@ -55,15 +75,17 @@ export const LoraExplorerGrid: React.FC<LoraExplorerListProps> = ({
               {/* Preview Thumbnail Header */}
               <div className="relative aspect-[4/3] bg-zinc-950 border-b border-zinc-800 overflow-hidden">
                 {hasThumb ? (
-                  <img
-                    src={coverUrl!}
-                    alt={l.name}
-                    className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
-                    loading="lazy"
-                    onError={() => {
-                      if (coverUrl) onMarkBrokenThumb(coverUrl);
-                    }}
-                  />
+                  <div className="w-full h-full group-hover:scale-[1.02] transition-transform duration-200">
+                    <CharacterPortraitImage
+                      src={coverUrl!}
+                      alt={l.name}
+                      crop={coverCrop}
+                      loading="lazy"
+                      onError={() => {
+                        if (coverUrl) onMarkBrokenThumb(coverUrl);
+                      }}
+                    />
+                  </div>
                 ) : (
                   <div className="w-full h-full flex flex-col items-center justify-center gap-1.5 text-zinc-600 bg-gradient-to-br from-zinc-950 via-zinc-900/90 to-zinc-950">
                     <Layers className="w-6 h-6 text-zinc-700" />

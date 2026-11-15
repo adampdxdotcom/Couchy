@@ -15,6 +15,7 @@ import {
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
 import type { ImageRecord, LoraCategory, LoraExplorerItem } from '../shared/types.ts';
+import { CharacterPortraitImage } from './character/CharacterPortraitImage.tsx';
 
 interface LoraDetailViewProps {
   lora: LoraExplorerItem;
@@ -73,10 +74,11 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
     .slice(0, 6);
 
   const previews = lora.previewImages || [];
-  const characterPortraitUrl =
+  const characterPortrait =
     lora.loraCategory === 'character'
-      ? lora.characters.find((c) => c.portraitThumbnailUrl)?.portraitThumbnailUrl || null
+      ? lora.characters.find((c) => c.portraitThumbnailUrl) || null
       : null;
+  const characterPortraitUrl = characterPortrait?.portraitThumbnailUrl || null;
   const hasRecommendedDiff =
     lora.recommendedWeight !== null &&
     lora.recommendedWeight !== undefined &&
@@ -174,10 +176,10 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
                 className="w-16 h-16 rounded-xl overflow-hidden border border-zinc-700 hover:border-indigo-500/70 bg-zinc-950 shrink-0 cursor-pointer transition-colors"
                 title="View linked character portrait"
               >
-                <img
+                <CharacterPortraitImage
                   src={characterPortraitUrl}
                   alt={lora.name}
-                  className="w-full h-full object-cover"
+                  crop={characterPortrait?.portraitCrop}
                 />
               </button>
             )}
@@ -296,11 +298,13 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
                 className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-950 border border-zinc-800 text-zinc-200"
               >
                 {c.portraitThumbnailUrl && (
-                  <img
-                    src={c.portraitThumbnailUrl}
-                    alt={c.name}
-                    className="w-4 h-4 rounded object-cover shrink-0"
-                  />
+                  <span className="w-4 h-4 rounded overflow-hidden shrink-0 inline-flex">
+                    <CharacterPortraitImage
+                      src={c.portraitThumbnailUrl}
+                      alt={c.name}
+                      crop={c.portraitCrop}
+                    />
+                  </span>
                 )}
                 <span>
                   {c.name} ({c.appearanceLabel})

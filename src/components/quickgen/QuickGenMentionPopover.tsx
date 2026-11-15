@@ -1,5 +1,6 @@
 import React from 'react';
 import { Layers, Search, User, X } from 'lucide-react';
+import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
 import { getCleanLoraLabel, type MentionEntry, type MentionTab } from './quickGenUtils.ts';
 
 interface QuickGenMentionPopoverProps {
@@ -121,14 +122,13 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                       <div className="w-full h-full bg-amber-500/10 flex items-center justify-center text-amber-400">
                         <Layers className="w-4 h-4" />
                       </div>
-                    ) : entry.thumbnailUrl ? (
-                      <img
+                    ) : (
+                      <CharacterPortraitImage
                         src={entry.thumbnailUrl}
                         alt={entry.title}
-                        className="w-full h-full object-cover"
+                        crop={entry.type === 'character' ? entry.character?.portraitCrop : null}
+                        iconClassName="w-4 h-4 text-zinc-500"
                       />
-                    ) : (
-                      <User className="w-4 h-4 text-zinc-500" />
                     )}
                   </div>
                   <div className="min-w-0 flex-1">
@@ -175,11 +175,22 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                     </div>
                   </div>
                 ) : highlightedEntry.thumbnailUrl ? (
-                  <img
-                    src={highlightedEntry.thumbnailUrl}
-                    alt={highlightedEntry.title}
-                    className="w-full h-full object-contain"
-                  />
+                  highlightedEntry.type === 'character' &&
+                  highlightedEntry.character?.portraitCrop &&
+                  highlightedEntry.thumbnailUrl === highlightedEntry.character.portraitThumbnailUrl ? (
+                    <CharacterPortraitImage
+                      src={highlightedEntry.thumbnailUrl}
+                      alt={highlightedEntry.title}
+                      crop={highlightedEntry.character.portraitCrop}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <img
+                      src={highlightedEntry.thumbnailUrl}
+                      alt={highlightedEntry.title}
+                      className="w-full h-full object-contain"
+                    />
+                  )
                 ) : (
                   <div className="flex flex-col items-center gap-2 text-zinc-500">
                     <User className="w-10 h-10 stroke-1" />

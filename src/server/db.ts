@@ -657,6 +657,13 @@ export function runMigrations(): void {
         ALTER TABLE characters ADD COLUMN physical_description TEXT NOT NULL DEFAULT '';
       `,
     },
+    {
+      version: 20,
+      name: 'character_portrait_crop',
+      sql: `
+        ALTER TABLE characters ADD COLUMN portrait_crop_json TEXT DEFAULT NULL;
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

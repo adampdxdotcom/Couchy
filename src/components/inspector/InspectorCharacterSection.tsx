@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Sparkles, User, XCircle } from 'lucide-react';
+import { CheckCircle2, Sparkles, XCircle } from 'lucide-react';
 import { api } from '../../api/client.ts';
 import type { CharacterProfile, ImageRecord } from '../../shared/types.ts';
+import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
 
 interface InspectorCharacterSectionProps {
   activeImage: ImageRecord;
@@ -94,16 +95,15 @@ export const InspectorCharacterSection: React.FC<InspectorCharacterSectionProps>
                     className="w-12 h-12 rounded-lg overflow-hidden bg-zinc-900 border border-zinc-800 shrink-0 flex items-center justify-center cursor-pointer hover:border-indigo-500/60 transition-colors"
                     title={`Filter gallery by ${ch.characterName}`}
                   >
-                    {charProfile?.portraitThumbnailUrl ? (
-                      <img
-                        src={charProfile.portraitThumbnailUrl}
+                    {
+                      <CharacterPortraitImage
+                        src={charProfile?.portraitThumbnailUrl}
                         alt={ch.characterName}
+                        crop={charProfile?.portraitCrop}
                         referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
+                        iconClassName="w-5 h-5 text-zinc-600"
                       />
-                    ) : (
-                      <User className="w-5 h-5 text-zinc-600" />
-                    )}
+                    }
                   </button>
 
                   <div className="min-w-0 flex-1">

@@ -3,17 +3,20 @@ import {
   ArrowLeft,
   Download,
   Loader2,
+  Pencil,
   ScanFace,
   Trash2,
-  User,
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
-import type { CharacterProfile, ImageRecord } from '../../shared/types.ts';
+import type { CharacterProfile, ImageRecord, PortraitCrop } from '../../shared/types.ts';
+import { CharacterPortraitImage } from './CharacterPortraitImage.tsx';
+import { PortraitCropModal } from './PortraitCropModal.tsx';
 
 interface CharacterProfileHeaderProps {
   character: CharacterProfile;
   confirmedImages: ImageRecord[];
   currentPortraitThumb: string | null;
+  currentPortraitCrop?: PortraitCrop | null;
   onBack: () => void;
   onFilterGallery: () => void;
   onDeleteProfile: () => Promise<void>;
@@ -25,6 +28,7 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
   character,
   confirmedImages,
   currentPortraitThumb,
+  currentPortraitCrop,
   onBack,
   onFilterGallery,
   onDeleteProfile,
@@ -37,6 +41,7 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
   const [notesInput, setNotesInput] = useState(character.notes);
   const [isAnalyzingPortrait, setIsAnalyzingPortrait] = useState(false);
   const [analyzeStatus, setAnalyzeStatus] = useState<string | null>(null);
+  const [showCropModal, setShowCropModal] = useState(false);
 
   useEffect(() => {
     setPersonalityInput(character.description);
@@ -127,15 +132,23 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
       {/* Profile Overview Banner */}
       <div className="bg-zinc-900 border border-zinc-800/80 rounded-xl p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 overflow-hidden">
         <div className="lg:col-span-3 min-w-0 flex flex-col items-center lg:items-start gap-3">
-          <div className="w-36 h-36 sm:w-40 sm:h-40 rounded-xl bg-zinc-950 border border-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
-            {currentPortraitThumb ? (
-              <img
-                src={currentPortraitThumb}
-                alt={character.name}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <User className="w-12 h-12 text-zinc-600" />
+          <div className="relative w-36 h-36 sm:w-40 sm:h-40 rounded-xl bg-zinc-950 border border-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+            <CharacterPortraitImage
+              src={currentPortraitThumb}
+              alt={character.name}
+              crop={currentPortraitCrop}
+              iconClassName="w-12 h-12 text-zinc-600"
+            />
+            {currentPortraitThumb && (
+              <button
+                type="button"
+                onClick={() => setShowCropModal(true)}
+                title="Adjust display framing & zoom (never alters original photo or LLM analysis)"
+                aria-label="Edit portrait framing"
+                className="absolute bottom-2 right-2 p-1.5 rounded-lg bg-zinc-950/85 hover:bg-indigo-600 border border-zinc-700/80 hover:border-indigo-400 text-zinc-200 hover:text-white shadow-md backdrop-blur-sm cursor-pointer transition-colors"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
             )}
           </div>
           <div className="text-xs text-zinc-400 space-y-1 font-mono tabular-nums">
@@ -279,6 +292,24 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
           </div>
         </div>
       </div>
+
+      {currentPortraitThumb && (
+        <PortraitCropModal
+          isOpen={showCropModal}
+          characterName={character.name}
+          portraitUrl={currentPortraitThumb}
+          initialCrop={currentPortraitCrop}
+          onClose={() => setShowCropModal(false)}
+          onSave={async (nextCrop) => {
+            await api.updateCharacter(character.id, { portraitCrop: nextCrop });
+            await onRefresh();
+            onPushToast?.(
+              nextCrop ? 'Saved portrait display framing' : 'Reset portrait framing to default',
+              'success'
+            );
+          }}
+        />
+      )}
     </>
   );
 };

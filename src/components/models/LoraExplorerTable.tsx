@@ -1,6 +1,7 @@
 import React from 'react';
 import { ExternalLink, Eye, EyeOff, Layers } from 'lucide-react';
-import { getLoraCoverUrl, type LoraExplorerListProps } from './LoraExplorerGrid.tsx';
+import { getLoraCoverInfo, type LoraExplorerListProps } from './LoraExplorerGrid.tsx';
+import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
 
 /**
  * Tabular LoRA Explorer view with inline @mention toggles, @nickname editing, and visibility controls.
@@ -38,7 +39,7 @@ export const LoraExplorerTable: React.FC<LoraExplorerListProps> = ({
         </thead>
         <tbody className="divide-y divide-zinc-800/70">
           {loras.map((l) => {
-            const coverUrl = getLoraCoverUrl(l);
+            const { url: coverUrl, crop: coverCrop } = getLoraCoverInfo(l);
             return (
               <tr
                 key={l.filename}
@@ -65,14 +66,16 @@ export const LoraExplorerTable: React.FC<LoraExplorerListProps> = ({
                 <td className="py-3 px-4 cursor-pointer" onClick={() => onSelectLora(l.filename)}>
                   <div className="flex items-center gap-3">
                     {coverUrl && !brokenThumbs[coverUrl] ? (
-                      <img
-                        src={coverUrl}
-                        alt={l.name}
-                        className="w-9 h-9 rounded object-cover border border-zinc-800 shrink-0"
-                        onError={() => {
-                          if (coverUrl) onMarkBrokenThumb(coverUrl);
-                        }}
-                      />
+                      <div className="w-9 h-9 rounded overflow-hidden border border-zinc-800 shrink-0">
+                        <CharacterPortraitImage
+                          src={coverUrl}
+                          alt={l.name}
+                          crop={coverCrop}
+                          onError={() => {
+                            if (coverUrl) onMarkBrokenThumb(coverUrl);
+                          }}
+                        />
+                      </div>
                     ) : (
                       <div className="w-9 h-9 rounded bg-zinc-950 border border-zinc-800 flex items-center justify-center text-zinc-700 shrink-0">
                         <Layers className="w-4 h-4" />

@@ -160,10 +160,15 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
       : targetHighestRatedPool.slice(0, 6);
 
     const activePortraitId = optimisticPortraitId ?? selectedCharacter.portraitImageId;
+    const isOptimisticSwitch =
+      optimisticPortraitId !== null && optimisticPortraitId !== selectedCharacter.portraitImageId;
     const currentPortraitThumb =
       (optimisticPortraitId
         ? allImages.find((i) => i.id === optimisticPortraitId)?.thumbnailUrl
         : null) || selectedCharacter.portraitThumbnailUrl;
+    const currentPortraitCrop = isOptimisticSwitch
+      ? null
+      : selectedCharacter.portraitCrop ?? null;
 
     return (
       <div className="px-3.5 sm:px-6 py-4 sm:py-6 w-full max-w-7xl mx-auto space-y-6 overflow-x-hidden">
@@ -171,6 +176,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
           character={selectedCharacter}
           confirmedImages={confirmedImages}
           currentPortraitThumb={currentPortraitThumb}
+          currentPortraitCrop={currentPortraitCrop}
           onBack={() => setSelectedCharId(null)}
           onFilterGallery={() => onFilterGalleryByCharacter(selectedCharacter.id)}
           onDeleteProfile={async () => {

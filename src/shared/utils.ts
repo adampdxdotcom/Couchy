@@ -532,3 +532,53 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
 
   return copied;
 }
+
+/**
+ * Validates and clamps a raw portrait framing payload into { x: 0..100, y: 0..100, zoom: 1..3 }.
+ */
+export function normalizePortraitCrop(raw: unknown): { x: number; y: number; zoom: number } | null {
+  if (!raw) return null;
+  let parsed: any = raw;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  const rawX = Number(parsed.x);
+  const rawY = Number(parsed.y);
+  const rawZoom = Number(parsed.zoom);
+  if (!Number.isFinite(rawX) || !Number.isFinite(rawY) || !Number.isFinite(rawZoom)) {
+    return null;
+  }
+
+  return {
+    x: Math.round(Math.min(100, Math.max(0, rawX)) * 10) / 10,
+    y: Math.round(Math.min(100, Math.max(0, rawY)) * 10) / 10,
+    zoom: Math.round(Math.min(3, Math.max(1, rawZoom)) * 100) / 100,
+  };
+}
+
+/**
+ * Builds non-destructive focal-point + zoom inline styles for portrait thumbnails.
+ */
+export function getPortraitImageStyle(crop?: { x: number; y: number; zoom: number } | null): {
+  objectPosition: string;
+  transformOrigin: string;
+  transform?: string;
+} | undefined {
+  if (!crop) return undefined;
+  const normalized = normalizePortraitCrop(crop);
+  if (!normalized) return undefined;
+  const pos = `${normalized.x}% ${normalized.y}%`;
+  return {
+    objectPosition: pos,
+    transformOrigin: pos,
+    transform: normalized.zoom > 1.001 ? `scale(${normalized.zoom})` : undefined,
+  };
+}

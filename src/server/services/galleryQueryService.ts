@@ -5,7 +5,7 @@ import {
   enrichSingleImageWithSeries,
 } from './seriesService.ts';
 import { parsePreviewImagesJson } from './civitaiMetadataService.ts';
-import { getCharacterPortraitThumbnailMap } from './characterService.ts';
+import { getCharacterPortraitMetadataMap } from './characterService.ts';
 import type {
   GalleryFilterState,
   ImageRecord,
@@ -712,7 +712,7 @@ export function listLoraExplorerItems(): LoraExplorerItem[] {
     )
     .all() as any[];
 
-  const portraitMap = getCharacterPortraitThumbnailMap();
+  const portraitMap = getCharacterPortraitMetadataMap();
 
   const getChars = db.prepare(`
     SELECT c.id, c.name, cl.appearance_label AS appearanceLabel
@@ -724,10 +724,14 @@ export function listLoraExplorerItems(): LoraExplorerItem[] {
   return rows.map((r) => {
     const linkedChars = (
       getChars.all(r.filename) as { id: number; name: string; appearanceLabel: string }[]
-    ).map((c) => ({
-      ...c,
-      portraitThumbnailUrl: portraitMap.get(c.id) ?? null,
-    }));
+    ).map((c) => {
+      const portraitInfo = portraitMap.get(c.id);
+      return {
+        ...c,
+        portraitThumbnailUrl: portraitInfo?.url ?? null,
+        portraitCrop: portraitInfo?.crop ?? null,
+      };
+    });
 
     return {
       name: r.name,

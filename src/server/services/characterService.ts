@@ -1,5 +1,6 @@
 import { db } from '../db.ts';
-import type { CharacterProfile, LoraCategory } from '../../shared/types.ts';
+import type { CharacterProfile, LoraCategory, PortraitCrop } from '../../shared/types.ts';
+import { normalizePortraitCrop } from '../../shared/utils.ts';
 
 /**
  * First-Class Character Organization & Assisted Character Identification Service.
@@ -86,7 +87,10 @@ export function resolveCharacterPortraitId(row: {
   return portraitId;
 }
 
-export function getCharacterPortraitThumbnailMap(): Map<number, string | null> {
+export function getCharacterPortraitMetadataMap(): Map<
+  number,
+  { url: string | null; crop: PortraitCrop | null }
+> {
   const rows = db
     .prepare(
       `
@@ -94,6 +98,7 @@ export function getCharacterPortraitThumbnailMap(): Map<number, string | null> {
         c.id,
         c.portrait_image_id,
         c.portrait_content_hash,
+        c.portrait_crop_json,
         img.id AS resolved_portrait_id
       FROM characters c
       LEFT JOIN images img ON (c.portrait_content_hash IS NOT NULL AND img.content_hash = c.portrait_content_hash)
@@ -102,10 +107,22 @@ export function getCharacterPortraitThumbnailMap(): Map<number, string | null> {
     )
     .all() as any[];
 
-  const map = new Map<number, string | null>();
+  const map = new Map<number, { url: string | null; crop: PortraitCrop | null }>();
   for (const row of rows) {
     const portraitId = resolveCharacterPortraitId(row);
-    map.set(row.id, portraitId ? `/api/images/${portraitId}/thumbnail` : null);
+    map.set(row.id, {
+      url: portraitId ? `/api/images/${portraitId}/thumbnail` : null,
+      crop: normalizePortraitCrop(row.portrait_crop_json),
+    });
+  }
+  return map;
+}
+
+export function getCharacterPortraitThumbnailMap(): Map<number, string | null> {
+  const meta = getCharacterPortraitMetadataMap();
+  const map = new Map<number, string | null>();
+  for (const [id, info] of meta.entries()) {
+    map.set(id, info.url);
   }
   return map;
 }
@@ -200,6 +217,7 @@ function buildCharacterProfile(row: any): CharacterProfile {
     portraitImageId: portraitId,
     portraitContentHash: row.portrait_content_hash || null,
     portraitThumbnailUrl: portraitId ? `/api/images/${portraitId}/thumbnail` : null,
+    portraitCrop: normalizePortraitCrop(row.portrait_crop_json),
     aliases,
     loras: loras.map((l) => ({
       ...l,
@@ -327,11 +345,13 @@ export function mergeCharacters(targetCharacterId: number, sourceCharacterId: nu
       .filter(Boolean)
       .join('\n\n');
 
+    const adoptSourcePortrait = !target.portrait_image_id && !target.portrait_content_hash;
     db.prepare(
       `UPDATE characters
        SET description = ?, physical_description = ?, notes = ?,
            portrait_image_id = COALESCE(portrait_image_id, ?),
            portrait_content_hash = COALESCE(portrait_content_hash, ?),
+           portrait_crop_json = COALESCE(portrait_crop_json, ?),
            updated_at = datetime('now')
        WHERE id = ?`
     ).run(
@@ -340,6 +360,7 @@ export function mergeCharacters(targetCharacterId: number, sourceCharacterId: nu
       mergedNotes,
       source.portrait_image_id,
       source.portrait_content_hash,
+      adoptSourcePortrait ? source.portrait_crop_json || null : null,
       targetCharacterId
     );
 

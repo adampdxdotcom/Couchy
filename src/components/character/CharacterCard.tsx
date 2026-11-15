@@ -1,6 +1,6 @@
 import React from 'react';
-import { User } from 'lucide-react';
 import type { CharacterProfile } from '../../shared/types.ts';
+import { CharacterPortraitImage } from './CharacterPortraitImage.tsx';
 
 interface CharacterCardProps {
   character: CharacterProfile;
@@ -14,15 +14,12 @@ export const CharacterCard: React.FC<CharacterCardProps> = ({ character, onClick
       className="bg-zinc-900 border border-zinc-800/80 hover:border-zinc-700 rounded-xl overflow-hidden cursor-pointer transition-colors flex flex-col justify-between"
     >
       <div className="aspect-[4/3] bg-zinc-950 relative overflow-hidden flex items-center justify-center">
-        {character.portraitThumbnailUrl ? (
-          <img
-            src={character.portraitThumbnailUrl}
-            alt={character.name}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          <User className="w-12 h-12 text-zinc-700" />
-        )}
+        <CharacterPortraitImage
+          src={character.portraitThumbnailUrl}
+          alt={character.name}
+          crop={character.portraitCrop}
+          iconClassName="w-12 h-12 text-zinc-700"
+        />
       </div>
 
       <div className="p-4 space-y-2">

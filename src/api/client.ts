@@ -15,6 +15,7 @@ import type {
   LoraExplorerItem,
   ModelCleanupStatus,
   ModelInventoryItem,
+  PortraitCrop,
   PromptTemplate,
   QuickGenChatMessage,
   ReproductionValidationResult,
@@ -203,6 +204,7 @@ export const api = {
       physicalDescription?: string;
       notes?: string;
       portraitImageId?: number | null;
+      portraitCrop?: PortraitCrop | null;
       aliases?: string[];
       tagIds?: number[];
       collectionIds?: number[];

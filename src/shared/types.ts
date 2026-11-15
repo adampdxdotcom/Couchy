@@ -171,6 +171,12 @@ export interface ImageRecord {
   chatSnapshot?: QuickGenChatMessage[];
 }
 
+export interface PortraitCrop {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
 export interface CharacterProfile {
   id: number;
   name: string;
@@ -180,6 +186,7 @@ export interface CharacterProfile {
   portraitImageId: number | null;
   portraitContentHash: string | null;
   portraitThumbnailUrl: string | null;
+  portraitCrop?: PortraitCrop | null;
   aliases: { id: number; alias: string }[];
   loras: {
     id: number;
@@ -343,6 +350,7 @@ export interface LoraExplorerItem {
     name: string;
     appearanceLabel: string;
     portraitThumbnailUrl?: string | null;
+    portraitCrop?: PortraitCrop | null;
   }[];
   nickname?: string | null;
   mentionEnabled?: boolean;
