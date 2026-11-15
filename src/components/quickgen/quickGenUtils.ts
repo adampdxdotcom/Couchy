@@ -129,6 +129,33 @@ export function resolveBaseModelDisplayLabel(
   return getCleanModelLabel(checkpointName);
 }
 
+/**
+ * Resolves an image's checkpointName for Quick Gen reuse:
+ * returns canonical installed filename when verified in ComfyUI, or marks unavailable if missing/un-imported.
+ */
+export function resolveReusableCheckpoint(
+  checkpointName?: string | null,
+  models: ModelInventoryItem[] = []
+): { checkpointName: string | null; unavailableLabel: string | null } {
+  const clean = (checkpointName || '').trim();
+  if (!clean) return { checkpointName: null, unavailableLabel: null };
+  const key = normalizeLoraKey(clean);
+  if (key && models.length > 0) {
+    const match = models.find(
+      (m) =>
+        m.modelType !== 'lora' &&
+        (normalizeLoraKey(m.filename) === key || normalizeLoraKey(m.name) === key)
+    );
+    if (match) {
+      if (match.isInstalled) {
+        return { checkpointName: match.filename, unavailableLabel: null };
+      }
+      return { checkpointName: null, unavailableLabel: getCleanModelMentionLabel(match) };
+    }
+  }
+  return { checkpointName: clean, unavailableLabel: null };
+}
+
 /** Checks whether a LoRA filename belongs to the given CharacterProfile. */
 export function isCharacterLora(
   loraName: string,

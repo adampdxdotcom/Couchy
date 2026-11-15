@@ -672,6 +672,13 @@ export function runMigrations(): void {
         ALTER TABLE models ADD COLUMN download_file_path TEXT;
       `,
     },
+    {
+      version: 22,
+      name: 'generation_batch_loras_json',
+      sql: `
+        ALTER TABLE generation_batches ADD COLUMN lora_names_json TEXT;
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

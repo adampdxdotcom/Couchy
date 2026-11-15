@@ -15,6 +15,10 @@ import { LoraAndModelManagerView } from './components/LoraAndModelManagerView.ts
 import { WorkflowLibraryView } from './components/WorkflowLibraryView.tsx';
 import { SystemAndBackupView, type SystemSubTab } from './components/SystemAndBackupView.tsx';
 import { FloatingQuickGenBar, type QuickGenPrefill } from './components/FloatingQuickGenBar.tsx';
+import {
+  resolveBaseModelDisplayLabel,
+  resolveReusableCheckpoint,
+} from './components/quickgen/quickGenUtils.ts';
 import { resolveClosestAspectRatio } from './shared/utils.ts';
 import type {
   AppToastMessage,
@@ -345,6 +349,7 @@ export default function App() {
             setQuickGenPrefill({
               prompt: '',
               character: matchedChar,
+              checkpointName: sourceImg?.checkpointName || null,
               loras: sourceImg?.loras || [],
               excludedLoras: latestExcludedMsg?.excludedLoras || [],
               aspectRatio: rec.aspectRatio,
@@ -521,10 +526,15 @@ export default function App() {
 
       // Calculate matching aspect ratio preset from dimensions
       const targetRatio = resolveClosestAspectRatio(img.width, img.height);
+      const { checkpointName: reusableCheckpoint, unavailableLabel } = resolveReusableCheckpoint(
+        img.checkpointName,
+        models
+      );
 
       setQuickGenPrefill({
         prompt: promptText,
         character: matchedChar,
+        checkpointName: reusableCheckpoint,
         loras: img.loras || [],
         aspectRatio: targetRatio,
         batchCount: 1,
@@ -532,11 +542,20 @@ export default function App() {
       });
 
       const charLabel = matchedChar ? ` with ${matchedChar.name}` : '';
+      const ckptLabel = reusableCheckpoint
+        ? ` + ${resolveBaseModelDisplayLabel(reusableCheckpoint, models)}`
+        : '';
       const loraCount = img.loras?.length || 0;
       const loraLabel = loraCount > 0 ? ` + ${loraCount} LoRA(s)` : '';
-      pushToast(`Reused prompt${charLabel}${loraLabel} (${targetRatio}, 1 image) in Quick Gen`, 'success');
+      const skippedNotice = unavailableLabel
+        ? ` (skipped unavailable base model: ${unavailableLabel})`
+        : '';
+      pushToast(
+        `Reused prompt${charLabel}${ckptLabel}${loraLabel} (${targetRatio}, 1 image) in Quick Gen${skippedNotice}`,
+        unavailableLabel ? 'warning' : 'success'
+      );
     },
-    [characters, pushToast]
+    [characters, models, pushToast]
   );
 
   const handleClearQuickGenPrefill = useCallback(() => {
@@ -586,9 +605,15 @@ export default function App() {
         .reverse()
         .find((m) => Array.isArray(m.excludedLoras) && m.excludedLoras.length > 0);
 
+      const { checkpointName: reusableCheckpoint } = resolveReusableCheckpoint(
+        img.checkpointName,
+        models
+      );
+
       setQuickGenPrefill({
         prompt: '',
         character: matchedChar,
+        checkpointName: reusableCheckpoint,
         loras: img.loras || [],
         excludedLoras: latestExcludedMsg?.excludedLoras || [],
         aspectRatio: targetRatio,
@@ -614,7 +639,7 @@ export default function App() {
         'info'
       );
     },
-    [activeTab, characters, lmStudioStatus.online, pushToast]
+    [activeTab, characters, lmStudioStatus.online, models, pushToast]
   );
 
   const handleQuickFavorite = useCallback(

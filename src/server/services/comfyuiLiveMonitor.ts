@@ -564,6 +564,7 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
           gb.height,
           gb.checkpoint_name,
           gb.lora_count,
+          gb.lora_names_json,
           gb.character_id,
           gb.series_id,
           gb.branch_from_image_id,
@@ -696,6 +697,18 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
             )
           : 1;
 
+      let batchLoraNames: string[] | undefined;
+      if (chosen.lora_names_json) {
+        try {
+          const parsed = JSON.parse(chosen.lora_names_json);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            batchLoraNames = parsed.map((n) => String(n).trim()).filter(Boolean);
+          }
+        } catch {
+          batchLoraNames = undefined;
+        }
+      }
+
       ghostItems.push({
         itemId: Number(chosen.item_id),
         batchId: bid,
@@ -706,10 +719,10 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
         progressPercent,
         width: Number(chosen.width || 1024),
         height: Number(chosen.height || 1536),
-        checkpointName: chosen.checkpoint_name || chosen.workflow_name || null,
+        checkpointName: chosen.checkpoint_name || queueMeta?.checkpointName || null,
         workflowName: chosen.workflow_name || null,
-        loraCount: Number(chosen.lora_count || 0),
-        loraNames: queueMeta?.loraNames || undefined,
+        loraCount: Number(chosen.lora_count || batchLoraNames?.length || queueMeta?.loraCount || 0),
+        loraNames: batchLoraNames && batchLoraNames.length > 0 ? batchLoraNames : queueMeta?.loraNames || undefined,
         characterId: chosen.character_id ? Number(chosen.character_id) : null,
         characterName: chosen.character_name || null,
         outputImageId: outputImgId,
@@ -745,6 +758,10 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
             SELECT COUNT(*) FROM image_models imod
             WHERE imod.image_id = rj.source_image_id AND imod.model_type = 'lora'
           ) AS img_lora_count,
+          (
+            SELECT json_group_array(imod.model_name) FROM image_models imod
+            WHERE imod.image_id = rj.source_image_id AND imod.model_type = 'lora'
+          ) AS img_lora_names_json,
           (
             SELECT ic.character_id FROM image_characters ic
             WHERE ic.image_id = rj.source_image_id AND ic.status = 'confirmed'
@@ -815,6 +832,18 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
         ghostItems.length === 0
       );
 
+      let reproLoraNames: string[] | undefined = queueMeta?.loraNames;
+      if ((!reproLoraNames || reproLoraNames.length === 0) && rj.img_lora_names_json) {
+        try {
+          const parsed = JSON.parse(rj.img_lora_names_json);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            reproLoraNames = parsed.map((n) => String(n || '').trim()).filter(Boolean);
+          }
+        } catch {
+          // ignore
+        }
+      }
+
       ghostItems.push({
         itemId: 1_000_000 + Number(rj.job_id),
         batchId: 1_000_000 + Number(rj.job_id),
@@ -826,10 +855,10 @@ export function getActiveGhostItems(): QueuedGhostCardItem[] {
         width: Number(queueMeta?.width || rj.img_width || 1024),
         height: Number(queueMeta?.height || rj.img_height || 1536),
         checkpointName:
-          queueMeta?.checkpointName || rj.img_checkpoint || rj.workflow_name || null,
+          queueMeta?.checkpointName || rj.img_checkpoint || null,
         workflowName: rj.workflow_name || null,
         loraCount: Number(queueMeta?.loraCount ?? rj.img_lora_count ?? 0),
-        loraNames: queueMeta?.loraNames || undefined,
+        loraNames: reproLoraNames && reproLoraNames.length > 0 ? reproLoraNames : undefined,
         characterId: rj.char_id ? Number(rj.char_id) : null,
         characterName: rj.char_name || null,
         outputImageId,

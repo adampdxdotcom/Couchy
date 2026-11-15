@@ -43,7 +43,7 @@ import { PendingGhostOverlay } from './gallery/PendingGhostOverlay.tsx';
 import { normalizeLoraKey, resolveBaseModelDisplayLabel } from './quickgen/quickGenUtils.ts';
 
 function resolveGalleryLoraMeta(
-  lora: ImageLoraRecord,
+  lora: Pick<ImageLoraRecord, 'loraName' | 'loraCategory'>,
   explorerLoras: LoraExplorerItem[]
 ): { label: string; category: LoraCategory } {
   const key = normalizeLoraKey(lora.loraName || '');
@@ -599,7 +599,59 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                       </div>
                     )}
 
-                    {/* Resolution, Ratio & Checkpoint Line */}
+                    {/* Base Model & LoRA Pills */}
+                    {(Boolean(ghost.checkpointName) ||
+                      (ghost.loraNames && ghost.loraNames.length > 0) ||
+                      ghost.loraCount > 0) && (
+                      <div className="flex flex-wrap items-center gap-1">
+                        {ghost.checkpointName && (
+                          <span
+                            title={`Base Model: ${ghost.checkpointName}`}
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-medium truncate max-w-[150px] ${
+                              galleryPillColorsEnabled
+                                ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200'
+                                : 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200'
+                            }`}
+                          >
+                            {resolveBaseModelDisplayLabel(ghost.checkpointName, models)}
+                          </span>
+                        )}
+                        {ghost.loraNames && ghost.loraNames.length > 0 ? (
+                          ghost.loraNames.map((loraName, idx) => {
+                            const { label, category } = resolveGalleryLoraMeta(
+                              { loraName },
+                              loras
+                            );
+                            const pillColorClass = !galleryPillColorsEnabled
+                              ? 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200'
+                              : category === 'character'
+                              ? 'bg-indigo-950/70 border-indigo-500/40 text-indigo-200'
+                              : 'bg-amber-950/60 border-amber-500/40 text-amber-200';
+                            return (
+                              <span
+                                key={`${loraName}-${idx}`}
+                                title={loraName}
+                                className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-medium truncate max-w-[150px] ${pillColorClass}`}
+                              >
+                                {label}
+                              </span>
+                            );
+                          })
+                        ) : ghost.loraCount > 0 ? (
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-medium ${
+                              galleryPillColorsEnabled
+                                ? 'bg-amber-950/60 border-amber-500/40 text-amber-200'
+                                : 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200'
+                            }`}
+                          >
+                            {ghost.loraCount} {ghost.loraCount === 1 ? 'LoRA' : 'LoRAs'}
+                          </span>
+                        ) : null}
+                      </div>
+                    )}
+
+                    {/* Resolution & Ratio */}
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400 font-mono tabular-nums">
                       <span>
                         {ghost.width}×{ghost.height}
@@ -610,12 +662,6 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                           <span>{formatImageAspectRatio(ghost.width, ghost.height)}</span>
                         </>
                       )}
-                      <span aria-hidden="true">·</span>
-                      <span className="truncate max-w-[150px] font-sans">
-                        {ghost.checkpointName
-                          ? resolveBaseModelDisplayLabel(ghost.checkpointName, models)
-                          : 'No Checkpoint'}
-                      </span>
                     </div>
                   </div>
                 )}

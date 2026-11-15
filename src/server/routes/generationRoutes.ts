@@ -519,7 +519,11 @@ generationRouter.post('/submit-batch', async (req, res) => {
       resolvedMp
     );
     const loraSelections: GenerationLoraSelection[] = Array.isArray(loras) ? loras : [];
-    const activeLorasCount = loraSelections.filter((l) => Boolean(l.loraName?.trim())).length;
+    const activeLoraNames = loraSelections
+      .map((l) => (l.loraName || '').trim())
+      .filter(Boolean);
+    const activeLorasCount = activeLoraNames.length;
+    const serializedLoraNames = activeLoraNames.length > 0 ? JSON.stringify(activeLoraNames) : null;
 
     // Resolve checkpoint name from request or mapped workflow checkpoint node
     const resolvedCheckpointName: string | null = checkpointName
@@ -545,8 +549,8 @@ generationRouter.post('/submit-batch', async (req, res) => {
     const batchInfo = db
       .prepare(
         `INSERT INTO generation_batches
-          (character_id, workflow_id, theme_title, mode, total_count, aspect_ratio, megapixels, width, height, checkpoint_name, lora_count, series_id, branch_from_image_id, chat_snapshot_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (character_id, workflow_id, theme_title, mode, total_count, aspect_ratio, megapixels, width, height, checkpoint_name, lora_count, lora_names_json, series_id, branch_from_image_id, chat_snapshot_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         characterId ? Number(characterId) : null,
@@ -560,6 +564,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
         computedHeight,
         resolvedCheckpointName,
         activeLorasCount,
+        serializedLoraNames,
         effectiveSeriesId,
         branchFromImageId ? Number(branchFromImageId) : null,
         serializedChatSnapshot
