@@ -26,7 +26,7 @@ Couchy bridges the gap between raw ComfyUI generation folders and an organized, 
   - [Image Inspector, Series Stacks & A/B Split Compare](#image-inspector-series-stacks--ab-split-compare)
   - [Characters, Portrait Framing & Auto-Recognition](#characters-portrait-framing--auto-recognition)
   - [Generation Studio](#generation-studio)
-  - [LoRAs, Model Inventory & Downloader (Civitai & Hugging Face)](#loras-model-inventory--downloader-civitai--hugging-face)
+  - [LoRAs, Base Models & Downloader (Civitai & Hugging Face)](#loras-base-models--downloader-civitai--hugging-face)
   - [Workflows & Structured Node Editor (Krea 2 Only)](#workflows--structured-node-editor-krea-2-only)
   - [System Administration & In-App Help](#system-administration--in-app-help)
 - [Local LLM Prompts & Runtime Context Reference](#local-llm-prompts--runtime-context-reference)
@@ -212,10 +212,10 @@ The **Quick Gen Box** is an always-accessible floating bottom dock available acr
   - Click the **Quick Gen** tab handle to minimize the dock out of the way (displaying a preview snippet if a draft prompt is present) or expand it on demand.
   - Automatically expands the prompt input box when focused or populated, and submits on `Enter` (`Shift+Enter` for new lines).
 
-- **`@Character` & `@LoRA` Mention Picker & Auto-Attachment**:
-  - Type `@` anywhere in the prompt (or click the **`+`** button) to open a two-column searchable `@Character` & `@LoRA` picker (`All`, `Characters`, and `LoRAs` tabs).
-  - Direct **Character** and **LoRA** matches rank at the top of the list above matching reference image prompts, with keyboard navigation (`ArrowUp`, `ArrowDown`, `Enter`/`Tab`, `Escape`) or mouse hover to preview character portraits, confirmed reference images, and prompt snippets.
-  - Selecting a character or mention-enabled LoRA attaches a removable **Pill Badge** above the prompt and automatically injects configured LoRAs, model/CLIP weights, trigger words, and the character's preferred default workflow on submission. Click any LoRA pill's strength number (e.g., `0.8x`) to edit its weight inline (`0.0`–`3.0`, `Enter`/blur to apply, `Esc` to cancel, `↑`/`↓` to nudge by `0.05`) for the current generation or series without changing the LoRA's system default.
+- **`@Character`, `@LoRA` & `@Model` Mention Picker & Auto-Attachment**:
+  - Type `@` anywhere in the prompt (or click the **`+`** button) to open a two-column searchable mention picker (`All`, `Characters`, `LoRAs`, and `Models` tabs).
+  - Direct **Character**, **LoRA**, and **Base Model** matches rank at the top of the list above matching reference image prompts, with keyboard navigation (`ArrowUp`, `ArrowDown`, `Enter`/`Tab`, `Escape`) or mouse hover to preview character portraits, model cards, confirmed reference images, and prompt snippets.
+  - Selecting a character, mention-enabled LoRA, or mention-enabled Base Model attaches a removable **Pill Badge** above the prompt (blue for characters, amber for LoRAs, green for user-selected Base Models) and automatically injects configured LoRAs, model/CLIP weights, trigger words, Base Model override, and the character's preferred default workflow on submission. Click any LoRA pill's strength number (e.g., `0.8x`) to edit its weight inline (`0.0`–`3.0`, `Enter`/blur to apply, `Esc` to cancel, `↑`/`↓` to nudge by `0.05`) for the current generation or series without changing the LoRA's system default. (Base Models are user-selectable via `@mention` or Character Favorite Addons and are never auto-selected by the LLM Agent.)
 
 - **Hybrid Image-to-Prompt Interrogation (Drag, Paste, or Upload)**:
   - **Drop, Paste, or Browse**: Drag and drop an image file onto the Quick Gen Box, paste an image from your clipboard (`Ctrl+V` / `Cmd+V`), or click the **Image Upload (`ImagePlus`)** button.
@@ -318,18 +318,19 @@ The **Quick Gen Box** is an always-accessible floating bottom dock available acr
 
 ---
 
-### LoRAs, Model Inventory & Downloader (Civitai & Hugging Face)
+### LoRAs, Base Models & Downloader (Civitai & Hugging Face)
 
-Open **LoRAs & Models** to browse three integrated sub-views (`LoRA Explorer`, `Model Inventory`, and `Civitai & HF Downloader`):
+Open **LoRAs & Models** to browse three integrated sub-views (`LoRA Explorer`, `Base Models`, and `Civitai & Hugging Face Downloader`):
 
-- **LoRA Explorer (Grid & Table Views) & LoRA Detail Inspector**:
-  - Search by name, filename, base model, trigger word, SHA-256 hash, or linked character; filter by category (`character`, `style`, `clothing`, `concept`, `pose`, `object`, `unclassified`); switch between **Grid** and **Table** layouts.
+- **LoRA Explorer (Grid & List Views) & LoRA Detail Inspector**:
+  - Search by name, filename, base model, trigger word, SHA-256 hash, or linked character; filter by category (`character`, `style`, `clothing`, `concept`, `pose`, `object`, `unclassified`); switch between **Grid** and **List** layouts.
   - **Hide / Unhide Utility LoRAs**: Mark noisy or utility LoRAs as hidden to exclude them from Quick Gen `@mention` and default views; toggle **Show Hidden (N)** anytime to manage them.
-  - **Inline `@Mention` & Detail Inspector**: Toggle Quick Gen `@mention` inclusion strictly via checkboxes and edit `@nicknames` inline, or click any LoRA to open **LoRA Detail View**—showing Civitai metadata sync (**Fetch from Civitai**), cached preview thumbnails (clickable lightbox), recommended vs. default model/CLIP strengths, trigger words, **Agent Description**, **Personal User Notes**, **CivitAI Description**, linked characters (using portrait crop framing), **Usage Impact Report**, and highest-rated / all associated images.
-- **Model Inventory & Missing Workflow Dependencies**:
-  - Indexes both `COMFYUI_MODELS_DIR` (`/data/models`) and `DOWNLOADS_DIR` (`/downloads`) across all ComfyUI subfolders (`loras`, `checkpoints`, `diffusion_models`, `unet`, `text_encoders`, `clip`, `vae`, `controlnet`, `upscale_models`, `embeddings`).
-  - Lists **Missing Model Dependencies** referenced by indexed images or workflows along with historical SHA-256 / AutoV2 hashes and dependent image counts—click **Locate & Download** to search Civitai/HF directly by hash or name.
-  - Inspect **Usage Impact Reports** on any installed model to see exact dependent images, workflows, and character profiles before moving or removing weights.
+  - **Inline `@Mention`, Detail Inspector & `Fetch Details`**: Toggle Quick Gen `@mention` inclusion strictly via checkboxes and edit `@nicknames` inline, or click any LoRA to open **LoRA Detail View**—showing cached preview thumbnails (clickable lightbox), recommended vs. default model/CLIP strengths, trigger words, **Agent Description**, **Personal User Notes**, **CivitAI Description** / **Hugging Face Model Card**, linked characters (using portrait crop framing), **Usage Impact Report**, and highest-rated / all associated images.
+  - Click **Fetch Details** on any LoRA or Base Model to run a shared metadata enrichment pipeline: it checks **Civitai first** (`.com` and `.red` by SHA-256 hash) and automatically falls back to **Hugging Face second** (resolving stored repo IDs/URLs or searching Hub repositories and matching files by exact LFS SHA-256 or filename to import the `README.md` Model Card, `base_model` tag, download URL, and preview images), surfacing **View on Civitai** and/or **View on Hugging Face** links directly in the inspector.
+- **Base Models Explorer (Krea 2 & Support Models)**:
+  - Indexes both `COMFYUI_MODELS_DIR` (`/data/models`) and `DOWNLOADS_DIR` (`/downloads`), cleanly separating LoRAs (managed in LoRA Explorer) from base and auxiliary weights.
+  - Use the group dropdown to switch between **Base Models (Krea2 / Diffusion / Checkpoints)** *(default)* and **Support Models (CLIP / VAE / Upscalers / Other)** in matching **Grid** (card) and **List** views, with **Hide / Unhide** (`Show Hidden (N)`), inline Quick Gen **`@Mention`** checkboxes, and `@nickname` editing.
+  - Click any card to open **Base Model Detail View** to run **Fetch Details** (Civitai first &rarr; Hugging Face fallback), document **Model Strengths & Details** and **Personal User Notes**, inspect **Usage Impact Reports** (dependent images and workflows before moving or removing weights), and browse highest-rated / associated renders.
 - **Civitai API Key (`CIVITAI_API_KEY`)**:
   - Public Civitai searches work without authentication, **but many models (including NSFW/mature, early-access, or creator-gated weights) return HTTP `401` / `403` unless authenticated**.
   - Create a personal token in your Civitai **Account Settings &rarr; API Keys**, add `CIVITAI_API_KEY=your_token_here` to `.env`, and recreate the container (`docker compose up -d`).
@@ -445,13 +446,13 @@ For contributors or anyone reconstructing Couchy's feature set from a system per
   - **Filesystem Scanner & Metadata Parser**: Indexes `COMFYUI_OUTPUT_DIR`, computes SHA-256 hashes, generates cached WebP thumbnails, and parses PNG `tEXt` / `zTXt` / `iTXt` chunks (`prompt` API JSON and `workflow` visual JSON).
   - **ComfyUI Live Bridge & Poller**: Connects to ComfyUI's REST API and WebSocket (`/ws`) to track live step percentages, running/queued jobs, and newly completed renders; compiles Krea 2 API prompt graphs (`workflowCompilerService`) with node mapping, LoRA stacking (`Power Lora Loader` or standard loaders), and inline `4x` ESRGAN upscaling.
   - **Local LLM Proxy & Agent Service**: Communicates server-side with any configured OpenAI-compatible `/v1` server (`LOCAL_LLM_URL` + optional `LOCAL_LLM_API_KEY`), supporting capability inspection (`/v1/models`), unified Agent chat/expansion, Vision + WD14 fallback interrogation/portrait analysis, and README section retrieval (**System &rarr; Help**).
-  - **ONNX Tagger, Model Downloader & Maintenance Workers**: In-process `wd-vit-tagger-v3` background queue, Civitai/Hugging Face resolver (with `.com` &rarr; `.red` fallback, atomic `.part` SHA-256 downloader, and Early Access timer scheduler), and optional copied-model duplicate cleanup daemon.
+  - **ONNX Tagger, Model Downloader & Maintenance Workers**: In-process `wd-vit-tagger-v3` background queue, shared Civitai-first / Hugging Face-fallback metadata enrichment (`Fetch Details`), Civitai/Hugging Face resolver (with `.com` &rarr; `.red` fallback, atomic `.part` SHA-256 downloader, and Early Access timer scheduler), and optional copied-model duplicate cleanup daemon.
 
 ### Core SQLite Domain Groups
 - **Images & Provenance**: `images` (content-addressed by `content_hash`), `image_metadata` (prompts, sampler, seed, raw workflow/API JSON), `image_loras`, `image_models`, `image_visual_tags`, and `image_workflows`.
 - **Series & Generations**: `image_series` / `image_series_items` (grouping `iterative` stacks with chat snapshots vs. `multi_shot` sets, plus exclusive poster tracking), `generation_batches`, `generation_items`, and `reproduction_jobs`.
 - **Curation & Characters**: `ratings` (stars, favorite, rejected, archived, notes), `tags` / `image_tags`, `collections` / `collection_images`, `saved_searches`, and `characters` / `character_aliases` / `character_loras` / `character_workflows` / `image_characters` (including non-destructive `portrait_crop_json` framing).
-- **Models & System**: `models` (inventory, hashes, Civitai metadata, `@mention` defaults, hidden state), `download_jobs` & `downloaded_model_copies`, `workflows` & `workflow_mappings`, `prompt_templates`, `lm_studio_settings`, `lm_studio_prompt_templates`, `app_settings`, `scan_jobs`, and `schema_migrations`.
+- **Models & System**: `models` (inventory, hashes, Civitai & Hugging Face repo/card metadata, `@mention` defaults, strengths/details, hidden state), `download_jobs` & `downloaded_model_copies`, `workflows` & `workflow_mappings`, `prompt_templates`, `lm_studio_settings`, `lm_studio_prompt_templates`, `app_settings`, `scan_jobs`, and `schema_migrations`.
 
 ---
 
