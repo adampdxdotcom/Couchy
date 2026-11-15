@@ -218,7 +218,10 @@ export function useQuickGenSubmit({
           ),
           triggerWord: matchedExplorerLora?.triggerWord || '',
           nickname: getCleanLoraLabel(matchedExplorerLora || { loraName: imgLora.loraName }),
-          showPill: Boolean(matchedExplorerLora?.mentionEnabled),
+          showPill:
+            'showPill' in imgLora && imgLora.showPill !== undefined
+              ? Boolean(imgLora.showPill)
+              : Boolean(matchedExplorerLora?.mentionEnabled),
         });
       }
       setAttachedLoras(reusedSelections);

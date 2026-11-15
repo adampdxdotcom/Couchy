@@ -900,10 +900,32 @@ export default function App() {
             onSelectCharacterId={setSelectedCharacterId}
             onRefresh={refreshAll}
             onOpenImage={(img) => setInspectedImageId(img.id)}
-            onFilterGalleryByCharacter={(charId) => {
+            onFilterGalleryByCharacter={(charId, addonFilter) => {
               setGalleryPage(1);
-              setFilters({ ...INITIAL_FILTERS, characterIds: [charId] });
+              setFilters({
+                ...INITIAL_FILTERS,
+                characterIds: [charId],
+                checkpoint: addonFilter?.checkpoint || '',
+                loras: addonFilter?.loraName ? [addonFilter.loraName] : [],
+              });
               setActiveTab('gallery');
+            }}
+            onSeedQuickGenAddon={(char, addon) => {
+              setQuickGenPrefill({
+                prompt: '',
+                character: char,
+                loras: [
+                  {
+                    loraName: addon.loraName,
+                    modelStrength: addon.modelStrength,
+                    clipStrength: addon.clipStrength,
+                    showPill: true,
+                  },
+                ],
+                batchCount: 1,
+                timestamp: Date.now(),
+              });
+              pushToast(`Prepared ${char.name} + addon LoRA in Quick Gen`, 'success');
             }}
             onReusePrompt={handleReusePrompt}
             onOpenConversation={handleOpenConversationForImage}

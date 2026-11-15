@@ -2,30 +2,43 @@ import React, { useState } from 'react';
 import { api } from '../../api/client.ts';
 import type {
   CharacterProfile,
+  ImageRecord,
   LoraExplorerItem,
-  WorkflowLibraryItem,
 } from '../../shared/types.ts';
+import { CharacterFavoriteAddonsCard } from './CharacterFavoriteAddonsCard.tsx';
 
 interface CharacterLorasAndWorkflowsProps {
   character: CharacterProfile;
+  allCharacters: CharacterProfile[];
+  confirmedImages: ImageRecord[];
   loras: LoraExplorerItem[];
-  workflows: WorkflowLibraryItem[];
   collections: { id: number; name: string }[];
   onRefresh: () => Promise<void>;
+  onSelectCharacter?: (characterId: number) => void;
+  onFilterGalleryByAddon?: (
+    characterId: number,
+    filter: { checkpoint?: string; loraName?: string }
+  ) => void;
+  onSeedQuickGenAddon?: (
+    character: CharacterProfile,
+    addon: { loraName: string; modelStrength: number; clipStrength: number }
+  ) => void;
 }
 
 export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProps> = ({
   character,
+  allCharacters,
+  confirmedImages,
   loras,
-  workflows,
   collections,
   onRefresh,
+  onSelectCharacter,
+  onFilterGalleryByAddon,
+  onSeedQuickGenAddon,
 }) => {
   const [linkLoraName, setLinkLoraName] = useState('');
   const [linkLoraAppearance, setLinkLoraAppearance] = useState('Default');
   const [linkLoraTriggerWord, setLinkLoraTriggerWord] = useState('');
-  const [linkWorkflowId, setLinkWorkflowId] = useState('');
-  const [linkWorkflowRole, setLinkWorkflowRole] = useState('Canonical Portrait');
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -154,99 +167,18 @@ export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProp
         </div>
       </div>
 
-      {/* Associated Workflows & Collections */}
-      <div className="min-w-0 bg-zinc-900 border border-zinc-800/80 rounded-xl p-4 sm:p-5 space-y-3 text-xs overflow-hidden">
-        <h3 className="text-sm font-display font-semibold text-zinc-100">
-          Associated Workflows ({character.workflows.length})
-        </h3>
-        {character.workflows.length > 0 && (
-          <div className="space-y-2">
-            {character.workflows.map((w) => (
-              <div
-                key={w.workflowId}
-                className="flex items-center justify-between gap-2 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 min-w-0"
-              >
-                <span className="font-medium text-zinc-200 truncate">{w.workflowName}</span>
-                <span className="text-zinc-400 shrink-0">{w.roleLabel}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-2">
-          <select
-            value={linkWorkflowId}
-            onChange={(e) => setLinkWorkflowId(e.target.value)}
-            className="w-full sm:flex-1 min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
-          >
-            <option value="">Select workflow to associate...</option>
-            {workflows.map((wf) => (
-              <option key={wf.id} value={wf.id}>
-                {wf.name}
-              </option>
-            ))}
-          </select>
-          <div className="flex items-center gap-2 w-full sm:w-auto min-w-0">
-            <input
-              type="text"
-              value={linkWorkflowRole}
-              onChange={(e) => setLinkWorkflowRole(e.target.value)}
-              placeholder="Role label..."
-              className="flex-1 sm:w-36 min-w-0 px-2.5 py-2 sm:py-1.5 bg-zinc-950 border border-zinc-800 rounded text-zinc-200"
-            />
-            <button
-              type="button"
-              onClick={async () => {
-                if (!linkWorkflowId) return;
-                await api.linkWorkflowToCharacter(
-                  character.id,
-                  Number(linkWorkflowId),
-                  linkWorkflowRole
-                );
-                setLinkWorkflowId('');
-                await onRefresh();
-              }}
-              className="px-3.5 py-2 sm:py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded cursor-pointer shrink-0"
-            >
-              Link
-            </button>
-          </div>
-        </div>
-
-        {collections.length > 0 && (
-          <div className="pt-3 border-t border-zinc-800">
-            <span className="text-zinc-400 block mb-1.5">Character Collections:</span>
-            <div className="flex flex-wrap gap-1.5">
-              {collections.map((col) => {
-                const isLinked = character.collections.some((c) => c.id === col.id);
-                return (
-                  <button
-                    key={col.id}
-                    type="button"
-                    onClick={async () => {
-                      const currentIds = character.collections.map((c) => c.id);
-                      const nextIds = isLinked
-                        ? currentIds.filter((id) => id !== col.id)
-                        : [...currentIds, col.id];
-                      await api.updateCharacter(character.id, {
-                        collectionIds: nextIds,
-                      });
-                      await onRefresh();
-                    }}
-                    className={`px-2.5 py-1 rounded border cursor-pointer ${
-                      isLinked
-                        ? 'bg-indigo-600/20 border-indigo-500 text-indigo-200'
-                        : 'bg-zinc-950 border-zinc-800 text-zinc-400'
-                    }`}
-                  >
-                    {col.name}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
+      {/* Favorite Addons, Friends (hidden when empty), & Collections */}
+      <CharacterFavoriteAddonsCard
+        character={character}
+        allCharacters={allCharacters}
+        confirmedImages={confirmedImages}
+        loras={loras}
+        collections={collections}
+        onRefresh={onRefresh}
+        onSelectCharacter={onSelectCharacter}
+        onFilterGalleryByAddon={onFilterGalleryByAddon}
+        onSeedQuickGenAddon={onSeedQuickGenAddon}
+      />
     </div>
   );
 };

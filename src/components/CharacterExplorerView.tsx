@@ -26,7 +26,14 @@ interface CharacterExplorerViewProps {
   onSelectCharacterId?: (id: number | null) => void;
   onRefresh: () => Promise<void>;
   onOpenImage: (img: ImageRecord) => void;
-  onFilterGalleryByCharacter: (charId: number) => void;
+  onFilterGalleryByCharacter: (
+    charId: number,
+    addonFilter?: { checkpoint?: string; loraName?: string }
+  ) => void;
+  onSeedQuickGenAddon?: (
+    character: CharacterProfile,
+    addon: { loraName: string; modelStrength: number; clipStrength: number }
+  ) => void;
   onQuickRate: (id: number, rating: number) => void;
   onQuickFavorite?: (id: number, nextFav: boolean) => void;
   onReusePrompt?: (img: ImageRecord) => void;
@@ -50,6 +57,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   onRefresh,
   onOpenImage,
   onFilterGalleryByCharacter,
+  onSeedQuickGenAddon,
   onQuickRate,
   onQuickFavorite,
   onReusePrompt,
@@ -190,10 +198,17 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
 
         <CharacterLorasAndWorkflows
           character={selectedCharacter}
+          allCharacters={characters}
+          confirmedImages={confirmedImages}
           loras={loras}
-          workflows={workflows}
           collections={collections}
           onRefresh={onRefresh}
+          onSelectCharacter={(friendId) => {
+            setSelectedCharId(friendId);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onFilterGalleryByAddon={(charId, filter) => onFilterGalleryByCharacter(charId, filter)}
+          onSeedQuickGenAddon={onSeedQuickGenAddon}
         />
 
         <CharacterSuggestionsReview

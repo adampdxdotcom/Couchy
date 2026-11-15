@@ -6,10 +6,17 @@ import type {
   QuickGenChatMessage,
 } from '../../shared/types.ts';
 
+export interface QuickGenPrefillLora {
+  loraName: string;
+  modelStrength?: number;
+  clipStrength?: number;
+  showPill?: boolean;
+}
+
 export interface QuickGenPrefill {
   prompt: string;
   character?: CharacterProfile | null;
-  loras?: ImageLoraRecord[];
+  loras?: Array<ImageLoraRecord | QuickGenPrefillLora>;
   excludedLoras?: string[];
   aspectRatio?: string;
   megapixels?: number;
