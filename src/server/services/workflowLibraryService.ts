@@ -1,14 +1,7 @@
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { db } from '../db.ts';
 import { getExecutableApiGraph, getWorkflowDefaults } from './workflowCompilerService.ts';
 import type { WorkflowLibraryItem } from '../../shared/types.ts';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const PRIMARY_WORKFLOW_PATH = path.resolve(__dirname, '../workflows/primary_workflow.json');
 
 export class WorkflowServiceError extends Error {
   statusCode: number;
@@ -99,9 +92,11 @@ export function getWorkflowRecordById(wfId: number): any {
   if (!wf) {
     throw new WorkflowServiceError(404, 'Workflow not found');
   }
-  const liveGraph = getExecutableApiGraph(wf);
-  if (wf.workflow_hash === 'default-krea2-turbo-workflow' && liveGraph) {
-    wf.api_workflow_json = JSON.stringify(liveGraph, null, 2);
+  if (!wf.api_workflow_json) {
+    const fallbackGraph = getExecutableApiGraph(wf);
+    if (fallbackGraph) {
+      wf.api_workflow_json = JSON.stringify(fallbackGraph, null, 2);
+    }
   }
   return wf;
 }
@@ -186,19 +181,6 @@ export function saveOrUpdateWorkflow(input: {
       ).run(nextName, nextDesc, nextVisual, nextApi, nextDefault, wfId);
     });
     tx();
-
-    if (
-      current.workflow_hash === 'default-krea2-turbo-workflow' &&
-      typeof nextApi === 'string' &&
-      nextApi.trim()
-    ) {
-      try {
-        const parsed = JSON.parse(nextApi);
-        fs.writeFileSync(PRIMARY_WORKFLOW_PATH, JSON.stringify(parsed, null, 2) + '\n', 'utf-8');
-      } catch {
-        // ignore disk sync failure
-      }
-    }
 
     return db.prepare('SELECT * FROM workflows WHERE id = ?').get(wfId);
   }

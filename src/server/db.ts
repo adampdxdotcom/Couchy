@@ -902,6 +902,9 @@ Rules:
         if (currentGraph['30_10']?.inputs?.unet_name && upgradedGraph['30_10']?.inputs) {
           upgradedGraph['30_10'].inputs.unet_name = currentGraph['30_10'].inputs.unet_name;
         }
+        if (currentGraph['29']?.inputs?.filename_prefix && upgradedGraph['29']?.inputs) {
+          upgradedGraph['29'].inputs.filename_prefix = currentGraph['29'].inputs.filename_prefix;
+        }
         db.prepare(`
           UPDATE workflows
           SET description = ?, api_workflow_json = ?, updated_at = datetime('now')

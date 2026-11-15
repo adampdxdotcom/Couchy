@@ -40,23 +40,11 @@ export function computeDimensionsFromMegapixels(
 
 /**
  * Resolves the executable API workflow JSON object for a workflow row.
- * For the built-in primary workflow, reads src/server/workflows/primary_workflow.json live.
+ * SQLite (`api_workflow_json`) is the primary source of truth so user edits persist;
+ * `primary_workflow.json` is used only as a fallback when the DB graph is absent/invalid.
  */
 export function getExecutableApiGraph(workflowRow: any): Record<string, any> | null {
   if (!workflowRow) return null;
-  if (
-    workflowRow.workflow_hash === 'default-krea2-turbo-workflow' &&
-    fs.existsSync(PRIMARY_WORKFLOW_PATH)
-  ) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(PRIMARY_WORKFLOW_PATH, 'utf-8'));
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed.nodes)) {
-        return parsed;
-      }
-    } catch {
-      // fall through to DB column
-    }
-  }
   if (workflowRow.api_workflow_json) {
     try {
       const parsed = JSON.parse(workflowRow.api_workflow_json);
@@ -64,12 +52,25 @@ export function getExecutableApiGraph(workflowRow: any): Record<string, any> | n
         return parsed;
       }
     } catch {
-      // ignore
+      // ignore invalid DB JSON and try fallbacks
     }
   }
   if (workflowRow.visual_workflow_json) {
     try {
       const parsed = JSON.parse(workflowRow.visual_workflow_json);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed.nodes)) {
+        return parsed;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (
+    workflowRow.workflow_hash === 'default-krea2-turbo-workflow' &&
+    fs.existsSync(PRIMARY_WORKFLOW_PATH)
+  ) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(PRIMARY_WORKFLOW_PATH, 'utf-8'));
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed.nodes)) {
         return parsed;
       }
