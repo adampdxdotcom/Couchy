@@ -650,6 +650,13 @@ export function runMigrations(): void {
         ALTER TABLE lm_studio_settings ADD COLUMN batch_expansion_prompt TEXT NOT NULL DEFAULT '';
       `,
     },
+    {
+      version: 19,
+      name: 'character_physical_description',
+      sql: `
+        ALTER TABLE characters ADD COLUMN physical_description TEXT NOT NULL DEFAULT '';
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');
@@ -722,7 +729,8 @@ Return ONLY a JSON array of prompt strings.`,
     const isPriorFactoryConversation =
       !curConv.trim() ||
       (curConv.includes('The final objective is a prompt that communicates exactly what the camera should capture') &&
-        !curConv.includes('Prompt Structure & Sentence Order:'));
+        !curConv.includes('Prompt Structure & Sentence Order:')) ||
+      curConv.includes('stay faithful to its stated permanent biological traits without inventing conflicting permanent features');
     if (isPriorFactoryConversation) {
       db.prepare(
         'UPDATE lm_studio_settings SET conversation_system_prompt = ? WHERE id = 1'

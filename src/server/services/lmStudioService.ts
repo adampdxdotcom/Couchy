@@ -347,6 +347,7 @@ function clampContextText(text: string | undefined | null, maxLen: number): stri
 function buildLlmCharacterAndLoraContext(params: {
   characterName?: string;
   characterDescription?: string;
+  characterPhysicalDescription?: string;
   loraNames?: string[];
 }): {
   characterBlock: string | null;
@@ -378,7 +379,7 @@ function buildLlmCharacterAndLoraContext(params: {
     attachedKeys.length > 0
       ? (db
           .prepare(
-            `SELECT cl.lora_name, cl.appearance_label, cl.lora_category, c.name AS character_name, c.description AS character_description
+            `SELECT cl.lora_name, cl.appearance_label, cl.lora_category, c.name AS character_name, c.description AS character_description, c.physical_description AS character_physical_description
              FROM character_loras cl
              JOIN characters c ON c.id = cl.character_id`
           )
@@ -388,11 +389,13 @@ function buildLlmCharacterAndLoraContext(params: {
           lora_category: string | null;
           character_name: string;
           character_description: string | null;
+          character_physical_description: string | null;
         }>)
       : [];
 
   const appearanceLabels: string[] = [];
   let fallbackDbCharDescription = '';
+  let fallbackDbCharPhysical = '';
 
   const attachedLines: string[] = [];
   const seenKeys = new Set<string>();
@@ -417,6 +420,9 @@ function buildLlmCharacterAndLoraContext(params: {
       }
       if (!fallbackDbCharDescription && matchedCharLora.character_description?.trim()) {
         fallbackDbCharDescription = matchedCharLora.character_description.trim();
+      }
+      if (!fallbackDbCharPhysical && matchedCharLora.character_physical_description?.trim()) {
+        fallbackDbCharPhysical = matchedCharLora.character_physical_description.trim();
       }
     }
 
@@ -443,26 +449,41 @@ function buildLlmCharacterAndLoraContext(params: {
     }
   }
 
-  let charDesc = clampContextText(params.characterDescription, 500);
-  if (!charDesc && fallbackDbCharDescription) {
-    charDesc = clampContextText(fallbackDbCharDescription, 500);
-  } else if (!charDesc && params.characterName?.trim()) {
+  let charDesc = clampContextText(params.characterDescription, 450);
+  let charPhysical = clampContextText(params.characterPhysicalDescription, 500);
+  if ((!charDesc || !charPhysical) && (fallbackDbCharDescription || fallbackDbCharPhysical)) {
+    if (!charDesc && fallbackDbCharDescription) {
+      charDesc = clampContextText(fallbackDbCharDescription, 450);
+    }
+    if (!charPhysical && fallbackDbCharPhysical) {
+      charPhysical = clampContextText(fallbackDbCharPhysical, 500);
+    }
+  }
+  if ((!charDesc || !charPhysical) && params.characterName?.trim()) {
     const dbChar = db
-      .prepare('SELECT description FROM characters WHERE LOWER(name) = LOWER(?) LIMIT 1')
-      .get(params.characterName.trim()) as { description?: string } | undefined;
-    charDesc = clampContextText(dbChar?.description, 500);
+      .prepare('SELECT description, physical_description FROM characters WHERE LOWER(name) = LOWER(?) LIMIT 1')
+      .get(params.characterName.trim()) as
+      | { description?: string; physical_description?: string }
+      | undefined;
+    if (!charDesc) charDesc = clampContextText(dbChar?.description, 450);
+    if (!charPhysical) charPhysical = clampContextText(dbChar?.physical_description, 500);
   }
 
   let characterBlock: string | null = null;
-  if (params.characterName?.trim() || charDesc) {
+  if (params.characterName?.trim() || charDesc || charPhysical) {
     const parts: string[] = [
-      `Active character LoRA is locked; match the Character Profile's pronouns and permanent traits while honoring user-requested outfits, hairstyles, makeup, or accessories.`,
+      `Active character LoRA handles their facial identity automatically; treat the Character Profile below as a guiding reference (not text to copy verbatim), always honoring user-requested outfits, hairstyles, makeup, or accessories.`,
     ];
     if (appearanceLabels.length > 0) {
       parts.push(`Active Character Variant: ${Array.from(new Set(appearanceLabels)).join(', ')}`);
     }
     if (charDesc) {
-      parts.push(`Reference Character Profile: ${charDesc}`);
+      parts.push(`Character Personality & Bio: ${charDesc}`);
+    }
+    if (charPhysical) {
+      parts.push(
+        `Physical Reference Guide (use for accurate pronouns, skin tone, natural hair color, build, and signature marks—weave only helpful cues naturally instead of repeating every anatomical detail verbatim): ${charPhysical}`
+      );
     }
     characterBlock = parts.join('\n');
   }
@@ -485,6 +506,7 @@ function buildLlmCharacterAndLoraContext(params: {
 export async function generatePhotoSetPromptsWithAgent(params: {
   characterName: string;
   characterDescription?: string;
+  characterPhysicalDescription?: string;
   loraNames: string[];
   theme: string;
   count: number;
@@ -524,6 +546,7 @@ export async function generatePhotoSetPromptsWithAgent(params: {
   const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
     characterName: params.characterName,
     characterDescription: params.characterDescription,
+    characterPhysicalDescription: params.characterPhysicalDescription,
     loraNames: params.loraNames,
   });
 
@@ -695,9 +718,22 @@ export async function generatePhotoSetPromptsWithAgent(params: {
  * Heuristic check for whether a model identifier in LM Studio is likely a Vision-Language Model (VLM).
  */
 function isLikelyVisionModelId(modelId: string): boolean {
-  return /(?:\b|_|-)(?:vl|vision|llava|joycaption|pixtral|minicpm|moondream|florence|internvl|molmo|bakllava|cogvlm|idefics|paligemma|gemma-?3|qwen[\w.-]*vl)(?:\b|_|-)/i.test(
+  return /(?:\b|_|-)(?:vl|vlm|vision|llava|joycaption|pixtral|minicpm|moondream|florence|internvl|molmo|bakllava|cogvlm|idefics|paligemma|gemma-?[34]|gemma4|supergemma|qwen[\w.-]*vl|smolvlm|ovis|glm-?4v|llama-?4)(?:\b|_|-)/i.test(
     modelId
   );
+}
+
+/**
+ * Extracts only permanent physical/identity tags from raw WD14 tags for Character Portrait analysis.
+ * Keeps gender/age cues, hair color/length/texture, eye color, skin tone, facial features/marks, and build.
+ */
+export function extractCharacterIdentityTags(tags: string[]): string[] {
+  const identityRegex =
+    /^(?:1girl|1boy|solo|woman|man|mature female|mature male|girl|boy)$|\b(?:hair|eyes|skin|freckles|mole|scar|tattoo|fangs|pointy ears|elf ears|heterochromia|glasses|eyebrows|lips|eyelashes|cheek|jawline|bust|breasts|chest|hips|waist|thighs|build|slender|curvy|voluptuous|petite|athletic|muscular|plump|toned|abs|tall|short|tan|tanlines|caucasian|asian|latina|ebony)\b/i;
+  const excludeTemporaryRegex =
+    /\b(?:looking at|smile|smiling|blush|open mouth|closed eyes|winking|parted lips|sitting|standing|lying|kneeling|shirt|dress|skirt|jacket|bikini|lingerie|bra|panties|stockings|shoes|boots|hat|background|indoors|outdoors|lighting|shadow)\b/i;
+
+  return tags.filter((tag) => identityRegex.test(tag) && !excludeTemporaryRegex.test(tag));
 }
 
 /**
@@ -1041,6 +1077,175 @@ Rules:
   }
 }
 
+/**
+ * Adaptive Character Portrait Physical Description Analyzer:
+ * 1. If a Vision-capable LLM is online, analyzes the portrait directly to summarize baseline physical traits.
+ * 2. Otherwise (or if Vision fails/refuses), runs local WD14 v3 to extract physical identity tags and
+ *    synthesizes them via Text LLM (or falls back to clean formatted physical tags if LLM is offline).
+ */
+export async function analyzeCharacterPortraitPhysicalTraits(params: {
+  imageBuffer: Buffer;
+  imageBase64DataUrl: string;
+  characterName?: string;
+}): Promise<{
+  physicalDescription: string;
+  pipelineUsed: 'vision' | 'wd14_text' | 'wd14_only';
+  tags: string[];
+  modelUsed: string;
+}> {
+  const status = await checkLmStudioStatus();
+  const settings = getLmStudioSettings();
+  const baseUrl = settings.baseUrl.replace(/\/+$/, '');
+  const chatEndpoint = baseUrl.endsWith('/v1')
+    ? `${baseUrl}/chat/completions`
+    : `${baseUrl}/v1/chat/completions`;
+  const modelToUse = status.selectedModel || settings.selectedModel || 'local-model';
+
+  const systemInstruction = `You are a character casting and visual reference specialist.
+Analyze the subject's permanent physical traits in this portrait to write a concise ~35–70 word physical reference summary for future image generation consistency.
+Include:
+- Gender presentation and approximate adult age range
+- Build, frame, and natural proportions
+- Skin tone and complexion
+- Face shape, eye color/shape, eyebrow/lip shape
+- Natural hair color, texture, and typical length
+- Distinctive permanent marks (freckles, moles, scars, tattoos, signature glasses, or non-human ears)
+Explicitly IGNORE: clothing, outfits, accessories, poses, temporary facial expressions, lighting, camera angle, and background setting.
+Rules:
+- Never mention personal names or filenames.
+- Output ONLY the concise plain-text physical description with no preamble, quotes, or markdown.`;
+
+  // Try Vision LLM first when online and model is Vision-capable
+  if (status.online && isLikelyVisionModelId(modelToUse)) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 60000);
+      const visionRes = await fetch(chatEndpoint, {
+        method: 'POST',
+        headers: getLocalLlmHeaders(true),
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: modelToUse,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: 'Summarize only this character’s permanent physical traits (gender presentation, approximate age, build, skin tone, eye color, facial structure, natural hair color/texture, and any permanent marks). Ignore their outfit, pose, expression, lighting, and background.',
+                },
+                {
+                  type: 'image_url',
+                  image_url: { url: params.imageBase64DataUrl },
+                },
+              ],
+            },
+          ],
+          temperature: 0.3,
+          max_tokens: 260,
+        }),
+      });
+      clearTimeout(timer);
+
+      if (visionRes.ok) {
+        const data = (await visionRes.json()) as any;
+        const rawText: string = data?.choices?.[0]?.message?.content?.trim() || '';
+        const cleaned = rawText
+          .replace(/<think>[\s\S]*?<\/think>/gi, '')
+          .replace(/^["']|["']$/g, '')
+          .trim();
+
+        const looksLikeRefusal =
+          /cannot see|can't see|unable to view|as a text-based|i cannot fulfill|i'm sorry, but i can't/i.test(
+            cleaned
+          );
+
+        if (cleaned.length > 10 && !looksLikeRefusal) {
+          return {
+            physicalDescription: sanitizeAgentPrompt(cleaned, params.characterName),
+            pipelineUsed: 'vision',
+            tags: [],
+            modelUsed: data?.model || modelToUse,
+          };
+        }
+      }
+    } catch {
+      // Fall through cleanly to WD14 fallback below
+    }
+  }
+
+  // Fallback path: local WD14 v3 physical identity tag extraction
+  const tagItems = await interrogateImageBufferWithWd14(params.imageBuffer, 0.22);
+  const rawTags = tagItems.map((t) => t.tag);
+  const identityTags = extractCharacterIdentityTags(rawTags);
+  const effectiveTags = identityTags.length > 0 ? identityTags : rawTags.slice(0, 20);
+
+  if (effectiveTags.length === 0) {
+    throw new Error(
+      'Could not extract physical traits from portrait. Ensure a Vision LLM is connected or WD14 model is downloaded.'
+    );
+  }
+
+  // Synthesize WD14 physical tags via Text LLM if online
+  if (status.online) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45000);
+    try {
+      const textRes = await fetch(chatEndpoint, {
+        method: 'POST',
+        headers: getLocalLlmHeaders(true),
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: modelToUse,
+          messages: [
+            { role: 'system', content: systemInstruction },
+            {
+              role: 'user',
+              content: `Turn these portrait physical tags into one concise ~35–70 word physical reference summary covering only permanent traits (gender presentation, build, skin tone, hair color/texture, eye color, facial structure, and signature marks). Ignore any clothing, pose, or background tags:\n\nPhysical Tags: ${effectiveTags.join(', ')}\n\nOutput ONLY the physical reference summary:`,
+            },
+          ],
+          temperature: 0.35,
+          max_tokens: 260,
+        }),
+      });
+      clearTimeout(timer);
+
+      if (textRes.ok) {
+        const data = (await textRes.json()) as any;
+        const rawText: string = data?.choices?.[0]?.message?.content?.trim() || '';
+        const cleaned = rawText
+          .replace(/<think>[\s\S]*?<\/think>/gi, '')
+          .replace(/^["']|["']$/g, '')
+          .trim();
+
+        const looksLikeRefusal =
+          /i cannot fulfill|i'm sorry, but i can't/i.test(cleaned);
+        if (cleaned.length > 10 && !looksLikeRefusal) {
+          return {
+            physicalDescription: sanitizeAgentPrompt(cleaned, params.characterName),
+            pipelineUsed: 'wd14_text',
+            tags: effectiveTags,
+            modelUsed: data?.model || modelToUse,
+          };
+        }
+      }
+    } catch {
+      // Fall back to formatted WD14 tags below
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // Pure WD14 offline fallback
+  return {
+    physicalDescription: effectiveTags.join(', '),
+    pipelineUsed: 'wd14_only',
+    tags: effectiveTags,
+    modelUsed: 'WD14 v3 Local Tagger',
+  };
+}
+
 // normalizeLoraMatchKey defined above for shared LLM context & LoRA matching
 
 /**
@@ -1056,6 +1261,7 @@ export async function converseQuickGenPrompt(params: {
   }>;
   characterName?: string;
   characterDescription?: string;
+  characterPhysicalDescription?: string;
   loraNames?: string[];
   excludedLoras?: string[];
   batchCount?: number;
@@ -1119,6 +1325,7 @@ export async function converseQuickGenPrompt(params: {
   const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
     characterName: params.characterName,
     characterDescription: params.characterDescription,
+    characterPhysicalDescription: params.characterPhysicalDescription,
     loraNames: params.loraNames,
   });
 

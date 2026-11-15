@@ -363,6 +363,7 @@ export function useQuickGenSubmit({
         })),
         characterName: attachedCharacter?.name || undefined,
         characterDescription: attachedCharacter?.description || undefined,
+        characterPhysicalDescription: attachedCharacter?.physicalDescription || undefined,
         loraNames: selectedLoras.map((l) => l.loraName),
         excludedLoras: currentRemovedKeys,
         batchCount,
@@ -469,6 +470,7 @@ export function useQuickGenSubmit({
         const agentRes = await api.generateSetPromptsWithAgent({
           characterName: attachedCharacter?.name || '',
           characterDescription: attachedCharacter?.description || '',
+          characterPhysicalDescription: attachedCharacter?.physicalDescription || '',
           loraNames: selectedLoras.map((l) => l.loraName),
           theme: cleanPrompt,
           count: batchCount,
@@ -570,6 +572,7 @@ export function useQuickGenSubmit({
       const agentRes = await api.generateSetPromptsWithAgent({
         characterName: attachedCharacter?.name || '',
         characterDescription: attachedCharacter?.description || '',
+        characterPhysicalDescription: attachedCharacter?.physicalDescription || '',
         loraNames: selectedLoras.map((l) => l.loraName),
         theme: cleanConcept,
         count: batchCount,

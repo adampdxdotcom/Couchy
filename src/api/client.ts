@@ -184,6 +184,7 @@ export const api = {
   createCharacter: (payload: {
     name: string;
     description?: string;
+    physicalDescription?: string;
     notes?: string;
     aliases?: string[];
     portraitImageId?: number | null;
@@ -198,6 +199,7 @@ export const api = {
     payload: {
       name?: string;
       description?: string;
+      physicalDescription?: string;
       notes?: string;
       portraitImageId?: number | null;
       aliases?: string[];
@@ -208,6 +210,18 @@ export const api = {
     requestJson<{ character: CharacterProfile }>(`/api/characters/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
+    }),
+
+  analyzeCharacterPortrait: (id: number, payload?: { imageId?: number; save?: boolean }) =>
+    requestJson<{
+      physicalDescription: string;
+      pipelineUsed: 'vision' | 'wd14_text' | 'wd14_only';
+      tags: string[];
+      modelUsed: string;
+      character: CharacterProfile;
+    }>(`/api/characters/${id}/analyze-portrait`, {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
     }),
 
   deleteCharacter: (id: number) =>
@@ -526,6 +540,7 @@ export const api = {
   generateSetPromptsWithAgent: (payload: {
     characterName: string;
     characterDescription?: string;
+    characterPhysicalDescription?: string;
     loraNames: string[];
     theme: string;
     count: number;
@@ -557,6 +572,7 @@ export const api = {
     }>;
     characterName?: string;
     characterDescription?: string;
+    characterPhysicalDescription?: string;
     loraNames?: string[];
     excludedLoras?: string[];
     batchCount?: number;

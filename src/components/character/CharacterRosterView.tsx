@@ -37,6 +37,7 @@ export const CharacterRosterView: React.FC<CharacterRosterViewProps> = ({
       return (
         c.name.toLowerCase().includes(q) ||
         c.description.toLowerCase().includes(q) ||
+        c.physicalDescription?.toLowerCase().includes(q) ||
         c.aliases.some((a) => a.alias.toLowerCase().includes(q)) ||
         c.loras.some((l) => l.loraName.toLowerCase().includes(q))
       );

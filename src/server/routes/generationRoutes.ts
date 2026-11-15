@@ -208,6 +208,7 @@ generationRouter.post('/lmstudio/generate-prompts', async (req, res) => {
     const {
       characterName,
       characterDescription,
+      characterPhysicalDescription,
       loraNames,
       theme,
       count,
@@ -225,6 +226,7 @@ generationRouter.post('/lmstudio/generate-prompts', async (req, res) => {
     const result = await generatePhotoSetPromptsWithAgent({
       characterName: characterName || 'Character',
       characterDescription: characterDescription || '',
+      characterPhysicalDescription: characterPhysicalDescription || '',
       loraNames: Array.isArray(loraNames) ? loraNames : [],
       theme: theme.trim(),
       count: Number(count) || 4,
@@ -253,6 +255,7 @@ generationRouter.post('/lmstudio/chat', async (req, res) => {
       messages,
       characterName,
       characterDescription,
+      characterPhysicalDescription,
       loraNames,
       excludedLoras,
       batchCount,
@@ -264,6 +267,9 @@ generationRouter.post('/lmstudio/chat', async (req, res) => {
       messages,
       characterName: characterName ? String(characterName) : undefined,
       characterDescription: characterDescription ? String(characterDescription) : undefined,
+      characterPhysicalDescription: characterPhysicalDescription
+        ? String(characterPhysicalDescription)
+        : undefined,
       loraNames: Array.isArray(loraNames) ? loraNames.map(String) : [],
       excludedLoras: Array.isArray(excludedLoras) ? excludedLoras.map(String) : [],
       batchCount: batchCount ? Number(batchCount) : 1,

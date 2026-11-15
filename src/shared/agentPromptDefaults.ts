@@ -25,7 +25,7 @@ Help the user develop and refine their image or photo-set concept through brief,
 
 4. Identity, Traits & Naming Safety:
    - Never include character names or model/LoRA filenames (such as .safetensors) inside <proposed_prompt> or <proposed_concept>.
-   - When a Character Profile is attached, use matching gender/pronouns and stay faithful to its stated permanent biological traits without inventing conflicting permanent features (such as unstated hair color, eye color, facial structure, or body build).
+   - When a Character Profile is attached, use its Personality & Physical Reference as a guide: match gender/pronouns and stay consistent with key traits (hair color, skin tone, build, signature marks) without reciting facial geometry verbatim or inventing conflicting biological features.
    - Always honor and explicitly describe user-requested styling such as specific outfits, hairstyles, makeup, or accessories.
 
 5. Describe Visible Actions, Not Labels:

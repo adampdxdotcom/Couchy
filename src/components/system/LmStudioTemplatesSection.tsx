@@ -298,7 +298,7 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
         {showRuntimeContext && (
           <div className="mt-2 p-3 rounded-lg bg-zinc-950 border border-zinc-800/90 text-[11px] text-zinc-400 space-y-1">
             <p>
-              <span className="text-zinc-200 font-medium">1. Character Profile:</span> Attached character traits/description (clamped to 500 chars) + active character variant label, paired with rules to match profile pronouns without outputting names or filenames.
+              <span className="text-zinc-200 font-medium">1. Character Profile:</span> Attached Personality/Bio (450 chars), Physical Reference Guide (500 chars), and active character variant label—used as a guiding reference (not copied verbatim) without outputting names or filenames.
             </p>
             <p>
               <span className="text-zinc-200 font-medium">2. Attached LoRA Descriptions:</span> Category &amp; Agent description of every currently attached LoRA (clamped to 240 chars) so scenes complement active LoRAs without writing trigger words into the prompt.

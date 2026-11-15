@@ -86,6 +86,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
     name: string;
     aliases: string[];
     description: string;
+    physicalDescription: string;
     notes: string;
   }) => {
     await api.createCharacter(data);
@@ -178,6 +179,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
             await onRefresh();
           }}
           onRefresh={onRefresh}
+          onPushToast={onPushToast}
         />
 
         <CharacterLorasAndWorkflows

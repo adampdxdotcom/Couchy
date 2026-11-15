@@ -1,11 +1,17 @@
 import { Router } from 'express';
+import fs from 'fs';
+import path from 'path';
+import sharp from 'sharp';
 import { db } from '../db.ts';
+import { appConfig } from '../config.ts';
 import {
   getCharacterProfileById,
   listCharacterProfiles,
   mergeCharacters,
+  resolveCharacterPortraitId,
   runAssistedCharacterIdentificationForAll,
 } from '../services/characterService.ts';
+import { analyzeCharacterPortraitPhysicalTraits } from '../services/lmStudioService.ts';
 
 export const charactersRouter = Router();
 
@@ -44,7 +50,8 @@ charactersRouter.get('/:id', (req, res) => {
  */
 charactersRouter.post('/', (req, res) => {
   try {
-    const { name, description, notes, aliases, portraitImageId } = req.body || {};
+    const { name, description, physicalDescription, notes, aliases, portraitImageId } =
+      req.body || {};
     if (!name || !String(name).trim()) {
       res.status(400).json({ error: 'Character name is required' });
       return;
@@ -60,12 +67,13 @@ charactersRouter.post('/', (req, res) => {
 
     const info = db
       .prepare(
-        `INSERT INTO characters (name, description, notes, portrait_image_id, portrait_content_hash)
-         VALUES (?, ?, ?, ?, ?)`
+        `INSERT INTO characters (name, description, physical_description, notes, portrait_image_id, portrait_content_hash)
+         VALUES (?, ?, ?, ?, ?, ?)`
       )
       .run(
         String(name).trim(),
         String(description || ''),
+        String(physicalDescription || ''),
         String(notes || ''),
         portraitImageId ? Number(portraitImageId) : null,
         portraitHash
@@ -105,8 +113,16 @@ const updateCharacterHandler = (req: any, res: any) => {
       return;
     }
 
-    const { name, description, notes, portraitImageId, aliases, tagIds, collectionIds } =
-      req.body || {};
+    const {
+      name,
+      description,
+      physicalDescription,
+      notes,
+      portraitImageId,
+      aliases,
+      tagIds,
+      collectionIds,
+    } = req.body || {};
 
     let portraitId = existing.portrait_image_id;
     let portraitHash = existing.portrait_content_hash;
@@ -138,12 +154,15 @@ const updateCharacterHandler = (req: any, res: any) => {
 
     db.prepare(
       `UPDATE characters
-       SET name = ?, description = ?, notes = ?, portrait_image_id = ?, portrait_content_hash = ?,
+       SET name = ?, description = ?, physical_description = ?, notes = ?, portrait_image_id = ?, portrait_content_hash = ?,
            updated_at = datetime('now')
        WHERE id = ?`
     ).run(
       name !== undefined ? String(name).trim() : existing.name,
       description !== undefined ? String(description) : existing.description,
+      physicalDescription !== undefined
+        ? String(physicalDescription)
+        : existing.physical_description || '',
       notes !== undefined ? String(notes) : existing.notes,
       portraitId,
       portraitHash,
@@ -184,11 +203,97 @@ const updateCharacterHandler = (req: any, res: any) => {
     runAssistedCharacterIdentificationForAll();
     res.json({ character: getCharacterProfileById(charId) });
   } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to update character' });
   }
 };
 
 charactersRouter.patch('/:id', updateCharacterHandler);
 charactersRouter.put('/:id', updateCharacterHandler);
+
+/**
+ * POST /api/characters/:id/analyze-portrait
+ * Analyzes the character's portrait photo (Vision LLM first, falling back to WD14 + Text LLM or WD14-only)
+ * to generate a baseline Physical Description reference guide and saves it to the profile.
+ */
+charactersRouter.post('/:id/analyze-portrait', async (req, res) => {
+  try {
+    const charId = Number(req.params.id);
+    const charRow = db
+      .prepare('SELECT id, name, portrait_image_id, portrait_content_hash FROM characters WHERE id = ?')
+      .get(charId) as
+      | {
+          id: number;
+          name: string;
+          portrait_image_id: number | null;
+          portrait_content_hash: string | null;
+        }
+      | undefined;
+
+    if (!charRow) {
+      res.status(404).json({ error: 'Character not found' });
+      return;
+    }
+
+    const portraitId = req.body?.imageId
+      ? Number(req.body.imageId)
+      : resolveCharacterPortraitId(charRow);
+
+    if (!portraitId) {
+      res.status(400).json({
+        error: 'Set a character portrait image (or confirm an image) before running portrait analysis.',
+      });
+      return;
+    }
+
+    const imgRow = db
+      .prepare('SELECT id, relative_path FROM images WHERE id = ?')
+      .get(portraitId) as { id: number; relative_path: string } | undefined;
+
+    if (!imgRow) {
+      res.status(404).json({ error: 'Portrait image record not found.' });
+      return;
+    }
+
+    const origPath = path.resolve(appConfig.comfyuiOutputDir, imgRow.relative_path);
+    if (!fs.existsSync(origPath)) {
+      res.status(404).json({ error: 'Portrait image file is missing on disk.' });
+      return;
+    }
+
+    // Downscale to ~1MP JPEG so Vision LLMs process fast and cleanly
+    const resizedBuffer = await sharp(origPath)
+      .rotate()
+      .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+
+    const dataUrl = `data:image/jpeg;base64,${resizedBuffer.toString('base64')}`;
+
+    const analysis = await analyzeCharacterPortraitPhysicalTraits({
+      imageBuffer: resizedBuffer,
+      imageBase64DataUrl: dataUrl,
+      characterName: charRow.name,
+    });
+
+    if (req.body?.save !== false) {
+      db.prepare(
+        `UPDATE characters
+         SET physical_description = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      ).run(analysis.physicalDescription, charId);
+    }
+
+    res.json({
+      physicalDescription: analysis.physicalDescription,
+      pipelineUsed: analysis.pipelineUsed,
+      tags: analysis.tags,
+      modelUsed: analysis.modelUsed,
+      character: getCharacterProfileById(charId),
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to analyze character portrait' });
+  }
+});
 
 /**
  * DELETE /api/characters/:id

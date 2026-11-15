@@ -175,6 +175,7 @@ export interface CharacterProfile {
   id: number;
   name: string;
   description: string;
+  physicalDescription: string;
   notes: string;
   portraitImageId: number | null;
   portraitContentHash: string | null;

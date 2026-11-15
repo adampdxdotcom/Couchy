@@ -7,6 +7,7 @@ interface CreateCharacterModalProps {
     name: string;
     aliases: string[];
     description: string;
+    physicalDescription: string;
     notes: string;
   }) => Promise<void>;
 }
@@ -19,6 +20,7 @@ export const CreateCharacterModal: React.FC<CreateCharacterModalProps> = ({
   const [name, setName] = React.useState('');
   const [aliases, setAliases] = React.useState('');
   const [desc, setDesc] = React.useState('');
+  const [physicalDesc, setPhysicalDesc] = React.useState('');
   const [notes, setNotes] = React.useState('');
   const [isSubmitting, setIsSubmitting] = React.useState(false);
 
@@ -36,11 +38,13 @@ export const CreateCharacterModal: React.FC<CreateCharacterModalProps> = ({
           .map((s) => s.trim())
           .filter(Boolean),
         description: desc.trim(),
+        physicalDescription: physicalDesc.trim(),
         notes: notes.trim(),
       });
       setName('');
       setAliases('');
       setDesc('');
+      setPhysicalDesc('');
       setNotes('');
       onClose();
     } finally {
@@ -81,11 +85,22 @@ export const CreateCharacterModal: React.FC<CreateCharacterModalProps> = ({
           />
         </div>
         <div>
-          <label className="block text-zinc-300 mb-1">Description</label>
+          <label className="block text-zinc-300 mb-1">Personality / Bio</label>
           <textarea
             rows={2}
             value={desc}
             onChange={(e) => setDesc(e.target.value)}
+            placeholder="Demeanor, role, vibe, or backstory..."
+            className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
+          />
+        </div>
+        <div>
+          <label className="block text-zinc-300 mb-1">Physical Description (Optional Guide)</label>
+          <textarea
+            rows={2}
+            value={physicalDesc}
+            onChange={(e) => setPhysicalDesc(e.target.value)}
+            placeholder="Hair color, eyes, skin tone, build (or auto-analyze from portrait later)..."
             className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
           />
         </div>
@@ -95,6 +110,7 @@ export const CreateCharacterModal: React.FC<CreateCharacterModalProps> = ({
             rows={2}
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
+            placeholder="Recommended LoRA weights, checkpoints, or workflow notes..."
             className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
           />
         </div>

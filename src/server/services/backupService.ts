@@ -163,16 +163,18 @@ export function restoreUserAnnotationsJson(payload: any): { restoredCounts: Reco
 
     for (const ch of payload.characters || []) {
       db.prepare(
-        `INSERT INTO characters (id, name, description, notes, portrait_content_hash, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO characters (id, name, description, physical_description, notes, portrait_content_hash, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(name) DO UPDATE SET
            description = excluded.description,
+           physical_description = COALESCE(NULLIF(excluded.physical_description, ''), characters.physical_description),
            notes = excluded.notes,
            portrait_content_hash = COALESCE(excluded.portrait_content_hash, characters.portrait_content_hash)`
       ).run(
         ch.id,
         ch.name,
         ch.description || '',
+        ch.physical_description || '',
         ch.notes || '',
         ch.portrait_content_hash || null,
         ch.created_at || new Date().toISOString(),

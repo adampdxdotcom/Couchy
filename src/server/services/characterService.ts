@@ -195,6 +195,7 @@ function buildCharacterProfile(row: any): CharacterProfile {
     id: row.id,
     name: row.name,
     description: row.description || '',
+    physicalDescription: row.physical_description || '',
     notes: row.notes || '',
     portraitImageId: portraitId,
     portraitContentHash: row.portrait_content_hash || null,
@@ -314,8 +315,11 @@ export function mergeCharacters(targetCharacterId: number, sourceCharacterId: nu
       'INSERT OR IGNORE INTO character_collections (character_id, collection_id) SELECT ?, collection_id FROM character_collections WHERE character_id = ?'
     ).run(targetCharacterId, sourceCharacterId);
 
-    // 5. Merge description & notes
+    // 5. Merge description, physical_description & notes
     const mergedDesc = [target.description, source.description].filter(Boolean).join('\n\n');
+    const mergedPhysicalDesc = [target.physical_description, source.physical_description]
+      .filter(Boolean)
+      .join('\n\n');
     const mergedNotes = [
       target.notes,
       source.notes ? `[Merged from ${source.name}]: ${source.notes}` : '',
@@ -325,13 +329,14 @@ export function mergeCharacters(targetCharacterId: number, sourceCharacterId: nu
 
     db.prepare(
       `UPDATE characters
-       SET description = ?, notes = ?,
+       SET description = ?, physical_description = ?, notes = ?,
            portrait_image_id = COALESCE(portrait_image_id, ?),
            portrait_content_hash = COALESCE(portrait_content_hash, ?),
            updated_at = datetime('now')
        WHERE id = ?`
     ).run(
       mergedDesc,
+      mergedPhysicalDesc,
       mergedNotes,
       source.portrait_image_id,
       source.portrait_content_hash,

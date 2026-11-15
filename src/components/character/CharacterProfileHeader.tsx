@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft,
   Download,
+  Loader2,
+  ScanFace,
   Trash2,
   User,
 } from 'lucide-react';
@@ -16,6 +18,7 @@ interface CharacterProfileHeaderProps {
   onFilterGallery: () => void;
   onDeleteProfile: () => Promise<void>;
   onRefresh: () => Promise<void>;
+  onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
 export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
@@ -26,8 +29,52 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
   onFilterGallery,
   onDeleteProfile,
   onRefresh,
+  onPushToast,
 }) => {
   const [editAliasesInput, setEditAliasesInput] = useState('');
+  const [personalityInput, setPersonalityInput] = useState(character.description);
+  const [physicalInput, setPhysicalInput] = useState(character.physicalDescription || '');
+  const [notesInput, setNotesInput] = useState(character.notes);
+  const [isAnalyzingPortrait, setIsAnalyzingPortrait] = useState(false);
+  const [analyzeStatus, setAnalyzeStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPersonalityInput(character.description);
+  }, [character.id, character.description]);
+
+  useEffect(() => {
+    setPhysicalInput(character.physicalDescription || '');
+  }, [character.id, character.physicalDescription]);
+
+  useEffect(() => {
+    setNotesInput(character.notes);
+  }, [character.id, character.notes]);
+
+  const handleAnalyzePortrait = async () => {
+    if (isAnalyzingPortrait) return;
+    setIsAnalyzingPortrait(true);
+    setAnalyzeStatus(null);
+    try {
+      const res = await api.analyzeCharacterPortrait(character.id);
+      setPhysicalInput(res.physicalDescription);
+      const modeLabel =
+        res.pipelineUsed === 'vision'
+          ? `Vision (${res.modelUsed})`
+          : res.pipelineUsed === 'wd14_text'
+          ? `WD14 + LLM (${res.modelUsed})`
+          : 'WD14 Tags';
+      const msg = `Analyzed portrait via ${modeLabel}`;
+      setAnalyzeStatus(msg);
+      onPushToast?.(msg, 'success');
+      await onRefresh();
+    } catch (err: any) {
+      const errMsg = err?.message || 'Failed to analyze character portrait.';
+      setAnalyzeStatus(errMsg);
+      onPushToast?.(errMsg, 'error');
+    } finally {
+      setIsAnalyzingPortrait(false);
+    }
+  };
 
   return (
     <>
@@ -122,34 +169,87 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
             <div className="min-w-0">
               <label className="block text-zinc-400 mb-1 font-medium">
-                Character Description
+                Personality &amp; Bio
               </label>
               <textarea
                 rows={3}
-                defaultValue={character.description}
-                onBlur={async (e) => {
-                  await api.updateCharacter(character.id, {
-                    description: e.target.value,
-                  });
-                  await onRefresh();
+                value={personalityInput}
+                onChange={(e) => setPersonalityInput(e.target.value)}
+                onBlur={async () => {
+                  if (personalityInput !== character.description) {
+                    await api.updateCharacter(character.id, {
+                      description: personalityInput,
+                    });
+                    await onRefresh();
+                  }
                 }}
-                placeholder="Visual traits, lore, canonical outfits, or prompt triggers..."
-                className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200"
+                placeholder="Demeanor, personality, lore, vibe, or role..."
+                className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 focus:outline-none focus:border-indigo-500"
               />
             </div>
             <div className="min-w-0">
               <label className="block text-zinc-400 mb-1 font-medium">User Notes</label>
               <textarea
                 rows={3}
-                defaultValue={character.notes}
-                onBlur={async (e) => {
-                  await api.updateCharacter(character.id, { notes: e.target.value });
-                  await onRefresh();
+                value={notesInput}
+                onChange={(e) => setNotesInput(e.target.value)}
+                onBlur={async () => {
+                  if (notesInput !== character.notes) {
+                    await api.updateCharacter(character.id, { notes: notesInput });
+                    await onRefresh();
+                  }
                 }}
                 placeholder="Recommended LoRA weights, preferred checkpoints, or workflow notes..."
-                className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200"
+                className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 focus:outline-none focus:border-indigo-500"
               />
             </div>
+          </div>
+
+          {/* Physical Description Reference Guide + Adaptive Portrait Scan */}
+          <div className="text-xs space-y-1.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-zinc-400 font-medium">
+                  Physical Description (Agent Reference Guide)
+                </label>
+                {analyzeStatus && (
+                  <span className="text-[11px] text-indigo-300 font-mono">{analyzeStatus}</span>
+                )}
+              </div>
+              <button
+                type="button"
+                disabled={isAnalyzingPortrait || !currentPortraitThumb}
+                onClick={handleAnalyzePortrait}
+                title={
+                  currentPortraitThumb
+                    ? 'Scan character portrait (uses Vision LLM if available, or falls back to WD14 + LLM) to extract baseline physical traits'
+                    : 'Set a portrait image (or confirm a character image) first'
+                }
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-600/20 hover:bg-indigo-600/35 border border-indigo-500/40 disabled:opacity-40 text-indigo-200 rounded-lg cursor-pointer transition-colors"
+              >
+                {isAnalyzingPortrait ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <ScanFace className="w-3.5 h-3.5" />
+                )}
+                <span>{isAnalyzingPortrait ? 'Analyzing Portrait...' : 'Analyze Portrait'}</span>
+              </button>
+            </div>
+            <textarea
+              rows={2}
+              value={physicalInput}
+              onChange={(e) => setPhysicalInput(e.target.value)}
+              onBlur={async () => {
+                if (physicalInput !== (character.physicalDescription || '')) {
+                  await api.updateCharacter(character.id, {
+                    physicalDescription: physicalInput,
+                  });
+                  await onRefresh();
+                }
+              }}
+              placeholder="Gender presentation, skin tone, hair color/texture, eye color, build, and permanent marks (used by the Agent as a guide, not copied verbatim)..."
+              className="w-full p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 focus:outline-none focus:border-indigo-500"
+            />
           </div>
 
           {/* Edit Aliases Inline */}
