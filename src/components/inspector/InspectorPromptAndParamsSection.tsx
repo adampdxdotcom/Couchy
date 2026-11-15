@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import type { ImageRecord } from '../../shared/types.ts';
+import { copyTextToClipboard } from '../../shared/utils.ts';
 
 interface InspectorPromptAndParamsSectionProps {
   activeImage: ImageRecord;
@@ -24,11 +25,20 @@ export const InspectorPromptAndParamsSection: React.FC<
   onClose,
 }) => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
 
-  const copyText = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+    };
+  }, []);
+
+  const copyText = async (text: string, label: string) => {
+    const ok = await copyTextToClipboard(text);
+    if (!ok) return;
+    if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
     setCopiedField(label);
-    setTimeout(() => setCopiedField(null), 1500);
+    copyTimerRef.current = window.setTimeout(() => setCopiedField(null), 1500);
   };
 
   return (

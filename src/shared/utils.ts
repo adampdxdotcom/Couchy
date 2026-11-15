@@ -474,3 +474,61 @@ export function filterAndSortGhostItems(
     }
   });
 }
+
+/**
+ * Copies text to clipboard using Clipboard API when available, falling back to a temporary
+ * textarea + execCommand('copy') for non-HTTPS LAN origins or permission-restricted iframes.
+ */
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (
+    typeof navigator !== 'undefined' &&
+    navigator.clipboard &&
+    typeof navigator.clipboard.writeText === 'function'
+  ) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to execCommand fallback
+    }
+  }
+
+  if (typeof document === 'undefined' || !document.body) {
+    return false;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '0';
+  textarea.style.left = '0';
+  textarea.style.width = '2px';
+  textarea.style.height = '2px';
+  textarea.style.padding = '0';
+  textarea.style.border = 'none';
+  textarea.style.outline = 'none';
+  textarea.style.boxShadow = 'none';
+  textarea.style.background = 'transparent';
+  textarea.style.opacity = '0';
+
+  const previouslyFocused = document.activeElement as HTMLElement | null;
+  document.body.appendChild(textarea);
+
+  let copied = false;
+  try {
+    textarea.focus({ preventScroll: true });
+    textarea.select();
+    textarea.setSelectionRange(0, text.length);
+    copied = document.execCommand('copy');
+  } catch {
+    copied = false;
+  } finally {
+    document.body.removeChild(textarea);
+    if (previouslyFocused && previouslyFocused.isConnected && typeof previouslyFocused.focus === 'function') {
+      previouslyFocused.focus({ preventScroll: true });
+    }
+  }
+
+  return copied;
+}

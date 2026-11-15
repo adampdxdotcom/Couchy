@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Check, Code, Copy, Download, Save, X } from 'lucide-react';
+import { copyTextToClipboard } from '../../shared/utils.ts';
 
 export interface WorkflowJsonModalProps {
   isOpen: boolean;
@@ -31,12 +32,10 @@ export const WorkflowJsonModal: React.FC<WorkflowJsonModalProps> = ({
   if (!isOpen) return null;
 
   const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(jsonText);
+    const ok = await copyTextToClipboard(jsonText);
+    if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Fallback
     }
   };
 
