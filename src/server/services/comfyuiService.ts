@@ -224,11 +224,14 @@ export function listModelInventory(): ModelInventoryItem[] {
       `
       SELECT
         m.*,
-        COUNT(DISTINCT im.image_id) AS dependentImageCount,
-        COUNT(DISTINCT iw.workflow_id) AS dependentWorkflowCount
+        COUNT(DISTINCT i.id) AS dependentImageCount,
+        COUNT(DISTINCT iw.workflow_id) AS dependentWorkflowCount,
+        AVG(CASE WHEN rt.rating > 0 THEN rt.rating ELSE NULL END) AS avgRating
       FROM models m
       LEFT JOIN image_models im ON LOWER(im.model_name) = LOWER(m.filename)
-      LEFT JOIN image_workflows iw ON iw.image_id = im.image_id
+      LEFT JOIN images i ON i.id = im.image_id AND i.is_missing = 0
+      LEFT JOIN ratings rt ON rt.content_hash = i.content_hash
+      LEFT JOIN image_workflows iw ON iw.image_id = i.id
       GROUP BY m.id
       ORDER BY m.is_installed DESC, dependentImageCount DESC, m.filename COLLATE NOCASE ASC
     `
@@ -262,6 +265,10 @@ export function listModelInventory(): ModelInventoryItem[] {
     civitaiFetchedAt: r.civitai_fetched_at || null,
     hfRepoId: r.hf_repo_id || null,
     userNotes: r.user_notes || null,
+    nickname: r.nickname || null,
+    mentionEnabled: Boolean(r.mention_enabled),
+    llmDescription: r.llm_description || null,
+    averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
     lastSeenAt: r.last_seen_at,
     dependentImageCount: Number(r.dependentImageCount || 0),
     dependentWorkflowCount: Number(r.dependentWorkflowCount || 0),

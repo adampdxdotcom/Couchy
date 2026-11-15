@@ -4,6 +4,7 @@ import type {
   GenerationLoraSelection,
   ImageRecord,
   LoraExplorerItem,
+  ModelInventoryItem,
 } from '../../shared/types.ts';
 import {
   buildMentionEntries,
@@ -16,10 +17,12 @@ import {
 interface UseQuickGenMentionsParams {
   characters: CharacterProfile[];
   loras: LoraExplorerItem[];
+  models?: ModelInventoryItem[];
   allImages: ImageRecord[];
   prompt: string;
   setPrompt: React.Dispatch<React.SetStateAction<string>>;
   setAttachedCharacter: React.Dispatch<React.SetStateAction<CharacterProfile | null>>;
+  setAttachedCheckpoint: React.Dispatch<React.SetStateAction<string | null>>;
   setAttachedLoras: React.Dispatch<React.SetStateAction<GenerationLoraSelection[]>>;
   setRemovedLoraKeys: React.Dispatch<React.SetStateAction<Set<string>>>;
   setShowSettingsMenu: React.Dispatch<React.SetStateAction<boolean>>;
@@ -32,10 +35,12 @@ interface UseQuickGenMentionsParams {
 export function useQuickGenMentions({
   characters,
   loras,
+  models = [],
   allImages,
   prompt,
   setPrompt,
   setAttachedCharacter,
+  setAttachedCheckpoint,
   setAttachedLoras,
   setRemovedLoraKeys,
   setShowSettingsMenu,
@@ -62,11 +67,12 @@ export function useQuickGenMentions({
       buildMentionEntries({
         characters,
         loras,
+        models,
         allImages,
         query: mentionQuery,
         tab: mentionTab,
       }),
-    [characters, loras, allImages, mentionQuery, mentionTab]
+    [characters, loras, models, allImages, mentionQuery, mentionTab]
   );
 
   useEffect(() => {
@@ -142,6 +148,16 @@ export function useQuickGenMentions({
           },
         ];
       });
+
+      if (mentionTriggerRange) {
+        const before = prompt.slice(0, mentionTriggerRange.start);
+        const after = prompt.slice(mentionTriggerRange.end);
+        const cleanBefore = before.endsWith(' ') ? before : before ? `${before} ` : '';
+        const cleanAfter = after.startsWith(' ') ? after.slice(1) : after;
+        nextPrompt = `${cleanBefore}${cleanAfter}`.trim();
+      }
+    } else if (entry.type === 'model' && entry.modelItem) {
+      setAttachedCheckpoint(entry.modelItem.filename);
 
       if (mentionTriggerRange) {
         const before = prompt.slice(0, mentionTriggerRange.start);

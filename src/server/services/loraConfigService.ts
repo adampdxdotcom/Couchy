@@ -136,3 +136,95 @@ export function updateLoraMentionConfig(input: LoraMentionConfigInput): void {
     );
   }
 }
+
+/**
+ * Toggles visibility (hidden vs shown) for any model row by numeric ID.
+ */
+export function updateModelVisibility(modelId: number, isHidden: boolean): void {
+  const result = db
+    .prepare(`UPDATE models SET is_hidden = ? WHERE id = ?`)
+    .run(isHidden ? 1 : 0, modelId);
+  if (result.changes === 0) {
+    throw new Error(`Model #${modelId} not found`);
+  }
+}
+
+/**
+ * Updates user-facing @mention settings, Details & Strengths (llm_description),
+ * and personal user notes for a base/utility model by numeric ID.
+ */
+export function updateModelConfig(
+  modelId: number,
+  input: {
+    mentionEnabled?: unknown;
+    nickname?: unknown;
+    llmDescription?: unknown;
+    userNotes?: unknown;
+  }
+): void {
+  const existingRow = db
+    .prepare(
+      `SELECT id, filename, nickname, mention_enabled, llm_description, user_notes
+       FROM models WHERE id = ?`
+    )
+    .get(modelId) as
+    | {
+        id: number;
+        filename: string;
+        nickname: string | null;
+        mention_enabled: number;
+        llm_description: string | null;
+        user_notes: string | null;
+      }
+    | undefined;
+
+  if (!existingRow) {
+    throw new Error(`Model #${modelId} not found`);
+  }
+
+  const cleanNick =
+    input.nickname !== undefined
+      ? typeof input.nickname === 'string'
+        ? input.nickname.trim().replace(/^@+/, '').toLowerCase() || null
+        : null
+      : (existingRow.nickname ?? null);
+
+  if (cleanNick) {
+    const conflict = db
+      .prepare(`SELECT filename FROM models WHERE LOWER(nickname) = ? AND id != ?`)
+      .get(cleanNick, modelId) as { filename: string } | undefined;
+    if (conflict) {
+      throw new Error(`Nickname "@${cleanNick}" is already assigned to ${conflict.filename}`);
+    }
+  }
+
+  const isMention =
+    input.mentionEnabled !== undefined
+      ? input.mentionEnabled
+        ? 1
+        : 0
+      : (existingRow.mention_enabled ?? 0);
+
+  const cleanDetails =
+    input.llmDescription !== undefined
+      ? typeof input.llmDescription === 'string'
+        ? input.llmDescription.trim() || null
+        : null
+      : (existingRow.llm_description ?? null);
+
+  const cleanUserNotes =
+    input.userNotes !== undefined
+      ? typeof input.userNotes === 'string'
+        ? input.userNotes.trim() || null
+        : null
+      : (existingRow.user_notes ?? null);
+
+  db.prepare(
+    `UPDATE models
+     SET nickname = ?,
+         mention_enabled = ?,
+         llm_description = ?,
+         user_notes = ?
+     WHERE id = ?`
+  ).run(cleanNick, isMention, cleanDetails, cleanUserNotes, modelId);
+}

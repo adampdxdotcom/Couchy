@@ -975,6 +975,10 @@ export default function App() {
               setFilters({ ...INITIAL_FILTERS, loras: [loraFilename] });
               setActiveTab('gallery');
             }}
+            onFilterGalleryByModel={(modelFilename) => {
+              setFilters({ ...INITIAL_FILTERS, checkpoint: modelFilename });
+              setActiveTab('gallery');
+            }}
             onPushToast={pushToast}
           />
         )}
@@ -1006,6 +1010,7 @@ export default function App() {
         <FloatingQuickGenBar
           characters={characters}
           loras={visibleLoras}
+          models={models}
           allImages={allImages}
           workflows={workflows}
           prefillPayload={quickGenPrefill}

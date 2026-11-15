@@ -320,6 +320,26 @@ export const api = {
 
   listModelInventory: () => requestJson<{ items: ModelInventoryItem[] }>('/api/models/inventory'),
 
+  updateModelVisibility: (modelId: number, isHidden: boolean) =>
+    requestJson<{ ok: boolean; items: ModelInventoryItem[] }>(`/api/models/${modelId}/visibility`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isHidden }),
+    }),
+
+  updateModelConfig: (
+    modelId: number,
+    payload: {
+      mentionEnabled?: boolean;
+      nickname?: string | null;
+      llmDescription?: string | null;
+      userNotes?: string | null;
+    }
+  ) =>
+    requestJson<{ ok: boolean; items: ModelInventoryItem[] }>(`/api/models/${modelId}/config`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
+
   syncModelInventory: () =>
     requestJson<{ items: ModelInventoryItem[] }>('/api/models/sync', { method: 'POST' }),
 

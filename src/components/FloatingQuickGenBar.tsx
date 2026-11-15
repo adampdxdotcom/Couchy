@@ -14,6 +14,7 @@ import type {
   CharacterProfile,
   ImageRecord,
   LoraExplorerItem,
+  ModelInventoryItem,
   WorkflowLibraryItem,
 } from '../shared/types.ts';
 import { ASPECT_RATIO_PRESETS } from '../shared/utils.ts';
@@ -30,6 +31,7 @@ export type { QuickGenPrefill };
 interface FloatingQuickGenBarProps {
   characters: CharacterProfile[];
   loras?: LoraExplorerItem[];
+  models?: ModelInventoryItem[];
   allImages: ImageRecord[];
   workflows: WorkflowLibraryItem[];
   prefillPayload?: QuickGenPrefill | null;
@@ -46,6 +48,7 @@ interface FloatingQuickGenBarProps {
 export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   characters,
   loras = [],
+  models = [],
   allImages,
   workflows,
   prefillPayload,
@@ -74,10 +77,12 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   const mentions = useQuickGenMentions({
     characters,
     loras,
+    models,
     allImages,
     prompt: submitState.prompt,
     setPrompt: submitState.setPrompt,
     setAttachedCharacter: submitState.setAttachedCharacter,
+    setAttachedCheckpoint: submitState.setAttachedCheckpoint,
     setAttachedLoras: submitState.setAttachedLoras,
     setRemovedLoraKeys: submitState.setRemovedLoraKeys,
     setShowSettingsMenu: submitState.setShowSettingsMenu,
@@ -324,10 +329,10 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                 }}
                 placeholder={
                   submitState.agentEnabled
-                    ? 'Brainstorm your image or set idea with the Agent (Enter to send, @ for character/LoRA)...'
+                    ? 'Brainstorm your image or set idea with the Agent (Enter to send, @ for character/LoRA/model)...'
                     : lmStudioOnline
-                    ? 'What do you want to create? (Type @ for character/LoRA, or drop/paste an image)'
-                    : 'What do you want to create? (Type @ to mention a character or LoRA)'
+                    ? 'What do you want to create? (Type @ for character/LoRA/model, or drop/paste an image)'
+                    : 'What do you want to create? (Type @ to mention a character, LoRA, or model)'
                 }
                 className={`w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-sm resize-none focus:outline-none leading-relaxed transition-[height,min-height] duration-200 overflow-y-auto ${
                   submitState.agentEnabled

@@ -384,6 +384,10 @@ export interface ModelInventoryItem {
   civitaiFetchedAt?: string | null;
   hfRepoId: string | null;
   userNotes: string | null;
+  nickname?: string | null;
+  mentionEnabled?: boolean;
+  llmDescription?: string | null;
+  averageRating?: number;
   lastSeenAt: string;
   dependentImageCount: number;
   dependentWorkflowCount: number;

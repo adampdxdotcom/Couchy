@@ -1,11 +1,16 @@
 import React from 'react';
-import { Layers, Search, User, X } from 'lucide-react';
+import { Cpu, Layers, Search, User, X } from 'lucide-react';
 import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
-import { getCleanLoraLabel, type MentionEntry, type MentionTab } from './quickGenUtils.ts';
+import {
+  getCleanLoraLabel,
+  getCleanModelMentionLabel,
+  type MentionEntry,
+  type MentionTab,
+} from './quickGenUtils.ts';
 
 interface QuickGenMentionPopoverProps {
   entries: MentionEntry[];
-  counts: { all: number; characters: number; loras: number };
+  counts: { all: number; characters: number; loras: number; models: number };
   activeTab: MentionTab;
   activeIndex: number;
   query: string;
@@ -57,13 +62,14 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
         </button>
       </div>
 
-      {/* Filter Tabs: All | Characters | LoRAs */}
-      <div className="px-4 py-2 border-b border-zinc-800/80 bg-zinc-900/40 flex items-center gap-1.5">
+      {/* Filter Tabs: All | Characters | LoRAs | Models */}
+      <div className="px-4 py-2 border-b border-zinc-800/80 bg-zinc-900/40 flex items-center gap-1.5 overflow-x-auto">
         {(
           [
             { id: 'all', label: 'All', count: counts.all },
             { id: 'characters', label: 'Characters', count: counts.characters },
             { id: 'loras', label: 'LoRAs', count: counts.loras },
+            { id: 'models', label: 'Models', count: counts.models },
           ] as const
         ).map((tab) => {
           const isTabActive = activeTab === tab.id;
@@ -74,14 +80,16 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
               onClick={() => onTabChange(tab.id)}
               className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
                 isTabActive
-                  ? 'bg-indigo-600 text-white shadow-sm'
+                  ? tab.id === 'models'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : 'bg-indigo-600 text-white shadow-sm'
                   : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
               }`}
             >
               <span>{tab.label}</span>
               <span
                 className={`font-mono text-[10px] tabular-nums ${
-                  isTabActive ? 'text-indigo-200' : 'text-zinc-500'
+                  isTabActive ? 'text-white/80' : 'text-zinc-500'
                 }`}
               >
                 {tab.count}
@@ -93,11 +101,13 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
 
       {entries.length === 0 ? (
         <div className="p-6 text-center text-zinc-400">
-          {activeTab === 'loras'
+          {activeTab === 'models'
+            ? 'No matching @mention Base Models found. Enable @mention on Base Models in the Models workspace!'
+            : activeTab === 'loras'
             ? 'No matching @mention LoRAs found. Enable LoRAs and set nicknames in the LoRA Explorer!'
             : activeTab === 'characters'
             ? 'No matching characters found. Create a character in the Characters tab to @mention them.'
-            : 'No matching characters or @mentioned LoRAs found. Enable LoRAs for @mention in the LoRA Explorer!'}
+            : 'No matching characters, @mentioned LoRAs, or Base Models found.'}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-12 max-h-[380px]">
@@ -122,6 +132,18 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                       <div className="w-full h-full bg-amber-500/10 flex items-center justify-center text-amber-400">
                         <Layers className="w-4 h-4" />
                       </div>
+                    ) : entry.type === 'model' ? (
+                      entry.thumbnailUrl ? (
+                        <img
+                          src={entry.thumbnailUrl}
+                          alt={entry.title}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full bg-emerald-500/10 flex items-center justify-center text-emerald-400">
+                          <Cpu className="w-4 h-4" />
+                        </div>
+                      )
                     ) : (
                       <CharacterPortraitImage
                         src={entry.thumbnailUrl}
@@ -137,6 +159,11 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                       {entry.type === 'lora' && (
                         <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-amber-400/10 text-amber-300 border border-amber-400/20 shrink-0">
                           LoRA
+                        </span>
+                      )}
+                      {entry.type === 'model' && (
+                        <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-emerald-400/10 text-emerald-300 border border-emerald-400/20 shrink-0">
+                          Model
                         </span>
                       )}
                     </div>
@@ -174,6 +201,30 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                       </span>
                     </div>
                   </div>
+                ) : highlightedEntry.type === 'model' ? (
+                  highlightedEntry.thumbnailUrl ? (
+                    <img
+                      src={highlightedEntry.thumbnailUrl}
+                      alt={highlightedEntry.title}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center gap-2.5 p-4 text-center">
+                      <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-inner">
+                        <Cpu className="w-6 h-6" />
+                      </div>
+                      <div className="text-sm font-semibold text-zinc-100">
+                        {getCleanModelMentionLabel(
+                          highlightedEntry.modelItem || { name: highlightedEntry.title }
+                        )}
+                      </div>
+                      {highlightedEntry.modelItem?.llmDescription && (
+                        <p className="text-[11px] text-zinc-400 line-clamp-3 max-w-xs">
+                          {highlightedEntry.modelItem.llmDescription}
+                        </p>
+                      )}
+                    </div>
+                  )
                 ) : highlightedEntry.thumbnailUrl ? (
                   highlightedEntry.type === 'character' &&
                   highlightedEntry.character?.portraitCrop &&
@@ -201,11 +252,23 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                   <span className="font-medium text-zinc-200 truncate">
                     {highlightedEntry.type === 'lora'
                       ? getCleanLoraLabel(highlightedEntry.loraItem || { name: highlightedEntry.title })
+                      : highlightedEntry.type === 'model'
+                      ? getCleanModelMentionLabel(
+                          highlightedEntry.modelItem || { name: highlightedEntry.title }
+                        )
                       : highlightedEntry.character?.name}
                   </span>
-                  <span className="text-indigo-300 font-mono shrink-0 ml-2">
+                  <span
+                    className={`font-mono shrink-0 ml-2 ${
+                      highlightedEntry.type === 'model' ? 'text-emerald-300' : 'text-indigo-300'
+                    }`}
+                  >
                     {highlightedEntry.type === 'lora'
                       ? highlightedEntry.loraItem?.isInstalled
+                        ? 'Installed'
+                        : 'Missing'
+                      : highlightedEntry.type === 'model'
+                      ? highlightedEntry.modelItem?.isInstalled
                         ? 'Installed'
                         : 'Missing'
                       : `${highlightedEntry.character?.loras.length || 0} LoRA(s)`}

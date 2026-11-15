@@ -8,6 +8,7 @@ import {
   healExistingCivitaiLinks,
   resolveSafeModelPreviewPath,
 } from '../services/civitaiMetadataService.ts';
+import { updateModelConfig, updateModelVisibility } from '../services/loraConfigService.ts';
 
 export const modelsRouter = Router();
 
@@ -140,5 +141,43 @@ modelsRouter.get('/models/:name/impact', (req, res) => {
     });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to compute model impact report' });
+  }
+});
+
+/**
+ * PATCH /api/models/:id/visibility
+ * Toggles whether a base or utility model is hidden in Base Models & Quick Gen @mention.
+ */
+modelsRouter.patch('/models/:id/visibility', (req, res) => {
+  try {
+    const modelId = Number(req.params.id);
+    if (!Number.isFinite(modelId) || modelId <= 0) {
+      res.status(400).json({ error: 'Valid numeric model ID is required' });
+      return;
+    }
+    const { isHidden } = req.body || {};
+    updateModelVisibility(modelId, Boolean(isHidden));
+    res.json({ ok: true, items: listModelInventory() });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to update model visibility' });
+  }
+});
+
+/**
+ * PATCH /api/models/:id/config
+ * Updates @mention settings, Model Details & Strengths, and personal notes for a model.
+ */
+modelsRouter.patch('/models/:id/config', (req, res) => {
+  try {
+    const modelId = Number(req.params.id);
+    if (!Number.isFinite(modelId) || modelId <= 0) {
+      res.status(400).json({ error: 'Valid numeric model ID is required' });
+      return;
+    }
+    const { mentionEnabled, nickname, llmDescription, userNotes } = req.body || {};
+    updateModelConfig(modelId, { mentionEnabled, nickname, llmDescription, userNotes });
+    res.json({ ok: true, items: listModelInventory() });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to update model settings' });
   }
 });

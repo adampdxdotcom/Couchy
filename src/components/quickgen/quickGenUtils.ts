@@ -3,6 +3,7 @@ import type {
   ImageLoraRecord,
   ImageRecord,
   LoraExplorerItem,
+  ModelInventoryItem,
   PortraitCrop,
   QuickGenChatMessage,
 } from '../../shared/types.ts';
@@ -37,13 +38,14 @@ export interface QuickGenPrefill {
   timestamp: number;
 }
 
-export type MentionTab = 'all' | 'characters' | 'loras';
+export type MentionTab = 'all' | 'characters' | 'loras' | 'models';
 
 export interface MentionEntry {
   key: string;
-  type: 'character' | 'image' | 'lora';
+  type: 'character' | 'image' | 'lora' | 'model';
   character?: CharacterProfile;
   loraItem?: LoraExplorerItem;
+  modelItem?: ModelInventoryItem;
   title: string;
   subtitle: string;
   thumbnailUrl: string | null;
@@ -81,6 +83,16 @@ export function getCleanModelLabel(name?: string | null): string {
     .split('/')
     .pop()!
     .replace(/\.(safetensors|pt|ckpt|pth|bin|gguf|sft)$/i, '');
+}
+
+/** Returns preferred display label for a base model in Quick Gen @mention (nickname first). */
+export function getCleanModelMentionLabel(
+  model?: { nickname?: string | null; name?: string; filename?: string } | null
+): string {
+  if (!model) return 'Model';
+  const nick = (model.nickname || '').trim().replace(/^@+/, '');
+  if (nick) return nick;
+  return getCleanModelLabel(model.name || model.filename);
 }
 
 /** Normalizes a LoRA or model filename/path to a lowercase base key without extension. */
@@ -179,17 +191,19 @@ export async function downscaleImageFileTo1Mp(file: File): Promise<{
 export function buildMentionEntries(params: {
   characters: CharacterProfile[];
   loras: LoraExplorerItem[];
+  models?: ModelInventoryItem[];
   allImages: ImageRecord[];
   query: string;
   tab: MentionTab;
 }): {
   mentionEntries: MentionEntry[];
-  mentionCounts: { all: number; characters: number; loras: number };
+  mentionCounts: { all: number; characters: number; loras: number; models: number };
 } {
-  const { characters, loras, allImages, query, tab } = params;
+  const { characters, loras, models = [], allImages, query, tab } = params;
   const q = query.trim().toLowerCase();
   const directCharEntries: MentionEntry[] = [];
   const loraEntries: MentionEntry[] = [];
+  const modelEntries: MentionEntry[] = [];
   const imagePromptEntries: MentionEntry[] = [];
 
   for (const char of characters) {
@@ -266,17 +280,58 @@ export function buildMentionEntries(params: {
     }
   }
 
-  // Place Character and LoRA matches at the top of the list, above matching image prompts
+  for (const model of models.filter(
+    (m) =>
+      (m.modelType === 'diffusion' || m.modelType === 'checkpoint') &&
+      !m.isHidden &&
+      m.mentionEnabled
+  )) {
+    const nick = (model.nickname || '').toLowerCase();
+    const mName = model.name.toLowerCase();
+    const mFile = model.filename.toLowerCase();
+    const mArch = (model.baseModel || '').toLowerCase();
+    const mDetails = (model.llmDescription || '').toLowerCase();
+
+    const matchesModel =
+      !q ||
+      (nick && nick.includes(q)) ||
+      mName.includes(q) ||
+      mFile.includes(q) ||
+      (mArch && mArch.includes(q)) ||
+      (mDetails && mDetails.includes(q));
+
+    if (matchesModel) {
+      const displayLabel = getCleanModelMentionLabel(model);
+      modelEntries.push({
+        key: `model-${model.id}`,
+        type: 'model',
+        modelItem: model,
+        title: displayLabel,
+        subtitle: `Base Model${model.baseModel ? ` · ${model.baseModel}` : ''}`,
+        thumbnailUrl: model.previewImages?.[0]?.url || null,
+        promptSnippet: displayLabel,
+      });
+    }
+  }
+
+  // Place Character, LoRA, and Base Model matches at the top of the list, above matching image prompts
   const charTabEntries = [...directCharEntries, ...imagePromptEntries];
-  const allCombined = [...directCharEntries, ...loraEntries, ...imagePromptEntries];
+  const allCombined = [...directCharEntries, ...loraEntries, ...modelEntries, ...imagePromptEntries];
   const mentionCounts = {
     all: allCombined.length,
     characters: charTabEntries.length,
     loras: loraEntries.length,
+    models: modelEntries.length,
   };
 
   const mentionEntries =
-    tab === 'characters' ? charTabEntries : tab === 'loras' ? loraEntries : allCombined;
+    tab === 'characters'
+      ? charTabEntries
+      : tab === 'loras'
+      ? loraEntries
+      : tab === 'models'
+      ? modelEntries
+      : allCombined;
 
   return { mentionEntries, mentionCounts };
 }

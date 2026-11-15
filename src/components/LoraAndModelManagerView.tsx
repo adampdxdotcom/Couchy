@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { ExternalLink, RefreshCw } from 'lucide-react';
 import { api } from '../api/client.ts';
+import { BaseModelDetailView } from './models/BaseModelDetailView.tsx';
+import { isBaseModelType } from './models/BaseModelExplorerGrid.tsx';
 import { LoraDetailView } from './LoraDetailView.tsx';
 import { ModelDownloaderTab } from './ModelDownloaderTab.tsx';
 import { LoraExplorerTab } from './models/LoraExplorerTab.tsx';
@@ -15,12 +17,14 @@ interface LoraAndModelManagerViewProps {
   onRefresh: () => Promise<void>;
   onOpenImage: (img: ImageRecord) => void;
   onFilterGalleryByLora: (loraFilename: string) => void;
+  onFilterGalleryByModel: (modelFilename: string) => void;
   onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
 /**
  * Top-level coordinator for LoRA Explorer, LoRA Detail Inspector,
- * Model Inventory & Missing Dependencies, and the Civitai / Hugging Face Downloader.
+ * Base Models Explorer (non-LoRA checkpoints, diffusion models, CLIP, VAE, etc.),
+ * and the Civitai / Hugging Face Downloader.
  */
 export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = ({
   loras,
@@ -29,10 +33,12 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   onRefresh,
   onOpenImage,
   onFilterGalleryByLora,
+  onFilterGalleryByModel,
   onPushToast,
 }) => {
   const [subTab, setSubTab] = useState<'loras' | 'dependencies' | 'downloader'>('loras');
   const [selectedLoraName, setSelectedLoraName] = useState<string | null>(null);
+  const [selectedModelId, setSelectedModelId] = useState<number | null>(null);
   const [highlightedModelFilename, setHighlightedModelFilename] = useState<string | null>(null);
   const [impactReport, setImpactReport] = useState<any | null>(null);
   const [fetchingModelId, setFetchingModelId] = useState<number | null>(null);
@@ -41,6 +47,8 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   const downloader = useModelDownloaderState(subTab, onRefresh);
   const selectedLora =
     loras.find((l) => l.filename.toLowerCase() === (selectedLoraName || '').toLowerCase()) || null;
+  const selectedModel =
+    selectedModelId !== null ? models.find((m) => m.id === selectedModelId) || null : null;
 
   const handleInspectDownload = async (job: any) => {
     const dest = typeof job.destination_path === 'string' ? job.destination_path : '';
@@ -55,10 +63,12 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       if (!existsInLoras) {
         await onRefresh();
       }
+      setSelectedModelId(null);
       setSelectedLoraName(targetFilename);
       return;
     }
 
+    setSelectedLoraName(null);
     setHighlightedModelFilename(targetFilename || null);
     setSubTab('dependencies');
   };
@@ -171,6 +181,66 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
     }
   };
 
+  const handleUpdateModelConfig = async (
+    modelId: number,
+    payload: {
+      mentionEnabled?: boolean;
+      nickname?: string | null;
+      llmDescription?: string | null;
+      userNotes?: string | null;
+    }
+  ) => {
+    const target = models.find((m) => m.id === modelId);
+    const label = target?.name || `Model #${modelId}`;
+    try {
+      await api.updateModelConfig(modelId, payload);
+      await onRefresh();
+      if (onPushToast) {
+        if (payload.mentionEnabled !== undefined) {
+          onPushToast(
+            payload.mentionEnabled
+              ? `Enabled @mention for ${label}`
+              : `Disabled @mention for ${label}`,
+            'info'
+          );
+        } else if (payload.nickname !== undefined) {
+          onPushToast(
+            payload.nickname
+              ? `Saved nickname @${payload.nickname}`
+              : `Cleared nickname for ${label}`,
+            'success'
+          );
+        } else if (payload.llmDescription !== undefined) {
+          onPushToast(
+            payload.llmDescription
+              ? `Saved details & strengths for ${label}`
+              : `Cleared details for ${label}`,
+            'success'
+          );
+        } else if (payload.userNotes !== undefined) {
+          onPushToast(`Saved personal notes for ${label}`, 'success');
+        }
+      }
+    } catch (err: any) {
+      onPushToast?.(err.message || 'Failed to update model settings', 'error');
+    }
+  };
+
+  const handleToggleModelVisibility = async (modelId: number, nextHidden: boolean) => {
+    const target = models.find((m) => m.id === modelId);
+    const label = target?.name || `Model #${modelId}`;
+    try {
+      await api.updateModelVisibility(modelId, nextHidden);
+      await onRefresh();
+      onPushToast?.(
+        nextHidden ? `Hidden ${label}` : `Restored ${label}`,
+        nextHidden ? 'info' : 'success'
+      );
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Failed to update model visibility', 'error');
+    }
+  };
+
   if (selectedLora) {
     return (
       <LoraDetailView
@@ -196,7 +266,31 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
     );
   }
 
+  if (selectedModel) {
+    return (
+      <BaseModelDetailView
+        model={selectedModel}
+        allImages={allImages}
+        impactReport={impactReport}
+        isFetchingCivitai={fetchingModelId === selectedModel.id}
+        onBack={() => {
+          setSelectedModelId(null);
+          setImpactReport(null);
+        }}
+        onLoadImpact={handleLoadImpact}
+        onFilterGalleryByModel={onFilterGalleryByModel}
+        onFetchFromCivitai={handleFetchFromCivitai}
+        onToggleVisibility={handleToggleModelVisibility}
+        onUpdateModelConfig={handleUpdateModelConfig}
+        onOpenImage={onOpenImage}
+      />
+    );
+  }
+
   const activeLoraCount = loras.filter((l) => !l.isHidden).length;
+  const activeBaseModelCount = models.filter(
+    (m) => isBaseModelType(m.modelType) && !m.isHidden
+  ).length;
   const missingModels = models.filter((m) => !m.isInstalled && m.dependentImageCount > 0);
 
   return (
@@ -218,13 +312,13 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           <button
             type="button"
             onClick={() => setSubTab('dependencies')}
-            className={`px-3.5 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+            className={`px-3.5 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               subTab === 'dependencies'
-                ? 'bg-indigo-600 text-white'
+                ? 'bg-emerald-600 text-white'
                 : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
             }`}
           >
-            Model Inventory &amp; Missing Dependencies ({missingModels.length} missing)
+            Base Models ({activeBaseModelCount})
           </button>
           <button
             type="button"
@@ -278,16 +372,15 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
         <ModelInventoryTab
           models={models}
           missingModels={missingModels}
-          fetchingModelId={fetchingModelId}
-          impactReport={impactReport}
           highlightedFilename={highlightedModelFilename}
           onLocateMissing={(q) => {
             downloader.setExtQuery(q);
             setSubTab('downloader');
             downloader.handleExternalSearch(undefined, q);
           }}
-          onFetchFromCivitai={handleFetchFromCivitai}
-          onLoadImpact={handleLoadImpact}
+          onSelectModel={setSelectedModelId}
+          onUpdateModelConfig={handleUpdateModelConfig}
+          onToggleVisibility={handleToggleModelVisibility}
         />
       )}
 
