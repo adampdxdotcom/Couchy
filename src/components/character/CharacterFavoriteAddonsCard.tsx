@@ -7,6 +7,7 @@ import type {
   LoraExplorerItem,
   ModelInventoryItem,
 } from '../../shared/types.ts';
+import { getModelAvailabilityInfo } from '../../shared/utils.ts';
 import {
   getCleanModelLabel,
   MAX_SYSTEM_LORAS,
@@ -271,6 +272,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
               <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
                 {baseModels.map((bm) => {
                   const isSelected = selectedCheckpoint === bm.name;
+                  const availability = getModelAvailabilityInfo(bm);
                   return (
                     <div
                       key={bm.key}
@@ -286,7 +288,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                         onClick={() => handleToggleCheckpoint(bm.name)}
                         title={
                           !bm.isInstalled
-                            ? `${bm.name} is not locally installed`
+                            ? `${bm.name}: ${availability.tooltip}`
                             : isSelected
                             ? `Deselect ${bm.name} (revert to workflow default)`
                             : `Select ${bm.name} for New Image`
@@ -309,7 +311,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                         </span>
                         {!bm.isInstalled ? (
                           <span className="text-[10px] font-mono text-amber-400/90 shrink-0">
-                            (missing)
+                            ({availability.label.toLowerCase()})
                           </span>
                         ) : (
                           isSelected && <Check className="w-3 h-3 text-emerald-300 shrink-0" />
@@ -350,6 +352,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                 {addonLoras.map((addon) => {
                   const isSelected = selectedAddonKeys.has(addon.key);
                   const isDisabled = !addon.isInstalled || (!isSelected && atLoraLimit);
+                  const availability = getModelAvailabilityInfo(addon);
                   return (
                     <div
                       key={addon.key}
@@ -365,7 +368,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                         onClick={() => handleToggleAddon(addon.key)}
                         title={
                           !addon.isInstalled
-                            ? `${addon.loraName} is not locally installed`
+                            ? `${addon.loraName}: ${availability.tooltip}`
                             : !isSelected && atLoraLimit
                             ? `Maximum ${MAX_SYSTEM_LORAS} total LoRAs reached`
                             : isSelected
@@ -397,7 +400,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                         </span>
                         {!addon.isInstalled ? (
                           <span className="text-[10px] font-mono text-amber-400/90 shrink-0">
-                            (missing)
+                            ({availability.label.toLowerCase()})
                           </span>
                         ) : (
                           isSelected && <Check className="w-3 h-3 text-amber-200 shrink-0" />
@@ -446,6 +449,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                   // Allow switching when another friend is already picked, block only when adding from 0 at cap
                   const wouldExceedCap = !isSelected && selectedFriendKey === null && atLoraLimit;
                   const isDisabled = !friend.isInstalled || wouldExceedCap;
+                  const availability = getModelAvailabilityInfo(friend);
                   return (
                     <div
                       key={friend.key}
@@ -461,7 +465,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                         onClick={() => handleToggleFriend(friend.key)}
                         title={
                           !friend.isInstalled
-                            ? `${friend.loraName} is not locally installed`
+                            ? `${friend.loraName}: ${availability.tooltip}`
                             : wouldExceedCap
                             ? `Maximum ${MAX_SYSTEM_LORAS} total LoRAs reached`
                             : isSelected
@@ -492,7 +496,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                         </span>
                         {!friend.isInstalled ? (
                           <span className="text-[10px] font-mono text-amber-400/90 shrink-0">
-                            (missing)
+                            ({availability.label.toLowerCase()})
                           </span>
                         ) : (
                           isSelected && <Check className="w-3 h-3 text-indigo-200 shrink-0" />

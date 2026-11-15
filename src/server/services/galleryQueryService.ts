@@ -24,12 +24,15 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
 
   // Build fast lookup for installed models by id and lowercase filename
   const modelRows = db
-    .prepare('SELECT id, LOWER(filename) AS lowerFilename, lora_category, is_installed FROM models')
+    .prepare(
+      'SELECT id, LOWER(filename) AS lowerFilename, lora_category, is_installed, download_file_path FROM models'
+    )
     .all() as {
     id: number;
     lowerFilename: string;
     lora_category: string;
     is_installed: number;
+    download_file_path: string | null;
   }[];
   const modelById = new Map<number, (typeof modelRows)[0]>();
   const modelByLowerName = new Map<string, (typeof modelRows)[0]>();
@@ -68,10 +71,12 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
         const m =
           (l.modelId ? modelById.get(l.modelId) : undefined) ||
           modelByLowerName.get(String(l.loraName || '').toLowerCase());
+        const isInstalled = Boolean(m?.is_installed);
         return {
           ...l,
           loraCategory: m?.lora_category || 'unclassified',
-          isInstalled: Boolean(m?.is_installed),
+          isInstalled,
+          isDownloadedPendingImport: Boolean(!isInstalled && m?.download_file_path),
         };
       })
     );
@@ -181,10 +186,12 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
       const m =
         (l.modelId ? modelById.get(l.modelId) : undefined) ||
         modelByLowerName.get(String(l.loraName || '').toLowerCase());
+      const isInstalled = Boolean(m?.is_installed);
       const enriched = {
         ...l,
         loraCategory: m?.lora_category || 'unclassified',
-        isInstalled: Boolean(m?.is_installed),
+        isInstalled,
+        isDownloadedPendingImport: Boolean(!isInstalled && m?.download_file_path),
       };
       const arr = lorasByImageId.get(l.imageId);
       if (arr) arr.push(enriched);
@@ -674,6 +681,8 @@ export function listLoraExplorerItems(): LoraExplorerItem[] {
         m.autov2_hash AS autov2Hash,
         COALESCE(m.lora_category, 'unclassified') AS loraCategory,
         COALESCE(m.is_installed, 0) AS isInstalled,
+        m.comfyui_path AS comfyuiPath,
+        m.download_file_path AS downloadFilePath,
         COALESCE(m.is_hidden, 0) AS isHidden,
         m.download_url AS downloadUrl,
         m.civitai_id AS civitaiId,
@@ -743,6 +752,9 @@ export function listLoraExplorerItems(): LoraExplorerItem[] {
       autov2Hash: r.autov2Hash ?? null,
       loraCategory: r.loraCategory || 'unclassified',
       isInstalled: Boolean(r.isInstalled),
+      isDownloadedPendingImport: Boolean(!r.isInstalled && r.downloadFilePath),
+      comfyuiPath: r.comfyuiPath ?? null,
+      downloadFilePath: r.downloadFilePath ?? null,
       isHidden: Boolean(r.isHidden),
       downloadUrl: r.downloadUrl ?? null,
       civitaiId: r.civitaiId ?? null,

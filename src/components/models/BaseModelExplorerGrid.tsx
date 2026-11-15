@@ -1,6 +1,6 @@
 import React from 'react';
 import { Cpu, ExternalLink, Eye, EyeOff } from 'lucide-react';
-import { formatBytes } from '../../shared/utils.ts';
+import { formatBytes, getModelAvailabilityInfo } from '../../shared/utils.ts';
 import type { ModelInventoryItem, ModelType } from '../../shared/types.ts';
 
 export const BASE_MODEL_TYPES = new Set<ModelType>(['diffusion', 'checkpoint']);
@@ -106,16 +106,21 @@ export const BaseModelExplorerGrid: React.FC<BaseModelExplorerListProps> = ({
                 {/* Isolated @Mention Toggle for Base Models */}
                 {isBase && (
                   <div
-                    className="absolute top-2.5 left-2.5 flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-950/85 border border-zinc-700/80"
+                    className={`absolute top-2.5 left-2.5 flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-950/85 border border-zinc-700/80 ${
+                      !m.isInstalled ? 'opacity-50' : ''
+                    }`}
                     onClick={(e) => e.stopPropagation()}
                     title={
-                      m.mentionEnabled
+                      !m.isInstalled
+                        ? 'Unavailable for @mention until present in ComfyUI models folder'
+                        : m.mentionEnabled
                         ? 'Enabled in Quick Gen @mention'
                         : 'Click to enable in Quick Gen @mention'
                     }
                   >
                     <input
                       type="checkbox"
+                      disabled={!m.isInstalled}
                       checked={Boolean(m.mentionEnabled)}
                       onClick={(e) => e.stopPropagation()}
                       onChange={(e) =>
@@ -124,7 +129,9 @@ export const BaseModelExplorerGrid: React.FC<BaseModelExplorerListProps> = ({
                         })
                       }
                       aria-label={`Include ${m.name} in @mention menu`}
-                      className="w-3.5 h-3.5 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 cursor-pointer"
+                      className={`w-3.5 h-3.5 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 ${
+                        m.isInstalled ? 'cursor-pointer' : 'cursor-not-allowed'
+                      }`}
                     />
                     <span className="text-[10px] font-mono text-emerald-300">@</span>
                   </div>
@@ -192,9 +199,14 @@ export const BaseModelExplorerGrid: React.FC<BaseModelExplorerListProps> = ({
                     </>
                   ) : null}
                   <span>·</span>
-                  <span className={m.isInstalled ? 'text-emerald-400' : 'text-amber-400'}>
-                    {m.isInstalled ? 'Installed' : 'Missing'}
-                  </span>
+                  {(() => {
+                    const avail = getModelAvailabilityInfo(m);
+                    return (
+                      <span className={avail.colorClass} title={avail.tooltip}>
+                        {avail.label}
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 {m.llmDescription ? (

@@ -5,6 +5,7 @@ export interface WorkflowSelectionPanelProps {
   onChangeCheckpoint: (val: string) => void;
   workflowDefaultCheckpoint: string;
   availableDiffusionModels: string[];
+  pendingImportModels?: string[];
 }
 
 /**
@@ -15,6 +16,7 @@ export const WorkflowSelectionPanel: React.FC<WorkflowSelectionPanelProps> = ({
   onChangeCheckpoint,
   workflowDefaultCheckpoint,
   availableDiffusionModels,
+  pendingImportModels = [],
 }) => {
   return (
     <section className="p-5 bg-zinc-900/60 border border-zinc-800/90 rounded-xl space-y-3">
@@ -55,6 +57,15 @@ export const WorkflowSelectionPanel: React.FC<WorkflowSelectionPanelProps> = ({
             <option key={m} value={m} />
           ))}
         </datalist>
+        {pendingImportModels.length > 0 && (
+          <p className="mt-1.5 text-[11px] text-amber-400/90">
+            {pendingImportModels.length} downloaded model
+            {pendingImportModels.length === 1 ? '' : 's'} not yet in ComfyUI (
+            <span className="font-mono">{pendingImportModels.slice(0, 2).join(', ')}</span>
+            {pendingImportModels.length > 2 ? `, +${pendingImportModels.length - 2} more` : ''})
+            — excluded until verified in ComfyUI.
+          </p>
+        )}
       </div>
     </section>
   );

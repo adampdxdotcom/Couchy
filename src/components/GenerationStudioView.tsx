@@ -13,6 +13,7 @@ import type {
   WorkflowLibraryItem,
 } from '../shared/types.ts';
 import {
+  filterDiffusionModels,
   interpolatePrompt as interpolatePromptClient,
   resolveDefaultWorkflow,
 } from '../shared/utils.ts';
@@ -100,20 +101,29 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
     [characters, selectedCharacterId]
   );
 
-  // Combined diffusion models list
-  const availableDiffusionModels = useMemo(() => {
-    const set = new Set<string>(checkpoints);
-    for (const m of models) {
-      if (
-        m.modelType === 'checkpoint' ||
-        m.modelType === 'diffusion' ||
-        m.modelType === 'other'
-      ) {
-        set.add(m.filename);
-      }
-    }
-    return Array.from(set).filter(Boolean).sort();
-  }, [checkpoints, models]);
+  // Combined ComfyUI-installed diffusion models list
+  const availableDiffusionModels = useMemo(
+    () => filterDiffusionModels(models, checkpoints),
+    [checkpoints, models]
+  );
+
+  // Downloaded diffusion models awaiting import into ComfyUI
+  const pendingImportModels = useMemo(
+    () =>
+      models
+        .filter(
+          (m) =>
+            !m.isInstalled &&
+            m.isDownloadedPendingImport &&
+            (m.modelType === 'checkpoint' ||
+              m.modelType === 'diffusion' ||
+              m.modelType === 'other')
+        )
+        .map((m) => m.filename)
+        .filter(Boolean)
+        .sort(),
+    [models]
+  );
 
   // Load Prompt Templates, LM Studio templates, and Batch History
   useEffect(() => {
@@ -413,6 +423,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
             onChangeCheckpoint={setSelectedCheckpoint}
             workflowDefaultCheckpoint={workflowDefaultCheckpoint}
             availableDiffusionModels={availableDiffusionModels}
+            pendingImportModels={pendingImportModels}
           />
 
           {/* STEP 4: Prompt Mode & LM Studio Set Agent */}

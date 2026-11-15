@@ -253,7 +253,7 @@ export function buildMentionEntries(params: {
     }
   }
 
-  for (const lora of loras.filter((l) => l.mentionEnabled)) {
+  for (const lora of loras.filter((l) => l.mentionEnabled && l.isInstalled && !l.isHidden)) {
     const nick = (lora.nickname || '').toLowerCase();
     const loraName = lora.name.toLowerCase();
     const loraFile = lora.filename.toLowerCase();
@@ -283,6 +283,7 @@ export function buildMentionEntries(params: {
   for (const model of models.filter(
     (m) =>
       (m.modelType === 'diffusion' || m.modelType === 'checkpoint') &&
+      m.isInstalled &&
       !m.isHidden &&
       m.mentionEnabled
   )) {

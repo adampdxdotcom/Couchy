@@ -214,8 +214,49 @@ export function interpolatePrompt(template: string, vars: PromptInterpolationVar
 // 4. Model Inventory Filtering
 // ==========================================
 
+export interface ModelAvailabilityInfo {
+  state: 'installed' | 'pending_import' | 'missing';
+  label: string;
+  colorClass: string;
+  tooltip: string;
+}
+
 /**
- * Filters diffusion checkpoints from model inventory and optional checkpoint list.
+ * Classifies a model or LoRA into ComfyUI-installed, downloaded locally (pending ComfyUI import),
+ * or missing everywhere.
+ */
+export function getModelAvailabilityInfo(item: {
+  isInstalled?: boolean;
+  isDownloadedPendingImport?: boolean;
+  downloadFilePath?: string | null;
+}): ModelAvailabilityInfo {
+  if (item.isInstalled) {
+    return {
+      state: 'installed',
+      label: 'Installed',
+      colorClass: 'text-emerald-400',
+      tooltip: 'Verified in ComfyUI models directory / API',
+    };
+  }
+  if (item.isDownloadedPendingImport || item.downloadFilePath) {
+    return {
+      state: 'pending_import',
+      label: 'Not in ComfyUI',
+      colorClass: 'text-amber-400',
+      tooltip:
+        'Downloaded locally, but not present in ComfyUI models folder yet (unavailable for generation).',
+    };
+  }
+  return {
+    state: 'missing',
+    label: 'Missing',
+    colorClass: 'text-rose-400',
+    tooltip: 'Model file not found in ComfyUI models folder or local downloads',
+  };
+}
+
+/**
+ * Filters ComfyUI-installed diffusion checkpoints from model inventory and optional checkpoint list.
  */
 export function filterDiffusionModels(
   models: ModelInventoryItem[] = [],
@@ -223,6 +264,7 @@ export function filterDiffusionModels(
 ): string[] {
   const set = new Set<string>(checkpoints);
   for (const m of models) {
+    if (!m.isInstalled) continue;
     if (
       m.modelType === 'checkpoint' ||
       m.modelType === 'diffusion' ||
@@ -235,19 +277,20 @@ export function filterDiffusionModels(
 }
 
 /**
- * Filters LoRA model filenames from LoRA items and model inventory.
+ * Filters ComfyUI-installed LoRA model filenames from LoRA items and model inventory.
  */
 export function filterLoraModels(
-  loras: Array<{ filename?: string; name?: string }> = [],
+  loras: Array<{ filename?: string; name?: string; isInstalled?: boolean }> = [],
   models: ModelInventoryItem[] = []
 ): string[] {
   const set = new Set<string>();
   for (const l of loras) {
+    if (l.isInstalled === false) continue;
     if (l.filename) set.add(l.filename);
     else if (l.name) set.add(l.name);
   }
   for (const m of models) {
-    if (m.modelType === 'lora' && m.filename) {
+    if (m.isInstalled && m.modelType === 'lora' && m.filename) {
       set.add(m.filename);
     }
   }
@@ -255,11 +298,12 @@ export function filterLoraModels(
 }
 
 /**
- * Filters VAE model filenames.
+ * Filters ComfyUI-installed VAE model filenames.
  */
 export function filterVaeModels(models: ModelInventoryItem[] = []): string[] {
   const set = new Set<string>();
   for (const m of models) {
+    if (!m.isInstalled) continue;
     if (
       m.modelType === 'vae' ||
       m.filename.toLowerCase().includes('vae') ||
@@ -272,11 +316,12 @@ export function filterVaeModels(models: ModelInventoryItem[] = []): string[] {
 }
 
 /**
- * Filters CLIP / text-encoder model filenames.
+ * Filters ComfyUI-installed CLIP / text-encoder model filenames.
  */
 export function filterClipModels(models: ModelInventoryItem[] = []): string[] {
   const set = new Set<string>();
   for (const m of models) {
+    if (!m.isInstalled) continue;
     if (
       m.filename.toLowerCase().includes('clip') ||
       m.filename.toLowerCase().includes('qwen') ||

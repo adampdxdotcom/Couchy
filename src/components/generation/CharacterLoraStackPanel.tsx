@@ -204,7 +204,7 @@ export const CharacterLoraStackPanel: React.FC<CharacterLoraStackPanelProps> = (
           ))
         )}
 
-        {/* Add additional LoRA dropdown */}
+        {/* Add additional LoRA dropdown (ComfyUI-installed only) */}
         <div className="flex items-center gap-2 pt-1">
           <select
             value={extraLoraToAdd}
@@ -212,11 +212,13 @@ export const CharacterLoraStackPanel: React.FC<CharacterLoraStackPanelProps> = (
             className="flex-1 px-2.5 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-300"
           >
             <option value="">+ Add another LoRA to Power Lora Loader (#50)...</option>
-            {loras.map((l) => (
-              <option key={l.filename} value={l.filename}>
-                {l.name} ({l.loraCategory})
-              </option>
-            ))}
+            {loras
+              .filter((l) => l.isInstalled)
+              .map((l) => (
+                <option key={l.filename} value={l.filename}>
+                  {l.name} ({l.loraCategory})
+                </option>
+              ))}
           </select>
           <button
             type="button"

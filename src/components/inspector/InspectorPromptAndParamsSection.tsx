@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, Copy } from 'lucide-react';
 import type { ImageRecord } from '../../shared/types.ts';
-import { copyTextToClipboard } from '../../shared/utils.ts';
+import { copyTextToClipboard, getModelAvailabilityInfo } from '../../shared/utils.ts';
 
 interface InspectorPromptAndParamsSectionProps {
   activeImage: ImageRecord;
@@ -169,7 +169,9 @@ export const InspectorPromptAndParamsSection: React.FC<
           <p className="text-zinc-500">No LoRAs detected in workflow or metadata.</p>
         ) : (
           <div className="space-y-1.5">
-            {activeImage.loras.map((l) => (
+            {activeImage.loras.map((l) => {
+              const availability = getModelAvailabilityInfo(l);
+              return (
               <div
                 key={l.id}
                 className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 flex items-center justify-between gap-2"
@@ -187,7 +189,9 @@ export const InspectorPromptAndParamsSection: React.FC<
                   </button>
                   <span className="text-[11px] text-zinc-500">
                     {l.nodeType || 'LoraLoader'} · Source: {l.provenance} ·{' '}
-                    {l.isInstalled ? 'Installed' : 'Missing on disk'}
+                    <span className={availability.colorClass} title={availability.tooltip}>
+                      {availability.label}
+                    </span>
                   </span>
                 </div>
                 <div className="text-right font-mono tabular-nums shrink-0">
@@ -195,7 +199,8 @@ export const InspectorPromptAndParamsSection: React.FC<
                   <div className="text-zinc-400 text-[11px]">CLIP: {l.clipStrength}</div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

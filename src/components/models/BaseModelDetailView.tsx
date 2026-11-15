@@ -11,7 +11,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import { formatBytes } from '../../shared/utils.ts';
+import { formatBytes, getModelAvailabilityInfo } from '../../shared/utils.ts';
 import type { ImageRecord, ModelInventoryItem } from '../../shared/types.ts';
 import { normalizeLoraKey } from '../quickgen/quickGenUtils.ts';
 import { formatModelTypeLabel, isBaseModelType } from './BaseModelExplorerGrid.tsx';
@@ -35,6 +35,8 @@ interface BaseModelDetailViewProps {
       userNotes?: string | null;
     }
   ) => Promise<void>;
+  onSyncModels?: () => Promise<void>;
+  isSyncingModels?: boolean;
   onOpenImage: (img: ImageRecord) => void;
 }
 
@@ -53,10 +55,13 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
   onFetchFromCivitai,
   onToggleVisibility,
   onUpdateModelConfig,
+  onSyncModels,
+  isSyncingModels = false,
   onOpenImage,
 }) => {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const isBase = isBaseModelType(model.modelType);
+  const avail = getModelAvailabilityInfo(model);
   const targetKey = normalizeLoraKey(model.filename);
 
   const associatedImages = allImages.filter(
@@ -176,10 +181,35 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
             )}
           </div>
           <p className="text-xs font-mono text-zinc-400 break-all">
-            {model.filename} · {model.filePath || 'Not locally installed'} ·{' '}
+            {model.filename} · {model.comfyuiPath || model.filePath || 'Not locally installed'} ·{' '}
             {formatBytes(model.fileSize)}
           </p>
         </div>
+
+        {avail.state === 'pending_import' && (
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-amber-500/10 border border-amber-500/35 rounded-lg px-4 py-3 text-xs">
+            <div className="space-y-0.5 text-amber-200 min-w-0">
+              <div className="font-medium">
+                Downloaded locally, but not yet detected in ComfyUI
+              </div>
+              <div className="text-[11px] text-amber-200/80 font-mono break-all">
+                Stored in {model.downloadFilePath || 'downloads folder'} — copy to ComfyUI models
+                folder (or refresh ComfyUI) to make this model available for generation and @mention.
+              </div>
+            </div>
+            {onSyncModels && (
+              <button
+                type="button"
+                disabled={isSyncingModels}
+                onClick={onSyncModels}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-amber-100 rounded-lg cursor-pointer disabled:opacity-50 shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingModels ? 'animate-spin' : ''}`} />
+                <span>{isSyncingModels ? 'Checking...' : 'Re-check ComfyUI'}</span>
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Cached Civitai Preview Strip */}
         {previews.length > 0 && (
@@ -209,11 +239,9 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
         )}
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs font-mono tabular-nums">
-          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3" title={avail.tooltip}>
             <span className="block text-[10px] font-sans text-zinc-400">Status</span>
-            <span className={model.isInstalled ? 'text-emerald-400' : 'text-amber-400'}>
-              {model.isInstalled ? 'Installed' : 'Missing'}
-            </span>
+            <span className={avail.colorClass}>{avail.label}</span>
           </div>
           <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
             <span className="block text-[10px] font-sans text-zinc-400">Images Using It</span>
@@ -264,9 +292,19 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
           </div>
 
           {isBase && (
-            <div className="flex items-center gap-2.5 select-none">
+            <div
+              className={`flex items-center gap-2.5 select-none ${
+                !model.isInstalled ? 'opacity-50' : ''
+              }`}
+              title={
+                !model.isInstalled
+                  ? 'Unavailable for @mention until present in ComfyUI models folder'
+                  : undefined
+              }
+            >
               <input
                 type="checkbox"
+                disabled={!model.isInstalled}
                 checked={Boolean(model.mentionEnabled)}
                 onChange={(e) =>
                   onUpdateModelConfig(model.id, {
@@ -274,7 +312,9 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
                   })
                 }
                 aria-label={`Include ${model.name} in @Mention Menu`}
-                className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-900 cursor-pointer"
+                className={`w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-900 ${
+                  model.isInstalled ? 'cursor-pointer' : 'cursor-not-allowed'
+                }`}
               />
               <span className="text-xs font-medium text-zinc-200">Include in @Mention Menu</span>
             </div>

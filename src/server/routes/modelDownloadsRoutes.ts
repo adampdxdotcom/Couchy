@@ -204,7 +204,7 @@ modelDownloadsRouter.get('/downloads', (_req, res) => {
   const jobs = db.prepare('SELECT * FROM download_jobs ORDER BY id DESC LIMIT 50').all() as any[];
   const modelRows = db
     .prepare(
-      `SELECT id, filename, file_path, model_type, is_installed, preview_images_json
+      `SELECT id, filename, file_path, model_type, is_installed, download_file_path, preview_images_json
        FROM models`
     )
     .all() as Array<{
@@ -213,6 +213,7 @@ modelDownloadsRouter.get('/downloads', (_req, res) => {
     file_path: string | null;
     model_type: string;
     is_installed: number;
+    download_file_path: string | null;
     preview_images_json: string | null;
   }>;
 
@@ -264,6 +265,7 @@ modelDownloadsRouter.get('/downloads', (_req, res) => {
       installed_filename: matched?.filename ?? null,
       installed_model_type: matched?.model_type ?? null,
       is_installed: matched ? Boolean(matched.is_installed) : false,
+      in_downloads: Boolean(matched?.download_file_path),
       first_preview_url: firstPreviewUrl,
       early_access_ends_at: parsedPayload?.earlyAccessEndsAt ?? null,
       can_reschedule: canReschedule,

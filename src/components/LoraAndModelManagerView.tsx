@@ -43,6 +43,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   const [impactReport, setImpactReport] = useState<any | null>(null);
   const [fetchingModelId, setFetchingModelId] = useState<number | null>(null);
   const [isHealingLinks, setIsHealingLinks] = useState(false);
+  const [isSyncingModels, setIsSyncingModels] = useState(false);
 
   const downloader = useModelDownloaderState(subTab, onRefresh);
   const selectedLora =
@@ -118,6 +119,19 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       onPushToast?.(err?.message || 'Failed to heal Civitai links', 'error');
     } finally {
       setIsHealingLinks(false);
+    }
+  };
+
+  const handleSyncInventory = async () => {
+    setIsSyncingModels(true);
+    try {
+      await api.syncModelInventory();
+      await onRefresh();
+      onPushToast?.('Synced ComfyUI & local model availability', 'success');
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Failed to sync ComfyUI model inventory', 'error');
+    } finally {
+      setIsSyncingModels(false);
     }
   };
 
@@ -265,6 +279,8 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
         onToggleVisibility={handleToggleLoraVisibility}
         onUpdateMentionConfig={handleUpdateMentionConfig}
         onRefresh={onRefresh}
+        onSyncModels={handleSyncInventory}
+        isSyncingModels={isSyncingModels}
         onOpenImage={onOpenImage}
         onPushToast={onPushToast}
       />
@@ -287,6 +303,8 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
         onFetchFromCivitai={handleFetchFromCivitai}
         onToggleVisibility={handleToggleModelVisibility}
         onUpdateModelConfig={handleUpdateModelConfig}
+        onSyncModels={handleSyncInventory}
+        isSyncingModels={isSyncingModels}
         onOpenImage={onOpenImage}
       />
     );
@@ -352,14 +370,12 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
 
           <button
             type="button"
-            onClick={async () => {
-              await api.syncModelInventory();
-              await onRefresh();
-            }}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-200 rounded-lg cursor-pointer"
+            disabled={isSyncingModels}
+            onClick={handleSyncInventory}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 disabled:opacity-50 text-zinc-200 rounded-lg cursor-pointer"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Sync ComfyUI &amp; Disk Models</span>
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingModels ? 'animate-spin' : ''}`} />
+            <span>{isSyncingModels ? 'Syncing...' : 'Sync ComfyUI & Disk Models'}</span>
           </button>
         </div>
       </div>

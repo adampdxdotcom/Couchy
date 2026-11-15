@@ -664,6 +664,14 @@ export function runMigrations(): void {
         ALTER TABLE characters ADD COLUMN portrait_crop_json TEXT DEFAULT NULL;
       `,
     },
+    {
+      version: 21,
+      name: 'model_comfyui_vs_download_paths',
+      sql: `
+        ALTER TABLE models ADD COLUMN comfyui_path TEXT;
+        ALTER TABLE models ADD COLUMN download_file_path TEXT;
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');
@@ -1026,12 +1034,12 @@ Rules:
     db.prepare('UPDATE workflows SET is_default = 1 WHERE id = ?').run(targetDefaultId);
   }
 
-  // Ensure primary default diffusion model is registered in models table
+  // Ensure primary default diffusion model is registered in models table (inventory sync verifies installation)
   const unetStem = fallbackUnet.replace(/\.(safetensors|ckpt|pt|bin)$/i, '');
   db.prepare(`
     INSERT INTO models (name, filename, model_type, is_installed, source_type)
-    VALUES (?, ?, 'diffusion', 1, 'workflow_default')
-    ON CONFLICT(filename) DO UPDATE SET model_type = 'diffusion', is_installed = 1
+    VALUES (?, ?, 'diffusion', 0, 'workflow_default')
+    ON CONFLICT(filename) DO UPDATE SET model_type = 'diffusion'
   `).run(unetStem, fallbackUnet);
 }
 

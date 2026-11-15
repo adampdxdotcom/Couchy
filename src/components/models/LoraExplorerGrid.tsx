@@ -2,6 +2,7 @@ import React from 'react';
 import { ExternalLink, Eye, EyeOff, Layers } from 'lucide-react';
 import type { LoraExplorerItem, PortraitCrop } from '../../shared/types.ts';
 import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
+import { getModelAvailabilityInfo } from '../../shared/utils.ts';
 
 export interface LoraExplorerListProps {
   loras: LoraExplorerItem[];
@@ -97,12 +98,21 @@ export const LoraExplorerGrid: React.FC<LoraExplorerListProps> = ({
 
                 {/* Isolated @Mention Checkbox */}
                 <div
-                  className="absolute top-2.5 left-2.5 flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-950/85 border border-zinc-700/80"
+                  className={`absolute top-2.5 left-2.5 flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-950/85 border border-zinc-700/80 ${
+                    !l.isInstalled ? 'opacity-50' : ''
+                  }`}
                   onClick={(e) => e.stopPropagation()}
-                  title={l.mentionEnabled ? 'Enabled in @mention' : 'Click to enable in @mention'}
+                  title={
+                    !l.isInstalled
+                      ? 'Unavailable for @mention until present in ComfyUI models folder'
+                      : l.mentionEnabled
+                      ? 'Enabled in @mention'
+                      : 'Click to enable in @mention'
+                  }
                 >
                   <input
                     type="checkbox"
+                    disabled={!l.isInstalled}
                     checked={Boolean(l.mentionEnabled)}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) =>
@@ -111,7 +121,9 @@ export const LoraExplorerGrid: React.FC<LoraExplorerListProps> = ({
                       })
                     }
                     aria-label={`Include ${l.name} in @mention menu`}
-                    className="w-3.5 h-3.5 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                    className={`w-3.5 h-3.5 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 ${
+                      l.isInstalled ? 'cursor-pointer' : 'cursor-not-allowed'
+                    }`}
                   />
                   <span className="text-[10px] font-mono text-zinc-300">@</span>
                 </div>
@@ -170,9 +182,14 @@ export const LoraExplorerGrid: React.FC<LoraExplorerListProps> = ({
                   <span>·</span>
                   <span>{(l.defaultModelStrength ?? 1.0).toFixed(2)}x</span>
                   <span>·</span>
-                  <span className={l.isInstalled ? 'text-emerald-400' : 'text-amber-400'}>
-                    {l.isInstalled ? 'Installed' : 'Missing'}
-                  </span>
+                  {(() => {
+                    const avail = getModelAvailabilityInfo(l);
+                    return (
+                      <span className={avail.colorClass} title={avail.tooltip}>
+                        {avail.label}
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 {l.triggerWord && (

@@ -2,6 +2,7 @@ import React from 'react';
 import { ExternalLink, Eye, EyeOff, Layers } from 'lucide-react';
 import { getLoraCoverInfo, type LoraExplorerListProps } from './LoraExplorerGrid.tsx';
 import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
+import { getModelAvailabilityInfo } from '../../shared/utils.ts';
 
 /**
  * Tabular LoRA Explorer view with inline @mention toggles, @nickname editing, and visibility controls.
@@ -50,6 +51,7 @@ export const LoraExplorerTable: React.FC<LoraExplorerListProps> = ({
                 <td className="py-3 px-3 text-center" onClick={(e) => e.stopPropagation()}>
                   <input
                     type="checkbox"
+                    disabled={!l.isInstalled}
                     checked={Boolean(l.mentionEnabled)}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) =>
@@ -58,8 +60,16 @@ export const LoraExplorerTable: React.FC<LoraExplorerListProps> = ({
                       })
                     }
                     aria-label={`Include ${l.name} in @mention menu`}
-                    className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                    title={l.mentionEnabled ? 'Enabled in @mention' : 'Click to enable in @mention'}
+                    className={`w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 disabled:opacity-40 ${
+                      l.isInstalled ? 'cursor-pointer' : 'cursor-not-allowed'
+                    }`}
+                    title={
+                      !l.isInstalled
+                        ? 'Unavailable for @mention until present in ComfyUI models folder'
+                        : l.mentionEnabled
+                        ? 'Enabled in @mention'
+                        : 'Click to enable in @mention'
+                    }
                   />
                 </td>
 
@@ -179,10 +189,15 @@ export const LoraExplorerTable: React.FC<LoraExplorerListProps> = ({
                 >
                   {l.isHidden ? (
                     <span className="text-amber-400">Hidden</span>
-                  ) : l.isInstalled ? (
-                    <span className="text-emerald-400">Installed</span>
                   ) : (
-                    <span className="text-amber-400">Missing</span>
+                    (() => {
+                      const avail = getModelAvailabilityInfo(l);
+                      return (
+                        <span className={avail.colorClass} title={avail.tooltip}>
+                          {avail.label}
+                        </span>
+                      );
+                    })()
                   )}
                 </td>
 

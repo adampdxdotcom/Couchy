@@ -564,20 +564,29 @@ export async function executeDownloadJob(
        WHERE id = ?`
     ).run(bytesDownloaded, actualHash, hashVerified ? 1 : 0, jobId);
 
-    // Register in `models` table and apply Civitai enrichment if applicable
+    // Register in `models` table (availability in ComfyUI is verified immediately via syncModelInventory)
+    const resolvedDest = path.resolve(params.destinationPath);
+    const resolvedComfyModels = path.resolve(appConfig.comfyuiModelsDir || '');
+    const downloadedDirectlyIntoComfy = Boolean(
+      resolvedComfyModels &&
+        (resolvedDest === resolvedComfyModels ||
+          resolvedDest.startsWith(resolvedComfyModels + path.sep))
+    );
+
     db.prepare(
       `INSERT INTO models
-        (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, download_url, hf_repo_id, last_seen_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'filesystem', ?, ?, datetime('now'))
+        (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, download_url, hf_repo_id, download_file_path, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'filesystem', ?, ?, ?, datetime('now'))
        ON CONFLICT(filename) DO UPDATE SET
          model_type = excluded.model_type,
          file_path = excluded.file_path,
          file_size = excluded.file_size,
          sha256_hash = excluded.sha256_hash,
          autov2_hash = excluded.autov2_hash,
-         is_installed = 1,
+         is_installed = excluded.is_installed,
          download_url = excluded.download_url,
          hf_repo_id = COALESCE(excluded.hf_repo_id, models.hf_repo_id),
+         download_file_path = excluded.download_file_path,
          last_seen_at = datetime('now')`
     ).run(
       params.modelName,
@@ -587,8 +596,10 @@ export async function executeDownloadJob(
       bytesDownloaded,
       actualHash.toLowerCase(),
       actualHash.slice(0, 10).toLowerCase(),
+      downloadedDirectlyIntoComfy ? 1 : 0,
       params.sourceUrl,
-      params.hfRepoId || null
+      params.hfRepoId || null,
+      downloadedDirectlyIntoComfy ? null : params.destinationPath
     );
 
     const savedRow = db

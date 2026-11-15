@@ -106,7 +106,9 @@ export const DownloadHistoryList: React.FC<DownloadHistoryListProps> = ({
               d.installed_model_type || d.model_type || ''
             ).toLowerCase();
             const canNavigate =
-              isCompleted && Boolean(onInspectDownload) && d.is_installed !== false;
+              isCompleted &&
+              Boolean(onInspectDownload) &&
+              Boolean(d.installed_model_id || d.installed_filename || d.is_installed !== false);
 
             const linkTooltip =
               effectiveType === 'lora'
@@ -182,9 +184,18 @@ export const DownloadHistoryList: React.FC<DownloadHistoryListProps> = ({
                       )}
 
                       {isCompleted && d.is_installed === false && (
-                        <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 font-mono text-[10px] text-zinc-500">
-                          uninstalled
-                        </span>
+                        d.in_downloads ? (
+                          <span
+                            title="Downloaded locally, awaiting copy/import into ComfyUI models folder"
+                            className="px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 font-mono text-[10px] text-amber-300"
+                          >
+                            pending ComfyUI
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 font-mono text-[10px] text-zinc-500">
+                            uninstalled
+                          </span>
+                        )
                       )}
                     </div>
 

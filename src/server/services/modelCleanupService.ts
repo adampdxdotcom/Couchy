@@ -361,9 +361,13 @@ export async function scanAndCleanCopiedDownloads(options?: {
               // Point inventory record to ComfyUI's read-only copy so metadata & installed state stay intact
               db.prepare(
                 `UPDATE models
-                 SET file_path = ?, is_installed = 1, last_seen_at = datetime('now')
+                 SET file_path = ?,
+                     download_file_path = NULL,
+                     comfyui_path = COALESCE(comfyui_path, ?),
+                     is_installed = 1,
+                     last_seen_at = datetime('now')
                  WHERE LOWER(filename) = LOWER(?)`
-              ).run(matchedComfy.fullPath, dl.filename);
+              ).run(matchedComfy.fullPath, dl.filename, dl.filename);
 
               deletedFiles.push(dl.filename);
               freedBytes += dl.size;

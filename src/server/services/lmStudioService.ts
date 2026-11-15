@@ -1296,6 +1296,7 @@ export async function converseQuickGenPrompt(params: {
        FROM models m
        WHERE m.model_type = 'lora'
          AND m.mention_enabled = 1
+         AND COALESCE(m.is_installed, 0) = 1
          AND COALESCE(m.is_hidden, 0) = 0
          AND TRIM(COALESCE(m.llm_description, '')) != ''
          AND LOWER(COALESCE(m.lora_category, 'unclassified')) != 'character'

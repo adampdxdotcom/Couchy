@@ -144,7 +144,8 @@ function buildCharacterProfile(row: any): CharacterProfile {
         cl.appearance_label AS appearanceLabel,
         COALESCE(cl.trigger_word, '') AS triggerWord,
         cl.notes,
-        COALESCE(m.is_installed, 0) AS isInstalled
+        COALESCE(m.is_installed, 0) AS isInstalled,
+        m.download_file_path AS downloadFilePath
       FROM character_loras cl
       LEFT JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
       WHERE cl.character_id = ?
@@ -219,10 +220,14 @@ function buildCharacterProfile(row: any): CharacterProfile {
     portraitThumbnailUrl: portraitId ? `/api/images/${portraitId}/thumbnail` : null,
     portraitCrop: normalizePortraitCrop(row.portrait_crop_json),
     aliases,
-    loras: loras.map((l) => ({
-      ...l,
-      isInstalled: Boolean(l.isInstalled),
-    })),
+    loras: loras.map((l) => {
+      const isInstalled = Boolean(l.isInstalled);
+      return {
+        ...l,
+        isInstalled,
+        isDownloadedPendingImport: Boolean(!isInstalled && l.downloadFilePath),
+      };
+    }),
     workflows,
     tags,
     collections,

@@ -16,6 +16,7 @@ import type {
   LoraExplorerItem,
   PortraitCrop,
 } from '../../shared/types.ts';
+import { getModelAvailabilityInfo } from '../../shared/utils.ts';
 import { CharacterPortraitImage } from './CharacterPortraitImage.tsx';
 import { PortraitCropModal } from './PortraitCropModal.tsx';
 
@@ -203,7 +204,9 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
               <div className="text-[11px] text-zinc-500">No linked LoRA yet.</div>
             )}
 
-            {character.loras.map((l) => (
+            {character.loras.map((l) => {
+              const availability = getModelAvailabilityInfo(l);
+              return (
               <div
                 key={l.id}
                 className="bg-zinc-950/90 border border-zinc-800 rounded-lg p-2.5 space-y-1.5 min-w-0"
@@ -217,8 +220,8 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
                       {l.loraName}
                     </div>
                     <div className="text-[10px] text-zinc-400">
-                      <span className={l.isInstalled ? 'text-emerald-400' : 'text-amber-400'}>
-                        {l.isInstalled ? 'Installed' : 'Missing'}
+                      <span className={availability.colorClass} title={availability.tooltip}>
+                        {availability.label}
                       </span>
                       {l.appearanceLabel && l.appearanceLabel !== 'Default'
                         ? ` · ${l.appearanceLabel}`
@@ -262,7 +265,8 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
                   />
                 </div>
               </div>
-            ))}
+              );
+            })}
 
             {showLinkLoraForm && (
               <div className="bg-zinc-950/90 border border-zinc-800 rounded-lg p-2.5 space-y-2">

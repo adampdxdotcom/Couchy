@@ -105,68 +105,92 @@ function computeModelHashesIfFeasible(filePath: string, size: number): {
 }
 
 /**
- * Inventories installed models from both the mounted COMFYUI_MODELS_DIR (plus DOWNLOADS_DIR)
- * and the live ComfyUI /object_info API when reachable.
+ * Inventories models across COMFYUI_MODELS_DIR, ComfyUI /object_info, and DOWNLOADS_DIR.
+ * Only models verified inside COMFYUI_MODELS_DIR (complete copy) or ComfyUI /object_info
+ * are marked `is_installed = 1`. Files sitting only in DOWNLOADS_DIR remain `is_installed = 0`
+ * with `download_file_path` populated so Couchy displays them as unavailable / pending import.
  */
 export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
-  const seenInstalledFilenames = new Set<string>();
+  interface ScannedDiskFile {
+    fullPath: string;
+    filename: string;
+    relativeToCategory: string;
+    modelType: ModelType;
+    size: number;
+  }
 
-  const scanRoot = (rootDir: string, defaultType: ModelType = 'other') => {
-    if (!fs.existsSync(rootDir)) return;
-    const walk = (dir: string, currentType: ModelType) => {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const walkModelRoot = (
+    rootDir: string,
+    defaultType: ModelType,
+    includeSubfolderRelPath: boolean
+  ): Map<string, ScannedDiskFile> => {
+    const found = new Map<string, ScannedDiskFile>();
+    if (!rootDir || !fs.existsSync(rootDir)) return found;
+
+    const walk = (dir: string, currentType: ModelType, categoryRoot: string | null) => {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
       for (const entry of entries) {
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-          const mappedType = MODEL_DIR_TYPE_MAP[entry.name.toLowerCase()] || currentType;
-          walk(full, mappedType);
+          const dirLower = entry.name.toLowerCase();
+          const mappedType = MODEL_DIR_TYPE_MAP[dirLower];
+          const nextType = mappedType || currentType;
+          const nextCategoryRoot = mappedType ? full : categoryRoot;
+          walk(full, nextType, nextCategoryRoot);
         } else if (entry.isFile() && MODEL_EXTS.has(path.extname(entry.name).toLowerCase())) {
-          const stat = fs.statSync(full);
-          const existing = db
-            .prepare('SELECT id, file_size, sha256_hash, autov2_hash FROM models WHERE LOWER(filename) = LOWER(?)')
-            .get(entry.name) as any;
-
-          let sha256 = existing?.sha256_hash || null;
-          let autov2 = existing?.autov2_hash || null;
-          if (!sha256 || existing?.file_size !== stat.size) {
-            const computed = computeModelHashesIfFeasible(full, stat.size);
-            sha256 = computed.sha256;
-            autov2 = computed.autov2;
+          try {
+            const stat = fs.statSync(full);
+            if (stat.size <= 0) continue;
+            const rel =
+              includeSubfolderRelPath && categoryRoot
+                ? path.relative(categoryRoot, full).replace(/\\/g, '/')
+                : entry.name;
+            const key = entry.name.toLowerCase();
+            if (!found.has(key)) {
+              found.set(key, {
+                fullPath: full,
+                filename: entry.name,
+                relativeToCategory: rel || entry.name,
+                modelType: currentType,
+                size: stat.size,
+              });
+            }
+          } catch {
+            // Ignore transient/unreadable files
           }
-
-          db.prepare(
-            `INSERT INTO models
-              (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, last_seen_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 1, 'filesystem', datetime('now'))
-             ON CONFLICT(filename) DO UPDATE SET
-               model_type = CASE WHEN excluded.model_type != 'other' THEN excluded.model_type ELSE models.model_type END,
-               file_path = excluded.file_path,
-               file_size = excluded.file_size,
-               sha256_hash = COALESCE(excluded.sha256_hash, models.sha256_hash),
-               autov2_hash = COALESCE(excluded.autov2_hash, models.autov2_hash),
-               is_installed = 1,
-               source_type = 'filesystem',
-               last_seen_at = datetime('now')`
-          ).run(
-            entry.name.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, ''),
-            entry.name,
-            currentType,
-            full,
-            stat.size,
-            sha256,
-            autov2
-          );
-          seenInstalledFilenames.add(entry.name.toLowerCase());
         }
       }
     };
-    walk(rootDir, defaultType);
+
+    walk(rootDir, defaultType, null);
+    return found;
   };
 
-  scanRoot(appConfig.comfyuiModelsDir, 'other');
-  scanRoot(appConfig.downloadsDir, 'lora');
+  const comfyModelsDirExists = Boolean(appConfig.comfyuiModelsDir && fs.existsSync(appConfig.comfyuiModelsDir));
+  const downloadsDirResolved = path.resolve(appConfig.downloadsDir || '');
+  const comfyDirResolved = path.resolve(appConfig.comfyuiModelsDir || '');
+  const dirsOverlap =
+    Boolean(downloadsDirResolved && comfyDirResolved) &&
+    (downloadsDirResolved === comfyDirResolved ||
+      downloadsDirResolved.startsWith(comfyDirResolved + path.sep));
 
-  // Query ComfyUI /object_info if online
+  const comfyDiskMap = walkModelRoot(appConfig.comfyuiModelsDir, 'other', true);
+  const downloadsDiskMap = dirsOverlap
+    ? new Map<string, ScannedDiskFile>()
+    : walkModelRoot(appConfig.downloadsDir, 'lora', false);
+
+  // Query live ComfyUI /object_info when reachable — authoritative runtime list
+  let comfyApiOnline = false;
+  const comfyApiMap = new Map<
+    string,
+    { filename: string; rawName: string; modelType: ModelType }
+  >();
+
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3000);
@@ -174,21 +198,18 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
     clearTimeout(timer);
 
     if (res.ok) {
+      comfyApiOnline = true;
       const objInfo = (await res.json()) as Record<string, any>;
       const extractList = (nodeName: string, inputKey: string, mType: ModelType) => {
         const list = objInfo?.[nodeName]?.input?.required?.[inputKey]?.[0];
-        if (Array.isArray(list)) {
-          for (const rawName of list) {
-            if (typeof rawName !== 'string' || rawName === 'None') continue;
-            const filename = rawName.replace(/\\/g, '/').split('/').pop() || rawName;
-            db.prepare(
-              `INSERT INTO models (name, filename, model_type, is_installed, source_type, last_seen_at)
-               VALUES (?, ?, ?, 1, 'comfyui_api', datetime('now'))
-               ON CONFLICT(filename) DO UPDATE SET
-                 is_installed = 1,
-                 last_seen_at = datetime('now')`
-            ).run(filename.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, ''), filename, mType);
-            seenInstalledFilenames.add(filename.toLowerCase());
+        if (!Array.isArray(list)) return;
+        for (const rawEntry of list) {
+          if (typeof rawEntry !== 'string' || rawEntry === 'None') continue;
+          const normalizedRaw = rawEntry.replace(/\\/g, '/').trim();
+          const filename = normalizedRaw.split('/').pop() || normalizedRaw;
+          const key = filename.toLowerCase();
+          if (!comfyApiMap.has(key)) {
+            comfyApiMap.set(key, { filename, rawName: normalizedRaw, modelType: mType });
           }
         }
       };
@@ -207,6 +228,117 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
     }
   } catch {
     // Offline operation is expected and supported
+  }
+
+  const allSeenKeys = new Set<string>([
+    ...comfyDiskMap.keys(),
+    ...downloadsDiskMap.keys(),
+    ...comfyApiMap.keys(),
+  ]);
+  const verifiedInstalledKeys = new Set<string>();
+
+  const existingByFilename = new Map<string, any>();
+  for (const row of db
+    .prepare('SELECT id, filename, file_size, sha256_hash, autov2_hash FROM models')
+    .all() as any[]) {
+    existingByFilename.set(String(row.filename).toLowerCase(), row);
+  }
+
+  for (const key of allSeenKeys) {
+    const comfyDisk = comfyDiskMap.get(key) || null;
+    const dlDisk = downloadsDiskMap.get(key) || null;
+    const apiEntry = comfyApiMap.get(key) || null;
+
+    // If present in both DOWNLOADS_DIR and COMFYUI_MODELS_DIR (not yet in /object_info), verify complete copy by size
+    const hasCompleteComfyDiskCopy = Boolean(
+      comfyDisk && (!dlDisk || comfyDisk.size === dlDisk.size)
+    );
+    const isComfyAvailable = Boolean(apiEntry || hasCompleteComfyDiskCopy);
+
+    const primaryDisk = comfyDisk || dlDisk;
+    const canonicalFilename =
+      apiEntry?.filename || primaryDisk?.filename || key;
+    const resolvedType: ModelType =
+      apiEntry?.modelType ||
+      (comfyDisk && comfyDisk.modelType !== 'other' ? comfyDisk.modelType : null) ||
+      dlDisk?.modelType ||
+      'other';
+    const resolvedPath = comfyDisk?.fullPath || dlDisk?.fullPath || null;
+    const resolvedSize = comfyDisk?.size ?? dlDisk?.size ?? null;
+    const comfyuiPath = isComfyAvailable
+      ? apiEntry?.rawName || comfyDisk?.relativeToCategory || canonicalFilename
+      : null;
+    const downloadFilePath = dlDisk?.fullPath || null;
+
+    const existing = existingByFilename.get(key);
+    let sha256: string | null = existing?.sha256_hash || null;
+    let autov2: string | null = existing?.autov2_hash || null;
+    if (primaryDisk && (!sha256 || existing?.file_size !== primaryDisk.size)) {
+      const computed = computeModelHashesIfFeasible(primaryDisk.fullPath, primaryDisk.size);
+      sha256 = computed.sha256;
+      autov2 = computed.autov2;
+    }
+
+    const sourceType = apiEntry && !comfyDisk && !dlDisk ? 'comfyui_api' : 'filesystem';
+    const installedFlag = isComfyAvailable ? 1 : 0;
+
+    if (isComfyAvailable) {
+      verifiedInstalledKeys.add(key);
+    }
+
+    db.prepare(
+      `INSERT INTO models
+        (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, comfyui_path, download_file_path, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(filename) DO UPDATE SET
+         model_type = CASE WHEN excluded.model_type != 'other' THEN excluded.model_type ELSE models.model_type END,
+         file_path = COALESCE(excluded.file_path, models.file_path),
+         file_size = COALESCE(excluded.file_size, models.file_size),
+         sha256_hash = COALESCE(excluded.sha256_hash, models.sha256_hash),
+         autov2_hash = COALESCE(excluded.autov2_hash, models.autov2_hash),
+         is_installed = excluded.is_installed,
+         source_type = CASE WHEN excluded.source_type = 'filesystem' THEN 'filesystem' ELSE models.source_type END,
+         comfyui_path = excluded.comfyui_path,
+         download_file_path = excluded.download_file_path,
+         last_seen_at = datetime('now')`
+    ).run(
+      canonicalFilename.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, ''),
+      canonicalFilename,
+      resolvedType,
+      resolvedPath,
+      resolvedSize,
+      sha256,
+      autov2,
+      installedFlag,
+      sourceType,
+      comfyuiPath,
+      downloadFilePath
+    );
+  }
+
+  // Clear stale installed flags whenever at least one authoritative ComfyUI source was reachable
+  if (comfyModelsDirExists || comfyApiOnline) {
+    for (const key of existingByFilename.keys()) {
+      if (!verifiedInstalledKeys.has(key)) {
+        const dlEntry = downloadsDiskMap.get(key) || null;
+        db.prepare(
+          `UPDATE models
+           SET is_installed = 0,
+               comfyui_path = NULL,
+               download_file_path = ?
+           WHERE LOWER(filename) = ?`
+        ).run(dlEntry?.fullPath || null, key);
+      }
+    }
+  } else if (fs.existsSync(appConfig.downloadsDir)) {
+    // Still keep download_file_path accurate when ComfyUI folders are unreachable
+    for (const key of existingByFilename.keys()) {
+      const dlEntry = downloadsDiskMap.get(key) || null;
+      db.prepare(`UPDATE models SET download_file_path = ? WHERE LOWER(filename) = ?`).run(
+        dlEntry?.fullPath || null,
+        key
+      );
+    }
   }
 
   // Recompute dependency statuses across all indexed images
@@ -238,41 +370,48 @@ export function listModelInventory(): ModelInventoryItem[] {
     )
     .all() as any[];
 
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    filename: r.filename,
-    modelType: r.model_type,
-    loraCategory: r.lora_category || 'unclassified',
-    filePath: r.file_path || null,
-    fileSize: r.file_size ?? null,
-    sha256Hash: r.sha256_hash || null,
-    autov2Hash: r.autov2_hash || null,
-    isInstalled: Boolean(r.is_installed),
-    isHidden: Boolean(r.is_hidden),
-    sourceType: r.source_type,
-    downloadUrl: r.download_url || null,
-    civitaiId: r.civitai_id || null,
-    civitaiVersionId: r.civitai_version_id || null,
-    civitaiUrl: r.civitai_url || null,
-    baseModel: r.base_model || null,
-    recommendedWeight:
-      r.recommended_weight !== null && r.recommended_weight !== undefined
-        ? Number(r.recommended_weight)
-        : null,
-    civitaiDescription: r.civitai_description || null,
-    previewImages: parsePreviewImagesJson(r.preview_images_json, r.id),
-    civitaiFetchedAt: r.civitai_fetched_at || null,
-    hfRepoId: r.hf_repo_id || null,
-    userNotes: r.user_notes || null,
-    nickname: r.nickname || null,
-    mentionEnabled: Boolean(r.mention_enabled),
-    llmDescription: r.llm_description || null,
-    averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
-    lastSeenAt: r.last_seen_at,
-    dependentImageCount: Number(r.dependentImageCount || 0),
-    dependentWorkflowCount: Number(r.dependentWorkflowCount || 0),
-  }));
+  return rows.map((r) => {
+    const isInstalled = Boolean(r.is_installed);
+    const downloadFilePath = r.download_file_path || null;
+    return {
+      id: r.id,
+      name: r.name,
+      filename: r.filename,
+      modelType: r.model_type,
+      loraCategory: r.lora_category || 'unclassified',
+      filePath: r.file_path || null,
+      fileSize: r.file_size ?? null,
+      sha256Hash: r.sha256_hash || null,
+      autov2Hash: r.autov2_hash || null,
+      isInstalled,
+      isDownloadedPendingImport: Boolean(!isInstalled && downloadFilePath),
+      comfyuiPath: r.comfyui_path || null,
+      downloadFilePath,
+      isHidden: Boolean(r.is_hidden),
+      sourceType: r.source_type,
+      downloadUrl: r.download_url || null,
+      civitaiId: r.civitai_id || null,
+      civitaiVersionId: r.civitai_version_id || null,
+      civitaiUrl: r.civitai_url || null,
+      baseModel: r.base_model || null,
+      recommendedWeight:
+        r.recommended_weight !== null && r.recommended_weight !== undefined
+          ? Number(r.recommended_weight)
+          : null,
+      civitaiDescription: r.civitai_description || null,
+      previewImages: parsePreviewImagesJson(r.preview_images_json, r.id),
+      civitaiFetchedAt: r.civitai_fetched_at || null,
+      hfRepoId: r.hf_repo_id || null,
+      userNotes: r.user_notes || null,
+      nickname: r.nickname || null,
+      mentionEnabled: Boolean(r.mention_enabled),
+      llmDescription: r.llm_description || null,
+      averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
+      lastSeenAt: r.last_seen_at,
+      dependentImageCount: Number(r.dependentImageCount || 0),
+      dependentWorkflowCount: Number(r.dependentWorkflowCount || 0),
+    };
+  });
 }
 
 /**

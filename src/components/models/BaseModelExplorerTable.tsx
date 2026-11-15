@@ -1,6 +1,6 @@
 import React from 'react';
 import { Cpu, ExternalLink, Eye, EyeOff } from 'lucide-react';
-import { formatBytes } from '../../shared/utils.ts';
+import { formatBytes, getModelAvailabilityInfo } from '../../shared/utils.ts';
 import {
   formatModelTypeLabel,
   isBaseModelType,
@@ -61,6 +61,7 @@ export const BaseModelExplorerTable: React.FC<BaseModelExplorerListProps> = ({
                   {isBase ? (
                     <input
                       type="checkbox"
+                      disabled={!m.isInstalled}
                       checked={Boolean(m.mentionEnabled)}
                       onClick={(e) => e.stopPropagation()}
                       onChange={(e) =>
@@ -69,9 +70,13 @@ export const BaseModelExplorerTable: React.FC<BaseModelExplorerListProps> = ({
                         })
                       }
                       aria-label={`Include ${m.name} in @mention menu`}
-                      className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 cursor-pointer"
+                      className={`w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 disabled:opacity-40 ${
+                        m.isInstalled ? 'cursor-pointer' : 'cursor-not-allowed'
+                      }`}
                       title={
-                        m.mentionEnabled
+                        !m.isInstalled
+                          ? 'Unavailable for @mention until present in ComfyUI models folder'
+                          : m.mentionEnabled
                           ? 'Enabled in Quick Gen @mention'
                           : 'Click to enable in Quick Gen @mention'
                       }
@@ -190,10 +195,15 @@ export const BaseModelExplorerTable: React.FC<BaseModelExplorerListProps> = ({
                 >
                   {m.isHidden ? (
                     <span className="text-amber-400">Hidden</span>
-                  ) : m.isInstalled ? (
-                    <span className="text-emerald-400">Installed</span>
                   ) : (
-                    <span className="text-amber-400">Missing</span>
+                    (() => {
+                      const avail = getModelAvailabilityInfo(m);
+                      return (
+                        <span className={avail.colorClass} title={avail.tooltip}>
+                          {avail.label}
+                        </span>
+                      );
+                    })()
                   )}
                 </td>
 

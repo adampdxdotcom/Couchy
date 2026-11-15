@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
-import { formatBytes } from '../shared/utils.ts';
+import { formatBytes, getModelAvailabilityInfo } from '../shared/utils.ts';
 import type { ImageRecord, LoraCategory, LoraExplorerItem } from '../shared/types.ts';
 import { CharacterPortraitImage } from './character/CharacterPortraitImage.tsx';
 
@@ -39,6 +39,8 @@ interface LoraDetailViewProps {
     }
   ) => Promise<void>;
   onRefresh: () => Promise<void>;
+  onSyncModels?: () => Promise<void>;
+  isSyncingModels?: boolean;
   onOpenImage: (img: ImageRecord) => void;
   onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
@@ -60,10 +62,13 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
   onToggleVisibility,
   onUpdateMentionConfig,
   onRefresh,
+  onSyncModels,
+  isSyncingModels = false,
   onOpenImage,
   onPushToast,
 }) => {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const avail = getModelAvailabilityInfo(lora);
 
   const associatedImages = allImages.filter((img) =>
     img.loras.some((l) => l.loraName.toLowerCase() === lora.filename.toLowerCase())
@@ -210,7 +215,8 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
                 )}
               </div>
               <p className="text-xs font-mono text-zinc-400 break-all">
-                {lora.filename} · {lora.filePath || 'Not locally installed'} · {formatBytes(lora.fileSize)}
+                {lora.filename} · {lora.comfyuiPath || lora.filePath || 'Not locally installed'} ·{' '}
+                {formatBytes(lora.fileSize)}
               </p>
             </div>
           </div>
@@ -236,6 +242,31 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
             </select>
           </div>
         </div>
+
+        {avail.state === 'pending_import' && (
+          <div className="flex flex-wrap items-center justify-between gap-3 bg-amber-500/10 border border-amber-500/35 rounded-lg px-4 py-3 text-xs">
+            <div className="space-y-0.5 text-amber-200 min-w-0">
+              <div className="font-medium">
+                Downloaded locally, but not yet detected in ComfyUI
+              </div>
+              <div className="text-[11px] text-amber-200/80 font-mono break-all">
+                Stored in {lora.downloadFilePath || 'downloads folder'} — copy to ComfyUI loras
+                folder (or refresh ComfyUI) to enable this LoRA for generation and @mention.
+              </div>
+            </div>
+            {onSyncModels && (
+              <button
+                type="button"
+                disabled={isSyncingModels}
+                onClick={onSyncModels}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/50 text-amber-100 rounded-lg cursor-pointer disabled:opacity-50 shrink-0"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingModels ? 'animate-spin' : ''}`} />
+                <span>{isSyncingModels ? 'Checking...' : 'Re-check ComfyUI'}</span>
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Cached Civitai Preview Strip */}
         {previews.length > 0 && (
@@ -265,11 +296,9 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
         )}
 
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 text-xs font-mono tabular-nums">
-          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3" title={avail.tooltip}>
             <span className="block text-[10px] font-sans text-zinc-400">Status</span>
-            <span className={lora.isInstalled ? 'text-emerald-400' : 'text-amber-400'}>
-              {lora.isInstalled ? 'Installed' : 'Missing'}
-            </span>
+            <span className={avail.colorClass}>{avail.label}</span>
           </div>
           <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3">
             <span className="block text-[10px] font-sans text-zinc-400">Images Using It</span>
@@ -344,9 +373,19 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 select-none">
+          <div
+            className={`flex items-center gap-2.5 select-none ${
+              !lora.isInstalled ? 'opacity-50' : ''
+            }`}
+            title={
+              !lora.isInstalled
+                ? 'Unavailable for @mention until present in ComfyUI models folder'
+                : undefined
+            }
+          >
             <input
               type="checkbox"
+              disabled={!lora.isInstalled}
               checked={Boolean(lora.mentionEnabled)}
               onChange={(e) =>
                 onUpdateMentionConfig(lora.filename, {
@@ -354,7 +393,9 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
                 })
               }
               aria-label={`Include ${lora.name} in @Mention Menu`}
-              className="w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-zinc-900 cursor-pointer"
+              className={`w-4 h-4 rounded border-zinc-700 bg-zinc-950 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-zinc-900 ${
+                lora.isInstalled ? 'cursor-pointer' : 'cursor-not-allowed'
+              }`}
             />
             <span className="text-xs font-medium text-zinc-200">Include in @Mention Menu</span>
           </div>

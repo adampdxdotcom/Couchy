@@ -55,6 +55,7 @@ export interface ImageLoraRecord {
   provenance: ProvenanceSource;
   loraCategory?: LoraCategory;
   isInstalled?: boolean;
+  isDownloadedPendingImport?: boolean;
 }
 
 export interface ImageModelDependency {
@@ -198,6 +199,7 @@ export interface CharacterProfile {
     triggerWord: string;
     notes: string;
     isInstalled: boolean;
+    isDownloadedPendingImport?: boolean;
   }[];
   workflows: {
     workflowId: number;
@@ -325,6 +327,9 @@ export interface LoraExplorerItem {
   autov2Hash: string | null;
   loraCategory: LoraCategory;
   isInstalled: boolean;
+  isDownloadedPendingImport?: boolean;
+  comfyuiPath?: string | null;
+  downloadFilePath?: string | null;
   isHidden?: boolean;
   downloadUrl: string | null;
   civitaiId: string | null;
@@ -371,6 +376,9 @@ export interface ModelInventoryItem {
   sha256Hash: string | null;
   autov2Hash: string | null;
   isInstalled: boolean;
+  isDownloadedPendingImport?: boolean;
+  comfyuiPath?: string | null;
+  downloadFilePath?: string | null;
   isHidden?: boolean;
   sourceType: 'filesystem' | 'comfyui_api' | 'historical';
   downloadUrl: string | null;

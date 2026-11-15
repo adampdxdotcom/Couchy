@@ -18,6 +18,7 @@ export interface FavoriteBaseModelItem {
   avgRating: number;
   favoriteCount: number;
   isInstalled: boolean;
+  isDownloadedPendingImport: boolean;
 }
 
 export interface FavoriteAddonLoraItem {
@@ -31,6 +32,7 @@ export interface FavoriteAddonLoraItem {
   avgRating: number;
   favoriteCount: number;
   isInstalled: boolean;
+  isDownloadedPendingImport: boolean;
 }
 
 export interface CharacterFriendItem {
@@ -47,6 +49,7 @@ export interface CharacterFriendItem {
   avgRating: number;
   favoriteCount: number;
   isInstalled: boolean;
+  isDownloadedPendingImport: boolean;
 }
 
 function getCleanDisplayStem(rawName: string): string {
@@ -165,6 +168,7 @@ export function computeCharacterAddonStats(params: {
       ratedCount: number;
       favoriteCount: number;
       isInstalled: boolean;
+      isDownloadedPendingImport: boolean;
     }
   >();
   const friendAcc = new Map<
@@ -183,6 +187,7 @@ export function computeCharacterAddonStats(params: {
       ratedCount: number;
       favoriteCount: number;
       isInstalled: boolean;
+      isDownloadedPendingImport: boolean;
     }
   >();
 
@@ -227,6 +232,9 @@ export function computeCharacterAddonStats(params: {
       const displayName = nick || explorer?.name?.trim() || getCleanDisplayStem(imgLora.loraName);
       const canonicalFilename = explorer?.filename || imgLora.loraName;
       const isInstalled = explorer ? Boolean(explorer.isInstalled) : Boolean(imgLora.isInstalled);
+      const isDownloadedPendingImport = explorer
+        ? Boolean(explorer.isDownloadedPendingImport)
+        : Boolean(imgLora.isDownloadedPendingImport);
 
       if (isFriendLora) {
         // Group co-occurring friend by characterId if known, otherwise by normalized LoRA key
@@ -245,6 +253,7 @@ export function computeCharacterAddonStats(params: {
           ratedCount: 0,
           favoriteCount: 0,
           isInstalled,
+          isDownloadedPendingImport,
         };
         existingFriend.count += 1;
         existingFriend.modelStrengthSum += Number(imgLora.modelStrength ?? 1.0);
@@ -269,6 +278,7 @@ export function computeCharacterAddonStats(params: {
         ratedCount: 0,
         favoriteCount: 0,
         isInstalled,
+        isDownloadedPendingImport,
       };
       existingAddon.count += 1;
       existingAddon.modelStrengthSum += Number(imgLora.modelStrength ?? 1.0);
@@ -296,6 +306,7 @@ export function computeCharacterAddonStats(params: {
         avgRating: item.ratedCount > 0 ? Math.round((item.ratingSum / item.ratedCount) * 10) / 10 : 0,
         favoriteCount: item.favoriteCount,
         isInstalled,
+        isDownloadedPendingImport: Boolean(matchedModel?.isDownloadedPendingImport),
       };
     })
     .sort((a, b) => compareBySortMode(a, b, a.name, b.name, sortMode));
@@ -312,6 +323,7 @@ export function computeCharacterAddonStats(params: {
       avgRating: item.ratedCount > 0 ? Math.round((item.ratingSum / item.ratedCount) * 10) / 10 : 0,
       favoriteCount: item.favoriteCount,
       isInstalled: item.isInstalled,
+      isDownloadedPendingImport: item.isDownloadedPendingImport,
     }))
     .sort((a, b) => compareBySortMode(a, b, a.displayName, b.displayName, sortMode));
 
@@ -330,6 +342,7 @@ export function computeCharacterAddonStats(params: {
       avgRating: item.ratedCount > 0 ? Math.round((item.ratingSum / item.ratedCount) * 10) / 10 : 0,
       favoriteCount: item.favoriteCount,
       isInstalled: item.isInstalled,
+      isDownloadedPendingImport: item.isDownloadedPendingImport,
     }))
     .sort((a, b) => compareBySortMode(a, b, a.characterName, b.characterName, sortMode));
 

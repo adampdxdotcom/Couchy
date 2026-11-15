@@ -323,8 +323,17 @@ export function compileWorkflowForGeneration(params: {
     }
   }
 
-  // 5. Diffusion Model Override (Node #30_10 UNETLoader)
+  // 5. Diffusion Model Override (Node #30_10 UNETLoader — prefer exact comfyui_path if nested)
   if (params.checkpointName) {
+    const ckptModelRow = db
+      .prepare(
+        `SELECT comfyui_path FROM models
+         WHERE LOWER(filename) = LOWER(?) OR LOWER(comfyui_path) = LOWER(?)
+         LIMIT 1`
+      )
+      .get(params.checkpointName, params.checkpointName) as { comfyui_path: string | null } | undefined;
+    const resolvedCkptName = ckptModelRow?.comfyui_path || params.checkpointName;
+
     const ckptNode =
       graph['30_10']?.inputs
         ? graph['30_10']
@@ -337,7 +346,7 @@ export function compileWorkflowForGeneration(params: {
           );
     if (ckptNode?.inputs) {
       const ckptField = 'unet_name' in ckptNode.inputs ? 'unet_name' : 'ckpt_name';
-      ckptNode.inputs[ckptField] = params.checkpointName;
+      ckptNode.inputs[ckptField] = resolvedCkptName;
     }
   }
 
@@ -361,15 +370,24 @@ export function compileWorkflowForGeneration(params: {
       }
     }
 
+    const loraPathLookup = db.prepare(
+      `SELECT comfyui_path FROM models
+       WHERE LOWER(filename) = LOWER(?) OR LOWER(comfyui_path) = LOWER(?)
+       LIMIT 1`
+    );
+
     const combinedLoras: { on: boolean; lora: string; strength: number }[] = [];
     const seenLoraNames = new Set<string>();
     for (const lora of activeLoras) {
       const key = lora.loraName.toLowerCase();
       if (!seenLoraNames.has(key)) {
         seenLoraNames.add(key);
+        const loraRow = loraPathLookup.get(lora.loraName, lora.loraName) as
+          | { comfyui_path: string | null }
+          | undefined;
         combinedLoras.push({
           on: true,
-          lora: lora.loraName,
+          lora: loraRow?.comfyui_path || lora.loraName,
           strength: Number(lora.modelStrength ?? 1.0),
         });
       }
