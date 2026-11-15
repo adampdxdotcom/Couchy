@@ -19,6 +19,7 @@ import {
   resolveBaseModelDisplayLabel,
   resolveReusableCheckpoint,
 } from './components/quickgen/quickGenUtils.ts';
+import { normalizePillTypeSettings } from './shared/pillSettings.ts';
 import { resolveClosestAspectRatio } from './shared/utils.ts';
 import type {
   AppToastMessage,
@@ -775,6 +776,10 @@ export default function App() {
   const inspectedIdx = images.findIndex((i) => i.id === inspectedImageId);
   const showQuickGenBar =
     healthData?.config?.quickGenBoxEnabled !== false && activeTab !== 'generation';
+  const pillTypeSettings = useMemo(
+    () => normalizePillTypeSettings(healthData?.config?.pillTypeSettings),
+    [healthData?.config?.pillTypeSettings]
+  );
   const visibleLoras = useMemo(() => loras.filter((l) => !l.isHidden), [loras]);
 
   return (
@@ -861,6 +866,7 @@ export default function App() {
               loras={visibleLoras}
               models={models}
               galleryPillColorsEnabled={healthData?.config?.galleryPillColorsEnabled === true}
+              pillTypeSettings={pillTypeSettings}
               ghostItems={activeGhostItems}
               filters={filters}
               page={currentGalleryPage}
@@ -924,6 +930,7 @@ export default function App() {
             models={models}
             workflows={workflows}
             collections={collections}
+            pillTypeSettings={pillTypeSettings}
             selectedCharacterId={selectedCharacterId}
             onSelectCharacterId={setSelectedCharacterId}
             onRefresh={refreshAll}
@@ -1045,6 +1052,7 @@ export default function App() {
           onRefreshAll={refreshAll}
           onPushToast={pushToast}
           lmStudioOnline={lmStudioStatus.online}
+          pillTypeSettings={pillTypeSettings}
         />
       )}
 

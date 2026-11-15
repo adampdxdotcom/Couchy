@@ -5,6 +5,7 @@ import type {
   ImageRecord,
   LoraExplorerItem,
   ModelInventoryItem,
+  PillTypeSettings,
   QueuedGhostCardItem,
   WorkflowLibraryItem,
 } from '../shared/types.ts';
@@ -26,6 +27,7 @@ interface CharacterExplorerViewProps {
   models?: ModelInventoryItem[];
   workflows: WorkflowLibraryItem[];
   collections: { id: number; name: string }[];
+  pillTypeSettings?: PillTypeSettings;
   selectedCharacterId?: number | null;
   onSelectCharacterId?: (id: number | null) => void;
   onRefresh: () => Promise<void>;
@@ -54,6 +56,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   models = [],
   workflows,
   collections,
+  pillTypeSettings,
   selectedCharacterId: controlledCharId,
   onSelectCharacterId,
   onRefresh,
@@ -205,6 +208,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
           models={models}
           defaultCheckpoint={resolveDefaultWorkflow(workflows)?.defaultCheckpoint ?? null}
           collections={collections}
+          pillTypeSettings={pillTypeSettings}
           onRefresh={onRefresh}
           onSelectCharacter={(friendId) => {
             setSelectedCharId(friendId);

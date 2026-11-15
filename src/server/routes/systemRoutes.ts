@@ -29,6 +29,7 @@ import {
   askReadmeHelpAssistant,
   getHelpDocsPayload,
 } from '../services/helpDocsService.ts';
+import { normalizePillTypeSettings } from '../../shared/pillSettings.ts';
 
 export const systemRouter = Router();
 
@@ -61,6 +62,19 @@ systemRouter.get('/health', (_req, res) => {
     .get() as { value: string } | undefined;
   const galleryPillColorsEnabled = galleryPillColorsRow ? galleryPillColorsRow.value === '1' : false;
 
+  const pillTypeSettingsRow = db
+    .prepare("SELECT value FROM app_settings WHERE key = 'pill_type_settings_json'")
+    .get() as { value: string } | undefined;
+  let parsedPillSettings: unknown = null;
+  if (pillTypeSettingsRow?.value) {
+    try {
+      parsedPillSettings = JSON.parse(pillTypeSettingsRow.value);
+    } catch {
+      parsedPillSettings = null;
+    }
+  }
+  const pillTypeSettings = normalizePillTypeSettings(parsedPillSettings);
+
   const cleanupSettings = getModelCleanupSettings();
 
   res.json({
@@ -86,6 +100,7 @@ systemRouter.get('/health', (_req, res) => {
       quickGenBoxEnabled,
       saveUploadedPromptImages,
       galleryPillColorsEnabled,
+      pillTypeSettings,
       autoCleanCopiedModels: cleanupSettings.enabled,
       autoCleanCopiedModelsHours: cleanupSettings.retentionHours,
     },
@@ -111,6 +126,7 @@ systemRouter.patch('/config', (req, res) => {
       quickGenBoxEnabled,
       saveUploadedPromptImages,
       galleryPillColorsEnabled,
+      pillTypeSettings,
     } = req.body || {};
 
     if (comfyuiUrl && String(comfyuiUrl).trim()) {
@@ -158,6 +174,14 @@ systemRouter.patch('/config', (req, res) => {
          VALUES ('gallery_pill_colors_enabled', ?, datetime('now'))
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
       ).run(galleryPillColorsEnabled ? '1' : '0');
+    }
+    if (pillTypeSettings !== undefined) {
+      const normalized = normalizePillTypeSettings(pillTypeSettings);
+      db.prepare(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('pill_type_settings_json', ?, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+      ).run(JSON.stringify(normalized));
     }
 
     res.json({ ok: true, config: appConfig });

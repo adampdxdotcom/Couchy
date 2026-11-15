@@ -21,6 +21,7 @@ import {
   Layers,
   MessageSquare,
 } from 'lucide-react';
+import { DEFAULT_PILL_TYPE_SETTINGS, PILL_COLOR_STYLES } from '../shared/pillSettings.ts';
 import type {
   CharacterProfile,
   DependencyStatus,
@@ -30,6 +31,7 @@ import type {
   LoraCategory,
   LoraExplorerItem,
   ModelInventoryItem,
+  PillTypeSettings,
   QueuedGhostCardItem,
 } from '../shared/types.ts';
 import {
@@ -69,6 +71,7 @@ interface GalleryGridViewProps {
   loras?: LoraExplorerItem[];
   models?: ModelInventoryItem[];
   galleryPillColorsEnabled?: boolean;
+  pillTypeSettings?: PillTypeSettings;
   ghostItems?: QueuedGhostCardItem[];
   filters?: GalleryFilterState;
   page: number;
@@ -138,6 +141,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   loras = [],
   models = [],
   galleryPillColorsEnabled = false,
+  pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   ghostItems = [],
   filters,
   page,
@@ -165,6 +169,10 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   onOpenSystemSettings,
   isLoading = false,
 }) => {
+  const neutralPillClass = 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200';
+  const charPillClass = PILL_COLOR_STYLES[pillTypeSettings.character.color].pill;
+  const baseModelPillClass = PILL_COLOR_STYLES[pillTypeSettings.baseModel.color].pill;
+  const loraPillClass = PILL_COLOR_STYLES[pillTypeSettings.lora.color].pill;
   const [bulkTagInput, setBulkTagInput] = useState('');
   const [bulkCharId, setBulkCharId] = useState('');
   const [bulkColId, setBulkColId] = useState('');
@@ -608,9 +616,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                           <span
                             title={`Base Model: ${ghost.checkpointName}`}
                             className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-medium truncate max-w-[150px] ${
-                              galleryPillColorsEnabled
-                                ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200'
-                                : 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200'
+                              galleryPillColorsEnabled ? baseModelPillClass : neutralPillClass
                             }`}
                           >
                             {resolveBaseModelDisplayLabel(ghost.checkpointName, models)}
@@ -623,10 +629,10 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                               loras
                             );
                             const pillColorClass = !galleryPillColorsEnabled
-                              ? 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200'
+                              ? neutralPillClass
                               : category === 'character'
-                              ? 'bg-indigo-950/70 border-indigo-500/40 text-indigo-200'
-                              : 'bg-amber-950/60 border-amber-500/40 text-amber-200';
+                              ? charPillClass
+                              : loraPillClass;
                             return (
                               <span
                                 key={`${loraName}-${idx}`}
@@ -640,9 +646,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                         ) : ghost.loraCount > 0 ? (
                           <span
                             className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-medium ${
-                              galleryPillColorsEnabled
-                                ? 'bg-amber-950/60 border-amber-500/40 text-amber-200'
-                                : 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200'
+                              galleryPillColorsEnabled ? loraPillClass : neutralPillClass
                             }`}
                           >
                             {ghost.loraCount} {ghost.loraCount === 1 ? 'LoRA' : 'LoRAs'}
@@ -917,9 +921,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                         <span
                           title={`Base Model: ${img.checkpointName}`}
                           className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-medium truncate max-w-[150px] ${
-                            galleryPillColorsEnabled
-                              ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200'
-                              : 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200'
+                            galleryPillColorsEnabled ? baseModelPillClass : neutralPillClass
                           }`}
                         >
                           {resolveBaseModelDisplayLabel(img.checkpointName, models)}
@@ -928,10 +930,10 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                       {img.loras.map((lora, idx) => {
                         const { label, category } = resolveGalleryLoraMeta(lora, loras);
                         const pillColorClass = !galleryPillColorsEnabled
-                          ? 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200'
+                          ? neutralPillClass
                           : category === 'character'
-                          ? 'bg-indigo-950/70 border-indigo-500/40 text-indigo-200'
-                          : 'bg-amber-950/60 border-amber-500/40 text-amber-200';
+                          ? charPillClass
+                          : loraPillClass;
                         return (
                           <span
                             key={`${lora.loraName}-${idx}`}

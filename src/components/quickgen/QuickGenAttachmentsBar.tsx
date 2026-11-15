@@ -1,9 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Cpu, Layers, X } from 'lucide-react';
+import {
+  DEFAULT_PILL_TYPE_SETTINGS,
+  PILL_COLOR_STYLES,
+  type PillColorStyleSet,
+} from '../../shared/pillSettings.ts';
 import type {
   CharacterProfile,
   GenerationLoraSelection,
   ModelInventoryItem,
+  PillTypeSettings,
 } from '../../shared/types.ts';
 import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
 import { getCleanLoraLabel, resolveBaseModelDisplayLabel } from './quickGenUtils.ts';
@@ -13,6 +19,7 @@ interface QuickGenAttachmentsBarProps {
   attachedCheckpoint?: string | null;
   attachedLoras: GenerationLoraSelection[];
   models?: ModelInventoryItem[];
+  pillTypeSettings?: PillTypeSettings;
   onRemoveCharacter: () => void;
   onRemoveCheckpoint?: () => void;
   onRemoveLora: (loraName: string) => void;
@@ -41,11 +48,15 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
   attachedCheckpoint,
   attachedLoras,
   models = [],
+  pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   onRemoveCharacter,
   onRemoveCheckpoint,
   onRemoveLora,
   onUpdateLoraStrength,
 }) => {
+  const charStyle = PILL_COLOR_STYLES[pillTypeSettings.character.color];
+  const baseModelStyle = PILL_COLOR_STYLES[pillTypeSettings.baseModel.color];
+  const loraStyle = PILL_COLOR_STYLES[pillTypeSettings.lora.color];
   const [editingLoraName, setEditingLoraName] = useState<string | null>(null);
   const [draftValue, setDraftValue] = useState('');
   const editInputRef = useRef<HTMLInputElement | null>(null);
@@ -110,24 +121,14 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
   const renderStrengthControl = (
     lora: GenerationLoraSelection,
     label: string,
-    tone: 'amber' | 'indigo'
+    styleSet: PillColorStyleSet
   ) => {
     const isEditing = editingLoraName === lora.loraName;
-    const textCls =
-      tone === 'indigo'
-        ? 'text-indigo-300/90 hover:text-white'
-        : 'text-amber-300/90 hover:text-amber-100';
-    const inputCls =
-      tone === 'indigo'
-        ? 'bg-indigo-900/60 text-indigo-100 ring-indigo-400/60'
-        : 'bg-amber-900/50 text-amber-100 ring-amber-400/60';
 
     if (isEditing) {
       return (
         <span
-          className={`inline-flex items-center text-[11px] font-mono tabular-nums ${
-            tone === 'indigo' ? 'text-indigo-300/90' : 'text-amber-300/90'
-          }`}
+          className={`inline-flex items-center text-[11px] font-mono tabular-nums ${styleSet.textAccent}`}
         >
           <input
             ref={editInputRef}
@@ -138,7 +139,7 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
             onChange={(e) => setDraftValue(e.target.value)}
             onBlur={() => commitEdit(lora)}
             onKeyDown={(e) => handleEditKeyDown(e, lora)}
-            className={`w-9 rounded px-1 text-[11px] font-mono tabular-nums text-center focus:outline-none ring-1 ${inputCls}`}
+            className={`w-9 rounded px-1 text-[11px] font-mono tabular-nums text-center focus:outline-none ring-1 ${styleSet.strengthInput}`}
           />
           <span>x</span>
         </span>
@@ -150,7 +151,7 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
         type="button"
         onClick={() => startEditing(lora)}
         title={`Click to adjust ${label} strength for this generation (0.0–3.0)`}
-        className={`text-[11px] font-mono tabular-nums ${textCls} ${
+        className={`text-[11px] font-mono tabular-nums ${styleSet.strengthText} ${
           onUpdateLoraStrength ? 'cursor-text transition-colors' : ''
         }`}
       >
@@ -162,25 +163,27 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
   return (
     <div className="mb-2 flex flex-wrap items-center gap-2">
       {attachedCharacter && (
-        <div className="inline-flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full bg-indigo-950/70 border border-indigo-500/40 text-xs text-indigo-200 shadow-sm">
+        <div
+          className={`inline-flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full border text-xs shadow-sm ${charStyle.pill}`}
+        >
           <div className="w-5 h-5 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
             <CharacterPortraitImage
               src={attachedCharacter.portraitThumbnailUrl}
               alt={attachedCharacter.name}
               crop={attachedCharacter.portraitCrop}
-              iconClassName="w-3 h-3 text-indigo-300"
+              iconClassName={`w-3 h-3 ${charStyle.icon}`}
             />
           </div>
           <span className="font-medium">{attachedCharacter.name}</span>
           {attachedCharacter.loras[0]?.triggerWord && (
-            <span className="text-[11px] font-mono text-indigo-300/90">
+            <span className={`text-[11px] font-mono ${charStyle.textAccent}`}>
               ({attachedCharacter.loras[0].triggerWord})
             </span>
           )}
           <button
             type="button"
             onClick={onRemoveCharacter}
-            className="text-indigo-300/70 hover:text-white cursor-pointer ml-0.5"
+            className={`${charStyle.removeButton} cursor-pointer ml-0.5`}
             title="Remove character"
           >
             <X className="w-3.5 h-3.5" />
@@ -190,18 +193,18 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
 
       {attachedCheckpoint && (
         <div
-          className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full bg-emerald-950/60 border border-emerald-500/40 text-xs text-emerald-200 shadow-sm max-w-full"
+          className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs shadow-sm max-w-full ${baseModelStyle.pill}`}
           title={`Base Model: ${attachedCheckpoint}`}
         >
-          <Cpu className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-          <span className="font-medium text-emerald-100 truncate max-w-[180px] sm:max-w-[240px]">
+          <Cpu className={`w-3.5 h-3.5 shrink-0 ${baseModelStyle.icon}`} />
+          <span className={`font-medium truncate max-w-[180px] sm:max-w-[240px] ${baseModelStyle.textLight}`}>
             {resolveBaseModelDisplayLabel(attachedCheckpoint, models)}
           </span>
           {onRemoveCheckpoint && (
             <button
               type="button"
               onClick={onRemoveCheckpoint}
-              className="text-emerald-300/70 hover:text-white cursor-pointer ml-0.5 shrink-0"
+              className={`${baseModelStyle.removeButton} cursor-pointer ml-0.5 shrink-0`}
               title="Revert to default base model"
             >
               <X className="w-3.5 h-3.5" />
@@ -216,27 +219,27 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
           return (
             <div
               key={lora.loraName}
-              className="inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-full bg-indigo-950/70 border border-indigo-500/40 text-xs text-indigo-200 shadow-sm"
+              className={`inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-full border text-xs shadow-sm ${charStyle.pill}`}
             >
               <div className="w-5 h-5 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
                 <CharacterPortraitImage
                   src={lora.portraitThumbnailUrl || null}
                   alt={label}
                   crop={lora.portraitCrop}
-                  iconClassName="w-3 h-3 text-indigo-300"
+                  iconClassName={`w-3 h-3 ${charStyle.icon}`}
                 />
               </div>
               <span className="font-medium">{label}</span>
               {lora.triggerWord && (
-                <span className="text-[11px] font-mono text-indigo-300/90">
+                <span className={`text-[11px] font-mono ${charStyle.textAccent}`}>
                   ({lora.triggerWord})
                 </span>
               )}
-              {renderStrengthControl(lora, label, 'indigo')}
+              {renderStrengthControl(lora, label, charStyle)}
               <button
                 type="button"
                 onClick={() => onRemoveLora(lora.loraName)}
-                className="text-indigo-300/70 hover:text-white cursor-pointer ml-0.5"
+                className={`${charStyle.removeButton} cursor-pointer ml-0.5`}
                 title={`Remove ${label}`}
               >
                 <X className="w-3.5 h-3.5" />
@@ -248,15 +251,15 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
         return (
           <div
             key={lora.loraName}
-            className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full bg-amber-950/60 border border-amber-500/40 text-xs text-amber-200 shadow-sm"
+            className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs shadow-sm ${loraStyle.pill}`}
           >
-            <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="font-medium text-amber-100">{label}</span>
-            {renderStrengthControl(lora, label, 'amber')}
+            <Layers className={`w-3.5 h-3.5 shrink-0 ${loraStyle.icon}`} />
+            <span className={`font-medium ${loraStyle.textLight}`}>{label}</span>
+            {renderStrengthControl(lora, label, loraStyle)}
             <button
               type="button"
               onClick={() => onRemoveLora(lora.loraName)}
-              className="text-amber-300/70 hover:text-white cursor-pointer ml-0.5"
+              className={`${loraStyle.removeButton} cursor-pointer ml-0.5`}
               title={`Remove ${label}`}
             >
               <X className="w-3.5 h-3.5" />

@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Bot, Database, RefreshCw, Server, Tags } from 'lucide-react';
+import { BookOpen, Bot, Database, RefreshCw, Server, Sparkles, Tags } from 'lucide-react';
 import { api } from '../api/client.ts';
+import { normalizePillTypeSettings } from '../shared/pillSettings.ts';
 import type {
   LmStudioStatus,
+  PillTypeSettings,
   VisualTaggerStatus,
 } from '../shared/types.ts';
 import { WorkspacePreferencesSection } from './system/WorkspacePreferencesSection.tsx';
+import { QuickGenAndPillsSection } from './system/QuickGenAndPillsSection.tsx';
 import { VisualTaggerSection } from './system/VisualTaggerSection.tsx';
 import { LmStudioTemplatesSection } from './system/LmStudioTemplatesSection.tsx';
 import { ComfyUiConnectionSection } from './system/ComfyUiConnectionSection.tsx';
@@ -14,7 +17,14 @@ import { DatabaseBackupSection } from './system/DatabaseBackupSection.tsx';
 import { CollectionsAndScannerSection } from './system/CollectionsAndScannerSection.tsx';
 import { SystemHelpSection } from './system/SystemHelpSection.tsx';
 
-export type SystemSubTab = 'tagger' | 'lm_studio' | 'comfyui' | 'backup' | 'scanner' | 'help';
+export type SystemSubTab =
+  | 'tagger'
+  | 'quick_gen'
+  | 'lm_studio'
+  | 'comfyui'
+  | 'backup'
+  | 'scanner'
+  | 'help';
 
 const SYSTEM_SUB_TABS: {
   id: SystemSubTab;
@@ -22,6 +32,7 @@ const SYSTEM_SUB_TABS: {
   icon: React.FC<{ className?: string }>;
 }[] = [
   { id: 'tagger', label: 'Search', icon: Tags },
+  { id: 'quick_gen', label: 'Quick Gen & Pills', icon: Sparkles },
   { id: 'lm_studio', label: 'Agent', icon: Bot },
   { id: 'comfyui', label: 'ComfyUI', icon: Server },
   { id: 'backup', label: 'Database', icon: Database },
@@ -73,6 +84,9 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   const [galleryPillColorsEnabled, setGalleryPillColorsEnabled] = useState<boolean>(
     healthData?.config?.galleryPillColorsEnabled === true
   );
+  const [pillTypeSettings, setPillTypeSettings] = useState<PillTypeSettings>(() =>
+    normalizePillTypeSettings(healthData?.config?.pillTypeSettings)
+  );
 
   // Visual Keyword Tagger (WD14 ONNX) State
   const [taggerStatus, setTaggerStatus] = useState<VisualTaggerStatus | null>(
@@ -90,6 +104,9 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
     if (healthData?.config?.galleryPillColorsEnabled !== undefined) {
       setGalleryPillColorsEnabled(healthData.config.galleryPillColorsEnabled === true);
     }
+    if (healthData?.config?.pillTypeSettings !== undefined) {
+      setPillTypeSettings(normalizePillTypeSettings(healthData.config.pillTypeSettings));
+    }
     if (healthData?.visualTagger) {
       setTaggerStatus(healthData.visualTagger);
     }
@@ -97,6 +114,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
     healthData?.config?.quickGenBoxEnabled,
     healthData?.config?.saveUploadedPromptImages,
     healthData?.config?.galleryPillColorsEnabled,
+    healthData?.config?.pillTypeSettings,
     healthData?.visualTagger,
   ]);
 
@@ -236,6 +254,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       quickGenBoxEnabled,
       saveUploadedPromptImages,
       galleryPillColorsEnabled,
+      pillTypeSettings,
     });
     setBackupMsg('Configuration updated successfully.');
     setTimeout(() => setBackupMsg(null), 3000);
@@ -293,6 +312,21 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       await onRefreshAll();
     } catch (err: any) {
       setBackupMsg(`Failed to update gallery pill colors setting: ${err.message}`);
+    }
+  };
+
+  const handleUpdatePillTypeSettings = async (next: PillTypeSettings) => {
+    const normalized = normalizePillTypeSettings(next);
+    setPillTypeSettings(normalized);
+    try {
+      await api.updateConfig({
+        pillTypeSettings: normalized,
+      });
+      setBackupMsg('Updated pill colors & @mention settings.');
+      setTimeout(() => setBackupMsg(null), 2500);
+      await onRefreshAll();
+    } catch (err: any) {
+      setBackupMsg(`Failed to update pill settings: ${err.message}`);
     }
   };
 
@@ -389,13 +423,9 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
 
       {/* Compact Global Workspace UI Toggles */}
       <WorkspacePreferencesSection
-        quickGenBoxEnabled={quickGenBoxEnabled}
         saveUploadedPromptImages={saveUploadedPromptImages}
-        galleryPillColorsEnabled={galleryPillColorsEnabled}
         uploadedImagesDir={healthData?.config?.uploadedImagesDir}
-        onToggleQuickGenBox={handleToggleQuickGenBox}
         onToggleSaveUploadedPromptImages={handleToggleSaveUploadedPromptImages}
-        onToggleGalleryPillColors={handleToggleGalleryPillColors}
       />
 
       {/* System Sub-Tab Navigation */}
@@ -435,6 +465,17 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
           onToggleVisualTagger={handleToggleVisualTagger}
           onTaggerConfigChange={handleTaggerConfigChange}
           onTaggerControl={handleTaggerControl}
+        />
+      )}
+
+      {activeSubTab === 'quick_gen' && (
+        <QuickGenAndPillsSection
+          quickGenBoxEnabled={quickGenBoxEnabled}
+          galleryPillColorsEnabled={galleryPillColorsEnabled}
+          pillTypeSettings={pillTypeSettings}
+          onToggleQuickGenBox={handleToggleQuickGenBox}
+          onToggleGalleryPillColors={handleToggleGalleryPillColors}
+          onUpdatePillTypeSettings={handleUpdatePillTypeSettings}
         />
       )}
 

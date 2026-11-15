@@ -1,14 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { DEFAULT_PILL_TYPE_SETTINGS } from '../../shared/pillSettings.ts';
 import type {
   CharacterProfile,
   GenerationLoraSelection,
   ImageRecord,
   LoraExplorerItem,
   ModelInventoryItem,
+  PillTypeSettings,
 } from '../../shared/types.ts';
 import {
   buildMentionEntries,
   getCleanLoraLabel,
+  getCleanModelMentionLabel,
   normalizeLoraKey,
   type MentionEntry,
   type MentionTab,
@@ -26,6 +29,7 @@ interface UseQuickGenMentionsParams {
   setAttachedLoras: React.Dispatch<React.SetStateAction<GenerationLoraSelection[]>>;
   setRemovedLoraKeys: React.Dispatch<React.SetStateAction<Set<string>>>;
   setShowSettingsMenu: React.Dispatch<React.SetStateAction<boolean>>;
+  pillTypeSettings?: PillTypeSettings;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
 }
 
@@ -44,6 +48,7 @@ export function useQuickGenMentions({
   setAttachedLoras,
   setRemovedLoraKeys,
   setShowSettingsMenu,
+  pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   inputRef,
 }: UseQuickGenMentionsParams) {
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -111,6 +116,28 @@ export function useQuickGenMentions({
     }
   };
 
+  const applyMentionPromptUpdate = (mentionName: string, insertName: boolean): string => {
+    if (mentionTriggerRange) {
+      const before = prompt.slice(0, mentionTriggerRange.start);
+      const after = prompt.slice(mentionTriggerRange.end);
+      if (insertName && mentionName) {
+        const needsTrailingSpace = after.length === 0 || !after.startsWith(' ');
+        return `${before}${mentionName}${needsTrailingSpace ? ' ' : ''}${after}`;
+      }
+      const cleanBefore = before.endsWith(' ') ? before : before ? `${before} ` : '';
+      const cleanAfter = after.startsWith(' ') ? after.slice(1) : after;
+      return `${cleanBefore}${cleanAfter}`.trim();
+    }
+
+    if (insertName && mentionName) {
+      const trimmed = prompt.trim();
+      if (!trimmed.toLowerCase().includes(mentionName.toLowerCase())) {
+        return trimmed ? `${mentionName} ${trimmed}` : `${mentionName} `;
+      }
+    }
+    return prompt;
+  };
+
   const handleSelectMention = (entry: MentionEntry) => {
     let nextPrompt = prompt;
 
@@ -149,23 +176,17 @@ export function useQuickGenMentions({
         ];
       });
 
-      if (mentionTriggerRange) {
-        const before = prompt.slice(0, mentionTriggerRange.start);
-        const after = prompt.slice(mentionTriggerRange.end);
-        const cleanBefore = before.endsWith(' ') ? before : before ? `${before} ` : '';
-        const cleanAfter = after.startsWith(' ') ? after.slice(1) : after;
-        nextPrompt = `${cleanBefore}${cleanAfter}`.trim();
-      }
+      nextPrompt = applyMentionPromptUpdate(
+        cleanLabel,
+        pillTypeSettings.lora.insertMentionName
+      );
     } else if (entry.type === 'model' && entry.modelItem) {
       setAttachedCheckpoint(entry.modelItem.filename);
-
-      if (mentionTriggerRange) {
-        const before = prompt.slice(0, mentionTriggerRange.start);
-        const after = prompt.slice(mentionTriggerRange.end);
-        const cleanBefore = before.endsWith(' ') ? before : before ? `${before} ` : '';
-        const cleanAfter = after.startsWith(' ') ? after.slice(1) : after;
-        nextPrompt = `${cleanBefore}${cleanAfter}`.trim();
-      }
+      const modelLabel = getCleanModelMentionLabel(entry.modelItem);
+      nextPrompt = applyMentionPromptUpdate(
+        modelLabel,
+        pillTypeSettings.baseModel.insertMentionName
+      );
     } else if (entry.character) {
       const char = entry.character;
       setAttachedCharacter(char);
@@ -177,17 +198,10 @@ export function useQuickGenMentions({
         return next;
       });
 
-      if (mentionTriggerRange) {
-        const before = prompt.slice(0, mentionTriggerRange.start);
-        const after = prompt.slice(mentionTriggerRange.end);
-        const needsTrailingSpace = after.length === 0 || !after.startsWith(' ');
-        nextPrompt = `${before}${char.name}${needsTrailingSpace ? ' ' : ''}${after}`;
-      } else {
-        const trimmed = prompt.trim();
-        if (!trimmed.toLowerCase().includes(char.name.toLowerCase())) {
-          nextPrompt = trimmed ? `${char.name} ${trimmed}` : `${char.name} `;
-        }
-      }
+      nextPrompt = applyMentionPromptUpdate(
+        char.name,
+        pillTypeSettings.character.insertMentionName
+      );
     }
 
     setPrompt(nextPrompt);

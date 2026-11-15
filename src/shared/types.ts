@@ -710,6 +710,25 @@ export interface HelpChatMessage {
   modelUsed?: string;
 }
 
+export type PillColorKey =
+  | 'indigo'
+  | 'emerald'
+  | 'amber'
+  | 'sky'
+  | 'rose'
+  | 'violet'
+  | 'teal'
+  | 'zinc';
+
+export type PillEntityType = 'character' | 'baseModel' | 'lora';
+
+export interface PillTypeBehavior {
+  color: PillColorKey;
+  insertMentionName: boolean;
+}
+
+export type PillTypeSettings = Record<PillEntityType, PillTypeBehavior>;
+
 export {
   ASPECT_RATIO_PRESETS,
   RESOLUTION_SELECTOR_OPTIONS,

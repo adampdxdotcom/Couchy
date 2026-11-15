@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Cpu, Layers, Sparkles, Users } from 'lucide-react';
 import { api } from '../../api/client.ts';
+import { DEFAULT_PILL_TYPE_SETTINGS, PILL_COLOR_STYLES } from '../../shared/pillSettings.ts';
 import type {
   CharacterProfile,
   ImageRecord,
   LoraExplorerItem,
   ModelInventoryItem,
+  PillTypeSettings,
 } from '../../shared/types.ts';
 import { getModelAvailabilityInfo } from '../../shared/utils.ts';
 import {
@@ -33,6 +35,7 @@ interface CharacterFavoriteAddonsCardProps {
   models?: ModelInventoryItem[];
   defaultCheckpoint?: string | null;
   collections: { id: number; name: string }[];
+  pillTypeSettings?: PillTypeSettings;
   onRefresh: () => Promise<void>;
   onSelectCharacter?: (characterId: number) => void;
   onFilterGalleryByAddon?: (
@@ -59,11 +62,15 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
   models = [],
   defaultCheckpoint = null,
   collections,
+  pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   onRefresh,
   onSelectCharacter,
   onFilterGalleryByAddon,
   onLaunchNewImage,
 }) => {
+  const charStyle = PILL_COLOR_STYLES[pillTypeSettings.character.color];
+  const baseModelStyle = PILL_COLOR_STYLES[pillTypeSettings.baseModel.color];
+  const loraStyle = PILL_COLOR_STYLES[pillTypeSettings.lora.color];
   const [sortMode, setSortMode] = useState<AddonSortMode>('most_used');
   const [selectedCheckpoint, setSelectedCheckpoint] = useState<string | null>(null);
   const [selectedAddonKeys, setSelectedAddonKeys] = useState<Set<string>>(new Set());
@@ -262,11 +269,11 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
         </div>
       ) : (
         <div className="space-y-4">
-          {/* Base Models / Checkpoints (Green Pill Single-Select Radio) */}
+          {/* Base Models / Checkpoints (Single-Select Radio) */}
           {baseModels.length > 0 && (
             <div className="space-y-1.5">
               <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-                <Cpu className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <Cpu className={`w-3.5 h-3.5 shrink-0 ${baseModelStyle.icon}`} />
                 <span>Base Models ({baseModels.length})</span>
               </div>
               <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
@@ -278,7 +285,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                       key={bm.key}
                       className={`flex items-center justify-between gap-2 bg-zinc-950 border rounded-lg px-2 py-1.5 min-w-0 transition-colors ${
                         isSelected
-                          ? 'border-emerald-500/50 bg-emerald-950/15'
+                          ? baseModelStyle.rowSelected
                           : 'border-zinc-800 hover:border-zinc-700'
                       }`}
                     >
@@ -297,13 +304,13 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                           !bm.isInstalled
                             ? 'bg-zinc-900 border-zinc-800 text-zinc-500 opacity-55 cursor-not-allowed'
                             : isSelected
-                            ? 'bg-emerald-600/30 border-emerald-400 text-emerald-100 ring-1 ring-emerald-400/50 cursor-pointer'
-                            : 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200 hover:border-emerald-400/70 hover:bg-emerald-950/80 cursor-pointer'
+                            ? baseModelStyle.pillSelected
+                            : baseModelStyle.pillHover
                         }`}
                       >
                         <Cpu
                           className={`w-3.5 h-3.5 shrink-0 ${
-                            bm.isInstalled ? 'text-emerald-400' : 'text-zinc-500'
+                            bm.isInstalled ? baseModelStyle.icon : 'text-zinc-500'
                           }`}
                         />
                         <span className="font-medium truncate">
@@ -314,7 +321,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                             ({availability.label.toLowerCase()})
                           </span>
                         ) : (
-                          isSelected && <Check className="w-3 h-3 text-emerald-300 shrink-0" />
+                          isSelected && <Check className={`w-3 h-3 shrink-0 ${baseModelStyle.checkIcon}`} />
                         )}
                       </button>
 
@@ -340,11 +347,11 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
             </div>
           )}
 
-          {/* Paired Addon LoRAs (Amber Pill Multi-Select up to 5 Total LoRAs) */}
+          {/* Paired Addon LoRAs (Multi-Select up to 5 Total LoRAs) */}
           {addonLoras.length > 0 && (
             <div className="space-y-1.5">
               <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-                <Layers className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <Layers className={`w-3.5 h-3.5 shrink-0 ${loraStyle.icon}`} />
                 <span>Addon LoRAs ({addonLoras.length})</span>
               </div>
 
@@ -358,7 +365,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                       key={addon.key}
                       className={`flex items-center justify-between gap-2 bg-zinc-950 border rounded-lg px-2 py-1.5 min-w-0 transition-colors ${
                         isSelected
-                          ? 'border-amber-500/50 bg-amber-950/15'
+                          ? loraStyle.rowSelected
                           : 'border-zinc-800 hover:border-zinc-700'
                       }`}
                     >
@@ -379,21 +386,21 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                           !addon.isInstalled
                             ? 'bg-zinc-900 border-zinc-800 text-zinc-500 opacity-55 cursor-not-allowed'
                             : isSelected
-                            ? 'bg-amber-600/30 border-amber-400 text-amber-100 ring-1 ring-amber-400/50 cursor-pointer'
+                            ? loraStyle.pillSelected
                             : isDisabled
-                            ? 'bg-amber-950/30 border-amber-500/20 text-amber-200/50 opacity-55 cursor-not-allowed'
-                            : 'bg-amber-950/60 border-amber-500/40 text-amber-200 hover:border-amber-400/70 hover:bg-amber-950/80 cursor-pointer'
+                            ? loraStyle.pillDisabledCap
+                            : loraStyle.pillHover
                         }`}
                       >
                         <Layers
                           className={`w-3.5 h-3.5 shrink-0 ${
-                            addon.isInstalled ? 'text-amber-400' : 'text-zinc-500'
+                            addon.isInstalled ? loraStyle.icon : 'text-zinc-500'
                           }`}
                         />
                         <span className="font-medium truncate">{addon.displayName}</span>
                         <span
                           className={`text-[11px] font-mono tabular-nums shrink-0 ${
-                            addon.isInstalled ? 'text-amber-300/90' : 'text-zinc-500'
+                            addon.isInstalled ? loraStyle.textAccent : 'text-zinc-500'
                           }`}
                         >
                           {formatPillStrength(addon.avgModelStrength)}x
@@ -403,7 +410,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                             ({availability.label.toLowerCase()})
                           </span>
                         ) : (
-                          isSelected && <Check className="w-3 h-3 text-amber-200 shrink-0" />
+                          isSelected && <Check className={`w-3 h-3 shrink-0 ${loraStyle.checkIcon}`} />
                         )}
                       </button>
 
@@ -436,11 +443,11 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
             </div>
           )}
 
-          {/* Friends (Blue Character Pill Single-Select Radio — Hidden When Empty) */}
+          {/* Friends (Character Pill Single-Select Radio — Hidden When Empty) */}
           {friends.length > 0 && (
             <div className="space-y-1.5 pt-1 border-t border-zinc-800/80">
               <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400 pt-1">
-                <Users className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <Users className={`w-3.5 h-3.5 shrink-0 ${charStyle.icon}`} />
                 <span>Friends ({friends.length})</span>
               </div>
               <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
@@ -455,7 +462,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                       key={friend.key}
                       className={`flex items-center justify-between gap-2 bg-zinc-950 border rounded-lg px-2 py-1.5 min-w-0 transition-colors ${
                         isSelected
-                          ? 'border-indigo-500/50 bg-indigo-950/20'
+                          ? charStyle.rowSelected
                           : 'border-zinc-800 hover:border-zinc-700'
                       }`}
                     >
@@ -476,10 +483,10 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                           !friend.isInstalled
                             ? 'bg-zinc-900 border-zinc-800 text-zinc-500 opacity-55 cursor-not-allowed'
                             : isSelected
-                            ? 'bg-indigo-600/35 border-indigo-400 text-indigo-100 ring-1 ring-indigo-400/50 cursor-pointer'
+                            ? charStyle.pillSelected
                             : isDisabled
-                            ? 'bg-indigo-950/35 border-indigo-500/20 text-indigo-200/50 opacity-55 cursor-not-allowed'
-                            : 'bg-indigo-950/70 border-indigo-500/40 text-indigo-200 hover:border-indigo-400/70 hover:bg-indigo-950/90 cursor-pointer'
+                            ? charStyle.pillDisabledCap
+                            : charStyle.pillHover
                         }`}
                       >
                         <div className="w-5 h-5 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
@@ -487,11 +494,11 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                             src={friend.portraitThumbnailUrl}
                             alt={friend.characterName}
                             crop={friend.portraitCrop}
-                            iconClassName="w-3 h-3 text-indigo-300"
+                            iconClassName={`w-3 h-3 ${charStyle.icon}`}
                           />
                         </div>
                         <span className="font-medium truncate">{friend.characterName}</span>
-                        <span className="text-[11px] font-mono text-indigo-300/90 tabular-nums shrink-0">
+                        <span className={`text-[11px] font-mono tabular-nums shrink-0 ${charStyle.textAccent}`}>
                           {formatPillStrength(friend.avgModelStrength)}x
                         </span>
                         {!friend.isInstalled ? (
@@ -499,7 +506,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                             ({availability.label.toLowerCase()})
                           </span>
                         ) : (
-                          isSelected && <Check className="w-3 h-3 text-indigo-200 shrink-0" />
+                          isSelected && <Check className={`w-3 h-3 shrink-0 ${charStyle.checkIcon}`} />
                         )}
                       </button>
 

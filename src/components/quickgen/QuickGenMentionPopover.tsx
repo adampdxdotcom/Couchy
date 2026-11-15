@@ -1,5 +1,7 @@
 import React from 'react';
 import { Cpu, Layers, Search, User, X } from 'lucide-react';
+import { DEFAULT_PILL_TYPE_SETTINGS, PILL_COLOR_STYLES } from '../../shared/pillSettings.ts';
+import type { PillTypeSettings } from '../../shared/types.ts';
 import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
 import {
   getCleanLoraLabel,
@@ -15,6 +17,7 @@ interface QuickGenMentionPopoverProps {
   activeIndex: number;
   query: string;
   highlightedEntry: MentionEntry | null;
+  pillTypeSettings?: PillTypeSettings;
   onQueryChange: (query: string) => void;
   onTabChange: (tab: MentionTab) => void;
   onHoverIndex: (index: number) => void;
@@ -32,12 +35,16 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
   activeIndex,
   query,
   highlightedEntry,
+  pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   onQueryChange,
   onTabChange,
   onHoverIndex,
   onSelect,
   onClose,
 }) => {
+  const charStyle = PILL_COLOR_STYLES[pillTypeSettings.character.color];
+  const baseModelStyle = PILL_COLOR_STYLES[pillTypeSettings.baseModel.color];
+  const loraStyle = PILL_COLOR_STYLES[pillTypeSettings.lora.color];
   return (
     <div className="mb-2 mx-2 md:mx-0 bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-3xl shadow-2xl overflow-hidden text-xs max-w-[calc(100vw-1rem)]">
       {/* Top Search Header */}
@@ -129,7 +136,7 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                 >
                   <div className="w-9 h-9 rounded-xl bg-zinc-900 border border-zinc-700/60 overflow-hidden shrink-0 flex items-center justify-center">
                     {entry.type === 'lora' ? (
-                      <div className="w-full h-full bg-amber-500/10 flex items-center justify-center text-amber-400">
+                      <div className={`w-full h-full flex items-center justify-center ${loraStyle.iconBg}`}>
                         <Layers className="w-4 h-4" />
                       </div>
                     ) : entry.type === 'model' ? (
@@ -140,7 +147,7 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        <div className="w-full h-full bg-emerald-500/10 flex items-center justify-center text-emerald-400">
+                        <div className={`w-full h-full flex items-center justify-center ${baseModelStyle.iconBg}`}>
                           <Cpu className="w-4 h-4" />
                         </div>
                       )
@@ -157,12 +164,12 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                     <div className="flex items-center gap-1.5">
                       <span className="font-medium text-zinc-100 truncate">{entry.title}</span>
                       {entry.type === 'lora' && (
-                        <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-amber-400/10 text-amber-300 border border-amber-400/20 shrink-0">
+                        <span className={`text-[10px] uppercase font-mono px-1.5 py-0.2 rounded border shrink-0 ${loraStyle.badge}`}>
                           LoRA
                         </span>
                       )}
                       {entry.type === 'model' && (
-                        <span className="text-[10px] uppercase font-mono px-1.5 py-0.2 rounded bg-emerald-400/10 text-emerald-300 border border-emerald-400/20 shrink-0">
+                        <span className={`text-[10px] uppercase font-mono px-1.5 py-0.2 rounded border shrink-0 ${baseModelStyle.badge}`}>
                           Model
                         </span>
                       )}
@@ -170,7 +177,7 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                     <div className="text-[11px] text-zinc-400 flex items-center gap-1.5">
                       <span>{entry.subtitle}</span>
                       {entry.type === 'character' && entry.character && entry.character.loras.length > 0 && (
-                        <span className="text-indigo-400 font-mono truncate">
+                        <span className={`font-mono truncate ${charStyle.icon}`}>
                           · {entry.character.loras[0].triggerWord || entry.character.loras[0].loraName}
                         </span>
                       )}
@@ -187,7 +194,7 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
               <div className="relative rounded-2xl bg-zinc-900 border border-zinc-800/80 overflow-hidden h-56 flex items-center justify-center">
                 {highlightedEntry.type === 'lora' ? (
                   <div className="flex flex-col items-center gap-2.5 p-4 text-center">
-                    <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-inner">
+                    <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center shadow-inner ${loraStyle.iconBg}`}>
                       <Layers className="w-6 h-6" />
                     </div>
                     <div className="text-sm font-semibold text-zinc-100">
@@ -196,7 +203,7 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                     <div className="text-[11px] text-zinc-400 flex items-center gap-2">
                       <span className="capitalize">{highlightedEntry.loraItem?.loraCategory}</span>
                       <span>·</span>
-                      <span className="font-mono text-amber-300">
+                      <span className={`font-mono ${loraStyle.textAccent}`}>
                         Strength: {(highlightedEntry.loraItem?.defaultModelStrength ?? 1.0).toFixed(1)}x
                       </span>
                     </div>
@@ -210,7 +217,7 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                     />
                   ) : (
                     <div className="flex flex-col items-center gap-2.5 p-4 text-center">
-                      <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-inner">
+                      <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center shadow-inner ${baseModelStyle.iconBg}`}>
                         <Cpu className="w-6 h-6" />
                       </div>
                       <div className="text-sm font-semibold text-zinc-100">
@@ -260,7 +267,11 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                   </span>
                   <span
                     className={`font-mono shrink-0 ml-2 ${
-                      highlightedEntry.type === 'model' ? 'text-emerald-300' : 'text-indigo-300'
+                      highlightedEntry.type === 'model'
+                        ? baseModelStyle.textAccent
+                        : highlightedEntry.type === 'lora'
+                        ? loraStyle.textAccent
+                        : charStyle.textAccent
                     }`}
                   >
                     {highlightedEntry.type === 'lora'

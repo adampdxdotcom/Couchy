@@ -10,11 +10,13 @@ import {
   Sliders,
   X,
 } from 'lucide-react';
+import { DEFAULT_PILL_TYPE_SETTINGS } from '../shared/pillSettings.ts';
 import type {
   CharacterProfile,
   ImageRecord,
   LoraExplorerItem,
   ModelInventoryItem,
+  PillTypeSettings,
   WorkflowLibraryItem,
 } from '../shared/types.ts';
 import { ASPECT_RATIO_PRESETS } from '../shared/utils.ts';
@@ -39,6 +41,7 @@ interface FloatingQuickGenBarProps {
   onRefreshAll: () => Promise<void>;
   onPushToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   lmStudioOnline?: boolean;
+  pillTypeSettings?: PillTypeSettings;
 }
 
 /**
@@ -56,6 +59,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   onRefreshAll,
   onPushToast,
   lmStudioOnline = true,
+  pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
 
@@ -86,6 +90,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     setAttachedLoras: submitState.setAttachedLoras,
     setRemovedLoraKeys: submitState.setRemovedLoraKeys,
     setShowSettingsMenu: submitState.setShowSettingsMenu,
+    pillTypeSettings,
     inputRef,
   });
 
@@ -176,6 +181,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               activeIndex={mentions.activeIndex}
               query={mentions.mentionQuery}
               highlightedEntry={mentions.highlightedEntry}
+              pillTypeSettings={pillTypeSettings}
               onQueryChange={(q) => {
                 mentions.setMentionQuery(q);
                 mentions.setActiveIndex(0);
@@ -269,6 +275,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               attachedCheckpoint={submitState.attachedCheckpoint}
               attachedLoras={submitState.attachedLoras}
               models={models}
+              pillTypeSettings={pillTypeSettings}
               onRemoveCharacter={submitState.handleRemoveCharacter}
               onRemoveCheckpoint={submitState.handleRemoveCheckpoint}
               onRemoveLora={submitState.handleRemoveLora}

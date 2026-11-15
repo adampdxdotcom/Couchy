@@ -4,6 +4,7 @@ import type {
   ImageRecord,
   LoraExplorerItem,
   ModelInventoryItem,
+  PillTypeSettings,
 } from '../../shared/types.ts';
 import {
   CharacterFavoriteAddonsCard,
@@ -22,6 +23,7 @@ interface CharacterLorasAndWorkflowsProps {
   models?: ModelInventoryItem[];
   defaultCheckpoint?: string | null;
   collections: { id: number; name: string }[];
+  pillTypeSettings?: PillTypeSettings;
   onRefresh: () => Promise<void>;
   onSelectCharacter?: (characterId: number) => void;
   onFilterGalleryByAddon?: (
@@ -49,6 +51,7 @@ export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProp
   models = [],
   defaultCheckpoint = null,
   collections,
+  pillTypeSettings,
   onRefresh,
   onSelectCharacter,
   onFilterGalleryByAddon,
@@ -87,6 +90,7 @@ export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProp
         models={models}
         defaultCheckpoint={defaultCheckpoint}
         collections={collections}
+        pillTypeSettings={pillTypeSettings}
         onRefresh={onRefresh}
         onSelectCharacter={onSelectCharacter}
         onFilterGalleryByAddon={onFilterGalleryByAddon}
