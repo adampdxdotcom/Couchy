@@ -264,6 +264,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               attachedLoras={submitState.attachedLoras}
               onRemoveCharacter={submitState.handleRemoveCharacter}
               onRemoveLora={submitState.handleRemoveLora}
+              onUpdateLoraStrength={submitState.handleUpdateLoraStrength}
             />
 
             {/* Inline Expanded Conversation Area (when Agent is active) */}

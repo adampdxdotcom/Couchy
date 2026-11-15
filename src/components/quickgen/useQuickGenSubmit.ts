@@ -339,6 +339,21 @@ export function useQuickGenSubmit({
     }
   };
 
+  /** Updates a session-only LoRA's model/CLIP strength (0.0–3.0) without mutating global defaults. */
+  const handleUpdateLoraStrength = (loraName: string, nextStrength: number) => {
+    if (!Number.isFinite(nextStrength)) return;
+    const clamped = Math.max(0.0, Math.min(3.0, Math.round(nextStrength * 100) / 100));
+    const targetKey = normalizeLoraKey(loraName);
+
+    setAttachedLoras((prev) =>
+      prev.map((al) =>
+        normalizeLoraKey(al.loraName) === targetKey
+          ? { ...al, modelStrength: clamped, clipStrength: clamped }
+          : al
+      )
+    );
+  };
+
   /** Sends a conversational turn to Local LLM when Agent mode is active. */
   const handleSendChatTurn = async () => {
     const cleanInput = prompt.trim();
@@ -712,6 +727,7 @@ export function useQuickGenSubmit({
     handleInterrogateImageFile,
     handleRemoveCharacter,
     handleRemoveLora,
+    handleUpdateLoraStrength,
     handleClearBox,
     handleSubmit,
     handleSubmitProposedPrompt,

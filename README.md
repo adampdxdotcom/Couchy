@@ -215,7 +215,7 @@ The **Quick Gen Box** is an always-accessible floating bottom dock available acr
 - **`@Character` & `@LoRA` Mention Picker & Auto-Attachment**:
   - Type `@` anywhere in the prompt (or click the **`+`** button) to open a two-column searchable `@Character` & `@LoRA` picker (`All`, `Characters`, and `LoRAs` tabs).
   - Direct **Character** and **LoRA** matches rank at the top of the list above matching reference image prompts, with keyboard navigation (`ArrowUp`, `ArrowDown`, `Enter`/`Tab`, `Escape`) or mouse hover to preview character portraits, confirmed reference images, and prompt snippets.
-  - Selecting a character or mention-enabled LoRA attaches a removable **Pill Badge** above the prompt and automatically injects configured LoRAs, model/CLIP weights, trigger words, and the character's preferred default workflow on submission.
+  - Selecting a character or mention-enabled LoRA attaches a removable **Pill Badge** above the prompt and automatically injects configured LoRAs, model/CLIP weights, trigger words, and the character's preferred default workflow on submission. Click any LoRA pill's strength number (e.g., `0.8x`) to edit its weight inline (`0.0`–`3.0`, `Enter`/blur to apply, `Esc` to cancel, `↑`/`↓` to nudge by `0.05`) for the current generation or series without changing the LoRA's system default.
 
 - **Hybrid Image-to-Prompt Interrogation (Drag, Paste, or Upload)**:
   - **Drop, Paste, or Browse**: Drag and drop an image file onto the Quick Gen Box, paste an image from your clipboard (`Ctrl+V` / `Cmd+V`), or click the **Image Upload (`ImagePlus`)** button.
