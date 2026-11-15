@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bot, Database, RefreshCw, Server, Tags } from 'lucide-react';
+import { BookOpen, Bot, Database, RefreshCw, Server, Tags } from 'lucide-react';
 import { api } from '../api/client.ts';
 import type {
   LmStudioStatus,
@@ -12,8 +12,9 @@ import { ComfyUiConnectionSection } from './system/ComfyUiConnectionSection.tsx'
 import { ModelCleanupSection } from './system/ModelCleanupSection.tsx';
 import { DatabaseBackupSection } from './system/DatabaseBackupSection.tsx';
 import { CollectionsAndScannerSection } from './system/CollectionsAndScannerSection.tsx';
+import { SystemHelpSection } from './system/SystemHelpSection.tsx';
 
-export type SystemSubTab = 'tagger' | 'lm_studio' | 'comfyui' | 'backup' | 'scanner';
+export type SystemSubTab = 'tagger' | 'lm_studio' | 'comfyui' | 'backup' | 'scanner' | 'help';
 
 const SYSTEM_SUB_TABS: {
   id: SystemSubTab;
@@ -25,6 +26,7 @@ const SYSTEM_SUB_TABS: {
   { id: 'comfyui', label: 'ComfyUI', icon: Server },
   { id: 'backup', label: 'Database', icon: Database },
   { id: 'scanner', label: 'Metadata', icon: RefreshCw },
+  { id: 'help', label: 'Help', icon: BookOpen },
 ];
 
 interface SystemAndBackupViewProps {
@@ -474,6 +476,8 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
           onReloadSystemDetails={loadSystemDetails}
         />
       )}
+
+      {activeSubTab === 'help' && <SystemHelpSection lmStatus={lmStatus} />}
     </div>
   );
 };

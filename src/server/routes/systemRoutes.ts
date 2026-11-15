@@ -25,6 +25,10 @@ import {
   scanAndCleanCopiedDownloads,
   updateModelCleanupSettings,
 } from '../services/modelCleanupService.ts';
+import {
+  askReadmeHelpAssistant,
+  getHelpDocsPayload,
+} from '../services/helpDocsService.ts';
 
 export const systemRouter = Router();
 
@@ -434,5 +438,31 @@ systemRouter.post('/models/cleanup/run', async (req, res) => {
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Model cleanup scan failed' });
+  }
+});
+
+/**
+ * GET /api/help/readme
+ * Returns live README.md markdown and parsed section outline.
+ */
+systemRouter.get('/help/readme', (_req, res) => {
+  try {
+    res.json(getHelpDocsPayload());
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to load README.md' });
+  }
+});
+
+/**
+ * POST /api/help/ask
+ * Answers user questions grounded in retrieved README.md sections via the Local LLM.
+ */
+systemRouter.post('/help/ask', async (req, res) => {
+  try {
+    const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+    const result = await askReadmeHelpAssistant({ messages });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Help Assistant request failed' });
   }
 });

@@ -195,7 +195,7 @@ export function updateLmStudioSettings(payload: {
  * Builds request headers for the OpenAI-compatible Local LLM endpoint,
  * attaching `Authorization: Bearer <token>` when `LOCAL_LLM_API_KEY` is configured on the server.
  */
-function getLocalLlmHeaders(includeJsonContentType = false): Record<string, string> {
+export function getLocalLlmHeaders(includeJsonContentType = false): Record<string, string> {
   const headers: Record<string, string> = {};
   if (includeJsonContentType) {
     headers['Content-Type'] = 'application/json';

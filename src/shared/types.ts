@@ -665,6 +665,27 @@ export interface VisualTaggerStatus {
   lastError: string | null;
 }
 
+export interface HelpDocSectionSummary {
+  id: string;
+  level: number;
+  title: string;
+  parentTitle: string | null;
+}
+
+export interface HelpReadmePayload {
+  markdown: string;
+  sections: HelpDocSectionSummary[];
+  updatedAt: string;
+}
+
+export interface HelpChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  matchedSections?: Array<{ id: string; title: string }>;
+  modelUsed?: string;
+}
+
 export {
   ASPECT_RATIO_PRESETS,
   RESOLUTION_SELECTOR_OPTIONS,

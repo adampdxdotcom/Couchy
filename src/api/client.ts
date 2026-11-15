@@ -7,6 +7,7 @@ import type {
   GalleryFilterState,
   GenerationBatchRecord,
   GenerationLoraSelection,
+  HelpReadmePayload,
   ImageRecord,
   LmStudioGuidingTemplate,
   LmStudioStatus,
@@ -666,5 +667,18 @@ export const api = {
     }>(`/api/images/${imageId}/upscale`, {
       method: 'POST',
       body: JSON.stringify({ targetMegapixels }),
+    }),
+
+  // Help & README Docs Assistant
+  getHelpReadme: () => requestJson<HelpReadmePayload>('/api/help/readme'),
+
+  askHelpAssistant: (messages: Array<{ role: 'user' | 'assistant'; content: string }>) =>
+    requestJson<{
+      reply: string;
+      matchedSections: Array<{ id: string; title: string }>;
+      modelUsed: string;
+    }>('/api/help/ask', {
+      method: 'POST',
+      body: JSON.stringify({ messages }),
     }),
 };
