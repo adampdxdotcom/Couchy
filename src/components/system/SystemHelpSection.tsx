@@ -315,7 +315,7 @@ export const SystemHelpSection: React.FC<SystemHelpSectionProps> = ({ lmStatus }
       </section>
 
       {/* Main Content + Conditional LLM Docs Assistant */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
         <div
           ref={articleRef}
           className={`${
