@@ -352,6 +352,166 @@ export function sanitizeAgentPrompt(prompt: string, characterName?: string): str
   return cleaned;
 }
 
+function normalizeLoraMatchKey(value: string): string {
+  return value
+    .trim()
+    .replace(/^@+/, '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()!
+    .replace(/\.(?:safetensors|ckpt|pt|bin)$/i, '')
+    .toLowerCase();
+}
+
+function clampContextText(text: string | undefined | null, maxLen: number): string {
+  if (!text) return '';
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  if (!collapsed) return '';
+  if (collapsed.length <= maxLen) return collapsed;
+  return `${collapsed.slice(0, maxLen - 1).trimEnd()}…`;
+}
+
+/**
+ * Builds a concise, token-efficient grounding block for the active Character
+ * (description + character LoRA appearance label) and attached LoRAs (category + llm_description)
+ * without leaking raw filenames, trigger words, or bloated CivitAI HTML blobs.
+ */
+function buildLlmCharacterAndLoraContext(params: {
+  characterName?: string;
+  characterDescription?: string;
+  loraNames?: string[];
+}): {
+  characterBlock: string | null;
+  attachedLoraBlock: string | null;
+} {
+  const attachedKeys = (params.loraNames || [])
+    .map((l) => ({ raw: l, key: normalizeLoraMatchKey(l) }))
+    .filter((entry) => Boolean(entry.key));
+
+  // Query lightweight model + character_lora metadata once for lookup
+  const modelRows =
+    attachedKeys.length > 0
+      ? (db
+          .prepare(
+            `SELECT name, filename, lora_category, nickname, llm_description
+             FROM models
+             WHERE model_type = 'lora'`
+          )
+          .all() as Array<{
+          name: string;
+          filename: string;
+          lora_category: string | null;
+          nickname: string | null;
+          llm_description: string | null;
+        }>)
+      : [];
+
+  const charLoraRows =
+    attachedKeys.length > 0
+      ? (db
+          .prepare(
+            `SELECT cl.lora_name, cl.appearance_label, cl.lora_category, c.name AS character_name, c.description AS character_description
+             FROM character_loras cl
+             JOIN characters c ON c.id = cl.character_id`
+          )
+          .all() as Array<{
+          lora_name: string;
+          appearance_label: string | null;
+          lora_category: string | null;
+          character_name: string;
+          character_description: string | null;
+        }>)
+      : [];
+
+  const appearanceLabels: string[] = [];
+  let fallbackDbCharDescription = '';
+
+  const attachedLines: string[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const { raw, key } of attachedKeys) {
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+
+    const matchedModel = modelRows.find(
+      (m) =>
+        normalizeLoraMatchKey(m.filename) === key ||
+        normalizeLoraMatchKey(m.name) === key ||
+        (m.nickname && normalizeLoraMatchKey(m.nickname) === key)
+    );
+    const matchedCharLora = charLoraRows.find(
+      (cl) => normalizeLoraMatchKey(cl.lora_name) === key
+    );
+
+    if (matchedCharLora) {
+      if (matchedCharLora.appearance_label?.trim()) {
+        appearanceLabels.push(matchedCharLora.appearance_label.trim());
+      }
+      if (!fallbackDbCharDescription && matchedCharLora.character_description?.trim()) {
+        fallbackDbCharDescription = matchedCharLora.character_description.trim();
+      }
+    }
+
+    const label =
+      (matchedModel?.nickname || '').trim().replace(/^@+/, '') ||
+      matchedModel?.name?.trim() ||
+      raw.replace(/^.*[\\/]/, '').replace(/\.(?:safetensors|ckpt|pt|bin)$/i, '').trim();
+
+    const rawCategory =
+      matchedModel?.lora_category || matchedCharLora?.lora_category || 'unclassified';
+    const catTag =
+      rawCategory && rawCategory !== 'unclassified' ? ` [${rawCategory}]` : '';
+    const desc = clampContextText(matchedModel?.llm_description, 240);
+    const variantNote =
+      matchedCharLora?.appearance_label?.trim()
+        ? `Variant: ${matchedCharLora.appearance_label.trim()}`
+        : '';
+
+    const detailParts = [variantNote, desc].filter(Boolean);
+    if (detailParts.length > 0) {
+      attachedLines.push(`- ${label}${catTag}: ${detailParts.join(' — ')}`);
+    } else {
+      attachedLines.push(`- ${label}${catTag}`);
+    }
+  }
+
+  let charDesc = clampContextText(params.characterDescription, 500);
+  if (!charDesc && fallbackDbCharDescription) {
+    charDesc = clampContextText(fallbackDbCharDescription, 500);
+  } else if (!charDesc && params.characterName?.trim()) {
+    const dbChar = db
+      .prepare('SELECT description FROM characters WHERE LOWER(name) = LOWER(?) LIMIT 1')
+      .get(params.characterName.trim()) as { description?: string } | undefined;
+    charDesc = clampContextText(dbChar?.description, 500);
+  }
+
+  let characterBlock: string | null = null;
+  if (params.characterName?.trim() || charDesc) {
+    const parts: string[] = [
+      `An active character LoRA is attached and locked. Refer to the subject neutrally (e.g., "the subject", "they", or matching pronouns) and NEVER output the character's name or LoRA filenames.`,
+    ];
+    if (appearanceLabels.length > 0) {
+      parts.push(`Active Character Variant: ${Array.from(new Set(appearanceLabels)).join(', ')}`);
+    }
+    if (charDesc) {
+      parts.push(
+        `Reference Character Profile (stay consistent with pronouns, build, distinctive traits, and aesthetic below without inventing conflicting features): ${charDesc}`
+      );
+    }
+    characterBlock = parts.join('\n');
+  }
+
+  const attachedLoraBlock =
+    attachedLines.length > 0
+      ? [
+          `Currently attached LoRAs (already active in the workflow—do NOT write LoRA filenames, @handles, or trigger words inside the prompt; write scenes that complement them):`,
+          ...attachedLines,
+        ].join('\n')
+      : null;
+
+  return { characterBlock, attachedLoraBlock };
+}
+
 /**
  * Connects to LM Studio's /v1/chat/completions endpoint using the chosen Guiding Prompt Template
  * to generate a sequence of N prompts for a photo set theme.
@@ -406,7 +566,13 @@ export async function generatePhotoSetPromptsWithAgent(params: {
     count,
   });
 
-  const sentSystemPrompt = interpolatePromptTemplate(
+  const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
+    characterName: params.characterName,
+    characterDescription: params.characterDescription,
+    loraNames: params.loraNames,
+  });
+
+  const baseSystemPrompt = interpolatePromptTemplate(
     chosenGuiding?.systemPrompt ||
       `You are a creative photography director and ComfyUI prompt engineer.
 Your job is to take a Photo Set Theme and Base Scene Style, and write {count} distinct, cohesive image generation prompts for a multi-photo set.
@@ -421,6 +587,10 @@ Return ONLY a valid JSON array of {count} prompt strings with no markdown format
       basePrompt: resolvedBaseStyle,
     }
   );
+
+  const sentSystemPrompt = [baseSystemPrompt, characterBlock, attachedLoraBlock]
+    .filter(Boolean)
+    .join('\n\n');
 
   const sentUserPrompt = interpolatePromptTemplate(
     chosenGuiding?.userPromptTemplate ||
@@ -904,16 +1074,7 @@ Rules:
   }
 }
 
-function normalizeLoraMatchKey(value: string): string {
-  return value
-    .trim()
-    .replace(/^@+/, '')
-    .replace(/\\/g, '/')
-    .split('/')
-    .pop()!
-    .replace(/\.(?:safetensors|ckpt|pt|bin)$/i, '')
-    .toLowerCase();
-}
+// normalizeLoraMatchKey defined above for shared LLM context & LoRA matching
 
 /**
  * Interactive multi-turn Quick Gen Conversation handler via LM Studio /v1/chat/completions.
@@ -980,21 +1141,18 @@ export async function converseQuickGenPrompt(params: {
     return !excludedKeys.has(fileKey) && !excludedKeys.has(nameKey) && (!nickKey || !excludedKeys.has(nickKey));
   });
 
+  const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
+    characterName: params.characterName,
+    characterDescription: params.characterDescription,
+    loraNames: params.loraNames,
+  });
+
   const contextNotes: string[] = [];
-  if (params.characterName?.trim()) {
-    contextNotes.push(
-      `An active character LoRA is attached and locked. Refer to the subject neutrally as "the subject" or "they" inside <proposed_prompt> and do NOT include the character's name or physical identity traits already baked into the LoRA.`
-    );
+  if (characterBlock) {
+    contextNotes.push(characterBlock);
   }
-  if (params.loraNames && params.loraNames.length > 0) {
-    const cleanLoraLabels = params.loraNames
-      .map((l) => l.replace(/\.(?:safetensors|ckpt|pt|bin)$/i, '').trim())
-      .filter(Boolean);
-    if (cleanLoraLabels.length > 0) {
-      contextNotes.push(
-        `Currently attached LoRAs: ${cleanLoraLabels.join(', ')} (do NOT write LoRA filenames or trigger words inside <proposed_prompt>).`
-      );
-    }
+  if (attachedLoraBlock) {
+    contextNotes.push(attachedLoraBlock);
   }
   if (availableCandidates.length > 0) {
     const catalogLines = availableCandidates.map((c) => {

@@ -272,6 +272,7 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
     try {
       const res = await api.generateSetPromptsWithAgent({
         characterName: selectedCharacter?.name || '',
+        characterDescription: selectedCharacter?.description || '',
         loraNames: activeLoras.map((l) => l.loraName),
         theme: themeText.trim() || 'Cinematic expressive portrait series',
         count: generationCount,
