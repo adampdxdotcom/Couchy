@@ -43,9 +43,9 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
   }, [messages.length, isChatting]);
 
   return (
-    <div className="mb-2.5 rounded-2xl bg-zinc-950/90 border border-zinc-800/90 overflow-hidden flex flex-col">
+    <div className="mb-2.5 rounded-2xl bg-zinc-950/90 border border-zinc-800/90 overflow-hidden flex flex-col flex-1 min-h-0 md:flex-none">
       {/* Header Bar */}
-      <div className="px-3 py-1.5 border-b border-zinc-800/80 bg-zinc-900/50 flex items-center justify-between text-[11px]">
+      <div className="px-3 py-1.5 border-b border-zinc-800/80 bg-zinc-900/50 flex items-center justify-between text-[11px] shrink-0">
         <div className="flex items-center gap-1.5 text-indigo-300 font-medium">
           <Bot className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
           <span>
@@ -69,7 +69,7 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
       {/* Scrollable Conversation Body */}
       <div
         ref={scrollContainerRef}
-        className="h-64 sm:h-72 overflow-y-auto p-3 space-y-2.5 text-xs leading-relaxed"
+        className="flex-1 min-h-0 md:flex-none md:h-72 overflow-y-auto overscroll-contain touch-pan-y p-3 space-y-2.5 text-xs leading-relaxed"
       >
         {messages.length === 0 && !isChatting ? (
           <div className="h-full flex flex-col items-center justify-center text-center px-4 text-zinc-400 space-y-1.5">

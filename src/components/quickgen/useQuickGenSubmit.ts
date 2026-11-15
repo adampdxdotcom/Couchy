@@ -58,7 +58,9 @@ export function useQuickGenSubmit({
   const [attachedLoras, setAttachedLoras] = useState<GenerationLoraSelection[]>([]);
   const [removedLoraKeys, setRemovedLoraKeys] = useState<Set<string>>(new Set());
   const [isHighlighted, setIsHighlighted] = useState(false);
-  const [isMinimized, setIsMinimized] = useState(false);
+  const [isMinimized, setIsMinimized] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [isPromptFocused, setIsPromptFocused] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -594,6 +596,9 @@ export function useQuickGenSubmit({
       setBatchCount(1);
       setShowSettingsMenu(false);
       setIsPromptFocused(false);
+      if (typeof window !== 'undefined' && window.innerWidth < 768) {
+        setIsMinimized(true);
+      }
       onAfterReset?.();
       inputRef.current?.blur();
       await onRefreshAll();

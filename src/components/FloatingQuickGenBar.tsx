@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ArrowLeft,
   ArrowRight,
   Bot,
   ChevronDown,
@@ -47,6 +48,7 @@ interface FloatingQuickGenBarProps {
 /**
  * Floating Quick Generation Dock with @character / @lora mentions,
  * drag-and-drop image interrogation, resolution settings, and interactive Local LLM Agent mode.
+ * On mobile viewports (<768px), collapses by default and expands into a full-screen isolated sheet.
  */
 export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   characters,
@@ -62,10 +64,21 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isMobile, setIsMobile] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const sync = () => setIsMobile(mq.matches);
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
 
   const submitState = useQuickGenSubmit({
     loras,
@@ -98,6 +111,32 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     !submitState.agentEnabled &&
     (submitState.isPromptFocused || submitState.prompt.trim().length > 0);
 
+  const wasMobileRef = useRef(isMobile);
+  useEffect(() => {
+    if (!wasMobileRef.current && isMobile) {
+      const hasDraft =
+        submitState.prompt.trim().length > 0 ||
+        Boolean(submitState.attachedCharacter) ||
+        Boolean(submitState.attachedCheckpoint) ||
+        submitState.attachedLoras.length > 0 ||
+        submitState.chatMessages.length > 0;
+      if (!hasDraft) {
+        submitState.setIsMinimized(true);
+      }
+    }
+    wasMobileRef.current = isMobile;
+  }, [isMobile]);
+
+  // Prevent background page/gallery scroll on mobile while full-screen Quick Gen is open
+  useEffect(() => {
+    if (!isMobile || submitState.isMinimized) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isMobile, submitState.isMinimized]);
+
   // Close popovers when clicking outside
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -123,6 +162,12 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     [submitState.megapixels]
   );
 
+  const handleCloseDock = () => {
+    submitState.setIsMinimized(true);
+    mentions.setMentionOpen(false);
+    submitState.setShowSettingsMenu(false);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (mentions.handleMentionKeyDown(e)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -131,145 +176,198 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     }
   };
 
+  if (submitState.isMinimized) {
+    return (
+      <div
+        ref={containerRef}
+        className="fixed bottom-0 left-0 right-0 z-40 w-full max-w-[100vw] md:bottom-5 md:left-1/2 md:-translate-x-1/2 md:w-[94vw] md:max-w-2xl pointer-events-none"
+      >
+        <div className="flex justify-center px-2">
+          <button
+            type="button"
+            onClick={() => {
+              submitState.setIsMinimized(false);
+              mentions.setMentionOpen(false);
+              submitState.setShowSettingsMenu(false);
+            }}
+            className="pointer-events-auto inline-flex items-center gap-1.5 px-4 py-1.5 rounded-t-xl bg-zinc-900/98 border-t border-x border-zinc-800 text-xs font-medium text-zinc-300 hover:text-white transition-colors shadow-lg cursor-pointer select-none max-w-full"
+            title="Expand Generation Dock"
+          >
+            <ChevronUp className="w-4 h-4 text-indigo-400 shrink-0" />
+            <span className="font-semibold text-zinc-200 shrink-0">Quick Gen</span>
+            {submitState.prompt.trim() ? (
+              <span className="text-[11px] text-zinc-400 truncate max-w-[140px] sm:max-w-[200px]">
+                &ldquo;{submitState.prompt.trim()}&rdquo;
+              </span>
+            ) : (
+              <span className="text-[10px] text-zinc-500">Tap to open</span>
+            )}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const cardShouldFillMobile = !mentions.mentionOpen && !submitState.showSettingsMenu;
+
   return (
     <div
       ref={containerRef}
-      className="fixed bottom-0 left-0 right-0 z-40 w-full max-w-[100vw] md:bottom-5 md:left-1/2 md:-translate-x-1/2 md:w-[94vw] md:max-w-2xl"
+      role={isMobile ? 'dialog' : undefined}
+      aria-modal={isMobile ? true : undefined}
+      aria-label={isMobile ? 'Quick Generation' : undefined}
+      className="fixed inset-0 z-50 w-full h-[100dvh] max-w-[100vw] flex flex-col bg-zinc-950 overscroll-contain md:inset-auto md:bottom-5 md:left-1/2 md:-translate-x-1/2 md:w-[94vw] md:max-w-2xl md:h-auto md:block md:bg-transparent md:z-40"
     >
-      {/* Minimize / Expand Toggle Tab */}
-      <div className="flex justify-center -mb-px px-2">
+      {/* Desktop Minimize Toggle Tab */}
+      <div className="hidden md:flex justify-center -mb-px px-2">
         <button
           type="button"
-          onClick={() => {
-            submitState.setIsMinimized((prev) => !prev);
-            mentions.setMentionOpen(false);
-            submitState.setShowSettingsMenu(false);
-          }}
+          onClick={handleCloseDock}
           className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-t-xl bg-zinc-900/98 border-t border-x border-zinc-800 text-xs font-medium text-zinc-300 hover:text-white transition-colors shadow-lg cursor-pointer select-none max-w-full"
-          title={submitState.isMinimized ? 'Expand Generation Dock' : 'Minimize Generation Dock'}
+          title="Minimize Generation Dock"
         >
-          {submitState.isMinimized ? (
-            <>
-              <ChevronUp className="w-4 h-4 text-indigo-400 shrink-0" />
-              <span className="font-semibold text-zinc-200 shrink-0">Quick Gen</span>
-              {submitState.prompt.trim() ? (
-                <span className="text-[11px] text-zinc-400 truncate max-w-[140px] sm:max-w-[200px]">
-                  &ldquo;{submitState.prompt.trim()}&rdquo;
-                </span>
-              ) : (
-                <span className="text-[10px] text-zinc-500 hidden sm:inline">Tap to expand</span>
-              )}
-            </>
-          ) : (
-            <>
-              <ChevronDown className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-              <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">
-                Quick Gen
-              </span>
-            </>
-          )}
+          <ChevronDown className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+          <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-semibold">
+            Quick Gen
+          </span>
         </button>
       </div>
 
-      {!submitState.isMinimized && (
-        <>
-          {mentions.mentionOpen && (
-            <QuickGenMentionPopover
-              entries={mentions.mentionEntries}
-              counts={mentions.mentionCounts}
-              activeTab={mentions.mentionTab}
-              activeIndex={mentions.activeIndex}
-              query={mentions.mentionQuery}
-              highlightedEntry={mentions.highlightedEntry}
-              pillTypeSettings={pillTypeSettings}
-              onQueryChange={(q) => {
-                mentions.setMentionQuery(q);
-                mentions.setActiveIndex(0);
-              }}
-              onTabChange={(tab) => {
-                mentions.setMentionTab(tab);
-                mentions.setActiveIndex(0);
-              }}
-              onHoverIndex={mentions.setActiveIndex}
-              onSelect={mentions.handleSelectMention}
-              onClose={() => mentions.setMentionOpen(false)}
-            />
+      {/* Mobile Full-Screen Header: Return Arrow (left) & Small X (upper-right) */}
+      <div className="flex md:hidden items-center justify-between px-3.5 py-2.5 border-b border-zinc-800/80 bg-zinc-950 shrink-0">
+        <button
+          type="button"
+          onClick={handleCloseDock}
+          className="inline-flex items-center gap-2 py-1 pr-2 text-xs font-semibold text-zinc-200 hover:text-white cursor-pointer"
+          aria-label="Return to gallery"
+          title="Return to gallery"
+        >
+          <ArrowLeft className="w-4 h-4 text-indigo-400 shrink-0" />
+          <span>Quick Gen</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={handleCloseDock}
+          className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-900 transition-colors cursor-pointer"
+          aria-label="Close Quick Gen"
+          title="Close Quick Gen"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {!mentions.mentionOpen && submitState.showSettingsMenu && (
+        <div className="flex-1 md:hidden" onClick={() => submitState.setShowSettingsMenu(false)} />
+      )}
+
+      {mentions.mentionOpen && (
+        <QuickGenMentionPopover
+          entries={mentions.mentionEntries}
+          counts={mentions.mentionCounts}
+          activeTab={mentions.mentionTab}
+          activeIndex={mentions.activeIndex}
+          query={mentions.mentionQuery}
+          highlightedEntry={mentions.highlightedEntry}
+          pillTypeSettings={pillTypeSettings}
+          onQueryChange={(q) => {
+            mentions.setMentionQuery(q);
+            mentions.setActiveIndex(0);
+          }}
+          onTabChange={(tab) => {
+            mentions.setMentionTab(tab);
+            mentions.setActiveIndex(0);
+          }}
+          onHoverIndex={mentions.setActiveIndex}
+          onSelect={mentions.handleSelectMention}
+          onClose={() => mentions.setMentionOpen(false)}
+        />
+      )}
+
+      {submitState.showSettingsMenu && (
+        <QuickGenSettingsPopover
+          aspectRatio={submitState.aspectRatio}
+          megapixels={submitState.megapixels}
+          workflowDefaultMp={submitState.workflowDefaultMp}
+          batchCount={submitState.batchCount}
+          agentEnabled={submitState.agentEnabled}
+          onChangeAspectRatio={submitState.setAspectRatio}
+          onChangeMegapixels={submitState.setMegapixels}
+          onChangeBatchCount={submitState.setBatchCount}
+        />
+      )}
+
+      {/* Main Floating Quick Generation Box (or bottom-pinned composer in mobile overlay) */}
+      <div
+        onDragOver={(e) => {
+          if (e.dataTransfer?.types?.includes('Files')) {
+            e.preventDefault();
+            if (lmStudioOnline && !submitState.isInterrogating) {
+              setIsDragOver(true);
+            }
+          }
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+            setIsDragOver(false);
+          }
+        }}
+        onDrop={async (e) => {
+          e.preventDefault();
+          setIsDragOver(false);
+          const droppedFile = e.dataTransfer?.files?.[0];
+          if (droppedFile) {
+            await submitState.handleInterrogateImageFile(droppedFile);
+          }
+        }}
+        className={`w-full max-w-full overflow-hidden bg-zinc-900/98 backdrop-blur-2xl px-3.5 sm:px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3 border-t md:border md:rounded-3xl border-zinc-800/90 shadow-2xl transition-all duration-300 ${
+          cardShouldFillMobile
+            ? 'flex-1 min-h-0 flex flex-col justify-between md:block'
+            : 'shrink-0'
+        } ${
+          isDragOver
+            ? 'border-t-amber-400 md:border-amber-400 ring-2 ring-amber-400/50 shadow-amber-500/20'
+            : submitState.isHighlighted
+            ? 'border-t-indigo-500 md:border-indigo-500 ring-2 ring-indigo-500/40 shadow-indigo-500/20'
+            : ''
+        }`}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) {
+              await submitState.handleInterrogateImageFile(file);
+            }
+          }}
+        />
+
+        <div
+          className={
+            cardShouldFillMobile ? 'flex-1 min-h-0 flex flex-col md:block' : ''
+          }
+        >
+          {(submitState.isInterrogating || isDragOver) && (
+            <div className="mb-2 flex items-center gap-2 px-2.5 py-1 rounded-lg bg-indigo-950/70 border border-indigo-500/40 text-xs text-indigo-200 shrink-0">
+              {submitState.isInterrogating ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />
+                  <span>Downscaling to 1MP &amp; interrogating image via Local LLM...</span>
+                </>
+              ) : (
+                <>
+                  <ImagePlus className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>Drop image to interrogate into prompt (1MP auto-downscale)</span>
+                </>
+              )}
+            </div>
           )}
 
-          {submitState.showSettingsMenu && (
-            <QuickGenSettingsPopover
-              aspectRatio={submitState.aspectRatio}
-              megapixels={submitState.megapixels}
-              workflowDefaultMp={submitState.workflowDefaultMp}
-              batchCount={submitState.batchCount}
-              agentEnabled={submitState.agentEnabled}
-              onChangeAspectRatio={submitState.setAspectRatio}
-              onChangeMegapixels={submitState.setMegapixels}
-              onChangeBatchCount={submitState.setBatchCount}
-            />
-          )}
-
-          {/* Main Floating Quick Generation Box */}
-          <div
-            onDragOver={(e) => {
-              if (e.dataTransfer?.types?.includes('Files')) {
-                e.preventDefault();
-                if (lmStudioOnline && !submitState.isInterrogating) {
-                  setIsDragOver(true);
-                }
-              }
-            }}
-            onDragLeave={(e) => {
-              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                setIsDragOver(false);
-              }
-            }}
-            onDrop={async (e) => {
-              e.preventDefault();
-              setIsDragOver(false);
-              const droppedFile = e.dataTransfer?.files?.[0];
-              if (droppedFile) {
-                await submitState.handleInterrogateImageFile(droppedFile);
-              }
-            }}
-            className={`w-full max-w-full overflow-hidden bg-zinc-900/98 backdrop-blur-2xl rounded-t-2xl md:rounded-3xl px-3.5 sm:px-4 py-3 border-t border-x md:border border-zinc-800/90 shadow-2xl transition-all duration-300 ${
-              isDragOver
-                ? 'border-t-amber-400 md:border-amber-400 ring-2 ring-amber-400/50 shadow-amber-500/20'
-                : submitState.isHighlighted
-                ? 'border-t-indigo-500 md:border-indigo-500 ring-2 ring-indigo-500/40 shadow-indigo-500/20'
-                : ''
-            }`}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (file) {
-                  await submitState.handleInterrogateImageFile(file);
-                }
-              }}
-            />
-
-            {(submitState.isInterrogating || isDragOver) && (
-              <div className="mb-2 flex items-center gap-2 px-2.5 py-1 rounded-lg bg-indigo-950/70 border border-indigo-500/40 text-xs text-indigo-200">
-                {submitState.isInterrogating ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />
-                    <span>Downscaling to 1MP &amp; interrogating image via Local LLM...</span>
-                  </>
-                ) : (
-                  <>
-                    <ImagePlus className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    <span>Drop image to interrogate into prompt (1MP auto-downscale)</span>
-                  </>
-                )}
-              </div>
-            )}
-
+          <div className="shrink-0">
             <QuickGenAttachmentsBar
               attachedCharacter={submitState.attachedCharacter}
               attachedCheckpoint={submitState.attachedCheckpoint}
@@ -281,220 +379,228 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               onRemoveLora={submitState.handleRemoveLora}
               onUpdateLoraStrength={submitState.handleUpdateLoraStrength}
             />
+          </div>
 
-            {/* Inline Expanded Conversation Area (when Agent is active) */}
-            {submitState.agentEnabled && (
-              <QuickGenConversationView
-                messages={submitState.chatMessages}
-                isChatting={submitState.isChatting}
-                expandingMessageId={submitState.expandingMessageId}
-                isSubmitting={submitState.isSubmitting}
-                batchCount={submitState.batchCount}
-                onSubmitPrompt={(proposedPrompt) =>
-                  submitState.handleSubmitProposedPrompt(proposedPrompt, mentions.resetMentions)
-                }
-                onPreviewExpand={submitState.handlePreviewExpandConcept}
-                onUpdateExpandedShot={submitState.handleUpdateExpandedPrompt}
-                onCloseExpandedPreview={submitState.handleCloseExpandedPreview}
-                onSubmitExpandedShots={(prompts, conceptTheme) =>
-                  submitState.handleSubmitExpandedPrompts(
-                    prompts,
-                    conceptTheme,
-                    mentions.resetMentions
-                  )
-                }
-                onClearChat={() => {
-                  submitState.setChatMessages([]);
-                  submitState.setActiveSeriesId(null);
-                  submitState.setBranchFromImageId(null);
-                }}
-              />
-            )}
+          {/* Inline Expanded Conversation Area (when Agent is active) */}
+          {submitState.agentEnabled && !mentions.mentionOpen && (
+            <QuickGenConversationView
+              messages={submitState.chatMessages}
+              isChatting={submitState.isChatting}
+              expandingMessageId={submitState.expandingMessageId}
+              isSubmitting={submitState.isSubmitting}
+              batchCount={submitState.batchCount}
+              onSubmitPrompt={(proposedPrompt) =>
+                submitState.handleSubmitProposedPrompt(proposedPrompt, mentions.resetMentions)
+              }
+              onPreviewExpand={submitState.handlePreviewExpandConcept}
+              onUpdateExpandedShot={submitState.handleUpdateExpandedPrompt}
+              onCloseExpandedPreview={submitState.handleCloseExpandedPreview}
+              onSubmitExpandedShots={(prompts, conceptTheme) =>
+                submitState.handleSubmitExpandedPrompts(
+                  prompts,
+                  conceptTheme,
+                  mentions.resetMentions
+                )
+              }
+              onClearChat={() => {
+                submitState.setChatMessages([]);
+                submitState.setActiveSeriesId(null);
+                submitState.setBranchFromImageId(null);
+              }}
+            />
+          )}
 
-            {/* Prompt Textarea Row */}
-            <div className="flex items-start gap-2">
-              <textarea
-                ref={inputRef}
-                rows={submitState.agentEnabled ? 2 : isPromptExpanded ? 4 : 1}
-                value={submitState.prompt}
-                onChange={mentions.handlePromptChange}
-                onFocus={() => submitState.setIsPromptFocused(true)}
-                onBlur={() => submitState.setIsPromptFocused(false)}
-                onKeyDown={handleKeyDown}
-                onPaste={async (e) => {
-                  const items = e.clipboardData?.items;
-                  if (!items) return;
-                  for (const item of Array.from(items)) {
-                    if (item.type.startsWith('image/')) {
-                      const file = item.getAsFile();
-                      if (file) {
-                        e.preventDefault();
-                        await submitState.handleInterrogateImageFile(file);
-                        return;
-                      }
+          {/* Prompt Textarea Row */}
+          <div
+            className={`flex items-start gap-2 ${
+              cardShouldFillMobile && !submitState.agentEnabled
+                ? 'flex-1 min-h-0 md:flex-none'
+                : 'shrink-0'
+            }`}
+          >
+            <textarea
+              ref={inputRef}
+              rows={submitState.agentEnabled ? 2 : isPromptExpanded ? 4 : 1}
+              value={submitState.prompt}
+              onChange={mentions.handlePromptChange}
+              onFocus={() => submitState.setIsPromptFocused(true)}
+              onBlur={() => submitState.setIsPromptFocused(false)}
+              onKeyDown={handleKeyDown}
+              onPaste={async (e) => {
+                const items = e.clipboardData?.items;
+                if (!items) return;
+                for (const item of Array.from(items)) {
+                  if (item.type.startsWith('image/')) {
+                    const file = item.getAsFile();
+                    if (file) {
+                      e.preventDefault();
+                      await submitState.handleInterrogateImageFile(file);
+                      return;
                     }
                   }
-                }}
-                placeholder={
-                  submitState.agentEnabled
-                    ? 'Brainstorm your image or set idea with the Agent (Enter to send, @ for character/LoRA/model)...'
-                    : lmStudioOnline
-                    ? 'What do you want to create? (Type @ for character/LoRA/model, or drop/paste an image)'
-                    : 'What do you want to create? (Type @ to mention a character, LoRA, or model)'
                 }
-                className={`w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-sm resize-none focus:outline-none leading-relaxed transition-[height,min-height] duration-200 overflow-y-auto ${
-                  submitState.agentEnabled
-                    ? 'min-h-[2.75rem] max-h-24'
-                    : isPromptExpanded
-                    ? 'min-h-[5.5rem] max-h-36 sm:max-h-48'
-                    : 'min-h-[1.5rem] max-h-24'
-                }`}
-              />
-              {(submitState.prompt.length > 0 ||
-                Boolean(submitState.attachedCharacter) ||
-                Boolean(submitState.attachedCheckpoint) ||
-                submitState.attachedLoras.length > 0 ||
-                submitState.chatMessages.length > 0) && (
-                <button
-                  type="button"
-                  onClick={() => submitState.handleClearBox(mentions.resetMentions)}
-                  className="p-1 text-zinc-500 hover:text-zinc-300 cursor-pointer shrink-0 mt-0.5"
-                  title="Clear Quick Gen box"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-
-            {/* Bottom Control Bar */}
-            <div className="mt-2.5 flex items-center justify-between gap-1.5 sm:gap-2">
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    mentions.setMentionOpen((prev) => !prev);
-                    submitState.setShowSettingsMenu(false);
-                    mentions.setMentionTriggerRange(null);
-                  }}
-                  className="w-8 h-8 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors cursor-pointer shrink-0"
-                  title="Mention a character or LoRA (@)"
-                >
-                  {mentions.mentionOpen ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-                </button>
-
-                <button
-                  type="button"
-                  disabled={!lmStudioOnline || submitState.isInterrogating}
-                  onClick={() => {
-                    if (!lmStudioOnline || submitState.isInterrogating) return;
-                    fileInputRef.current?.click();
-                  }}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 ${
-                    !lmStudioOnline
-                      ? 'opacity-40 cursor-not-allowed bg-zinc-800/50 text-zinc-500'
-                      : submitState.isInterrogating
-                      ? 'bg-indigo-600/30 border border-indigo-500/60 text-indigo-200 cursor-wait'
-                      : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 cursor-pointer'
-                  }`}
-                  title={
-                    lmStudioOnline
-                      ? 'Upload or drop an image to interrogate into a prompt (auto-downscales to 1MP)'
-                      : 'Local LLM is offline — connect a Local LLM to interrogate images'
-                  }
-                >
-                  {submitState.isInterrogating ? (
-                    <Loader2 className="w-4 h-4 animate-spin text-indigo-300" />
-                  ) : (
-                    <ImagePlus className="w-4 h-4" />
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  disabled={!lmStudioOnline}
-                  onClick={() => {
-                    if (!lmStudioOnline) return;
-                    submitState.setAgentEnabled((prev) => {
-                      const next = !prev;
-                      if (next) {
-                        setTimeout(() => {
-                          inputRef.current?.focus({ preventScroll: true });
-                        }, 30);
-                      }
-                      return next;
-                    });
-                  }}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 ${
-                    !lmStudioOnline
-                      ? 'opacity-40 cursor-not-allowed bg-zinc-800/50 text-zinc-500 border border-transparent'
-                      : submitState.agentEnabled
-                      ? 'bg-indigo-600/25 border border-indigo-500/60 text-indigo-200 cursor-pointer'
-                      : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-transparent cursor-pointer'
-                  }`}
-                  title={
-                    lmStudioOnline
-                      ? 'Toggle Local LLM Agent to brainstorm prompts (or expand into x2–x8 themed set shots)'
-                      : 'Local LLM is offline — start your Local LLM server or check connection in System settings'
-                  }
-                >
-                  <Bot className="w-3.5 h-3.5" />
-                  <span>Agent</span>
-                </button>
-              </div>
-
-              <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
-                <button
-                  type="button"
-                  onClick={() => {
-                    submitState.setShowSettingsMenu((prev) => !prev);
-                    mentions.setMentionOpen(false);
-                  }}
-                  className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-full bg-zinc-800/90 hover:bg-zinc-700/90 text-zinc-200 text-xs font-medium transition-colors cursor-pointer min-w-0 truncate"
-                  title="Configure Aspect Ratio, Resolution (MP) & Number of Generations"
-                >
-                  <Sliders className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
-                  <span className="inline-flex items-center gap-1 font-mono text-zinc-300 shrink-0">
-                    <span className="inline-block w-2 h-3 border border-zinc-400 rounded-[2px]" />
-                    <span>{resolvedShortRatio}</span>
-                  </span>
-                  <span
-                    className={`font-mono shrink-0 ${
-                      submitState.megapixels > 3.0 ? 'text-amber-300' : 'text-indigo-300'
-                    }`}
-                  >
-                    {formattedMpLabel}
-                  </span>
-                  <span className="font-mono text-zinc-100 shrink-0">
-                    x{submitState.batchCount}
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => submitState.handleSubmit(mentions.resetMentions)}
-                  disabled={
-                    !submitState.prompt.trim() ||
-                    submitState.isSubmitting ||
-                    submitState.isChatting
-                  }
-                  className="w-8 h-8 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-zinc-800 disabled:bg-zinc-800 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0 shadow-sm"
-                  title={
-                    submitState.agentEnabled
-                      ? 'Send message to Agent'
-                      : 'Submit quick generation'
-                  }
-                >
-                  {submitState.isSubmitting || submitState.isChatting ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <ArrowRight className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
-            </div>
+              }}
+              placeholder={
+                submitState.agentEnabled
+                  ? 'Brainstorm your image or set idea with the Agent (Enter to send, @ for character/LoRA/model)...'
+                  : lmStudioOnline
+                  ? 'What do you want to create? (Type @ for character/LoRA/model, or drop/paste an image)'
+                  : 'What do you want to create? (Type @ to mention a character, LoRA, or model)'
+              }
+              className={`w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-sm resize-none focus:outline-none leading-relaxed transition-[height,min-height] duration-200 overflow-y-auto overscroll-contain ${
+                submitState.agentEnabled
+                  ? 'min-h-[2.75rem] max-h-24'
+                  : cardShouldFillMobile
+                  ? 'h-full min-h-[6rem] md:h-auto md:min-h-[1.5rem] md:max-h-48'
+                  : isPromptExpanded
+                  ? 'min-h-[5.5rem] max-h-36 sm:max-h-48'
+                  : 'min-h-[1.5rem] max-h-24'
+              }`}
+            />
+            {(submitState.prompt.length > 0 ||
+              Boolean(submitState.attachedCharacter) ||
+              Boolean(submitState.attachedCheckpoint) ||
+              submitState.attachedLoras.length > 0 ||
+              submitState.chatMessages.length > 0) && (
+              <button
+                type="button"
+                onClick={() => submitState.handleClearBox(mentions.resetMentions)}
+                className="p-1 text-zinc-500 hover:text-zinc-300 cursor-pointer shrink-0 mt-0.5"
+                title="Clear prompt & attachments"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
           </div>
-        </>
-      )}
+        </div>
+
+        {/* Bottom Control Bar */}
+        <div className="mt-2.5 pt-2 border-t border-zinc-800/60 md:border-t-0 md:pt-0 flex items-center justify-between gap-1.5 sm:gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                mentions.setMentionOpen((prev) => !prev);
+                submitState.setShowSettingsMenu(false);
+                mentions.setMentionTriggerRange(null);
+              }}
+              className="w-8 h-8 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+              title="Mention a character or LoRA (@)"
+            >
+              {mentions.mentionOpen ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+            </button>
+
+            <button
+              type="button"
+              disabled={!lmStudioOnline || submitState.isInterrogating}
+              onClick={() => {
+                if (!lmStudioOnline || submitState.isInterrogating) return;
+                fileInputRef.current?.click();
+              }}
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 ${
+                !lmStudioOnline
+                  ? 'opacity-40 cursor-not-allowed bg-zinc-800/50 text-zinc-500'
+                  : submitState.isInterrogating
+                  ? 'bg-indigo-600/30 border border-indigo-500/60 text-indigo-200 cursor-wait'
+                  : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 cursor-pointer'
+              }`}
+              title={
+                lmStudioOnline
+                  ? 'Upload or drop an image to interrogate into a prompt (auto-downscales to 1MP)'
+                  : 'Local LLM is offline — connect a Local LLM to interrogate images'
+              }
+            >
+              {submitState.isInterrogating ? (
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-300" />
+              ) : (
+                <ImagePlus className="w-4 h-4" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              disabled={!lmStudioOnline}
+              onClick={() => {
+                if (!lmStudioOnline) return;
+                submitState.setAgentEnabled((prev) => {
+                  const next = !prev;
+                  if (next) {
+                    setTimeout(() => {
+                      inputRef.current?.focus({ preventScroll: true });
+                    }, 30);
+                  }
+                  return next;
+                });
+              }}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 ${
+                !lmStudioOnline
+                  ? 'opacity-40 cursor-not-allowed bg-zinc-800/50 text-zinc-500 border border-transparent'
+                  : submitState.agentEnabled
+                  ? 'bg-indigo-600/25 border border-indigo-500/60 text-indigo-200 cursor-pointer'
+                  : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-transparent cursor-pointer'
+              }`}
+              title={
+                lmStudioOnline
+                  ? 'Toggle Local LLM Agent to brainstorm prompts (or expand into x2–x8 themed set shots)'
+                  : 'Local LLM is offline — start your Local LLM server or check connection in System settings'
+              }
+            >
+              <Bot className="w-3.5 h-3.5" />
+              <span>Agent</span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => {
+                submitState.setShowSettingsMenu((prev) => !prev);
+                mentions.setMentionOpen(false);
+              }}
+              className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-full bg-zinc-800/90 hover:bg-zinc-700/90 text-zinc-200 text-xs font-medium transition-colors cursor-pointer min-w-0 truncate"
+              title="Configure Aspect Ratio, Resolution (MP) & Number of Generations"
+            >
+              <Sliders className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+              <span className="inline-flex items-center gap-1 font-mono text-zinc-300 shrink-0">
+                <span className="inline-block w-2 h-3 border border-zinc-400 rounded-[2px]" />
+                <span>{resolvedShortRatio}</span>
+              </span>
+              <span
+                className={`font-mono shrink-0 ${
+                  submitState.megapixels > 3.0 ? 'text-amber-300' : 'text-indigo-300'
+                }`}
+              >
+                {formattedMpLabel}
+              </span>
+              <span className="font-mono text-zinc-100 shrink-0">
+                x{submitState.batchCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => submitState.handleSubmit(mentions.resetMentions)}
+              disabled={
+                !submitState.prompt.trim() ||
+                submitState.isSubmitting ||
+                submitState.isChatting
+              }
+              className="w-8 h-8 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-zinc-800 disabled:bg-zinc-800 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0 shadow-sm"
+              title={
+                submitState.agentEnabled
+                  ? 'Send message to Agent'
+                  : 'Submit quick generation'
+              }
+            >
+              {submitState.isSubmitting || submitState.isChatting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <ArrowRight className="w-4 h-4" />
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };

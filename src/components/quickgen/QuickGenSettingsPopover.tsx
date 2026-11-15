@@ -27,7 +27,7 @@ export const QuickGenSettingsPopover: React.FC<QuickGenSettingsPopoverProps> = (
   onChangeBatchCount,
 }) => {
   return (
-    <div className="mb-2 mr-2 md:mr-0 ml-auto w-72 max-w-[calc(100vw-1rem)] bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-2xl p-3.5 shadow-2xl space-y-3.5 text-xs">
+    <div className="mx-3 mb-2 md:mx-0 md:ml-auto w-[calc(100%-1.5rem)] md:w-72 max-h-[55dvh] overflow-y-auto overscroll-contain bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-2xl p-3.5 shadow-2xl space-y-3.5 text-xs shrink-0">
       <div>
         <span className="block text-[11px] font-medium text-zinc-400 mb-1.5">
           Aspect Ratio (Node #49)

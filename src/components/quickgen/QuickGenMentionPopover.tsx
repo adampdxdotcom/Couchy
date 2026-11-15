@@ -46,9 +46,9 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
   const baseModelStyle = PILL_COLOR_STYLES[pillTypeSettings.baseModel.color];
   const loraStyle = PILL_COLOR_STYLES[pillTypeSettings.lora.color];
   return (
-    <div className="mb-2 mx-2 md:mx-0 bg-zinc-950/98 backdrop-blur-2xl border border-zinc-800 rounded-3xl shadow-2xl overflow-hidden text-xs max-w-[calc(100vw-1rem)]">
+    <div className="flex-1 min-h-0 md:flex-none flex flex-col md:mb-2 bg-zinc-950/98 backdrop-blur-2xl md:border border-b border-zinc-800 md:rounded-3xl shadow-2xl overflow-hidden text-xs w-full">
       {/* Top Search Header */}
-      <div className="px-4 py-3 border-b border-zinc-800/80 flex items-center gap-3">
+      <div className="px-3.5 sm:px-4 py-2.5 sm:py-3 border-b border-zinc-800/80 flex items-center gap-2.5 shrink-0">
         <div className="relative flex-1 min-w-0">
           <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -70,7 +70,7 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
       </div>
 
       {/* Filter Tabs: All | Characters | LoRAs | Models */}
-      <div className="px-4 py-2 border-b border-zinc-800/80 bg-zinc-900/40 flex items-center gap-1.5 overflow-x-auto">
+      <div className="px-3.5 sm:px-4 py-2 border-b border-zinc-800/80 bg-zinc-900/40 flex items-center gap-1.5 overflow-x-auto overscroll-x-contain shrink-0">
         {(
           [
             { id: 'all', label: 'All', count: counts.all },
@@ -107,7 +107,7 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
       </div>
 
       {entries.length === 0 ? (
-        <div className="p-6 text-center text-zinc-400">
+        <div className="p-6 text-center text-zinc-400 flex-1 flex items-center justify-center">
           {activeTab === 'models'
             ? 'No matching @mention Base Models found. Enable @mention on Base Models in the Models workspace!'
             : activeTab === 'loras'
@@ -117,9 +117,9 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
             : 'No matching characters, @mentioned LoRAs, or Base Models found.'}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-12 max-h-[380px]">
-          {/* Left Column: Character, LoRA & Image Matches */}
-          <div className="sm:col-span-6 p-2.5 overflow-y-auto max-h-[360px] space-y-1 border-r border-zinc-800/70">
+        <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-cols-12 md:max-h-[380px] overflow-hidden">
+          {/* Matches List (Below preview on mobile, Left Column on desktop) */}
+          <div className="order-2 md:order-1 md:col-span-6 flex-1 min-h-0 p-2.5 overflow-y-auto overscroll-contain touch-pan-y md:max-h-[360px] space-y-1 md:border-r border-zinc-800/70">
             {entries.map((entry, idx) => {
               const isSelected = idx === activeIndex;
               return (
@@ -188,10 +188,10 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
             })}
           </div>
 
-          {/* Right Column: Large Preview & "Add to prompt" Action */}
+          {/* Large Preview & "Add to prompt" Action (Top on mobile, Right Column on desktop) */}
           {highlightedEntry && (
-            <div className="sm:col-span-6 p-3.5 flex flex-col justify-between bg-zinc-950/60">
-              <div className="relative rounded-2xl bg-zinc-900 border border-zinc-800/80 overflow-hidden h-56 flex items-center justify-center">
+            <div className="order-1 md:order-2 md:col-span-6 p-3 md:p-3.5 flex flex-col justify-between bg-zinc-950/60 border-b md:border-b-0 border-zinc-800/70 shrink-0">
+              <div className="relative rounded-2xl bg-zinc-900 border border-zinc-800/80 overflow-hidden h-36 md:h-56 flex items-center justify-center">
                 {highlightedEntry.type === 'lora' ? (
                   <div className="flex flex-col items-center gap-2.5 p-4 text-center">
                     <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center shadow-inner ${loraStyle.iconBg}`}>
