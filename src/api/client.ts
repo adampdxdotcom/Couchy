@@ -346,6 +346,8 @@ export const api = {
   fetchModelFromCivitai: (modelId: number) =>
     requestJson<{
       ok: boolean;
+      provider?: 'civitai' | 'huggingface';
+      hfRepoId?: string | null;
       filledTriggerWord: boolean;
       filledDefaultStrength: boolean;
       civitaiUrl: string | null;

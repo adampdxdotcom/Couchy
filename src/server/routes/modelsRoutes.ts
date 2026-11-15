@@ -66,6 +66,8 @@ modelsRouter.post('/models/:id/civitai-fetch', async (req, res) => {
     const result = await fetchAndEnrichModelFromCivitai(modelId);
     res.json({
       ok: true,
+      provider: result.provider,
+      hfRepoId: result.hfRepoId,
       filledTriggerWord: result.filledTriggerWord,
       filledDefaultStrength: result.filledDefaultStrength,
       civitaiUrl: result.meta.civitaiUrl,
@@ -75,7 +77,7 @@ modelsRouter.post('/models/:id/civitai-fetch', async (req, res) => {
     });
   } catch (err: any) {
     const status = typeof err?.statusCode === 'number' ? err.statusCode : 500;
-    res.status(status).json({ error: err?.message || 'Failed to fetch Civitai metadata' });
+    res.status(status).json({ error: err?.message || 'Failed to fetch model details' });
   }
 });
 

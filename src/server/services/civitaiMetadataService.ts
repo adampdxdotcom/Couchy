@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import sharp from 'sharp';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
+import { resolveHuggingFaceModelDetails } from './huggingFaceMetadataService.ts';
 import type { ModelPreviewImage } from '../../shared/types.ts';
 
 export interface CivitaiNormalizedMeta {
@@ -554,7 +555,8 @@ export async function cacheModelPreviewImages(
 export function applyCivitaiEnrichmentToModel(
   modelId: number,
   meta: CivitaiNormalizedMeta,
-  cachedPreviews: StoredPreviewImageEntry[]
+  cachedPreviews: StoredPreviewImageEntry[],
+  extraMeta?: { hfRepoId?: string | null; downloadUrl?: string | null }
 ): { filledTriggerWord: boolean; filledDefaultStrength: boolean } {
   const existing = db
     .prepare(
@@ -600,6 +602,8 @@ export function applyCivitaiEnrichmentToModel(
      SET civitai_id = COALESCE(?, civitai_id),
          civitai_version_id = COALESCE(?, civitai_version_id),
          civitai_url = COALESCE(?, civitai_url),
+         hf_repo_id = COALESCE(?, hf_repo_id),
+         download_url = COALESCE(download_url, ?),
          base_model = COALESCE(?, base_model),
          recommended_weight = COALESCE(?, recommended_weight),
          civitai_description = COALESCE(?, civitai_description),
@@ -612,6 +616,8 @@ export function applyCivitaiEnrichmentToModel(
     meta.civitaiId,
     meta.civitaiVersionId,
     meta.civitaiUrl,
+    extraMeta?.hfRepoId || null,
+    extraMeta?.downloadUrl || null,
     meta.baseModel,
     meta.recommendedWeight,
     meta.civitaiDescription,
@@ -778,16 +784,22 @@ function parseIdsFromCivitaiUrl(urlStr?: string | null): {
 }
 
 /**
- * Resolves Civitai metadata for an existing model row via SHA-256 / AutoV2 hash lookup
- * (with fallback to stored `civitai_version_id` / `civitai_id`), detects `civitai.red` vs `civitai.com`,
- * caches thumbnails locally, and applies non-destructive metadata enrichment.
+ * Resolves metadata for an existing model row (Base Model or LoRA):
+ * 1) Civitai via SHA-256 / AutoV2 hash lookup (with fallback to stored IDs, detecting .red vs .com).
+ * 2) Hugging Face fallback via stored repo ID or API search + LFS SHA-256 / filename verification.
  */
-export async function fetchAndEnrichModelFromCivitai(modelId: number): Promise<{
+export async function fetchAndEnrichModelFromCivitai(
+  modelId: number,
+  options?: { allowHuggingFaceFallback?: boolean }
+): Promise<{
+  provider: 'civitai' | 'huggingface';
+  hfRepoId: string | null;
   meta: CivitaiNormalizedMeta;
   cachedPreviews: StoredPreviewImageEntry[];
   filledTriggerWord: boolean;
   filledDefaultStrength: boolean;
 }> {
+  const allowHfFallback = options?.allowHuggingFaceFallback !== false;
   const row = db.prepare('SELECT * FROM models WHERE id = ?').get(modelId) as any;
   if (!row) {
     const err: any = new Error('Model not found');
@@ -865,9 +877,47 @@ export async function fetchAndEnrichModelFromCivitai(modelId: number): Promise<{
   }
 
   if (!versionObj) {
+    if (allowHfFallback) {
+      const hfMeta = await resolveHuggingFaceModelDetails({
+        filename: row.filename,
+        name: row.name,
+        sha256,
+        hfRepoId: row.hf_repo_id,
+        downloadUrl: row.download_url,
+      });
+      if (hfMeta) {
+        const normalizedHf: CivitaiNormalizedMeta = {
+          civitaiId: null,
+          civitaiVersionId: null,
+          civitaiUrl: null,
+          baseModel: hfMeta.baseModel,
+          trainedWords: [],
+          recommendedWeight: null,
+          civitaiDescription: hfMeta.description,
+          previewImages: hfMeta.previewImages,
+        };
+        const cacheKey = `m${row.id}_hf_${row.autov2_hash || 'v'}`;
+        const cachedPreviews = await cacheModelPreviewImages(cacheKey, normalizedHf.previewImages);
+        const { filledTriggerWord, filledDefaultStrength } = applyCivitaiEnrichmentToModel(
+          row.id,
+          normalizedHf,
+          cachedPreviews,
+          { hfRepoId: hfMeta.hfRepoId, downloadUrl: hfMeta.downloadUrl }
+        );
+        return {
+          provider: 'huggingface',
+          hfRepoId: hfMeta.hfRepoId,
+          meta: normalizedHf,
+          cachedPreviews,
+          filledTriggerWord,
+          filledDefaultStrength,
+        };
+      }
+    }
+
     const err: any = new Error(
-      hashesToTry.length > 0
-        ? 'No matching model found on Civitai (.com or .red) for this file hash.'
+      hashesToTry.length > 0 || allowHfFallback
+        ? 'No matching model found on Civitai or Hugging Face for this file.'
         : 'Cannot look up model on Civitai: no local file hash or Civitai ID available.'
     );
     err.statusCode = 404;
@@ -902,7 +952,14 @@ export async function fetchAndEnrichModelFromCivitai(modelId: number): Promise<{
     cachedPreviews
   );
 
-  return { meta, cachedPreviews, filledTriggerWord, filledDefaultStrength };
+  return {
+    provider: 'civitai',
+    hfRepoId: row.hf_repo_id || null,
+    meta,
+    cachedPreviews,
+    filledTriggerWord,
+    filledDefaultStrength,
+  };
 }
 
 /**
@@ -936,7 +993,9 @@ export async function healExistingCivitaiLinks(): Promise<{
     checked++;
     const previousUrl = row.civitai_url || null;
     try {
-      const { meta } = await fetchAndEnrichModelFromCivitai(row.id);
+      const { meta } = await fetchAndEnrichModelFromCivitai(row.id, {
+        allowHuggingFaceFallback: false,
+      });
       if (meta.civitaiUrl?.includes('civitai.red')) {
         redCount++;
       }

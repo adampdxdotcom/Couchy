@@ -103,10 +103,11 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
               type="button"
               disabled={isFetchingCivitai}
               onClick={() => onFetchFromCivitai(lora.modelId!)}
+              title="Check Civitai first, then Hugging Face"
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-700 hover:border-indigo-500/70 disabled:opacity-50 text-zinc-100 rounded-lg cursor-pointer transition-colors"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isFetchingCivitai ? 'animate-spin text-indigo-400' : ''}`} />
-              <span>{isFetchingCivitai ? 'Fetching Civitai...' : 'Fetch from Civitai'}</span>
+              <span>{isFetchingCivitai ? 'Fetching Details...' : 'Fetch Details'}</span>
             </button>
           )}
           {lora.civitaiUrl && (
@@ -120,6 +121,17 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
               <span>
                 {lora.civitaiUrl.includes('civitai.red') ? 'View on Civitai.red' : 'View on Civitai'}
               </span>
+            </a>
+          )}
+          {lora.hfRepoId && (
+            <a
+              href={`https://huggingface.co/${lora.hfRepoId}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-amber-300 hover:text-amber-200 rounded-lg transition-colors"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>View on Hugging Face</span>
             </a>
           )}
           <button
@@ -512,13 +524,15 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
         </div>
       </div>
 
-      {/* Dedicated CivitAI Description Area */}
+      {/* Dedicated Source Description Area (Civitai or Hugging Face Model Card) */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <FileText className="w-4 h-4 text-indigo-400" />
             <h2 className="text-sm font-display font-semibold text-zinc-100">
-              CivitAI Description
+              {!lora.civitaiUrl && lora.hfRepoId
+                ? 'Hugging Face Model Card'
+                : 'CivitAI Description'}
             </h2>
           </div>
           <div className="flex items-center gap-3 text-[11px] font-mono text-zinc-500">
@@ -536,6 +550,17 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
                 <ExternalLink className="w-3 h-3" />
               </a>
             )}
+            {lora.hfRepoId && (
+              <a
+                href={`https://huggingface.co/${lora.hfRepoId}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-amber-300 hover:text-amber-200 font-sans"
+              >
+                <span>Open on Hugging Face</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
           </div>
         </div>
 
@@ -547,7 +572,7 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
           <div className="bg-zinc-950/60 border border-zinc-800/70 rounded-lg px-4 py-4 flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-400">
             <span className="flex items-center gap-2">
               <Sparkles className="w-3.5 h-3.5 text-zinc-500" />
-              <span>No Civitai creator description stored yet for this LoRA.</span>
+              <span>No Civitai or Hugging Face description stored yet for this LoRA.</span>
             </span>
             {lora.modelId && (
               <button
@@ -556,7 +581,7 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
                 onClick={() => onFetchFromCivitai(lora.modelId!)}
                 className="text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer disabled:opacity-50"
               >
-                {isFetchingCivitai ? 'Fetching...' : 'Fetch from Civitai now'}
+                {isFetchingCivitai ? 'Fetching...' : 'Fetch Details now'}
               </button>
             )}
           </div>

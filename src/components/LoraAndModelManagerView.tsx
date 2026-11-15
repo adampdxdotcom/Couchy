@@ -85,16 +85,21 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       await onRefresh();
       const notes: string[] = [];
       if (res.baseModel) notes.push(res.baseModel);
+      if (res.hfRepoId && res.provider === 'huggingface') notes.push(res.hfRepoId);
       if (res.civitaiUrl?.includes('civitai.red')) notes.push('civitai.red link');
       if (res.filledTriggerWord) notes.push('trigger word auto-filled');
       if (res.filledDefaultStrength) notes.push('default strength updated');
       if (res.previewCount > 0) notes.push(`${res.previewCount} preview(s) cached`);
+      const sourceLabel = res.provider === 'huggingface' ? 'Hugging Face' : 'Civitai';
       onPushToast?.(
-        `Fetched Civitai metadata${notes.length > 0 ? ` (${notes.join(', ')})` : ''}`,
+        `Fetched details from ${sourceLabel}${notes.length > 0 ? ` (${notes.join(', ')})` : ''}`,
         'success'
       );
     } catch (err: any) {
-      onPushToast?.(err?.message || 'Could not fetch metadata from Civitai', 'error');
+      onPushToast?.(
+        err?.message || 'Could not fetch details from Civitai or Hugging Face',
+        'error'
+      );
     } finally {
       setFetchingModelId(null);
     }

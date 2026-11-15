@@ -85,19 +85,18 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
         </button>
 
         <div className="flex flex-wrap items-center gap-2">
-          {(model.isInstalled || model.sha256Hash || model.civitaiId) && (
-            <button
-              type="button"
-              disabled={isFetchingCivitai}
-              onClick={() => onFetchFromCivitai(model.id)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-700 hover:border-emerald-500/70 disabled:opacity-50 text-zinc-100 rounded-lg cursor-pointer transition-colors"
-            >
-              <RefreshCw
-                className={`w-3.5 h-3.5 ${isFetchingCivitai ? 'animate-spin text-emerald-400' : ''}`}
-              />
-              <span>{isFetchingCivitai ? 'Fetching Civitai...' : 'Fetch from Civitai'}</span>
-            </button>
-          )}
+          <button
+            type="button"
+            disabled={isFetchingCivitai}
+            onClick={() => onFetchFromCivitai(model.id)}
+            title="Check Civitai first, then Hugging Face"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-700 hover:border-emerald-500/70 disabled:opacity-50 text-zinc-100 rounded-lg cursor-pointer transition-colors"
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${isFetchingCivitai ? 'animate-spin text-emerald-400' : ''}`}
+            />
+            <span>{isFetchingCivitai ? 'Fetching Details...' : 'Fetch Details'}</span>
+          </button>
           {model.civitaiUrl && (
             <a
               href={model.civitaiUrl}
@@ -109,6 +108,17 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
               <span>
                 {model.civitaiUrl.includes('civitai.red') ? 'View on Civitai.red' : 'View on Civitai'}
               </span>
+            </a>
+          )}
+          {model.hfRepoId && (
+            <a
+              href={`https://huggingface.co/${model.hfRepoId}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-amber-300 hover:text-amber-200 rounded-lg transition-colors"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>View on Hugging Face</span>
             </a>
           )}
           <button
@@ -342,13 +352,15 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
         </div>
       </div>
 
-      {/* CivitAI Description Card */}
+      {/* Source Description Card (Civitai or Hugging Face Model Card) */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <FileText className="w-4 h-4 text-emerald-400" />
             <h2 className="text-sm font-display font-semibold text-zinc-100">
-              CivitAI Description
+              {!model.civitaiUrl && model.hfRepoId
+                ? 'Hugging Face Model Card'
+                : 'CivitAI Description'}
             </h2>
           </div>
           <div className="flex items-center gap-3 text-[11px] font-mono text-zinc-500">
@@ -366,6 +378,17 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
                 <ExternalLink className="w-3 h-3" />
               </a>
             )}
+            {model.hfRepoId && (
+              <a
+                href={`https://huggingface.co/${model.hfRepoId}`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 text-amber-300 hover:text-amber-200 font-sans"
+              >
+                <span>Open on Hugging Face</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
           </div>
         </div>
 
@@ -377,18 +400,16 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
           <div className="bg-zinc-950/60 border border-zinc-800/70 rounded-lg px-4 py-4 flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-400">
             <span className="flex items-center gap-2">
               <Sparkles className="w-3.5 h-3.5 text-zinc-500" />
-              <span>No Civitai creator description stored yet for this model.</span>
+              <span>No Civitai or Hugging Face description stored yet for this model.</span>
             </span>
-            {(model.isInstalled || model.sha256Hash || model.civitaiId) && (
-              <button
-                type="button"
-                disabled={isFetchingCivitai}
-                onClick={() => onFetchFromCivitai(model.id)}
-                className="text-emerald-400 hover:text-emerald-300 font-medium cursor-pointer disabled:opacity-50"
-              >
-                {isFetchingCivitai ? 'Fetching...' : 'Fetch from Civitai now'}
-              </button>
-            )}
+            <button
+              type="button"
+              disabled={isFetchingCivitai}
+              onClick={() => onFetchFromCivitai(model.id)}
+              className="text-emerald-400 hover:text-emerald-300 font-medium cursor-pointer disabled:opacity-50"
+            >
+              {isFetchingCivitai ? 'Fetching...' : 'Fetch Details now'}
+            </button>
           </div>
         )}
       </div>
