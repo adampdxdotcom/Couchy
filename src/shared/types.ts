@@ -219,6 +219,19 @@ export interface CharacterProfile {
   updatedAt: string;
 }
 
+export interface FaceMatchResponse {
+  matched: boolean;
+  character: CharacterProfile | null;
+  similarity: number | null;
+  facesDetected: number;
+  indexedCharactersCount: number;
+  bestCandidate?: {
+    characterId: number;
+    characterName: string;
+    similarity: number;
+  } | null;
+}
+
 export interface ModelPreviewImage {
   filename: string;
   url: string;

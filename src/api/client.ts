@@ -5,6 +5,7 @@ import type {
   ComfyUiLiveStatus,
   ExternalModelFileOption,
   ExternalModelSearchResult,
+  FaceMatchResponse,
   GalleryFilterState,
   GenerationBatchRecord,
   GenerationLoraSelection,
@@ -291,6 +292,12 @@ export const api = {
   runCharacterSuggestions: () =>
     requestJson<{ ok: boolean; newSuggestions: number }>('/api/characters/run-suggestions', {
       method: 'POST',
+    }),
+
+  matchCharacterFace: (payload: { imageBase64DataUrl: string; minSimilarity?: number }) =>
+    requestJson<FaceMatchResponse>('/api/characters/match-face', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     }),
 
   // LoRAs, Models & Workflows

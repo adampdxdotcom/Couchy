@@ -711,6 +711,26 @@ export function runMigrations(): void {
           ON pending_lora_character_tasks(status);
       `,
     },
+    {
+      version: 25,
+      name: 'character_face_embeddings_cache',
+      sql: `
+        CREATE TABLE IF NOT EXISTS character_face_embeddings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+          image_id INTEGER REFERENCES images(id) ON DELETE CASCADE,
+          image_content_hash TEXT NOT NULL,
+          source_kind TEXT NOT NULL DEFAULT 'portrait',
+          face_index INTEGER NOT NULL DEFAULT 0,
+          embedding_b64 TEXT NOT NULL,
+          det_score REAL NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          UNIQUE(character_id, image_content_hash, face_index)
+        );
+        CREATE INDEX IF NOT EXISTS idx_char_face_embeddings_char
+          ON character_face_embeddings(character_id, source_kind);
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

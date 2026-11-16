@@ -67,6 +67,29 @@ export function useQuickGenSubmit({
   const [isPromptFocused, setIsPromptFocused] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isInterrogating, setIsInterrogating] = useState(false);
+  const [modelMatchEnabled, setModelMatchEnabled] = useState<boolean>(() => {
+    try {
+      return (
+        typeof window !== 'undefined' &&
+        localStorage.getItem('couchy_quickgen_model_match') === '1'
+      );
+    } catch {
+      return false;
+    }
+  });
+  const [isMatchingFace, setIsMatchingFace] = useState(false);
+
+  const toggleModelMatch = () => {
+    setModelMatchEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('couchy_quickgen_model_match', next ? '1' : '0');
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  };
 
   const lastAppliedTimestampRef = useRef<number | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
@@ -322,10 +345,55 @@ export function useQuickGenSubmit({
       const matchedRatio = resolveClosestAspectRatio(width, height);
       setAspectRatio(matchedRatio);
 
+      // When Model Match mode is on and no subject is attached yet, scan faces and attach closest match first
+      let effectiveCharacter = attachedCharacter;
+      let matchedFaceInfo: { name: string; similarity: number } | null = null;
+
+      if (modelMatchEnabled && !effectiveCharacter) {
+        setIsMatchingFace(true);
+        try {
+          const matchRes = await api.matchCharacterFace({ imageBase64DataUrl: dataUrl });
+          if (matchRes.matched && matchRes.character) {
+            effectiveCharacter = matchRes.character;
+            setAttachedCharacter(matchRes.character);
+            setCharacterLoraStrength(1.0);
+            setRemovedLoraKeys((prev) => {
+              const next = new Set(prev);
+              for (const cl of matchRes.character!.loras) {
+                next.delete(normalizeLoraKey(cl.loraName));
+              }
+              return next;
+            });
+            matchedFaceInfo = {
+              name: matchRes.character.name,
+              similarity: matchRes.similarity ?? 0,
+            };
+          } else if (matchRes.indexedCharactersCount === 0) {
+            onPushToast('Model Match: No character portraits indexed yet.', 'info');
+          } else if (matchRes.facesDetected === 0) {
+            onPushToast('Model Match: No face detected in uploaded image.', 'info');
+          } else if (matchRes.bestCandidate) {
+            onPushToast(
+              `Model Match: No close match (closest: ${matchRes.bestCandidate.characterName} at ${Math.round(
+                matchRes.bestCandidate.similarity * 100
+              )}%).`,
+              'info'
+            );
+          }
+        } catch (matchErr: any) {
+          onPushToast(
+            `Model Match skipped (${matchErr?.message || 'face scan unavailable'}).`,
+            'warning'
+          );
+        } finally {
+          setIsMatchingFace(false);
+        }
+      }
+
       const existingHint = prompt.trim();
       const res = await api.interrogateImage({
         imageBase64DataUrl: dataUrl,
-        characterName: attachedCharacter?.name,
+        characterName: effectiveCharacter?.name,
         userHint: existingHint || undefined,
       });
 
@@ -337,12 +405,16 @@ export function useQuickGenSubmit({
         setPrompt(res.prompt);
         pulseHighlight(1200);
         const modeLabel = res.pipelineUsed === 'vision' ? 'Vision Model' : 'WD14 + LLM';
-        onPushToast(`Interrogated image via ${modeLabel} (${matchedRatio})`, 'success');
+        const prefix = matchedFaceInfo
+          ? `Matched ${matchedFaceInfo.name} (${Math.round(matchedFaceInfo.similarity * 100)}%) · `
+          : '';
+        onPushToast(`${prefix}Interrogated image via ${modeLabel} (${matchedRatio})`, 'success');
         focusInputAtEnd(50, false);
       }
     } catch (err: any) {
       onPushToast(err?.message || 'Failed to interrogate uploaded image.', 'error');
     } finally {
+      setIsMatchingFace(false);
       setIsInterrogating(false);
     }
   };
@@ -832,6 +904,9 @@ export function useQuickGenSubmit({
     setIsPromptFocused,
     isSubmitting,
     isInterrogating,
+    modelMatchEnabled,
+    isMatchingFace,
+    toggleModelMatch,
     workflowDefaultMp,
     handleInterrogateImageFile,
     handleRemoveCharacter,

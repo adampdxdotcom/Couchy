@@ -12,6 +12,7 @@ import {
   runAssistedCharacterIdentificationForAll,
 } from '../services/characterService.ts';
 import { analyzeCharacterPortraitPhysicalTraits } from '../services/lmStudioService.ts';
+import { matchFaceToCharacter } from '../services/faceRecognitionService.ts';
 import { resolveImageDiskPath } from '../services/scannerService.ts';
 import { normalizePortraitCrop } from '../../shared/utils.ts';
 
@@ -552,6 +553,48 @@ charactersRouter.post('/associations/bulk-status', (req, res) => {
     res.json({ ok: true, count: updatedCount });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || 'Failed to bulk update character associations' });
+  }
+});
+
+/**
+ * POST /api/characters/match-face
+ * Detects faces in an uploaded image and matches against cached character face embeddings.
+ */
+charactersRouter.post('/match-face', async (req, res) => {
+  try {
+    const { imageBase64DataUrl, minSimilarity } = req.body || {};
+    if (!imageBase64DataUrl || typeof imageBase64DataUrl !== 'string') {
+      res.status(400).json({ error: 'imageBase64DataUrl is required' });
+      return;
+    }
+
+    const raw = imageBase64DataUrl.trim();
+    const match = raw.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+    const b64 = match ? match[1] : raw;
+    if (!b64) {
+      res.status(400).json({ error: 'Invalid or empty image payload' });
+      return;
+    }
+
+    const imageBuffer = Buffer.from(b64, 'base64');
+    const threshold =
+      typeof minSimilarity === 'number' && Number.isFinite(minSimilarity)
+        ? Math.max(0.1, Math.min(0.95, minSimilarity))
+        : undefined;
+
+    const result = await matchFaceToCharacter(imageBuffer, threshold);
+    const character = result.characterId ? getCharacterProfileById(result.characterId) : null;
+
+    res.json({
+      matched: Boolean(result.matched && character),
+      character,
+      similarity: result.similarity,
+      facesDetected: result.facesDetected,
+      indexedCharactersCount: result.indexedCharactersCount,
+      bestCandidate: result.bestCandidate,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Face matching failed' });
   }
 });
 

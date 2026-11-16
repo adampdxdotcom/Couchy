@@ -8,6 +8,7 @@ import {
   ImagePlus,
   Loader2,
   Plus,
+  ScanFace,
   Sliders,
   X,
 } from 'lucide-react';
@@ -357,7 +358,11 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               {submitState.isInterrogating ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />
-                  <span>Downscaling to 1MP &amp; interrogating image via Local LLM...</span>
+                  <span>
+                    {submitState.isMatchingFace
+                      ? 'Scanning face for Model Match & interrogating image...'
+                      : 'Downscaling to 1MP & interrogating image via Local LLM...'}
+                  </span>
                 </>
               ) : (
                 <>
@@ -521,6 +526,32 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               ) : (
                 <ImagePlus className="w-4 h-4" />
               )}
+            </button>
+
+            <button
+              type="button"
+              disabled={!lmStudioOnline || submitState.isInterrogating}
+              onClick={() => {
+                if (!lmStudioOnline || submitState.isInterrogating) return;
+                submitState.toggleModelMatch();
+              }}
+              aria-pressed={submitState.modelMatchEnabled}
+              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 ${
+                !lmStudioOnline
+                  ? 'opacity-40 cursor-not-allowed bg-zinc-800/50 text-zinc-500 border border-transparent'
+                  : submitState.modelMatchEnabled
+                  ? 'bg-indigo-600/25 border border-indigo-500/60 text-indigo-200 cursor-pointer'
+                  : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-transparent cursor-pointer'
+              }`}
+              title={
+                lmStudioOnline
+                  ? 'Model Match: if no character is selected when you paste/upload an image, scan faces and auto-attach the closest matching character'
+                  : 'Local LLM is offline — connect a Local LLM to use Model Match'
+              }
+            >
+              <ScanFace className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">Model Match</span>
+              <span className="sm:hidden">Match</span>
             </button>
 
             <button
