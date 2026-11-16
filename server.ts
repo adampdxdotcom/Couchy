@@ -26,15 +26,17 @@ import {
   scanAndCleanCopiedDownloads,
   startModelCleanupScheduler,
 } from './src/server/services/modelCleanupService.ts';
+import { startLoraHeadshotWatcher } from './src/server/services/characterDownloadAutomationService.ts';
 
 async function startServer() {
   // 1. Run SQLite schema migrations & one-time prompt backfill
   runMigrations();
   backfillMissingImagePrompts(false);
 
-  // 2. Start filesystem monitoring, scheduled download worker & model cleanup scheduler
+  // 2. Start filesystem monitoring, scheduled download worker, headshot watcher & model cleanup scheduler
   startFilesystemWatcher();
   startDownloadScheduler();
+  startLoraHeadshotWatcher();
   startModelCleanupScheduler();
 
   const app = express();

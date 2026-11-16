@@ -10,7 +10,9 @@ import {
   formatUnlockCountdown,
   formatUnlockLocalTime,
 } from './models/earlyAccessUtils.ts';
+import { CharacterLoraDownloadOptions } from './models/CharacterLoraDownloadOptions.tsx';
 import type {
+  CharacterDownloadAutomation,
   ComfyModelSubfolder,
   ExternalModelFileOption,
   ExternalModelSearchResult,
@@ -77,6 +79,8 @@ interface ModelDownloadConfirmModalProps {
   setDlSubfolder: (folder: ComfyModelSubfolder) => void;
   loraCategory: LoraCategory;
   setLoraCategory: (cat: LoraCategory) => void;
+  characterAutomation?: CharacterDownloadAutomation;
+  setCharacterAutomation?: (next: CharacterDownloadAutomation) => void;
   pillTypeSettings?: PillTypeSettings;
   customFilename: string;
   setCustomFilename: (name: string) => void;
@@ -104,6 +108,8 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
   setDlSubfolder,
   loraCategory,
   setLoraCategory,
+  characterAutomation,
+  setCharacterAutomation,
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   customFilename,
   setCustomFilename,
@@ -349,32 +355,45 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
           </div>
 
           {dlSubfolder === 'loras' && (
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-950/70 border border-zinc-800 rounded-lg px-3.5 py-2.5">
-              <div className="flex items-center gap-2">
-                <span className={`w-2 h-2 rounded-full ${categoryStyle.swatchBg}`} />
-                <label className="text-zinc-300 font-medium">LoRA Category</label>
-                {pendingDownload.suggestedLoraCategory &&
-                  pendingDownload.suggestedLoraCategory !== 'unclassified' &&
-                  loraCategory === pendingDownload.suggestedLoraCategory && (
-                    <span
-                      className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${categoryStyle.badge}`}
-                    >
-                      Auto-detected
-                    </span>
-                  )}
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-950/70 border border-zinc-800 rounded-lg px-3.5 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${categoryStyle.swatchBg}`} />
+                  <label className="text-zinc-300 font-medium">LoRA Category</label>
+                  {pendingDownload.suggestedLoraCategory &&
+                    pendingDownload.suggestedLoraCategory !== 'unclassified' &&
+                    loraCategory === pendingDownload.suggestedLoraCategory && (
+                      <span
+                        className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${categoryStyle.badge}`}
+                      >
+                        Auto-detected
+                      </span>
+                    )}
+                </div>
+                <select
+                  value={loraCategory}
+                  onChange={(e) => setLoraCategory(e.target.value as LoraCategory)}
+                  aria-label="LoRA Category before download"
+                  className="px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 cursor-pointer focus:outline-none focus:border-indigo-500"
+                >
+                  {LORA_CATEGORY_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <select
-                value={loraCategory}
-                onChange={(e) => setLoraCategory(e.target.value as LoraCategory)}
-                aria-label="LoRA Category before download"
-                className="px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 cursor-pointer focus:outline-none focus:border-indigo-500"
-              >
-                {LORA_CATEGORY_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+
+              {loraCategory === 'character' &&
+                !pendingDownload.isInstalled &&
+                characterAutomation &&
+                setCharacterAutomation && (
+                  <CharacterLoraDownloadOptions
+                    value={characterAutomation}
+                    onChange={setCharacterAutomation}
+                    disabled={isSubmitting}
+                  />
+                )}
             </div>
           )}
 

@@ -34,8 +34,10 @@ import {
   classifyLoraFromMetadata,
   classifySafetensorsHeaderOnDisk,
 } from './loraClassifierService.ts';
+import { handleDownloadedCharacterLoraAutomation } from './characterDownloadAutomationService.ts';
 import { VALID_LORA_CATEGORIES } from '../../shared/pillSettings.ts';
 import type {
+  CharacterDownloadAutomation,
   ComfyModelSubfolder,
   ExternalModelFileOption,
   ExternalModelSearchResult,
@@ -433,6 +435,7 @@ export interface ScheduledDownloadPayload {
   hfRepoId?: string | null;
   civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
   loraCategory?: LoraCategory | null;
+  characterAutomation?: CharacterDownloadAutomation | null;
   retryCount?: number;
 }
 
@@ -447,6 +450,7 @@ export interface ExecuteDownloadJobParams {
   hfRepoId?: string | null;
   civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
   loraCategory?: LoraCategory | null;
+  characterAutomation?: CharacterDownloadAutomation | null;
   /** When true, caller handles HTTP 401/403 re-scheduling instead of marking failed immediately. */
   deferAuthErrorToCaller?: boolean;
 }
@@ -680,6 +684,19 @@ export async function executeDownloadJob(
     }
 
     await syncModelInventory();
+
+    if (
+      params.effectiveModelType === 'lora' &&
+      resolvedLoraCategory === 'character' &&
+      params.characterAutomation?.addCharacter
+    ) {
+      await handleDownloadedCharacterLoraAutomation({
+        downloadJobId: jobId,
+        loraFilename: params.safeFilename,
+        recommendedWeight: params.civitaiMeta?.recommendedWeight ?? null,
+        automation: params.characterAutomation,
+      }).catch(() => {});
+    }
   } catch (err: any) {
     if (fs.existsSync(partPath)) {
       try {
@@ -716,6 +733,7 @@ export async function startConfirmedModelDownload(params: {
   hfRepoId?: string | null;
   civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
   loraCategory?: LoraCategory | null;
+  characterAutomation?: CharacterDownloadAutomation | null;
   scheduledFor?: string | null;
 }): Promise<any> {
   // Sanitize filename and subfolder against path traversal
@@ -766,12 +784,25 @@ export async function startConfirmedModelDownload(params: {
       ? params.loraCategory
       : null;
 
+  const normalizedCharacterAutomation: CharacterDownloadAutomation | null =
+    effectiveModelType === 'lora' &&
+    normalizedLoraCategory === 'character' &&
+    params.characterAutomation?.addCharacter
+      ? {
+          addCharacter: true,
+          generateHeadshot: Boolean(params.characterAutomation.generateHeadshot),
+          characterName: String(params.characterAutomation.characterName || '').trim(),
+          triggerWord: String(params.characterAutomation.triggerWord || '').trim(),
+        }
+      : null;
+
   const payloadJson = JSON.stringify({
     subfolder: safeSubfolder,
     allowOverwrite: Boolean(params.allowOverwrite),
     hfRepoId: params.hfRepoId || null,
     civitaiMeta: params.civitaiMeta || null,
     loraCategory: normalizedLoraCategory,
+    characterAutomation: normalizedCharacterAutomation,
     retryCount: 0,
   } satisfies ScheduledDownloadPayload);
 
@@ -809,6 +840,7 @@ export async function startConfirmedModelDownload(params: {
         hfRepoId: params.hfRepoId || null,
         civitaiMeta: params.civitaiMeta || null,
         loraCategory: normalizedLoraCategory,
+        characterAutomation: normalizedCharacterAutomation,
       }).catch(() => {});
     });
   }

@@ -688,6 +688,29 @@ export function runMigrations(): void {
         CREATE INDEX IF NOT EXISTS idx_images_uploaded_ref ON images(is_uploaded_reference);
       `,
     },
+    {
+      version: 24,
+      name: 'pending_lora_character_headshot_tasks',
+      sql: `
+        CREATE TABLE IF NOT EXISTS pending_lora_character_tasks (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          download_job_id INTEGER REFERENCES download_jobs(id) ON DELETE SET NULL,
+          lora_filename TEXT NOT NULL,
+          character_name TEXT NOT NULL,
+          trigger_word TEXT NOT NULL DEFAULT '',
+          recommended_weight REAL,
+          generate_headshot INTEGER NOT NULL DEFAULT 1,
+          character_id INTEGER REFERENCES characters(id) ON DELETE CASCADE,
+          status TEXT NOT NULL DEFAULT 'awaiting_comfy',
+          generation_item_id INTEGER,
+          error_message TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_pending_lora_char_status
+          ON pending_lora_character_tasks(status);
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

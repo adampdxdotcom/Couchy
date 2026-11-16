@@ -115,6 +115,7 @@ modelDownloadsRouter.post('/downloads/start', async (req, res) => {
       hfRepoId,
       civitaiMeta,
       loraCategory,
+      characterAutomation,
       scheduledFor,
     } = req.body || {};
 
@@ -142,6 +143,15 @@ modelDownloadsRouter.post('/downloads/start', async (req, res) => {
       hfRepoId: hfRepoId || null,
       civitaiMeta: civitaiMeta || null,
       loraCategory: validatedCategory,
+      characterAutomation:
+        characterAutomation && typeof characterAutomation === 'object'
+          ? {
+              addCharacter: Boolean(characterAutomation.addCharacter),
+              generateHeadshot: Boolean(characterAutomation.generateHeadshot),
+              characterName: String(characterAutomation.characterName || ''),
+              triggerWord: String(characterAutomation.triggerWord || ''),
+            }
+          : null,
       scheduledFor: scheduledFor || null,
     });
     res.json({ job });

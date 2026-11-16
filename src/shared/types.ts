@@ -322,6 +322,13 @@ export interface ExternalModelSearchResult extends ExternalModelInstalledInfo {
   } | null;
 }
 
+export interface CharacterDownloadAutomation {
+  addCharacter: boolean;
+  generateHeadshot: boolean;
+  characterName: string;
+  triggerWord?: string;
+}
+
 export interface LoraExplorerItem {
   name: string;
   modelId: number | null;

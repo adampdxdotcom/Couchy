@@ -99,8 +99,24 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
     description: string;
     physicalDescription: string;
     notes: string;
+    loraName?: string;
+    triggerWord?: string;
   }) => {
-    await api.createCharacter(data);
+    const { loraName, triggerWord, ...profileData } = data;
+    const res = await api.createCharacter(profileData);
+    if (loraName) {
+      try {
+        await api.linkLoraToCharacter(res.character.id, {
+          loraName,
+          appearanceLabel: 'Default',
+          triggerWord: triggerWord?.trim() || '',
+          loraCategory: 'character',
+        });
+      } catch (err) {
+        await onRefresh();
+        throw err;
+      }
+    }
     await onRefresh();
   };
 
@@ -275,6 +291,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
 
       <CreateCharacterModal
         isOpen={showCreateModal}
+        loras={loras}
         onClose={() => setShowCreateModal(false)}
         onSubmit={handleCreateCharacter}
       />

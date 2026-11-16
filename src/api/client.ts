@@ -1,5 +1,6 @@
 import type {
   AspectRatioPreset,
+  CharacterDownloadAutomation,
   CharacterProfile,
   ComfyUiLiveStatus,
   ExternalModelFileOption,
@@ -419,6 +420,7 @@ export const api = {
     hfRepoId?: string | null;
     civitaiMeta?: Record<string, any> | null;
     loraCategory?: LoraCategory | null;
+    characterAutomation?: CharacterDownloadAutomation | null;
     scheduledFor?: string | null;
   }) =>
     requestJson<{ job: any }>('/api/downloads/start', {

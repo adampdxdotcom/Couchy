@@ -41,6 +41,7 @@ function parseJobPayload(raw: string | null | undefined): ScheduledDownloadPaylo
       hfRepoId: parsed?.hfRepoId ?? null,
       civitaiMeta: parsed?.civitaiMeta ?? null,
       loraCategory,
+      characterAutomation: parsed?.characterAutomation ?? null,
       retryCount: typeof parsed?.retryCount === 'number' ? parsed.retryCount : 0,
     };
   } catch {
@@ -177,6 +178,7 @@ async function runClaimedScheduledJob(job: any, skipEarlyAccessRefresh = false):
       hfRepoId: payload.hfRepoId || null,
       civitaiMeta: payload.civitaiMeta || null,
       loraCategory: payload.loraCategory ?? null,
+      characterAutomation: payload.characterAutomation ?? null,
       deferAuthErrorToCaller: !skipEarlyAccessRefresh,
     });
   } catch (err: any) {

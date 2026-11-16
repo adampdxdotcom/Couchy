@@ -30,7 +30,12 @@ import {
   COMFY_SUBFOLDER_OPTIONS,
   ModelDownloadConfirmModal,
 } from './ModelDownloadConfirmModal.tsx';
+import {
+  CharacterLoraDownloadOptions,
+  deriveDefaultCharacterAutomation,
+} from './models/CharacterLoraDownloadOptions.tsx';
 import type {
+  CharacterDownloadAutomation,
   ComfyModelSubfolder,
   ExternalModelFileOption,
   ExternalModelSearchResult,
@@ -185,10 +190,21 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   const [selectedCategoryByCard, setSelectedCategoryByCard] = useState<
     Record<string, LoraCategory>
   >({});
+  const [characterAutoByCard, setCharacterAutoByCard] = useState<
+    Record<string, CharacterDownloadAutomation>
+  >({});
+  const [pendingCharacterAutomation, setPendingCharacterAutomation] =
+    useState<CharacterDownloadAutomation>({
+      addCharacter: true,
+      generateHeadshot: true,
+      characterName: '',
+      triggerWord: '',
+    });
 
   useEffect(() => {
     setSelectedVersionByCard({});
     setSelectedCategoryByCard({});
+    setCharacterAutoByCard({});
   }, [searchBatchTimestamp]);
 
   const getCategoryMapKey = (cardKey: string, versionId?: string | null) =>
@@ -206,6 +222,14 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       return item.installedLoraCategory;
     }
     return item.suggestedLoraCategory || 'unclassified';
+  };
+
+  const getEffectiveCharacterAutomation = (
+    item: ExternalModelSearchResult,
+    cardKey: string
+  ): CharacterDownloadAutomation => {
+    const mapKey = getCategoryMapKey(cardKey, item.versionId);
+    return characterAutoByCard[mapKey] || deriveDefaultCharacterAutomation(item);
   };
 
   const handleInspectInstalledItem = (target: ExternalModelSearchResult) => {
@@ -264,6 +288,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     setSelectedFile(initialFile);
     setDlSubfolder(initialFolder);
     setPendingLoraCategory(getEffectiveCardCategory(item, cardKey));
+    setPendingCharacterAutomation(getEffectiveCharacterAutomation(item, cardKey));
     setCustomFilename(initialFile?.filename || item.filename);
     setAllowOverwrite(preferOverwrite);
     setScheduleDownload(shouldSchedule);
@@ -341,6 +366,10 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
               }
             : null,
         loraCategory: chosenCategory,
+        characterAutomation:
+          chosenCategory === 'character' && !item.isInstalled
+            ? getEffectiveCharacterAutomation(item, cardKey)
+            : null,
         scheduledFor: scheduledForIso || null,
       });
       if (res?.job?.id) {
@@ -419,6 +448,12 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
               }
             : null,
         loraCategory: effectiveType === 'lora' ? pendingLoraCategory : null,
+        characterAutomation:
+          effectiveType === 'lora' &&
+          pendingLoraCategory === 'character' &&
+          !pendingDownload.isInstalled
+            ? pendingCharacterAutomation
+            : null,
         scheduledFor: scheduledForIso,
       });
       if (res?.job?.id) {
@@ -857,52 +892,71 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                           Boolean(item.isInstalled && item.installedFilename) &&
                           activeCategory !== (item.installedLoraCategory || 'unclassified');
 
+                        const charAuto = getEffectiveCharacterAutomation(item, cardKey);
+                        const showCharAutomation =
+                          !item.isInstalled && activeCategory === 'character';
+
                         return (
-                          <div className="flex flex-wrap items-center justify-between gap-2 bg-zinc-950/60 border border-zinc-800/80 rounded-lg px-3 py-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span
-                                className={`w-2 h-2 rounded-full shrink-0 ${catStyle.swatchBg}`}
-                              />
-                              <span className="text-zinc-400">LoRA Category:</span>
-                              <select
-                                value={activeCategory}
-                                disabled={isDownloadingNow}
-                                onChange={(e) => {
-                                  const nextCat = e.target.value as LoraCategory;
-                                  setSelectedCategoryByCard((prev) => ({
-                                    ...prev,
-                                    [catMapKey]: nextCat,
-                                  }));
-                                }}
-                                aria-label={`LoRA Category for ${item.name}`}
-                                className="px-2.5 py-1 bg-zinc-900 border border-zinc-700 hover:border-indigo-500/60 disabled:opacity-60 rounded-md text-zinc-100 cursor-pointer focus:outline-none focus:border-indigo-500"
-                              >
-                                {LORA_CATEGORY_OPTIONS.map((opt) => (
-                                  <option key={opt.value} value={opt.value}>
-                                    {opt.label}
-                                  </option>
-                                ))}
-                              </select>
-                              {isAutoAssigned && (
+                          <div className="space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2 bg-zinc-950/60 border border-zinc-800/80 rounded-lg px-3 py-2">
+                              <div className="flex flex-wrap items-center gap-2">
                                 <span
-                                  className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${catStyle.badge}`}
+                                  className={`w-2 h-2 rounded-full shrink-0 ${catStyle.swatchBg}`}
+                                />
+                                <span className="text-zinc-400">LoRA Category:</span>
+                                <select
+                                  value={activeCategory}
+                                  disabled={isDownloadingNow}
+                                  onChange={(e) => {
+                                    const nextCat = e.target.value as LoraCategory;
+                                    setSelectedCategoryByCard((prev) => ({
+                                      ...prev,
+                                      [catMapKey]: nextCat,
+                                    }));
+                                  }}
+                                  aria-label={`LoRA Category for ${item.name}`}
+                                  className="px-2.5 py-1 bg-zinc-900 border border-zinc-700 hover:border-indigo-500/60 disabled:opacity-60 rounded-md text-zinc-100 cursor-pointer focus:outline-none focus:border-indigo-500"
                                 >
-                                  Auto-detected
-                                </span>
+                                  {LORA_CATEGORY_OPTIONS.map((opt) => (
+                                    <option key={opt.value} value={opt.value}>
+                                      {opt.label}
+                                    </option>
+                                  ))}
+                                </select>
+                                {isAutoAssigned && (
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${catStyle.badge}`}
+                                  >
+                                    Auto-detected
+                                  </span>
+                                )}
+                              </div>
+
+                              {hasUnsavedInstalledChange && (
+                                <button
+                                  type="button"
+                                  disabled={savingCategoryKey === cardKey}
+                                  onClick={() =>
+                                    handleSaveInstalledCategory(item, cardKey, activeCategory)
+                                  }
+                                  className="px-2.5 py-1 rounded-md bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-200 text-[11px] font-medium cursor-pointer disabled:opacity-50"
+                                >
+                                  {savingCategoryKey === cardKey ? 'Saving...' : 'Save to Installed'}
+                                </button>
                               )}
                             </div>
 
-                            {hasUnsavedInstalledChange && (
-                              <button
-                                type="button"
-                                disabled={savingCategoryKey === cardKey}
-                                onClick={() =>
-                                  handleSaveInstalledCategory(item, cardKey, activeCategory)
+                            {showCharAutomation && (
+                              <CharacterLoraDownloadOptions
+                                value={charAuto}
+                                disabled={isDownloadingNow}
+                                onChange={(nextAuto) =>
+                                  setCharacterAutoByCard((prev) => ({
+                                    ...prev,
+                                    [catMapKey]: nextAuto,
+                                  }))
                                 }
-                                className="px-2.5 py-1 rounded-md bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-200 text-[11px] font-medium cursor-pointer disabled:opacity-50"
-                              >
-                                {savingCategoryKey === cardKey ? 'Saving...' : 'Save to Installed'}
-                              </button>
+                              />
                             )}
                           </div>
                         );
@@ -1102,6 +1156,8 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
           setDlSubfolder={setDlSubfolder}
           loraCategory={pendingLoraCategory}
           setLoraCategory={setPendingLoraCategory}
+          characterAutomation={pendingCharacterAutomation}
+          setCharacterAutomation={setPendingCharacterAutomation}
           pillTypeSettings={pillTypeSettings}
           customFilename={customFilename}
           setCustomFilename={setCustomFilename}
