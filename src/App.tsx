@@ -1003,6 +1003,7 @@ export default function App() {
             loras={loras}
             models={models}
             allImages={allImages}
+            pillTypeSettings={pillTypeSettings}
             onRefresh={refreshAll}
             onOpenImage={(img) => setInspectedImageId(img.id)}
             onFilterGalleryByLora={(loraFilename) => {

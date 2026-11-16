@@ -12,12 +12,14 @@ import {
   rewriteCivitaiDownloadUrl,
   type CivitaiDomain,
 } from './civitaiMetadataService.ts';
+import { classifyLoraFromMetadata } from './loraClassifierService.ts';
 import type {
   ComfyModelSubfolder,
   ExternalModelFileOption,
   ExternalModelInstalledInfo,
   ExternalModelSearchResult,
   ExternalModelVersionOption,
+  LoraCategory,
   ModelType,
 } from '../../shared/types.ts';
 
@@ -236,6 +238,23 @@ export function buildCivitaiVersionOption(
     meta.baseModel
   );
 
+  const parentTags = Array.isArray(parentModel?.tags)
+    ? parentModel.tags
+    : Array.isArray(versionObj?.model?.tags)
+    ? versionObj.model.tags
+    : [];
+  const suggestedLoraCategory: LoraCategory | null =
+    inferred.modelType === 'lora'
+      ? classifyLoraFromMetadata({
+          name: parentModel?.name || versionObj?.model?.name || versionObj?.name,
+          filename: primaryFile.filename,
+          tags: parentTags,
+          trainedWords: meta.trainedWords,
+          description: meta.civitaiDescription,
+          baseModel: meta.baseModel,
+        })
+      : null;
+
   return {
     versionId: meta.civitaiVersionId || String(versionObj.id),
     versionName: versionObj.name || 'Latest',
@@ -252,6 +271,7 @@ export function buildCivitaiVersionOption(
     downloadUrl: primaryFile.downloadUrl,
     modelType: inferred.modelType,
     suggestedSubfolder: inferred.suggestedSubfolder,
+    suggestedLoraCategory,
     subfolderHint: inferred.subfolderHint || null,
     availableFiles,
     ...earlyAccess,
@@ -297,7 +317,7 @@ export function annotateInstalledSearchResults(
 
   const installedRows = db
     .prepare(
-      `SELECT id, filename, model_type, sha256_hash, autov2_hash, civitai_version_id
+      `SELECT id, filename, model_type, lora_category, sha256_hash, autov2_hash, civitai_version_id
        FROM models
        WHERE is_installed = 1`
     )
@@ -305,6 +325,7 @@ export function annotateInstalledSearchResults(
     id: number;
     filename: string;
     model_type: string;
+    lora_category: string | null;
     sha256_hash: string | null;
     autov2_hash: string | null;
     civitai_version_id: string | null;
@@ -344,6 +365,7 @@ export function annotateInstalledSearchResults(
           installedModelId: m.id,
           installedFilename: m.filename,
           installedModelType: m.model_type as ModelType,
+          installedLoraCategory: (m.lora_category as LoraCategory) || 'unclassified',
           installedMatchReason: 'hash',
         };
       }
@@ -357,6 +379,7 @@ export function annotateInstalledSearchResults(
           installedModelId: m.id,
           installedFilename: m.filename,
           installedModelType: m.model_type as ModelType,
+          installedLoraCategory: (m.lora_category as LoraCategory) || 'unclassified',
           installedMatchReason: 'version_id',
         };
       }
@@ -370,6 +393,7 @@ export function annotateInstalledSearchResults(
           installedModelId: m.id,
           installedFilename: m.filename,
           installedModelType: m.model_type as ModelType,
+          installedLoraCategory: (m.lora_category as LoraCategory) || 'unclassified',
           installedMatchReason: 'filename',
         };
       }
@@ -380,6 +404,7 @@ export function annotateInstalledSearchResults(
       installedModelId: null,
       installedFilename: null,
       installedModelType: null,
+      installedLoraCategory: null,
       installedMatchReason: null,
     };
   };
@@ -565,6 +590,15 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
           )
         : null) || repoData.files[0];
 
+    const suggestedLoraCategory: LoraCategory | null =
+      matchedFile.modelType === 'lora'
+        ? classifyLoraFromMetadata({
+            name: repoData.repoId,
+            filename: matchedFile.filename,
+            tags: repoData.tags,
+          })
+        : null;
+
     return annotateInstalledSearchResults([
       {
         provider: 'huggingface',
@@ -573,6 +607,7 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
         name: repoData.repoId,
         modelType: matchedFile.modelType,
         suggestedSubfolder: matchedFile.suggestedSubfolder,
+        suggestedLoraCategory,
         versionName: hfParsed.branch,
         filename: matchedFile.filename,
         fileSize: matchedFile.fileSize,
@@ -673,6 +708,7 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
       name: parentModel?.name || targetVer.model?.name || activeVersion.filename,
       modelType: activeVersion.modelType,
       suggestedSubfolder: activeVersion.suggestedSubfolder,
+      suggestedLoraCategory: activeVersion.suggestedLoraCategory ?? null,
       subfolderHint: activeVersion.subfolderHint || null,
       versionName: activeVersion.versionName,
       baseModel: activeVersion.baseModel,
@@ -709,6 +745,14 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
       : `${rawBasename}.safetensors`;
     const inferred = inferSubfolderAndTypeFromPath(parsedUrl.pathname);
 
+    const suggestedLoraCategory: LoraCategory | null =
+      inferred.modelType === 'lora'
+        ? classifyLoraFromMetadata({
+            name: cleanFilename,
+            filename: cleanFilename,
+          })
+        : null;
+
     return annotateInstalledSearchResults([
       {
         provider: 'direct',
@@ -716,6 +760,7 @@ export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalM
         name: cleanFilename.replace(/\.(safetensors|gguf|ckpt|pt|pth|bin|sft)$/i, ''),
         modelType: inferred.modelType,
         suggestedSubfolder: inferred.suggestedSubfolder,
+        suggestedLoraCategory,
         versionName: 'Direct URL',
         filename: cleanFilename,
         fileSize: null,

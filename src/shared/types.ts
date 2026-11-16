@@ -254,6 +254,7 @@ export interface ExternalModelInstalledInfo {
   installedModelId?: number | null;
   installedFilename?: string | null;
   installedModelType?: ModelType | null;
+  installedLoraCategory?: LoraCategory | null;
   installedMatchReason?: 'hash' | 'version_id' | 'filename' | null;
 }
 
@@ -273,6 +274,7 @@ export interface ExternalModelVersionOption extends ExternalModelInstalledInfo {
   downloadUrl: string;
   modelType: ModelType;
   suggestedSubfolder: ComfyModelSubfolder;
+  suggestedLoraCategory?: LoraCategory | null;
   subfolderHint?: string | null;
   availableFiles: ExternalModelFileOption[];
   earlyAccessEndsAt?: string | null;
@@ -293,6 +295,7 @@ export interface ExternalModelSearchResult extends ExternalModelInstalledInfo {
   name: string;
   modelType: ModelType;
   suggestedSubfolder?: ComfyModelSubfolder;
+  suggestedLoraCategory?: LoraCategory | null;
   subfolderHint?: string | null;
   versionName: string;
   baseModel?: string | null;

@@ -14,7 +14,8 @@ import {
   executeDownloadJob,
   type ScheduledDownloadPayload,
 } from './modelManagerService.ts';
-import type { ModelType } from '../../shared/types.ts';
+import { VALID_LORA_CATEGORIES } from '../../shared/pillSettings.ts';
+import type { LoraCategory, ModelType } from '../../shared/types.ts';
 
 const SCHEDULER_INTERVAL_MS = 30_000;
 const MAX_UNLOCK_RETRIES = 3;
@@ -29,11 +30,17 @@ function parseJobPayload(raw: string | null | undefined): ScheduledDownloadPaylo
   }
   try {
     const parsed = JSON.parse(raw);
+    const rawCategory = parsed?.loraCategory;
+    const loraCategory =
+      typeof rawCategory === 'string' && VALID_LORA_CATEGORIES.has(rawCategory as LoraCategory)
+        ? (rawCategory as LoraCategory)
+        : null;
     return {
       subfolder: parsed?.subfolder || 'checkpoints',
       allowOverwrite: Boolean(parsed?.allowOverwrite),
       hfRepoId: parsed?.hfRepoId ?? null,
       civitaiMeta: parsed?.civitaiMeta ?? null,
+      loraCategory,
       retryCount: typeof parsed?.retryCount === 'number' ? parsed.retryCount : 0,
     };
   } catch {
@@ -169,6 +176,7 @@ async function runClaimedScheduledJob(job: any, skipEarlyAccessRefresh = false):
       expectedHash,
       hfRepoId: payload.hfRepoId || null,
       civitaiMeta: payload.civitaiMeta || null,
+      loraCategory: payload.loraCategory ?? null,
       deferAuthErrorToCaller: !skipEarlyAccessRefresh,
     });
   } catch (err: any) {

@@ -17,6 +17,8 @@ import {
   rescheduleFailedDownload,
   runScheduledDownloadNow,
 } from '../services/downloadSchedulerService.ts';
+import { VALID_LORA_CATEGORIES } from '../../shared/pillSettings.ts';
+import type { LoraCategory } from '../../shared/types.ts';
 
 export const modelDownloadsRouter = Router();
 
@@ -112,6 +114,7 @@ modelDownloadsRouter.post('/downloads/start', async (req, res) => {
       userConfirmed,
       hfRepoId,
       civitaiMeta,
+      loraCategory,
       scheduledFor,
     } = req.body || {};
 
@@ -121,6 +124,11 @@ modelDownloadsRouter.post('/downloads/start', async (req, res) => {
       });
       return;
     }
+
+    const validatedCategory: LoraCategory | null =
+      typeof loraCategory === 'string' && VALID_LORA_CATEGORIES.has(loraCategory as LoraCategory)
+        ? (loraCategory as LoraCategory)
+        : null;
 
     const job = await startConfirmedModelDownload({
       provider,
@@ -133,6 +141,7 @@ modelDownloadsRouter.post('/downloads/start', async (req, res) => {
       allowOverwrite: Boolean(allowOverwrite),
       hfRepoId: hfRepoId || null,
       civitaiMeta: civitaiMeta || null,
+      loraCategory: validatedCategory,
       scheduledFor: scheduledFor || null,
     });
     res.json({ job });

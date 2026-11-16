@@ -14,6 +14,11 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { formatBytes } from '../shared/utils.ts';
+import {
+  DEFAULT_PILL_TYPE_SETTINGS,
+  LORA_CATEGORY_OPTIONS,
+  resolveLoraCategoryStyle,
+} from '../shared/pillSettings.ts';
 import { DownloadHistoryList } from './models/DownloadHistoryList.tsx';
 import {
   formatUnlockCountdown,
@@ -29,7 +34,9 @@ import type {
   ComfyModelSubfolder,
   ExternalModelFileOption,
   ExternalModelSearchResult,
+  LoraCategory,
   ModelType,
+  PillTypeSettings,
 } from '../shared/types.ts';
 
 export interface ActivePreviewDownloadEntry {
@@ -54,6 +61,7 @@ interface ModelDownloaderTabProps {
   isSearchingExt: boolean;
   searchError: string | null;
   downloads: any[];
+  pillTypeSettings?: PillTypeSettings;
   onSearch: (e?: React.FormEvent, customQ?: string) => Promise<void>;
   onRefreshDownloads: () => Promise<void>;
   onInspectDownload?: (job: any) => void;
@@ -118,6 +126,7 @@ function applySelectedVersion(
     downloadUrl: match.downloadUrl,
     modelType: match.modelType,
     suggestedSubfolder: match.suggestedSubfolder,
+    suggestedLoraCategory: match.suggestedLoraCategory ?? item.suggestedLoraCategory ?? null,
     subfolderHint: match.subfolderHint ?? null,
     availableFiles: match.availableFiles,
     totalRepoFilesCount: match.availableFiles.length,
@@ -129,6 +138,7 @@ function applySelectedVersion(
     installedModelId: match.installedModelId ?? null,
     installedFilename: match.installedFilename ?? null,
     installedModelType: match.installedModelType ?? null,
+    installedLoraCategory: match.installedLoraCategory ?? null,
     installedMatchReason: match.installedMatchReason ?? null,
   };
 }
@@ -150,6 +160,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   isSearchingExt,
   searchError,
   downloads,
+  pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   onSearch,
   onRefreshDownloads,
   onInspectDownload,
@@ -159,6 +170,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   const [selectedFile, setSelectedFile] = useState<ExternalModelFileOption | null>(null);
   const [isLoadingRepoFiles, setIsLoadingRepoFiles] = useState(false);
   const [dlSubfolder, setDlSubfolder] = useState<ComfyModelSubfolder>('loras');
+  const [pendingLoraCategory, setPendingLoraCategory] = useState<LoraCategory>('unclassified');
   const [customFilename, setCustomFilename] = useState('');
   const [allowOverwrite, setAllowOverwrite] = useState(false);
   const [scheduleDownload, setScheduleDownload] = useState(false);
@@ -166,13 +178,35 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   const [dlError, setDlError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [directStartingKey, setDirectStartingKey] = useState<string | null>(null);
+  const [savingCategoryKey, setSavingCategoryKey] = useState<string | null>(null);
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
   const [selectedPreviewIdx, setSelectedPreviewIdx] = useState<Record<string, number>>({});
   const [selectedVersionByCard, setSelectedVersionByCard] = useState<Record<string, string>>({});
+  const [selectedCategoryByCard, setSelectedCategoryByCard] = useState<
+    Record<string, LoraCategory>
+  >({});
 
   useEffect(() => {
     setSelectedVersionByCard({});
+    setSelectedCategoryByCard({});
   }, [searchBatchTimestamp]);
+
+  const getCategoryMapKey = (cardKey: string, versionId?: string | null) =>
+    `${cardKey}-${versionId || 'default'}`;
+
+  const getEffectiveCardCategory = (
+    item: ExternalModelSearchResult,
+    cardKey: string
+  ): LoraCategory => {
+    const mapKey = getCategoryMapKey(cardKey, item.versionId);
+    if (selectedCategoryByCard[mapKey]) {
+      return selectedCategoryByCard[mapKey];
+    }
+    if (item.isInstalled && item.installedLoraCategory && item.installedLoraCategory !== 'unclassified') {
+      return item.installedLoraCategory;
+    }
+    return item.suggestedLoraCategory || 'unclassified';
+  };
 
   const handleInspectInstalledItem = (target: ExternalModelSearchResult) => {
     if (!onInspectDownload) return;
@@ -225,9 +259,11 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     const shouldSchedule =
       preferSchedule !== undefined ? preferSchedule : Boolean(item.isEarlyAccessActive);
     const defaultIso = getSuggestedScheduledIso(item.earlyAccessEndsAt);
+    const cardKey = getDownloaderCardKey(item);
     setPendingDownload(item);
     setSelectedFile(initialFile);
     setDlSubfolder(initialFolder);
+    setPendingLoraCategory(getEffectiveCardCategory(item, cardKey));
     setCustomFilename(initialFile?.filename || item.filename);
     setAllowOverwrite(preferOverwrite);
     setScheduleDownload(shouldSchedule);
@@ -279,6 +315,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     try {
       const primary = item.availableFiles?.[0];
       const targetFilename = primary?.filename || item.filename;
+      const chosenCategory = getEffectiveCardCategory(item, cardKey);
       const res = await api.startModelDownload({
         provider: item.provider,
         modelName: item.name,
@@ -303,6 +340,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                 previewImages: item.previewImages || [],
               }
             : null,
+        loraCategory: chosenCategory,
         scheduledFor: scheduledForIso || null,
       });
       if (res?.job?.id) {
@@ -380,6 +418,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                 previewImages: pendingDownload.previewImages || [],
               }
             : null,
+        loraCategory: effectiveType === 'lora' ? pendingLoraCategory : null,
         scheduledFor: scheduledForIso,
       });
       if (res?.job?.id) {
@@ -409,6 +448,39 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
 
   const handleDismissSearchCard = (cardKey: string) => {
     setSearchResults((prev) => prev.filter((r) => getDownloaderCardKey(r) !== cardKey));
+  };
+
+  const handleSaveInstalledCategory = async (
+    item: ExternalModelSearchResult,
+    cardKey: string,
+    nextCategory: LoraCategory
+  ) => {
+    const installedName = item.installedFilename || item.filename;
+    if (!installedName) return;
+    setSavingCategoryKey(cardKey);
+    try {
+      await api.classifyLora(installedName, nextCategory);
+      setSearchResults((prev) =>
+        prev.map((r) => {
+          if (getDownloaderCardKey(r) !== cardKey) return r;
+          const updatedVersions = r.availableVersions?.map((v) =>
+            v.versionId === item.versionId
+              ? { ...v, installedLoraCategory: nextCategory }
+              : v
+          );
+          return {
+            ...r,
+            ...(r.versionId === item.versionId ? { installedLoraCategory: nextCategory } : {}),
+            ...(updatedVersions ? { availableVersions: updatedVersions } : {}),
+          };
+        })
+      );
+      onPushToast?.(`Saved category "${nextCategory}" for ${installedName}`, 'success');
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Failed to update LoRA category', 'error');
+    } finally {
+      setSavingCategoryKey(null);
+    }
   };
 
   // Build unified full-width preview stack ordered newest first:
@@ -769,6 +841,73 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                       )}
                     </div>
 
+                    {/* LoRA Category Selector (Auto-detected before download, adjustable via pulldown) */}
+                    {(item.modelType === 'lora' || targetFolder === 'loras') &&
+                      (() => {
+                        const catMapKey = getCategoryMapKey(cardKey, item.versionId);
+                        const activeCategory = getEffectiveCardCategory(item, cardKey);
+                        const hasManualPick = Boolean(selectedCategoryByCard[catMapKey]);
+                        const catStyle = resolveLoraCategoryStyle(activeCategory, pillTypeSettings);
+                        const isAutoAssigned =
+                          !hasManualPick &&
+                          !item.isInstalled &&
+                          Boolean(item.suggestedLoraCategory) &&
+                          item.suggestedLoraCategory !== 'unclassified';
+                        const hasUnsavedInstalledChange =
+                          Boolean(item.isInstalled && item.installedFilename) &&
+                          activeCategory !== (item.installedLoraCategory || 'unclassified');
+
+                        return (
+                          <div className="flex flex-wrap items-center justify-between gap-2 bg-zinc-950/60 border border-zinc-800/80 rounded-lg px-3 py-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={`w-2 h-2 rounded-full shrink-0 ${catStyle.swatchBg}`}
+                              />
+                              <span className="text-zinc-400">LoRA Category:</span>
+                              <select
+                                value={activeCategory}
+                                disabled={isDownloadingNow}
+                                onChange={(e) => {
+                                  const nextCat = e.target.value as LoraCategory;
+                                  setSelectedCategoryByCard((prev) => ({
+                                    ...prev,
+                                    [catMapKey]: nextCat,
+                                  }));
+                                }}
+                                aria-label={`LoRA Category for ${item.name}`}
+                                className="px-2.5 py-1 bg-zinc-900 border border-zinc-700 hover:border-indigo-500/60 disabled:opacity-60 rounded-md text-zinc-100 cursor-pointer focus:outline-none focus:border-indigo-500"
+                              >
+                                {LORA_CATEGORY_OPTIONS.map((opt) => (
+                                  <option key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                  </option>
+                                ))}
+                              </select>
+                              {isAutoAssigned && (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${catStyle.badge}`}
+                                >
+                                  Auto-detected
+                                </span>
+                              )}
+                            </div>
+
+                            {hasUnsavedInstalledChange && (
+                              <button
+                                type="button"
+                                disabled={savingCategoryKey === cardKey}
+                                onClick={() =>
+                                  handleSaveInstalledCategory(item, cardKey, activeCategory)
+                                }
+                                className="px-2.5 py-1 rounded-md bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/40 text-emerald-200 text-[11px] font-medium cursor-pointer disabled:opacity-50"
+                              >
+                                {savingCategoryKey === cardKey ? 'Saving...' : 'Save to Installed'}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })()}
+
                     {/* Trigger Words */}
                     {item.trainedWords && item.trainedWords.length > 0 && (
                       <div className="text-xs bg-zinc-950/50 border border-zinc-800/60 rounded-lg px-3 py-2">
@@ -961,6 +1100,9 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
           isLoadingRepoFiles={isLoadingRepoFiles}
           dlSubfolder={dlSubfolder}
           setDlSubfolder={setDlSubfolder}
+          loraCategory={pendingLoraCategory}
+          setLoraCategory={setPendingLoraCategory}
+          pillTypeSettings={pillTypeSettings}
           customFilename={customFilename}
           setCustomFilename={setCustomFilename}
           allowOverwrite={allowOverwrite}

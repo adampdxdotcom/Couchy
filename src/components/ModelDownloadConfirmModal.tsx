@@ -2,6 +2,11 @@ import React, { useMemo, useState } from 'react';
 import { Check, CheckCircle2, Clock, FileCode2, FolderGit2, Info, Loader2, Search } from 'lucide-react';
 import { formatBytes } from '../shared/utils.ts';
 import {
+  DEFAULT_PILL_TYPE_SETTINGS,
+  LORA_CATEGORY_OPTIONS,
+  resolveLoraCategoryStyle,
+} from '../shared/pillSettings.ts';
+import {
   formatUnlockCountdown,
   formatUnlockLocalTime,
 } from './models/earlyAccessUtils.ts';
@@ -9,7 +14,9 @@ import type {
   ComfyModelSubfolder,
   ExternalModelFileOption,
   ExternalModelSearchResult,
+  LoraCategory,
   ModelType,
+  PillTypeSettings,
 } from '../shared/types.ts';
 
 export const COMFY_SUBFOLDER_OPTIONS: {
@@ -68,6 +75,9 @@ interface ModelDownloadConfirmModalProps {
   isLoadingRepoFiles: boolean;
   dlSubfolder: ComfyModelSubfolder;
   setDlSubfolder: (folder: ComfyModelSubfolder) => void;
+  loraCategory: LoraCategory;
+  setLoraCategory: (cat: LoraCategory) => void;
+  pillTypeSettings?: PillTypeSettings;
   customFilename: string;
   setCustomFilename: (name: string) => void;
   allowOverwrite: boolean;
@@ -92,6 +102,9 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
   isLoadingRepoFiles,
   dlSubfolder,
   setDlSubfolder,
+  loraCategory,
+  setLoraCategory,
+  pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   customFilename,
   setCustomFilename,
   allowOverwrite,
@@ -106,6 +119,7 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
   onConfirm,
 }) => {
   const [fileFilter, setFileFilter] = useState('');
+  const categoryStyle = resolveLoraCategoryStyle(loraCategory, pillTypeSettings);
 
   const availableFiles = pendingDownload.availableFiles || [];
   const filteredFiles = useMemo(() => {
@@ -333,6 +347,36 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
               />
             </div>
           </div>
+
+          {dlSubfolder === 'loras' && (
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-950/70 border border-zinc-800 rounded-lg px-3.5 py-2.5">
+              <div className="flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${categoryStyle.swatchBg}`} />
+                <label className="text-zinc-300 font-medium">LoRA Category</label>
+                {pendingDownload.suggestedLoraCategory &&
+                  pendingDownload.suggestedLoraCategory !== 'unclassified' &&
+                  loraCategory === pendingDownload.suggestedLoraCategory && (
+                    <span
+                      className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${categoryStyle.badge}`}
+                    >
+                      Auto-detected
+                    </span>
+                  )}
+              </div>
+              <select
+                value={loraCategory}
+                onChange={(e) => setLoraCategory(e.target.value as LoraCategory)}
+                aria-label="LoRA Category before download"
+                className="px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-100 cursor-pointer focus:outline-none focus:border-indigo-500"
+              >
+                {LORA_CATEGORY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div className="space-y-2.5 pt-1">
             <label className="inline-flex items-center gap-2 text-zinc-300 cursor-pointer">

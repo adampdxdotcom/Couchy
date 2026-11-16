@@ -418,6 +418,7 @@ export const api = {
     userConfirmed: boolean;
     hfRepoId?: string | null;
     civitaiMeta?: Record<string, any> | null;
+    loraCategory?: LoraCategory | null;
     scheduledFor?: string | null;
   }) =>
     requestJson<{ job: any }>('/api/downloads/start', {

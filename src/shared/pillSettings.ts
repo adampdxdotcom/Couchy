@@ -26,6 +26,24 @@ export const CUSTOMIZABLE_LORA_CATEGORIES: Array<{
   { key: 'unclassified', label: 'Unclassified' },
 ];
 
+export const LORA_CATEGORY_OPTIONS: Array<{
+  value: LoraCategory;
+  label: string;
+}> = [
+  { value: 'unclassified', label: 'Unclassified' },
+  { value: 'character', label: 'Character' },
+  { value: 'style', label: 'Style' },
+  { value: 'clothing', label: 'Clothing / Outfit' },
+  { value: 'pose', label: 'Pose' },
+  { value: 'concept', label: 'Concept' },
+  { value: 'object', label: 'Object' },
+  { value: 'other', label: 'Other' },
+];
+
+export const VALID_LORA_CATEGORIES = new Set<LoraCategory>(
+  LORA_CATEGORY_OPTIONS.map((opt) => opt.value)
+);
+
 export interface PillColorStyleSet {
   label: string;
   swatchBg: string;

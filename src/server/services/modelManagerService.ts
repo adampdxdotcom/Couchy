@@ -30,10 +30,16 @@ import {
   parseHuggingFaceRepoAndFile,
   resolveDirectModelUrl,
 } from './modelDownloadResolverService.ts';
+import {
+  classifyLoraFromMetadata,
+  classifySafetensorsHeaderOnDisk,
+} from './loraClassifierService.ts';
+import { VALID_LORA_CATEGORIES } from '../../shared/pillSettings.ts';
 import type {
   ComfyModelSubfolder,
   ExternalModelFileOption,
   ExternalModelSearchResult,
+  LoraCategory,
   ModelType,
 } from '../../shared/types.ts';
 
@@ -110,6 +116,7 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
               name: parentModel?.name || ver.model?.name || activeVersion.filename,
               modelType: activeVersion.modelType,
               suggestedSubfolder: activeVersion.suggestedSubfolder,
+              suggestedLoraCategory: activeVersion.suggestedLoraCategory ?? null,
               subfolderHint: activeVersion.subfolderHint || null,
               versionName: activeVersion.versionName,
               baseModel: activeVersion.baseModel,
@@ -193,6 +200,7 @@ export async function searchCivitaiModels(query: string, typeFilter?: string): P
       name: item.name,
       modelType: activeVersion.modelType,
       suggestedSubfolder: activeVersion.suggestedSubfolder,
+      suggestedLoraCategory: activeVersion.suggestedLoraCategory ?? null,
       subfolderHint: activeVersion.subfolderHint || null,
       versionName: activeVersion.versionName,
       baseModel: activeVersion.baseModel,
@@ -326,6 +334,15 @@ export async function searchHuggingFaceModels(
     if (typeFilter && !matchingFile) continue;
     const primary = matchingFile || availableFiles[0];
 
+    const suggestedLoraCategory: LoraCategory | null =
+      primary.modelType === 'lora'
+        ? classifyLoraFromMetadata({
+            name: repoId,
+            filename: primary.filename,
+            tags,
+          })
+        : null;
+
     results.push({
       provider: 'huggingface',
       id: repoId,
@@ -333,6 +350,7 @@ export async function searchHuggingFaceModels(
       name: repoId,
       modelType: primary.modelType,
       suggestedSubfolder: primary.suggestedSubfolder,
+      suggestedLoraCategory,
       versionName: 'main',
       filename: primary.filename,
       fileSize: primary.fileSize,
@@ -414,6 +432,7 @@ export interface ScheduledDownloadPayload {
   allowOverwrite: boolean;
   hfRepoId?: string | null;
   civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
+  loraCategory?: LoraCategory | null;
   retryCount?: number;
 }
 
@@ -427,6 +446,7 @@ export interface ExecuteDownloadJobParams {
   expectedHash?: string | null;
   hfRepoId?: string | null;
   civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
+  loraCategory?: LoraCategory | null;
   /** When true, caller handles HTTP 401/403 re-scheduling instead of marking failed immediately. */
   deferAuthErrorToCaller?: boolean;
 }
@@ -573,12 +593,36 @@ export async function executeDownloadJob(
           resolvedDest.startsWith(resolvedComfyModels + path.sep))
     );
 
+    // Determine final LoRA category: explicit user/search selection first,
+    // falling back to safetensors header inspection only if still unclassified.
+    let resolvedLoraCategory: LoraCategory = 'unclassified';
+    if (params.effectiveModelType === 'lora') {
+      const requestedCat =
+        params.loraCategory && VALID_LORA_CATEGORIES.has(params.loraCategory)
+          ? params.loraCategory
+          : 'unclassified';
+      resolvedLoraCategory =
+        requestedCat !== 'unclassified'
+          ? requestedCat
+          : classifySafetensorsHeaderOnDisk(params.destinationPath, {
+              name: params.modelName,
+              filename: params.safeFilename,
+              trainedWords: params.civitaiMeta?.trainedWords || [],
+              description: params.civitaiMeta?.civitaiDescription || null,
+              baseModel: params.civitaiMeta?.baseModel || null,
+            });
+    }
+
     db.prepare(
       `INSERT INTO models
-        (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, download_url, hf_repo_id, download_file_path, last_seen_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'filesystem', ?, ?, ?, datetime('now'))
+        (name, filename, model_type, lora_category, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, download_url, hf_repo_id, download_file_path, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'filesystem', ?, ?, ?, datetime('now'))
        ON CONFLICT(filename) DO UPDATE SET
          model_type = excluded.model_type,
+         lora_category = CASE
+           WHEN excluded.lora_category <> 'unclassified' THEN excluded.lora_category
+           ELSE models.lora_category
+         END,
          file_path = excluded.file_path,
          file_size = excluded.file_size,
          sha256_hash = excluded.sha256_hash,
@@ -592,6 +636,7 @@ export async function executeDownloadJob(
       params.modelName,
       params.safeFilename,
       params.effectiveModelType,
+      resolvedLoraCategory,
       params.destinationPath,
       bytesDownloaded,
       actualHash.toLowerCase(),
@@ -670,6 +715,7 @@ export async function startConfirmedModelDownload(params: {
   allowOverwrite?: boolean;
   hfRepoId?: string | null;
   civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
+  loraCategory?: LoraCategory | null;
   scheduledFor?: string | null;
 }): Promise<any> {
   // Sanitize filename and subfolder against path traversal
@@ -713,11 +759,19 @@ export async function startConfirmedModelDownload(params: {
     }
   }
 
+  const normalizedLoraCategory: LoraCategory | null =
+    effectiveModelType === 'lora' &&
+    params.loraCategory &&
+    VALID_LORA_CATEGORIES.has(params.loraCategory)
+      ? params.loraCategory
+      : null;
+
   const payloadJson = JSON.stringify({
     subfolder: safeSubfolder,
     allowOverwrite: Boolean(params.allowOverwrite),
     hfRepoId: params.hfRepoId || null,
     civitaiMeta: params.civitaiMeta || null,
+    loraCategory: normalizedLoraCategory,
     retryCount: 0,
   } satisfies ScheduledDownloadPayload);
 
@@ -754,6 +808,7 @@ export async function startConfirmedModelDownload(params: {
         expectedHash: params.expectedHash || null,
         hfRepoId: params.hfRepoId || null,
         civitaiMeta: params.civitaiMeta || null,
+        loraCategory: normalizedLoraCategory,
       }).catch(() => {});
     });
   }

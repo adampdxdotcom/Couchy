@@ -8,12 +8,18 @@ import { ModelDownloaderTab } from './ModelDownloaderTab.tsx';
 import { LoraExplorerTab } from './models/LoraExplorerTab.tsx';
 import { ModelInventoryTab } from './models/ModelInventoryTab.tsx';
 import { useModelDownloaderState } from './models/useModelDownloaderState.ts';
-import type { ImageRecord, LoraExplorerItem, ModelInventoryItem } from '../shared/types.ts';
+import type {
+  ImageRecord,
+  LoraExplorerItem,
+  ModelInventoryItem,
+  PillTypeSettings,
+} from '../shared/types.ts';
 
 interface LoraAndModelManagerViewProps {
   loras: LoraExplorerItem[];
   models: ModelInventoryItem[];
   allImages: ImageRecord[];
+  pillTypeSettings?: PillTypeSettings;
   onRefresh: () => Promise<void>;
   onOpenImage: (img: ImageRecord) => void;
   onFilterGalleryByLora: (loraFilename: string) => void;
@@ -30,6 +36,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   loras,
   models,
   allImages,
+  pillTypeSettings,
   onRefresh,
   onOpenImage,
   onFilterGalleryByLora,
@@ -419,6 +426,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           isSearchingExt={downloader.isSearchingExt}
           searchError={downloader.searchError}
           downloads={downloader.downloads}
+          pillTypeSettings={pillTypeSettings}
           onSearch={downloader.handleExternalSearch}
           onRefreshDownloads={downloader.refreshDownloads}
           onInspectDownload={handleInspectDownload}
