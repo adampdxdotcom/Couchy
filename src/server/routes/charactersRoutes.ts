@@ -171,6 +171,11 @@ const updateCharacterHandler = (req: any, res: any) => {
       nextPortraitCropJson = null;
     }
 
+    if (name !== undefined && !String(name).trim()) {
+      res.status(400).json({ error: 'Character name cannot be empty.' });
+      return;
+    }
+
     db.prepare(
       `UPDATE characters
        SET name = ?, description = ?, physical_description = ?, notes = ?, portrait_image_id = ?, portrait_content_hash = ?, portrait_crop_json = ?,
@@ -223,6 +228,10 @@ const updateCharacterHandler = (req: any, res: any) => {
     runAssistedCharacterIdentificationForAll();
     res.json({ character: getCharacterProfileById(charId) });
   } catch (err: any) {
+    if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      res.status(400).json({ error: 'A character with that name already exists.' });
+      return;
+    }
     res.status(400).json({ error: err?.message || 'Failed to update character' });
   }
 };

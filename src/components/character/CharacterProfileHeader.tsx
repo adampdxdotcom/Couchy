@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   Download,
@@ -45,6 +45,10 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
   onRefresh,
   onPushToast,
 }) => {
+  const [nameInput, setNameInput] = useState(character.name);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [isSavingName, setIsSavingName] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [editAliasesInput, setEditAliasesInput] = useState('');
   const [personalityInput, setPersonalityInput] = useState(character.description);
   const [physicalInput, setPhysicalInput] = useState(character.physicalDescription || '');
@@ -55,6 +59,11 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
   const [showLinkLoraForm, setShowLinkLoraForm] = useState(false);
   const [linkLoraName, setLinkLoraName] = useState('');
   const [linkLoraTriggerWord, setLinkLoraTriggerWord] = useState('');
+
+  useEffect(() => {
+    setNameInput(character.name);
+    setIsEditingName(false);
+  }, [character.id, character.name]);
 
   useEffect(() => {
     setPersonalityInput(character.description);
@@ -73,6 +82,37 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
     setLinkLoraName('');
     setLinkLoraTriggerWord('');
   }, [character.id]);
+
+  const startEditingName = () => {
+    setNameInput(character.name);
+    setIsEditingName(true);
+    requestAnimationFrame(() => {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    });
+  };
+
+  const commitNameEdit = async () => {
+    if (isSavingName) return;
+    const trimmed = nameInput.trim();
+    if (!trimmed || trimmed === character.name) {
+      setNameInput(character.name);
+      setIsEditingName(false);
+      return;
+    }
+    setIsSavingName(true);
+    try {
+      await api.updateCharacter(character.id, { name: trimmed });
+      setIsEditingName(false);
+      await onRefresh();
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Failed to rename character', 'error');
+      setNameInput(character.name);
+      setIsEditingName(false);
+    } finally {
+      setIsSavingName(false);
+    }
+  };
 
   const handleAnalyzePortrait = async () => {
     if (isAnalyzingPortrait) return;
@@ -318,9 +358,49 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
 
         <div className="lg:col-span-9 min-w-0 space-y-4">
           <div className="min-w-0">
-            <h1 className="text-xl sm:text-2xl font-display font-bold text-zinc-100 break-words">
-              {character.name}
-            </h1>
+            {isEditingName ? (
+              <input
+                ref={nameInputRef}
+                type="text"
+                value={nameInput}
+                disabled={isSavingName}
+                onChange={(e) => setNameInput(e.target.value)}
+                onBlur={() => {
+                  commitNameEdit();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitNameEdit();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setNameInput(character.name);
+                    setIsEditingName(false);
+                  }
+                }}
+                aria-label="Character name"
+                className="w-full max-w-xl px-2 py-0.5 -ml-2 text-xl sm:text-2xl font-display font-bold text-zinc-100 bg-zinc-950/90 border border-indigo-500/70 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            ) : (
+              <div className="inline-flex items-center gap-2 max-w-full group">
+                <h1
+                  onClick={startEditingName}
+                  title="Click to rename character"
+                  className="text-xl sm:text-2xl font-display font-bold text-zinc-100 hover:text-white break-words cursor-text transition-colors"
+                >
+                  {character.name}
+                </h1>
+                <button
+                  type="button"
+                  onClick={startEditingName}
+                  title="Rename character"
+                  aria-label="Rename character"
+                  className="p-1 rounded-md text-zinc-500 hover:text-indigo-300 group-hover:text-zinc-300 hover:bg-zinc-800/70 transition-colors cursor-pointer shrink-0"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400 mt-1 break-words">
               <span>
                 Aliases:{' '}
