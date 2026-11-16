@@ -55,6 +55,7 @@ export function useQuickGenSubmit({
   const [megapixels, setMegapixels] = useState<number>(3.0);
   const [batchCount, setBatchCount] = useState<number>(1);
   const [attachedCharacter, setAttachedCharacter] = useState<CharacterProfile | null>(null);
+  const [characterLoraStrength, setCharacterLoraStrength] = useState<number>(1.0);
   const [attachedCheckpoint, setAttachedCheckpoint] = useState<string | null>(null);
   const [attachedLoras, setAttachedLoras] = useState<GenerationLoraSelection[]>([]);
   const [removedLoraKeys, setRemovedLoraKeys] = useState<Set<string>>(new Set());
@@ -134,10 +135,16 @@ export function useQuickGenSubmit({
       const matchingAttached = attachedLoras.find(
         (al) => normalizeLoraKey(al.loraName) === normalizeLoraKey(l.loraName)
       );
+      const resolvedModelStrength = matchingAttached
+        ? matchingAttached.modelStrength
+        : characterLoraStrength;
+      const resolvedClipStrength = matchingAttached
+        ? matchingAttached.clipStrength
+        : characterLoraStrength;
       return {
         loraName: l.loraName,
-        modelStrength: matchingAttached ? matchingAttached.modelStrength : 1.0,
-        clipStrength: matchingAttached ? matchingAttached.clipStrength : 1.0,
+        modelStrength: resolvedModelStrength,
+        clipStrength: resolvedClipStrength,
         triggerWord: l.triggerWord || '',
         appearanceLabel: l.appearanceLabel || '',
       };
@@ -202,6 +209,10 @@ export function useQuickGenSubmit({
       prefillPayload.checkpointName ? String(prefillPayload.checkpointName).trim() || null : null
     );
 
+    const excludedKeySet = new Set(
+      (prefillPayload.excludedLoras || []).map((k) => normalizeLoraKey(k)).filter(Boolean)
+    );
+
     if (prefillPayload.loras !== undefined) {
       const reusedSelections: GenerationLoraSelection[] = [];
       const seenLoraNames = new Set<string>();
@@ -247,8 +258,25 @@ export function useQuickGenSubmit({
         });
       }
       setAttachedLoras(reusedSelections);
+
+      if (prefillPayload.character) {
+        const charLoraKeys = new Set(
+          prefillPayload.character.loras
+            .map((cl) => normalizeLoraKey(cl.loraName))
+            .filter((k) => !excludedKeySet.has(k))
+        );
+        const matchedCharReused = reusedSelections.find((rs) =>
+          charLoraKeys.has(normalizeLoraKey(rs.loraName))
+        );
+        setCharacterLoraStrength(matchedCharReused ? matchedCharReused.modelStrength : 1.0);
+      } else if (prefillPayload.character === null) {
+        setCharacterLoraStrength(1.0);
+      }
     } else {
       setAttachedLoras([]);
+      if (prefillPayload.character !== undefined) {
+        setCharacterLoraStrength(1.0);
+      }
     }
 
     if (prefillPayload.aspectRatio) setAspectRatio(prefillPayload.aspectRatio);
@@ -324,6 +352,7 @@ export function useQuickGenSubmit({
   const handleRemoveCharacter = () => {
     const charToRemove = attachedCharacter;
     setAttachedCharacter(null);
+    setCharacterLoraStrength(1.0);
     if (!charToRemove) return;
 
     const removedKeys = new Set(charToRemove.loras.map((cl) => normalizeLoraKey(cl.loraName)));
@@ -376,6 +405,13 @@ export function useQuickGenSubmit({
     const clamped = Math.max(0.0, Math.min(3.0, Math.round(nextStrength * 100) / 100));
     const targetKey = normalizeLoraKey(loraName);
 
+    if (
+      attachedCharacter &&
+      attachedCharacter.loras.some((cl) => normalizeLoraKey(cl.loraName) === targetKey)
+    ) {
+      setCharacterLoraStrength(clamped);
+    }
+
     setAttachedLoras((prev) =>
       prev.map((al) =>
         normalizeLoraKey(al.loraName) === targetKey
@@ -383,6 +419,23 @@ export function useQuickGenSubmit({
           : al
       )
     );
+  };
+
+  /** Updates the attached base character LoRA's session strength (0.0–3.0). */
+  const handleUpdateCharacterStrength = (nextStrength: number) => {
+    if (!Number.isFinite(nextStrength) || !attachedCharacter) return;
+    const clamped = Math.max(0.0, Math.min(3.0, Math.round(nextStrength * 100) / 100));
+    setCharacterLoraStrength(clamped);
+
+    const charKeys = new Set(attachedCharacter.loras.map((cl) => normalizeLoraKey(cl.loraName)));
+    setAttachedLoras((prev) => {
+      if (!prev.some((al) => charKeys.has(normalizeLoraKey(al.loraName)))) return prev;
+      return prev.map((al) =>
+        charKeys.has(normalizeLoraKey(al.loraName))
+          ? { ...al, modelStrength: clamped, clipStrength: clamped }
+          : al
+      );
+    });
   };
 
   /** Sends a conversational turn to Local LLM when Agent mode is active. */
@@ -597,6 +650,7 @@ export function useQuickGenSubmit({
       setInspirationFilename(null);
       setAgentEnabled(false);
       setAttachedCharacter(null);
+      setCharacterLoraStrength(1.0);
       setAttachedCheckpoint(null);
       setAttachedLoras([]);
       setRemovedLoraKeys(new Set());
@@ -691,6 +745,7 @@ export function useQuickGenSubmit({
   const handleClearBox = (onAfterReset?: () => void) => {
     setPrompt('');
     setAttachedCharacter(null);
+    setCharacterLoraStrength(1.0);
     setAttachedCheckpoint(null);
     setAttachedLoras([]);
     setRemovedLoraKeys(new Set());
@@ -751,10 +806,13 @@ export function useQuickGenSubmit({
     setBatchCount,
     attachedCharacter,
     setAttachedCharacter,
+    characterLoraStrength,
+    setCharacterLoraStrength,
     attachedCheckpoint,
     setAttachedCheckpoint,
     attachedLoras,
     setAttachedLoras,
+    removedLoraKeys,
     setRemovedLoraKeys,
     isHighlighted,
     isMinimized,
@@ -771,6 +829,7 @@ export function useQuickGenSubmit({
     handleRemoveCheckpoint,
     handleRemoveLora,
     handleUpdateLoraStrength,
+    handleUpdateCharacterStrength,
     handleClearBox,
     handleSubmit,
     handleSubmitProposedPrompt,

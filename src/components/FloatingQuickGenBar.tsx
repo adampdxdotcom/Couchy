@@ -99,6 +99,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     prompt: submitState.prompt,
     setPrompt: submitState.setPrompt,
     setAttachedCharacter: submitState.setAttachedCharacter,
+    setCharacterLoraStrength: submitState.setCharacterLoraStrength,
     setAttachedCheckpoint: submitState.setAttachedCheckpoint,
     setAttachedLoras: submitState.setAttachedLoras,
     setRemovedLoraKeys: submitState.setRemovedLoraKeys,
@@ -370,14 +371,17 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
           <div className="shrink-0">
             <QuickGenAttachmentsBar
               attachedCharacter={submitState.attachedCharacter}
+              characterStrength={submitState.characterLoraStrength}
               attachedCheckpoint={submitState.attachedCheckpoint}
               attachedLoras={submitState.attachedLoras}
+              removedLoraKeys={submitState.removedLoraKeys}
               models={models}
               pillTypeSettings={pillTypeSettings}
               onRemoveCharacter={submitState.handleRemoveCharacter}
               onRemoveCheckpoint={submitState.handleRemoveCheckpoint}
               onRemoveLora={submitState.handleRemoveLora}
               onUpdateLoraStrength={submitState.handleUpdateLoraStrength}
+              onUpdateCharacterStrength={submitState.handleUpdateCharacterStrength}
             />
           </div>
 

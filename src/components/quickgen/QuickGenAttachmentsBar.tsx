@@ -12,23 +12,31 @@ import type {
   PillTypeSettings,
 } from '../../shared/types.ts';
 import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
-import { getCleanLoraLabel, resolveBaseModelDisplayLabel } from './quickGenUtils.ts';
+import {
+  getCleanLoraLabel,
+  normalizeLoraKey,
+  resolveBaseModelDisplayLabel,
+} from './quickGenUtils.ts';
 
 interface QuickGenAttachmentsBarProps {
   attachedCharacter: CharacterProfile | null;
+  characterStrength?: number;
   attachedCheckpoint?: string | null;
   attachedLoras: GenerationLoraSelection[];
+  removedLoraKeys?: Set<string>;
   models?: ModelInventoryItem[];
   pillTypeSettings?: PillTypeSettings;
   onRemoveCharacter: () => void;
   onRemoveCheckpoint?: () => void;
   onRemoveLora: (loraName: string) => void;
   onUpdateLoraStrength?: (loraName: string, nextStrength: number) => void;
+  onUpdateCharacterStrength?: (nextStrength: number) => void;
 }
 
 const MIN_STRENGTH = 0.0;
 const MAX_STRENGTH = 3.0;
 const STEP_STRENGTH = 0.05;
+const CHARACTER_EDIT_KEY = '__character__';
 
 function clampStrength(value: number): number {
   return Math.max(MIN_STRENGTH, Math.min(MAX_STRENGTH, Math.round(value * 100) / 100));
@@ -45,85 +53,117 @@ function formatStrengthDigits(value: number): string {
  */
 export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
   attachedCharacter,
+  characterStrength = 1.0,
   attachedCheckpoint,
   attachedLoras,
+  removedLoraKeys,
   models = [],
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   onRemoveCharacter,
   onRemoveCheckpoint,
   onRemoveLora,
   onUpdateLoraStrength,
+  onUpdateCharacterStrength,
 }) => {
   const charStyle = PILL_COLOR_STYLES[pillTypeSettings.character.color];
   const baseModelStyle = PILL_COLOR_STYLES[pillTypeSettings.baseModel.color];
   const loraStyle = PILL_COLOR_STYLES[pillTypeSettings.lora.color];
-  const [editingLoraName, setEditingLoraName] = useState<string | null>(null);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
   const [draftValue, setDraftValue] = useState('');
   const editInputRef = useRef<HTMLInputElement | null>(null);
 
   const visibleLoras = attachedLoras.filter((l) => l.showPill !== false);
+  const activeCharLoras = attachedCharacter
+    ? attachedCharacter.loras.filter(
+        (l) => !removedLoraKeys?.has(normalizeLoraKey(l.loraName))
+      )
+    : [];
+  const hasActiveCharLora = activeCharLoras.length > 0;
+  const primaryCharLoraKey = activeCharLoras[0]
+    ? normalizeLoraKey(activeCharLoras[0].loraName)
+    : null;
+  const matchedCharAttached = primaryCharLoraKey
+    ? attachedLoras.find((al) => normalizeLoraKey(al.loraName) === primaryCharLoraKey)
+    : undefined;
+  const resolvedCharacterStrength = matchedCharAttached
+    ? matchedCharAttached.modelStrength
+    : characterStrength;
 
   // Auto-focus and select digits when entering inline edit mode
   useEffect(() => {
-    if (!editingLoraName) return;
+    if (!editingKey) return;
     editInputRef.current?.focus();
     editInputRef.current?.select();
-  }, [editingLoraName]);
+  }, [editingKey]);
 
-  // Clear edit state if the active LoRA pill is removed externally
+  // Clear edit state if the active character or LoRA pill is removed externally
   useEffect(() => {
-    if (editingLoraName && !visibleLoras.some((l) => l.loraName === editingLoraName)) {
-      setEditingLoraName(null);
+    if (!editingKey) return;
+    if (editingKey === CHARACTER_EDIT_KEY) {
+      if (!attachedCharacter || !hasActiveCharLora) {
+        setEditingKey(null);
+      }
+      return;
     }
-  }, [editingLoraName, visibleLoras]);
+    if (!visibleLoras.some((l) => l.loraName === editingKey)) {
+      setEditingKey(null);
+    }
+  }, [editingKey, attachedCharacter, hasActiveCharLora, visibleLoras]);
 
   if (!attachedCharacter && !attachedCheckpoint && visibleLoras.length === 0) return null;
 
-  const startEditing = (lora: GenerationLoraSelection) => {
-    if (!onUpdateLoraStrength) return;
-    setEditingLoraName(lora.loraName);
-    setDraftValue(formatStrengthDigits(lora.modelStrength));
+  const startEditing = (
+    editKey: string,
+    currentStrength: number,
+    onCommit?: (nextStrength: number) => void
+  ) => {
+    if (!onCommit) return;
+    setEditingKey(editKey);
+    setDraftValue(formatStrengthDigits(currentStrength));
   };
 
-  const commitEdit = (lora: GenerationLoraSelection) => {
+  const commitEdit = (onCommit?: (nextStrength: number) => void) => {
     const cleaned = draftValue.trim().replace(/x$/i, '');
     const parsed = Number(cleaned);
-    if (cleaned !== '' && Number.isFinite(parsed) && onUpdateLoraStrength) {
-      onUpdateLoraStrength(lora.loraName, clampStrength(parsed));
+    if (cleaned !== '' && Number.isFinite(parsed) && onCommit) {
+      onCommit(clampStrength(parsed));
     }
-    setEditingLoraName(null);
+    setEditingKey(null);
   };
 
   const handleEditKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>,
-    lora: GenerationLoraSelection
+    currentStrength: number,
+    onCommit?: (nextStrength: number) => void
   ) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      commitEdit(lora);
+      commitEdit(onCommit);
       return;
     }
     if (e.key === 'Escape') {
       e.preventDefault();
-      setEditingLoraName(null);
+      setEditingKey(null);
       return;
     }
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
       e.preventDefault();
       const cleaned = draftValue.trim().replace(/x$/i, '');
       const base =
-        cleaned !== '' && Number.isFinite(Number(cleaned)) ? Number(cleaned) : lora.modelStrength;
+        cleaned !== '' && Number.isFinite(Number(cleaned)) ? Number(cleaned) : currentStrength;
       const delta = e.key === 'ArrowUp' ? STEP_STRENGTH : -STEP_STRENGTH;
       setDraftValue(formatStrengthDigits(clampStrength(base + delta)));
     }
   };
 
   const renderStrengthControl = (
-    lora: GenerationLoraSelection,
+    editKey: string,
+    currentStrength: number,
     label: string,
-    styleSet: PillColorStyleSet
+    styleSet: PillColorStyleSet,
+    onCommit?: (nextStrength: number) => void
   ) => {
-    const isEditing = editingLoraName === lora.loraName;
+    const isEditing = editingKey === editKey;
 
     if (isEditing) {
       return (
@@ -137,8 +177,8 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
             aria-label={`Strength for ${label}`}
             value={draftValue}
             onChange={(e) => setDraftValue(e.target.value)}
-            onBlur={() => commitEdit(lora)}
-            onKeyDown={(e) => handleEditKeyDown(e, lora)}
+            onBlur={() => commitEdit(onCommit)}
+            onKeyDown={(e) => handleEditKeyDown(e, currentStrength, onCommit)}
             className={`w-9 rounded px-1 text-[11px] font-mono tabular-nums text-center focus:outline-none ring-1 ${styleSet.strengthInput}`}
           />
           <span>x</span>
@@ -149,13 +189,13 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
     return (
       <button
         type="button"
-        onClick={() => startEditing(lora)}
+        onClick={() => startEditing(editKey, currentStrength, onCommit)}
         title={`Click to adjust ${label} strength for this generation (0.0–3.0)`}
         className={`text-[11px] font-mono tabular-nums ${styleSet.strengthText} ${
-          onUpdateLoraStrength ? 'cursor-text transition-colors' : ''
+          onCommit ? 'cursor-text transition-colors' : ''
         }`}
       >
-        {formatStrengthDigits(lora.modelStrength)}x
+        {formatStrengthDigits(currentStrength)}x
       </button>
     );
   };
@@ -180,6 +220,14 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
               ({attachedCharacter.loras[0].triggerWord})
             </span>
           )}
+          {hasActiveCharLora &&
+            renderStrengthControl(
+              CHARACTER_EDIT_KEY,
+              resolvedCharacterStrength,
+              attachedCharacter.name,
+              charStyle,
+              onUpdateCharacterStrength
+            )}
           <button
             type="button"
             onClick={onRemoveCharacter}
@@ -235,7 +283,15 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
                   ({lora.triggerWord})
                 </span>
               )}
-              {renderStrengthControl(lora, label, charStyle)}
+              {renderStrengthControl(
+                lora.loraName,
+                lora.modelStrength,
+                label,
+                charStyle,
+                onUpdateLoraStrength
+                  ? (nextStrength) => onUpdateLoraStrength(lora.loraName, nextStrength)
+                  : undefined
+              )}
               <button
                 type="button"
                 onClick={() => onRemoveLora(lora.loraName)}
@@ -255,7 +311,15 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
           >
             <Layers className={`w-3.5 h-3.5 shrink-0 ${loraStyle.icon}`} />
             <span className={`font-medium ${loraStyle.textLight}`}>{label}</span>
-            {renderStrengthControl(lora, label, loraStyle)}
+            {renderStrengthControl(
+              lora.loraName,
+              lora.modelStrength,
+              label,
+              loraStyle,
+              onUpdateLoraStrength
+                ? (nextStrength) => onUpdateLoraStrength(lora.loraName, nextStrength)
+                : undefined
+            )}
             <button
               type="button"
               onClick={() => onRemoveLora(lora.loraName)}

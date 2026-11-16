@@ -25,6 +25,7 @@ interface UseQuickGenMentionsParams {
   prompt: string;
   setPrompt: React.Dispatch<React.SetStateAction<string>>;
   setAttachedCharacter: React.Dispatch<React.SetStateAction<CharacterProfile | null>>;
+  setCharacterLoraStrength: React.Dispatch<React.SetStateAction<number>>;
   setAttachedCheckpoint: React.Dispatch<React.SetStateAction<string | null>>;
   setAttachedLoras: React.Dispatch<React.SetStateAction<GenerationLoraSelection[]>>;
   setRemovedLoraKeys: React.Dispatch<React.SetStateAction<Set<string>>>;
@@ -44,6 +45,7 @@ export function useQuickGenMentions({
   prompt,
   setPrompt,
   setAttachedCharacter,
+  setCharacterLoraStrength,
   setAttachedCheckpoint,
   setAttachedLoras,
   setRemovedLoraKeys,
@@ -190,6 +192,7 @@ export function useQuickGenMentions({
     } else if (entry.character) {
       const char = entry.character;
       setAttachedCharacter(char);
+      setCharacterLoraStrength(1.0);
       setRemovedLoraKeys((prev) => {
         const next = new Set(prev);
         for (const cl of char.loras) {
