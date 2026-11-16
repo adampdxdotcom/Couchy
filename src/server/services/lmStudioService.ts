@@ -718,9 +718,38 @@ export async function generatePhotoSetPromptsWithAgent(params: {
  * Heuristic check for whether a model identifier in LM Studio is likely a Vision-Language Model (VLM).
  */
 function isLikelyVisionModelId(modelId: string): boolean {
-  return /(?:\b|_|-)(?:vl|vlm|vision|llava|joycaption|pixtral|minicpm|moondream|florence|internvl|molmo|bakllava|cogvlm|idefics|paligemma|gemma-?[34]|gemma4|supergemma|qwen[\w.-]*vl|smolvlm|ovis|glm-?4v|llama-?4)(?:\b|_|-)/i.test(
+  return /(?:\b|_|-)(?:vl|vlm|vision|llava|joycaption|pixtral|minicpm|moondream|florence|internvl|molmo|bakllava|cogvlm|idefics|paligemma|gemma-?[34]|gemma4|supergemma|qwen[\w.-]*vl|smolvlm|ovis|glm-?4v|llama-?4|omni)(?:\b|_|-)/i.test(
     modelId
   );
+}
+
+/**
+ * Checks LM Studio's `/api/v0/models` metadata (when available) alongside model ID heuristics
+ * to detect Vision-capable models even when their name doesn't contain "-vl".
+ */
+async function checkLmStudioVisionSupport(baseUrl: string, modelId: string): Promise<boolean> {
+  if (isLikelyVisionModelId(modelId)) return true;
+  try {
+    const rootUrl = baseUrl.replace(/\/v1\/?$/, '');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(`${rootUrl}/api/v0/models`, {
+      headers: getLocalLlmHeaders(false),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) return false;
+    const payload = (await res.json()) as { data?: Array<Record<string, any>> };
+    const matched = payload?.data?.find((m) => m?.id === modelId);
+    if (!matched) return false;
+    return (
+      matched.type === 'vlm' ||
+      Boolean(matched.vision) ||
+      Boolean(matched.capabilities?.vision)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -738,95 +767,59 @@ export function extractCharacterIdentityTags(tags: string[]): string[] {
 
 /**
  * Pre-filters WD14 tags when a character is attached in Quick Gen:
- * Strips hair color, eye color, permanent facial features, skin tone/ethnicity, and body proportions
- * while preserving transient expressions/emotions, pose, clothing/NSFW state, lighting, and framing.
+ * Strips only hair color and eye color tags while preserving expressions, poses,
+ * clothing, props, and environment details.
  */
 export function filterCharacterIdentityTags(tags: string[]): string[] {
   const hairColorRegex =
-    /\b(?:blonde|brown|black|red|pink|blue|green|purple|orange|silver|grey|gray|white|aqua|platinum|auburn|chestnut|multicolored|two-tone|streaked|colored|gradient|bleached|light brown|dark brown|dark blue|light blue|light purple)\s+hair\b/i;
+    /\b(?:blonde|blond|brown|dark[\s_]brown|light[\s_]brown|black|red|pink|blue|dark[\s_]blue|light[\s_]blue|green|purple|light[\s_]purple|orange|silver|grey|gray|white|aqua|platinum|auburn|chestnut|ginger|multicolored|two-tone|streaked|colored|gradient|bleached)[\s_]+hair\b/i;
 
-  const eyeAndFaceRegex =
-    /\b(?:blue|brown|green|red|yellow|purple|aqua|amber|grey|gray|pink|orange|black|golden|hazel|multicolored)\s+eyes\b|\b(?:heterochromia|freckles|mole|mole under eye|mole on cheek|mole under mouth|facial mark|scar|pointy ears|elf ears|thick eyebrows)\b/i;
+  const eyeColorRegex =
+    /\b(?:blue|brown|green|red|yellow|purple|aqua|amber|grey|gray|pink|orange|black|golden|hazel|multicolored)[\s_]+eyes\b|\bheterochromia\b/i;
 
-  const skinAndEthnicityRegex =
-    /\b(?:dark skin|dark-skinned(?:\s+female|\s+male)?|pale skin|fair skin|tan|tanlines|suntan|olive skin|brown skin|white skin|caucasian|asian|latina|hispanic|ebony|african|indian|arab)\b/i;
-
-  const bodyProportionsRegex =
-    /\b(?:large|medium|small|huge|gigantic|enormous|flat|perky|sagging)\s+(?:breasts|chest|bust)\b|\b(?:wide hips|narrow waist|thick thighs|plump|curvy|voluptuous|chubby|slender|petite|skinny|thin|muscular(?:\s+female|\s+male)?|toned|abs|tall|short|mature female|loli)\b/i;
-
-  return tags.filter(
-    (tag) =>
-      !hairColorRegex.test(tag) &&
-      !eyeAndFaceRegex.test(tag) &&
-      !skinAndEthnicityRegex.test(tag) &&
-      !bodyProportionsRegex.test(tag)
-  );
+  return tags.filter((tag) => !hairColorRegex.test(tag) && !eyeColorRegex.test(tag));
 }
 
 /**
- * Post-processes an interrogated natural-language prompt when a character is selected
- * to strip any residual descriptions of hair color, eye color, facial features, skin tone/ethnicity,
- * or body type/proportions while keeping facial expressions, pose, outfit/NSFW state, and environment.
+ * Post-processes an interrogated prompt when a character is selected, scoped strictly
+ * to hair color and eye color so object/prop/setting descriptors remain untouched.
  */
 export function stripCharacterPhysicalTraits(prompt: string): string {
   let cleaned = prompt;
+  const hairColors =
+    '(?:platinum\\s+blonde|strawberry\\s+blonde|dirty\\s+blonde|ash\\s+blonde|golden\\s+blonde|light\\s+brown|dark\\s+brown|jet[\\s-]black|raven[\\s-]black|fiery\\s+red|chestnut\\s+brown|copper|ginger|auburn|chestnut|mahogany|brunette|blonde|blond|brown|black|red|pink|blue|green|purple|teal|cyan|orange|lavender|silver|grey|gray|white|pastel|dyed|bleached)';
+  const hairNouns =
+    '(?:hair|locks|tresses|curls|waves|strands|ponytail|twintails|braid|braids|bun|bangs)';
+  const hairStyleMid =
+    '(?:(?:long|short|medium|shoulder-length|waist-length|wavy|curly|straight|messy|tousled|braided|flowing|sleek|layered|cropped|shoulder\\s+length)\\s+){0,2}';
 
-  // 1. Strip hair color adjectives while keeping hair style/length nouns when paired (e.g. "long wavy blonde hair" -> "long wavy hair")
+  // 1. Strip hair color adjectives preceding hair nouns (allowing style words in between, e.g. "brown wavy hair")
   cleaned = cleaned.replace(
-    /\b(?:platinum\s+blonde|strawberry\s+blonde|dirty\s+blonde|ash\s+blonde|golden\s+blonde|light\s+brown|dark\s+brown|jet[\s-]black|raven[\s-]black|fiery\s+red|ginger|auburn|chestnut|brunette|blonde|blond|black|red|pink|blue|green|purple|silver|grey|gray|white|pastel|dyed|bleached)\s+(?=(?:hair|locks|tresses|curls|waves|strands|ponytail|twintails|braid|braids|bun|bangs)\b)/gi,
+    new RegExp(`\\b${hairColors}\\s+(?=${hairStyleMid}${hairNouns}\\b)`, 'gi'),
     ''
   );
-  // Strip standalone hair-color compounds ("a blonde woman" -> "a woman", "blonde-haired", "redhead")
+  // Strip hyphenated hair-color compounds and hair-color person modifiers
   cleaned = cleaned.replace(
-    /\b(?:blonde-haired|blond-haired|brown-haired|dark-haired|black-haired|red-haired|silver-haired|white-haired|pink-haired|blue-haired|raven-haired|blonde|blond|brunette|redhead)\b/gi,
+    /\b(?:blonde-haired|blond-haired|brown-haired|dark-haired|black-haired|red-haired|silver-haired|white-haired|pink-haired|blue-haired|raven-haired|ginger-haired|auburn-haired)\b/gi,
     ''
   );
-  // Strip bare "with hair" if removing the color left a vacuous phrase
+  cleaned = cleaned.replace(
+    /\b(?:blonde|blond|brunette|redhead)\s+(?=(?:woman|man|girl|boy|person|subject|female|male|model|figure)\b)/gi,
+    ''
+  );
   cleaned = cleaned.replace(/\bwith\s+hair\b/gi, '');
 
-  // 2. Strip eye color & permanent facial feature phrases (while preserving expressions like "smiling", "half-closed eyes", "looking at viewer")
+  // 2. Strip eye color phrases strictly tied to eyes
   cleaned = cleaned.replace(
-    /\b(?:with\s+)?(?:piercing\s+|bright\s+|deep\s+|warm\s+|dark\s+|light\s+|striking\s+|vivid\s+|pale\s+|glowing\s+)?(?:blue|brown|green|hazel|amber|grey|gray|violet|purple|crimson|red|golden|yellow|aqua|emerald|sapphire)\s+eyes\b/gi,
+    /\b(?:and\s+)?(?:with\s+)?(?:piercing\s+|bright\s+|deep\s+|warm\s+|dark\s+|light\s+|striking\s+|vivid\s+|pale\s+|glowing\s+)?(?:blue|brown|green|hazel|amber|grey|gray|violet|purple|crimson|red|golden|yellow|aqua|emerald|sapphire)\s+eyes\b/gi,
     ''
   );
   cleaned = cleaned.replace(
-    /\b(?:blue-eyed|brown-eyed|green-eyed|hazel-eyed|dark-eyed|heterochromia|freckled|freckles|beauty mark|mole under (?:her|his|their) eye|chiseled jawline|high cheekbones|button nose|aquiline nose)\b/gi,
-    ''
-  );
-
-  // 3. Strip skin tone, race, and ethnicity descriptors
-  cleaned = cleaned.replace(
-    /\b(?:with\s+)?(?:pale|fair|porcelain|ivory|creamy|milky|sun-kissed|tanned|tan|bronzed|bronze|olive|ebony|dark|brown|light|caramel|flawless|alabaster)\s+(?:skin|complexion|skin tone)\b/gi,
-    ''
-  );
-  cleaned = cleaned.replace(
-    /\b(?:fair-skinned|dark-skinned|pale-skinned|light-skinned|tan-skinned|olive-skinned|brown-skinned|caucasian|asian|east asian|south asian|latina|latino|hispanic|african|african-american|ebony|black|white|middle eastern|european)\s+(?=(?:woman|man|girl|boy|person|subject|female|male|model|figure)\b)/gi,
-    ''
-  );
-  cleaned = cleaned.replace(
-    /\b(?:fair-skinned|dark-skinned|pale-skinned|light-skinned|tan-skinned|olive-skinned|caucasian|east asian|latina|hispanic|ebony)\b/gi,
+    /\b(?:blue-eyed|brown-eyed|green-eyed|hazel-eyed|dark-eyed|amber-eyed|grey-eyed|gray-eyed|violet-eyed|red-eyed|heterochromia)\b/gi,
     ''
   );
 
-  // 4. Strip body type and proportion phrases
-  cleaned = cleaned.replace(
-    /\b(?:with\s+)?(?:a\s+|an\s+)?(?:curvy|voluptuous|busty|slender|petite|slim|lithe|plump|chubby|statuesque|heavyset|full-figured|well-endowed|athletic|muscular|toned|hourglass|lean|skinny|thin|thick)\s+(?:figure|body|build|frame|physique|silhouette|proportions)\b/gi,
-    ''
-  );
-  cleaned = cleaned.replace(
-    /\b(?:with\s+)?(?:large|huge|massive|gigantic|enormous|ample|generous|full|heavy|perky|medium|small|petite|flat)\s+(?:breasts|bust|chest|bosom)\b/gi,
-    ''
-  );
-  cleaned = cleaned.replace(
-    /\b(?:with\s+)?(?:wide|curvy|broad|childbearing)\s+hips\b|\b(?:with\s+)?(?:thick|plump|slender|toned)\s+thighs\b|\b(?:with\s+)?(?:a\s+)?(?:narrow|slim|tiny|wasp)\s+waist\b/gi,
-    ''
-  );
-  cleaned = cleaned.replace(
-    /\b(?:curvy|voluptuous|busty|slender|petite|full-figured|well-endowed|plump|chubby|skinny|muscular|statuesque)\b/gi,
-    ''
-  );
-
-  // 5. Clean up orphaned prepositions/conjunctions and extra punctuation
+  // 3. Clean up orphaned connectors and extra whitespace/punctuation
   cleaned = cleaned
     .replace(/\bwith\s+(?:and|in|on|at|wearing|dressed)\b/gi, (m) =>
       m.replace(/^with\s+/i, '')
@@ -855,6 +848,7 @@ export function stripCharacterPhysicalTraits(prompt: string): string {
 export async function interrogateImageToPrompt(params: {
   imageBase64DataUrl: string;
   characterName?: string;
+  userHint?: string;
 }): Promise<{
   prompt: string;
   pipelineUsed: 'vision' | 'wd14_text';
@@ -905,33 +899,33 @@ export async function interrogateImageToPrompt(params: {
     : `${baseUrl}/v1/chat/completions`;
   const modelToUse = status.selectedModel || settings.selectedModel || 'local-model';
   const hasCharacter = Boolean(params.characterName?.trim());
-
-  // Extract local WD14 v3 visual/NSFW tags so they are available both as supplemental context and for text-model synthesis
-  let extractedTags: string[] = [];
-  try {
-    const tagItems = await interrogateImageBufferWithWd14(imageBuffer, 0.24);
-    const rawTags = tagItems.map((t) => t.tag);
-    extractedTags = hasCharacter ? filterCharacterIdentityTags(rawTags) : rawTags;
-  } catch {
-    // Continue even if WD14 model isn't ready yet and a Vision model is active
-  }
+  const cleanUserHint = (params.userHint || '').trim();
 
   const characterConstraintBlock = hasCharacter
-    ? `\nCRITICAL CHARACTER LORA RULE:
-A character LoRA is active and defines only the biological/physical identity of the subject.
-- DO NOT mention the subject's biological hair color, eye color, permanent facial features (freckles, moles, facial bone structure), skin tone, race, ethnicity, or body type/proportions (such as breast/chest size, hip/thigh width, curvy, slender, petite, muscular, or height).
-- ALWAYS KEEP and explicitly describe all clothing colors, garment types, fabric textures/patterns, lingerie/swimwear colors, footwear colors, and accessory colors (e.g., "wearing a bright red lace dress", "in a black bikini", "white thigh-high stockings", "blue denim jacket").
-- DO describe transient facial expressions and emotions (e.g., smiling, blushing, parted lips, looking at viewer), hairstyle structure/arrangement (without hair color), pose, body positioning, clothing with exact colors or nudity/NSFW details, camera framing, lighting, and environment.`
+    ? `\nCHARACTER LORA RULE:
+A character LoRA defines the subject's biological traits.
+- DO NOT mention the subject's hair color or eye color.
+- DO keep hairstyle shape/length (without hair color), facial expression, pose, actions, physical interactions with surrounding objects, clothing/colors, and every detail of objects and setting.`
+    : '';
+
+  const userHintBlock = cleanUserHint
+    ? `\nUSER FOCUS / CONTEXT HINT:
+"${cleanUserHint}"
+Prioritize and accurately incorporate the objects, action, or focus mentioned in this hint while faithfully describing the image.`
     : '';
 
   const systemInstruction = `You are an uncensored, clinical Stable Diffusion and Flux image captioning specialist.
-Describe the subject, ${
+Describe the entire scene accurately in one cohesive, vivid image generation prompt covering ALL four pillars with balanced detail:
+1. Core Action & Spatial Interaction: What the subject is physically doing and how they interact with surrounding objects or surfaces (e.g., climbing into, sitting on, leaning against, holding).
+2. Prominent Objects, Machinery & Props: Name specific appliances, machines, furniture, vehicles, structures, and props using concrete nouns, scale, colors, and materials (never collapse notable props into vague words like "indoors", "equipment", or "room").
+3. Setting, Lighting & Framing: Specific environment/location, background elements, lighting mood, and camera angle/shot framing.
+4. Subject Details: Transient facial expression, pose, ${
     hasCharacter
-      ? 'transient facial expression/emotion, pose, clothing (including exact garment and accessory colors, patterns, and materials) or nudity/NSFW state'
-      : 'appearance, clothing (with exact colors and materials) or nudity/anatomical details (including explicit or NSFW elements if present), pose'
-  }, camera framing, setting, lighting, and artistic style in one cohesive, vivid image generation prompt.${characterConstraintBlock}
+      ? 'hairstyle shape (without hair color), and clothing (with colors/materials) or nudity/NSFW state'
+      : 'appearance, hairstyle, and clothing (with colors/materials) or nudity/anatomical details (including explicit or NSFW elements if present)'
+  }.${characterConstraintBlock}${userHintBlock}
 Rules:
-- Refer to the subject descriptively ("the subject", "a woman", "a man", etc.) without inventing personal names.
+- Refer to the subject descriptively ("a woman", "the subject", "a man", etc.) without inventing personal names.
 - Never mention LoRA or checkpoint filenames.
 - Output ONLY the final image generation prompt text with no preamble, no quotes, and no markdown.`;
 
@@ -940,22 +934,19 @@ Rules:
     return sanitizeAgentPrompt(stripped, params.characterName);
   };
 
-  // Try Vision path if model ID looks like a VLM or if we want to attempt multimodal completion first
-  const tryVisionFirst = isLikelyVisionModelId(modelToUse) || extractedTags.length === 0;
+  // Try Vision directly (omitting WD14 tags so Danbooru tag limits never bias real-world scenes/props)
+  const tryVisionFirst = await checkLmStudioVisionSupport(baseUrl, modelToUse);
 
   if (tryVisionFirst) {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 35000);
+      const timer = setTimeout(() => controller.abort(), 90_000);
 
-      const tagHintText =
-        extractedTags.length > 0
-          ? `\nReference visual tags detected in image: ${extractedTags.slice(0, 45).join(', ')}.`
-          : '';
-
-      const visionUserPrompt = hasCharacter
-        ? `Analyze this image and write a detailed image generation prompt capturing the pose, facial expression/emotion (e.g. smiling, blushing), full outfit/clothing details WITH ALL EXACT CLOTHING AND ACCESSORY COLORS (or nudity/NSFW state), hairstyle shape, camera framing, lighting, and environment. Only omit the subject's biological hair color, eye color, facial structure/freckles, skin tone, race/ethnicity, and body type/proportions.${tagHintText}`
-        : `Analyze this image and write a detailed, accurate image generation prompt capturing the subject, pose, clothing (with exact colors and fabrics) or anatomy, framing, lighting, and environment.${tagHintText}`;
+      const visionUserPrompt = `${
+        hasCharacter
+          ? 'Analyze this image and write a detailed image generation prompt capturing: (1) the exact action and spatial interaction between the subject and any objects/machinery/props, (2) specific concrete objects, appliances, furniture, or props in the foreground/midground with their colors and materials, (3) camera framing, lighting, and setting, and (4) the subject’s expression, pose, hairstyle shape, and clothing with colors/materials (or nudity/NSFW state). Only omit hair color and eye color.'
+          : 'Analyze this image and write a detailed image generation prompt capturing: (1) the exact action and spatial interaction between the subject and any objects/machinery/props, (2) specific concrete objects, appliances, furniture, or props in the foreground/midground with their colors and materials, (3) camera framing, lighting, and setting, and (4) the subject’s appearance, expression, pose, and clothing with colors/materials (or anatomical/NSFW details).'
+      }${cleanUserHint ? `\n\nUser focus hint: ${cleanUserHint}` : ''}`;
 
       const visionRes = await fetch(chatEndpoint, {
         method: 'POST',
@@ -980,7 +971,7 @@ Rules:
             },
           ],
           temperature: 0.4,
-          max_tokens: 500,
+          max_tokens: 550,
         }),
       });
       clearTimeout(timer);
@@ -1002,7 +993,7 @@ Rules:
           return {
             prompt: finalizePrompt(cleaned),
             pipelineUsed: 'vision',
-            tags: extractedTags,
+            tags: [],
             modelUsed: data?.model || modelToUse,
             savedFilename,
           };
@@ -1013,12 +1004,11 @@ Rules:
     }
   }
 
-  // Path 2: WD14 Visual/NSFW Tags -> LM Studio Text Model
-  if (extractedTags.length === 0) {
-    const tagItems = await interrogateImageBufferWithWd14(imageBuffer, 0.22);
-    const rawTags = tagItems.map((t) => t.tag);
-    extractedTags = hasCharacter ? filterCharacterIdentityTags(rawTags) : rawTags;
-  }
+  // Path 2: WD14 Visual/NSFW Tags -> LM Studio Text Model (when Vision model is unavailable or unsupported)
+  let extractedTags: string[] = [];
+  const tagItems = await interrogateImageBufferWithWd14(imageBuffer, 0.22);
+  const rawTags = tagItems.map((t) => t.tag);
+  extractedTags = hasCharacter ? filterCharacterIdentityTags(rawTags) : rawTags;
 
   if (extractedTags.length === 0) {
     throw new Error('Could not extract visual features from the uploaded image.');
@@ -1027,9 +1017,11 @@ Rules:
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 30000);
   try {
-    const textUserPrompt = hasCharacter
-      ? `Convert the following ordered visual tags (extracted from an image) into a single cohesive, descriptive image generation prompt. Preserve all clothing/outfit/accessory colors and fabrics (e.g. red dress, black bikini, white stockings), facial expressions/emotions (e.g. smiling, blushing), hairstyle shape, pose, nudity/NSFW details, lighting, camera framing, and setting. Only omit the subject's biological hair color, eye color, permanent facial features, skin tone, race/ethnicity, and body type/proportions:\n\nVisual Tags: ${extractedTags.join(', ')}\n\nOutput ONLY the prompt text:`
-      : `Convert the following ordered visual tags (extracted from an image, ordered from highest confidence to lowest) into a single cohesive, descriptive image generation prompt that preserves all subject, pose, clothing (with exact colors), anatomical/NSFW, lighting, and setting details:\n\nVisual Tags: ${extractedTags.join(', ')}\n\nOutput ONLY the prompt text:`;
+    const textUserPrompt = `${
+      hasCharacter
+        ? `Convert the following ordered visual tags into a single cohesive image generation prompt preserving the action, pose, any scene objects/props, setting, lighting, camera framing, facial expressions, hairstyle shape, and clothing colors/materials (or nudity/NSFW details). Only omit hair color and eye color:\n\nVisual Tags: ${extractedTags.join(', ')}`
+        : `Convert the following ordered visual tags (from highest confidence to lowest) into a single cohesive image generation prompt preserving subject, action, pose, scene objects/props, clothing colors/materials, anatomical/NSFW details, lighting, and setting:\n\nVisual Tags: ${extractedTags.join(', ')}`
+    }${cleanUserHint ? `\n\nUser focus hint: ${cleanUserHint}` : ''}\n\nOutput ONLY the prompt text:`;
 
     const textRes = await fetch(chatEndpoint, {
       method: 'POST',
@@ -1045,7 +1037,7 @@ Rules:
           },
         ],
         temperature: 0.5,
-        max_tokens: 500,
+        max_tokens: 550,
       }),
     });
     clearTimeout(timer);

@@ -289,13 +289,14 @@ generationRouter.post('/lmstudio/chat', async (req, res) => {
  */
 generationRouter.post('/interrogate-image', async (req, res) => {
   try {
-    const { imageBase64DataUrl, characterName } = req.body || {};
+    const { imageBase64DataUrl, characterName, userHint } = req.body || {};
     if (!imageBase64DataUrl || typeof imageBase64DataUrl !== 'string') {
       return res.status(400).json({ error: 'Please provide an image to interrogate.' });
     }
     const result = await interrogateImageToPrompt({
       imageBase64DataUrl,
       characterName: characterName ? String(characterName) : undefined,
+      userHint: userHint ? String(userHint).trim() : undefined,
     });
     res.json(result);
   } catch (err: any) {

@@ -619,7 +619,11 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  interrogateImage: (payload: { imageBase64DataUrl: string; characterName?: string }) =>
+  interrogateImage: (payload: {
+    imageBase64DataUrl: string;
+    characterName?: string;
+    userHint?: string;
+  }) =>
     requestJson<{
       prompt: string;
       pipelineUsed: 'vision' | 'wd14_text';

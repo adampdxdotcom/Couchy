@@ -322,9 +322,11 @@ export function useQuickGenSubmit({
       const matchedRatio = resolveClosestAspectRatio(width, height);
       setAspectRatio(matchedRatio);
 
+      const existingHint = prompt.trim();
       const res = await api.interrogateImage({
         imageBase64DataUrl: dataUrl,
         characterName: attachedCharacter?.name,
+        userHint: existingHint || undefined,
       });
 
       if (res.savedFilename) {
