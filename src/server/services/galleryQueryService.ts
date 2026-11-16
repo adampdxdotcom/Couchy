@@ -330,6 +330,7 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
       createdAt: r.created_at,
       fileMtime: r.file_mtime,
       isMissing: Boolean(r.is_missing),
+      isUploadedReference: Boolean(r.is_uploaded_reference),
       thumbnailUrl: `/api/images/${r.id}/thumbnail${hashParam}`,
       originalUrl: `/api/images/${r.id}/file`,
       dependencyStatus: r.dependency_status,
@@ -544,6 +545,7 @@ export function queryGalleryImages(filters: Partial<GalleryFilterState>): ImageR
       LEFT JOIN ratings r ON r.content_hash = i.content_hash
       LEFT JOIN image_metadata m ON m.image_id = i.id
       WHERE i.is_missing = 0
+        AND COALESCE(i.is_uploaded_reference, 0) = 0
     `
     )
     .all() as any[];

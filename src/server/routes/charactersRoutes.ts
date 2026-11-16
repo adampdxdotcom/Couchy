@@ -12,6 +12,7 @@ import {
   runAssistedCharacterIdentificationForAll,
 } from '../services/characterService.ts';
 import { analyzeCharacterPortraitPhysicalTraits } from '../services/lmStudioService.ts';
+import { resolveImageDiskPath } from '../services/scannerService.ts';
 import { normalizePortraitCrop } from '../../shared/utils.ts';
 
 export const charactersRouter = Router();
@@ -265,15 +266,19 @@ charactersRouter.post('/:id/analyze-portrait', async (req, res) => {
     }
 
     const imgRow = db
-      .prepare('SELECT id, relative_path FROM images WHERE id = ?')
-      .get(portraitId) as { id: number; relative_path: string } | undefined;
+      .prepare(
+        'SELECT id, relative_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ?'
+      )
+      .get(portraitId) as
+      | { id: number; relative_path: string; is_uploaded_reference: number }
+      | undefined;
 
     if (!imgRow) {
       res.status(404).json({ error: 'Portrait image record not found.' });
       return;
     }
 
-    const origPath = path.resolve(appConfig.comfyuiOutputDir, imgRow.relative_path);
+    const origPath = resolveImageDiskPath(imgRow);
     if (!fs.existsSync(origPath)) {
       res.status(404).json({ error: 'Portrait image file is missing on disk.' });
       return;

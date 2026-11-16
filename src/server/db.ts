@@ -679,6 +679,15 @@ export function runMigrations(): void {
         ALTER TABLE generation_batches ADD COLUMN lora_names_json TEXT;
       `,
     },
+    {
+      version: 23,
+      name: 'uploaded_inspiration_reference_images',
+      sql: `
+        ALTER TABLE images ADD COLUMN is_uploaded_reference INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE generation_batches ADD COLUMN inspiration_image_id INTEGER;
+        CREATE INDEX IF NOT EXISTS idx_images_uploaded_ref ON images(is_uploaded_reference);
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

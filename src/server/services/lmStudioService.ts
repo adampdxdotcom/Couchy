@@ -860,6 +860,7 @@ export async function interrogateImageToPrompt(params: {
   pipelineUsed: 'vision' | 'wd14_text';
   tags: string[];
   modelUsed: string;
+  savedFilename?: string | null;
 }> {
   const status = await checkLmStudioStatus();
   if (!status.online) {
@@ -877,6 +878,7 @@ export async function interrogateImageToPrompt(params: {
   const fullDataUrl = base64Match ? rawDataUrl : `data:image/jpeg;base64,${base64Payload}`;
 
   // Optionally persist the 1MP downscaled prompt image to data/uploaded if enabled in System & Backup settings
+  let savedFilename: string | null = null;
   const saveUploadedRow = db
     .prepare("SELECT value FROM app_settings WHERE key = 'save_uploaded_prompt_images'")
     .get() as { value: string } | undefined;
@@ -887,11 +889,10 @@ export async function interrogateImageToPrompt(params: {
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const mimePart = base64Match ? base64Match[0].toLowerCase() : '';
       const ext = mimePart.includes('png') ? 'png' : mimePart.includes('webp') ? 'webp' : 'jpg';
-      const savedPath = path.join(
-        appConfig.uploadedImagesDir,
-        `prompt-1mp-${timestamp}-${hashPrefix}.${ext}`
-      );
+      const generatedName = `prompt-1mp-${timestamp}-${hashPrefix}.${ext}`;
+      const savedPath = path.join(appConfig.uploadedImagesDir, generatedName);
       fs.writeFileSync(savedPath, imageBuffer);
+      savedFilename = generatedName;
     } catch (err) {
       console.error('Failed to save 1MP uploaded prompt image:', err);
     }
@@ -1003,6 +1004,7 @@ Rules:
             pipelineUsed: 'vision',
             tags: extractedTags,
             modelUsed: data?.model || modelToUse,
+            savedFilename,
           };
         }
       }
@@ -1071,6 +1073,7 @@ Rules:
       pipelineUsed: 'wd14_text',
       tags: extractedTags,
       modelUsed: data?.model || modelToUse,
+      savedFilename,
     };
   } finally {
     clearTimeout(timer);

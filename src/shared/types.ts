@@ -113,6 +113,7 @@ export interface ImageSeriesItem {
   rating: number;
   createdAt: string;
   chatSnapshot: QuickGenChatMessage[];
+  isUploadedReference?: boolean;
 }
 
 export interface ImageRecord {
@@ -127,6 +128,7 @@ export interface ImageRecord {
   createdAt: string;
   fileMtime: string;
   isMissing: boolean;
+  isUploadedReference?: boolean;
   thumbnailUrl: string;
   originalUrl: string;
   dependencyStatus: DependencyStatus;

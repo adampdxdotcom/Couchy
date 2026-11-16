@@ -47,6 +47,7 @@ export function useQuickGenSubmit({
   const [chatMessages, setChatMessages] = useState<QuickGenChatMessage[]>([]);
   const [activeSeriesId, setActiveSeriesId] = useState<number | null>(null);
   const [branchFromImageId, setBranchFromImageId] = useState<number | null>(null);
+  const [inspirationFilename, setInspirationFilename] = useState<string | null>(null);
   const [isChatting, setIsChatting] = useState(false);
   const [expandingMessageId, setExpandingMessageId] = useState<string | null>(null);
 
@@ -190,6 +191,7 @@ export function useQuickGenSubmit({
     lastAppliedTimestampRef.current = prefillPayload.timestamp;
 
     setIsMinimized(false);
+    setInspirationFilename(null);
     setRemovedLoraKeys(
       new Set((prefillPayload.excludedLoras || []).map((k) => normalizeLoraKey(k)).filter(Boolean))
     );
@@ -286,6 +288,7 @@ export function useQuickGenSubmit({
 
     setIsInterrogating(true);
     setIsMinimized(false);
+    setInspirationFilename(null);
     try {
       const { dataUrl, width, height } = await downscaleImageFileTo1Mp(file);
       const matchedRatio = resolveClosestAspectRatio(width, height);
@@ -295,6 +298,10 @@ export function useQuickGenSubmit({
         imageBase64DataUrl: dataUrl,
         characterName: attachedCharacter?.name,
       });
+
+      if (res.savedFilename) {
+        setInspirationFilename(res.savedFilename);
+      }
 
       if (res.prompt) {
         setPrompt(res.prompt);
@@ -558,6 +565,7 @@ export function useQuickGenSubmit({
         checkpointName: attachedCheckpoint || undefined,
         seriesId: isMultiShotSet ? null : activeSeriesId,
         branchFromImageId: isMultiShotSet ? null : branchFromImageId,
+        inspirationFilename: !activeSeriesId && !branchFromImageId ? inspirationFilename : null,
         chatSnapshot: snapshotForBatch,
       });
 
@@ -586,6 +594,7 @@ export function useQuickGenSubmit({
       setExpandingMessageId(null);
       setActiveSeriesId(null);
       setBranchFromImageId(null);
+      setInspirationFilename(null);
       setAgentEnabled(false);
       setAttachedCharacter(null);
       setAttachedCheckpoint(null);
@@ -689,6 +698,7 @@ export function useQuickGenSubmit({
     setExpandingMessageId(null);
     setActiveSeriesId(null);
     setBranchFromImageId(null);
+    setInspirationFilename(null);
     setAgentEnabled(false);
     setAspectRatio(workflowDefaultAr);
     setMegapixels(workflowDefaultMp);

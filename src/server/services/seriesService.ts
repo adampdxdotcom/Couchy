@@ -296,7 +296,7 @@ export function attachGenerationItemOutputToSeries(itemId: number, imageId: numb
   if (!itemId || !imageId || imageId <= 0) return null;
   const batchMeta = db
     .prepare(
-      `SELECT gi.item_index, gb.total_count, gb.series_id, gb.branch_from_image_id, gb.chat_snapshot_json
+      `SELECT gi.item_index, gb.total_count, gb.series_id, gb.branch_from_image_id, gb.inspiration_image_id, gb.chat_snapshot_json
        FROM generation_items gi
        JOIN generation_batches gb ON gb.id = gi.batch_id
        WHERE gi.id = ?`
@@ -307,6 +307,7 @@ export function attachGenerationItemOutputToSeries(itemId: number, imageId: numb
         total_count: number;
         series_id: number | null;
         branch_from_image_id: number | null;
+        inspiration_image_id: number | null;
         chat_snapshot_json: string | null;
       }
     | undefined;
@@ -315,13 +316,18 @@ export function attachGenerationItemOutputToSeries(itemId: number, imageId: numb
     !batchMeta ||
     (!batchMeta.series_id &&
       !batchMeta.branch_from_image_id &&
+      !batchMeta.inspiration_image_id &&
       !(batchMeta.chat_snapshot_json && batchMeta.chat_snapshot_json.trim()))
   ) {
     return null;
   }
 
-  const preferredStepOrder =
-    batchMeta.total_count > 1 && !batchMeta.branch_from_image_id && batchMeta.item_index >= 1
+  // When an inspiration image occupies step 0, place generated outputs at steps 1..N (preserving shot order)
+  const preferredStepOrder = batchMeta.inspiration_image_id
+    ? batchMeta.item_index >= 1
+      ? batchMeta.item_index
+      : 1
+    : batchMeta.total_count > 1 && !batchMeta.branch_from_image_id && batchMeta.item_index >= 1
       ? batchMeta.item_index - 1
       : null;
 
@@ -546,6 +552,7 @@ interface RawSeriesMemberRow {
   width: number;
   height: number;
   is_missing: number;
+  is_uploaded_reference: number;
   is_favorite: number;
   rating: number;
 }
@@ -569,6 +576,7 @@ function buildSeriesItemRecord(r: RawSeriesMemberRow): ImageSeriesItem {
     rating: Number(r.rating || 0),
     createdAt: r.item_created_at,
     chatSnapshot: parseChatSnapshot(r.chat_snapshot_json),
+    isUploadedReference: Boolean(r.is_uploaded_reference),
   };
 }
 
@@ -618,6 +626,7 @@ export function enrichSingleImageWithSeries(
          isi.series_id, s.series_kind, s.poster_image_id, isi.image_id, isi.step_order,
          isi.chat_snapshot_json, isi.created_at AS item_created_at,
          i.filename, i.content_hash, i.width, i.height, i.is_missing,
+         COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference,
          COALESCE(r.is_favorite, 0) AS is_favorite,
          COALESCE(r.rating, 0) AS rating
        FROM image_series_items isi
@@ -657,6 +666,7 @@ export function collapseSeriesInGalleryPool(pool: ImageRecord[]): ImageRecord[] 
          isi.series_id, s.series_kind, s.poster_image_id, isi.image_id, isi.step_order,
          isi.chat_snapshot_json, isi.created_at AS item_created_at,
          i.filename, i.content_hash, i.width, i.height, i.is_missing,
+         COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference,
          COALESCE(r.is_favorite, 0) AS is_favorite,
          COALESCE(r.rating, 0) AS rating
        FROM image_series_items isi

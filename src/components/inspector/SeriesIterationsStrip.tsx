@@ -142,6 +142,7 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
         {displayItems.map((item, idx) => {
           const isSelected = item.imageId === activeImageId;
           const hasChat = item.chatSnapshot && item.chatSnapshot.length > 0;
+          const isInspo = Boolean(item.isUploadedReference);
           return (
             <button
               key={`${item.seriesId}-${item.imageId}`}
@@ -150,11 +151,17 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
               className={`relative group w-14 h-14 rounded-lg overflow-hidden shrink-0 border transition-all cursor-pointer ${
                 isSelected
                   ? 'border-indigo-400 ring-2 ring-indigo-500/60 scale-[1.03]'
+                  : isInspo
+                  ? 'border-cyan-500/50 hover:border-cyan-400 opacity-90 hover:opacity-100'
                   : 'border-zinc-800 hover:border-zinc-600 opacity-75 hover:opacity-100'
               }`}
-              title={`Step #${idx + 1} · ${item.width}×${item.height}${
-                item.isFavorite ? ' · Poster (Favorited)' : ''
-              }`}
+              title={
+                isInspo
+                  ? `Uploaded Inspiration · ${item.width}×${item.height}`
+                  : `Step #${idx + 1} · ${item.width}×${item.height}${
+                      item.isFavorite ? ' · Poster (Favorited)' : ''
+                    }`
+              }
             >
               <img
                 src={item.thumbnailUrl}
@@ -162,10 +169,16 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover"
               />
-              <span className="absolute bottom-0.5 left-0.5 px-1 py-0.2 rounded bg-black/75 text-[9px] font-mono font-semibold text-zinc-200 tabular-nums">
-                #{idx + 1}
+              <span
+                className={`absolute bottom-0.5 left-0.5 px-1 py-0.2 rounded text-[9px] font-mono font-semibold tabular-nums ${
+                  isInspo
+                    ? 'bg-cyan-950/90 border border-cyan-500/50 text-cyan-200'
+                    : 'bg-black/75 text-zinc-200'
+                }`}
+              >
+                {isInspo ? 'Inspo' : `#${idx + 1}`}
               </span>
-              {item.isFavorite && (
+              {item.isFavorite && !isInspo && (
                 <span
                   className="absolute top-0.5 right-0.5 p-0.5 rounded-full bg-black/75 text-rose-400"
                   title="Series Poster (Favorited)"

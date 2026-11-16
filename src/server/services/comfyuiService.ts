@@ -6,6 +6,7 @@ import { appConfig } from '../config.ts';
 import {
   copyImageMetadataToDerivedImage,
   recomputeImageDependencyStatus,
+  resolveImageDiskPath,
 } from './scannerService.ts';
 import {
   COUCHY_COMFY_CLIENT_ID,
@@ -795,16 +796,24 @@ export async function submitImageUpscale(params: {
   targetMegapixels: number;
 }): Promise<{ promptId: string; targetMegapixels: number; sourceFilename: string }> {
   const imgRow = db
-    .prepare('SELECT id, relative_path, filename, is_missing FROM images WHERE id = ?')
+    .prepare(
+      'SELECT id, relative_path, filename, is_missing, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ?'
+    )
     .get(params.imageId) as
-    | { id: number; relative_path: string; filename: string; is_missing: number }
+    | {
+        id: number;
+        relative_path: string;
+        filename: string;
+        is_missing: number;
+        is_uploaded_reference: number;
+      }
     | undefined;
 
   if (!imgRow) {
     throw new Error('Image not found.');
   }
 
-  const origPath = path.resolve(appConfig.comfyuiOutputDir, imgRow.relative_path);
+  const origPath = resolveImageDiskPath(imgRow);
   if (imgRow.is_missing || !fs.existsSync(origPath)) {
     throw new Error('Original image file is missing on disk.');
   }

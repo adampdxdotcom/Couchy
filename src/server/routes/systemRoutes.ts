@@ -40,7 +40,11 @@ export const systemRouter = Router();
  */
 systemRouter.get('/health', (_req, res) => {
   const imgCount = (
-    db.prepare('SELECT COUNT(*) AS c FROM images WHERE is_missing = 0').get() as { c: number }
+    db
+      .prepare(
+        'SELECT COUNT(*) AS c FROM images WHERE is_missing = 0 AND COALESCE(is_uploaded_reference, 0) = 0'
+      )
+      .get() as { c: number }
   ).c;
   const charCount = (db.prepare('SELECT COUNT(*) AS c FROM characters').get() as { c: number }).c;
   const loraCount = (

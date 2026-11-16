@@ -359,12 +359,13 @@ export function getGenerationStats(params: {
   const rangeStartIso = new Date(rangeStartMs).toISOString();
   const rangeEndIso = new Date(rangeEndMs).toISOString();
 
-  // Include all non-missing images (both rejected and archived) since all represent real generations
+  // Include all non-missing generated images (including rejected and archived), excluding uploaded prompt references
   const rows = db
     .prepare(
       `SELECT file_mtime
        FROM images
        WHERE is_missing = 0
+         AND COALESCE(is_uploaded_reference, 0) = 0
          AND file_mtime >= ?
          AND file_mtime < ?
        ORDER BY file_mtime ASC`
@@ -375,7 +376,8 @@ export function getGenerationStats(params: {
     .prepare(
       `SELECT COUNT(*) AS totalAllTime, MAX(file_mtime) AS latestGenerationIso
        FROM images
-       WHERE is_missing = 0`
+       WHERE is_missing = 0
+         AND COALESCE(is_uploaded_reference, 0) = 0`
     )
     .get() as { totalAllTime: number; latestGenerationIso: string | null } | undefined;
 

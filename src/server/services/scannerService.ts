@@ -172,6 +172,95 @@ export async function ensureWebpThumbnail(
 }
 
 /**
+ * Resolves the absolute disk path for an indexed image row, routing uploaded prompt
+ * inspiration references to `appConfig.uploadedImagesDir` and generated outputs to `comfyuiOutputDir`.
+ */
+export function resolveImageDiskPath(row: {
+  relative_path: string;
+  is_uploaded_reference?: number | boolean | null;
+}): string {
+  const rel = String(row.relative_path || '');
+  if (row.is_uploaded_reference || rel.startsWith('__uploaded__/')) {
+    return path.resolve(appConfig.uploadedImagesDir, path.basename(rel));
+  }
+  return path.resolve(appConfig.comfyuiOutputDir, rel);
+}
+
+/**
+ * Indexes a saved 1MP uploaded prompt image from `appConfig.uploadedImagesDir` into `images`
+ * (`is_uploaded_reference = 1`) so it can be injected as the inspiration step (#0) of a new stack.
+ */
+export async function indexUploadedInspirationImage(
+  filename: string,
+  positivePrompt?: string | null
+): Promise<number | null> {
+  const safeName = path.basename(String(filename || '').trim());
+  if (!safeName) return null;
+
+  const fullPath = path.resolve(appConfig.uploadedImagesDir, safeName);
+  const uploadedRoot = path.resolve(appConfig.uploadedImagesDir);
+  if (!fullPath.startsWith(uploadedRoot + path.sep) || !fs.existsSync(fullPath)) {
+    return null;
+  }
+
+  const stat = fs.statSync(fullPath);
+  if (!stat.isFile() || stat.size <= 0) return null;
+
+  const relativePath = `__uploaded__/${safeName}`;
+  const existing = db
+    .prepare('SELECT id FROM images WHERE relative_path = ? LIMIT 1')
+    .get(relativePath) as { id: number } | undefined;
+  if (existing) {
+    return existing.id;
+  }
+
+  const contentHash = computeFileSha256(fullPath);
+  const { thumbPath, width, height, format } = await ensureWebpThumbnail(fullPath, contentHash);
+  if (width <= 0 || height <= 0 || !thumbPath) {
+    return null;
+  }
+
+  const mtimeIso = stat.mtime.toISOString();
+  const cleanPrompt = (positivePrompt || '').trim() || null;
+
+  const imageId = db.transaction(() => {
+    const info = db
+      .prepare(
+        `INSERT INTO images
+          (content_hash, relative_path, filename, file_size, width, height, format, file_mtime, is_missing, thumbnail_path, dependency_status, is_uploaded_reference)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'ready', 1)`
+      )
+      .run(
+        contentHash,
+        relativePath,
+        safeName,
+        stat.size,
+        width,
+        height,
+        format,
+        mtimeIso,
+        thumbPath
+      );
+    const id = Number(info.lastInsertRowid);
+
+    db.prepare('INSERT OR IGNORE INTO ratings (content_hash, image_id) VALUES (?, ?)').run(
+      contentHash,
+      id
+    );
+
+    db.prepare(
+      `INSERT INTO image_metadata (
+        image_id, positive_prompt, missing_fields_json, provenance_json, raw_metadata_json
+      ) VALUES (?, ?, '[]', '{"source":"uploaded_inspiration"}', '{}')`
+    ).run(id, cleanPrompt);
+
+    return id;
+  })();
+
+  return imageId;
+}
+
+/**
  * Deletes a single corrupt/0x0 image record and any orphaned series rows from SQLite.
  */
 function deleteCorruptImageRecord(imageId: number): void {
@@ -245,7 +334,7 @@ export async function runBackgroundThumbnailMigration(): Promise<void> {
 
     const rows = db
       .prepare(
-        `SELECT id, content_hash, relative_path, thumbnail_path
+        `SELECT id, content_hash, relative_path, thumbnail_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference
          FROM images
          WHERE is_missing = 0
          ORDER BY id DESC`
@@ -255,6 +344,7 @@ export async function runBackgroundThumbnailMigration(): Promise<void> {
       content_hash: string;
       relative_path: string;
       thumbnail_path: string | null;
+      is_uploaded_reference: number;
     }[];
 
     const updateStmt = db.prepare('UPDATE images SET thumbnail_path = ? WHERE id = ?');
@@ -265,7 +355,7 @@ export async function runBackgroundThumbnailMigration(): Promise<void> {
       const thumbExists = fs.existsSync(expectedThumb);
 
       if (forceRebuildAll || !thumbExists || row.thumbnail_path !== expectedThumb) {
-        const origPath = path.resolve(appConfig.comfyuiOutputDir, row.relative_path);
+        const origPath = resolveImageDiskPath(row);
         if (fs.existsSync(origPath)) {
           const { thumbPath } = await ensureWebpThumbnail(origPath, row.content_hash, forceRebuildAll);
           if (thumbPath && row.thumbnail_path !== thumbPath) {
@@ -857,9 +947,19 @@ export async function runDirectoryScan(
 
       // Reconcile deleted files (mark is_missing = 1 while preserving user annotations)
       const existingRows = db
-        .prepare('SELECT id, relative_path FROM images WHERE is_missing = 0')
-        .all() as { id: number; relative_path: string }[];
+        .prepare(
+          'SELECT id, relative_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE is_missing = 0'
+        )
+        .all() as { id: number; relative_path: string; is_uploaded_reference: number }[];
       for (const row of existingRows) {
+        if (row.is_uploaded_reference) {
+          const uploadedPath = resolveImageDiskPath(row);
+          if (!fs.existsSync(uploadedPath)) {
+            db.prepare('UPDATE images SET is_missing = 1 WHERE id = ?').run(row.id);
+            deleted++;
+          }
+          continue;
+        }
         if (!seenRelativePaths.has(row.relative_path)) {
           db.prepare('UPDATE images SET is_missing = 1 WHERE id = ?').run(row.id);
           deleted++;

@@ -337,7 +337,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 pendingGhosts={matchingPendingGhosts}
                 onSelectIteration={(nextId) => setSelectedIterationId(nextId)}
                 onContinueConversation={
-                  onOpenConversation ? () => onOpenConversation(activeImage) : undefined
+                  onOpenConversation && !activeImage.isUploadedReference
+                    ? () => onOpenConversation(activeImage)
+                    : undefined
                 }
                 onOpenMiniGallery={() => setShowSeriesMiniGallery(true)}
               />

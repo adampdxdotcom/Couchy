@@ -14,7 +14,7 @@ import {
   enrichSingleImageWithSeries,
   setExclusiveSeriesFavorite,
 } from '../services/seriesService.ts';
-import { ensureWebpThumbnail } from '../services/scannerService.ts';
+import { ensureWebpThumbnail, resolveImageDiskPath } from '../services/scannerService.ts';
 import { submitImageUpscale } from '../services/comfyuiService.ts';
 import type { GalleryFilterState } from '../../shared/types.ts';
 
@@ -101,9 +101,17 @@ imagesRouter.get('/:id', (req, res) => {
 imagesRouter.get('/:id/thumbnail', async (req, res) => {
   const id = Number(req.params.id);
   const row = db
-    .prepare('SELECT id, content_hash, relative_path, thumbnail_path FROM images WHERE id = ?')
+    .prepare(
+      'SELECT id, content_hash, relative_path, thumbnail_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ?'
+    )
     .get(id) as
-    | { id: number; content_hash: string; relative_path: string; thumbnail_path: string | null }
+    | {
+        id: number;
+        content_hash: string;
+        relative_path: string;
+        thumbnail_path: string | null;
+        is_uploaded_reference: number;
+      }
     | undefined;
 
   if (!row) {
@@ -123,7 +131,7 @@ imagesRouter.get('/:id/thumbnail', async (req, res) => {
     return;
   }
 
-  const origPath = path.resolve(appConfig.comfyuiOutputDir, row.relative_path);
+  const origPath = resolveImageDiskPath(row);
   if (fs.existsSync(origPath)) {
     const { thumbPath } = await ensureWebpThumbnail(origPath, row.content_hash);
     if (thumbPath && fs.existsSync(thumbPath)) {
@@ -146,15 +154,19 @@ imagesRouter.get('/:id/thumbnail', async (req, res) => {
 imagesRouter.get('/:id/file', (req, res) => {
   const id = Number(req.params.id);
   const row = db
-    .prepare('SELECT relative_path, filename FROM images WHERE id = ?')
-    .get(id) as { relative_path: string; filename: string } | undefined;
+    .prepare(
+      'SELECT relative_path, filename, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ?'
+    )
+    .get(id) as
+    | { relative_path: string; filename: string; is_uploaded_reference: number }
+    | undefined;
 
   if (!row) {
     res.status(404).json({ error: 'Image not found' });
     return;
   }
 
-  const origPath = path.resolve(appConfig.comfyuiOutputDir, row.relative_path);
+  const origPath = resolveImageDiskPath(row);
   if (!fs.existsSync(origPath)) {
     res.status(404).json({ error: 'Original file missing on disk' });
     return;
@@ -372,11 +384,15 @@ imagesRouter.post('/export-zip', (req, res) => {
     const usedNames = new Set<string>();
     for (const id of targetIds) {
       const row = db
-        .prepare('SELECT relative_path, filename FROM images WHERE id = ? AND is_missing = 0')
-        .get(id) as { relative_path: string; filename: string } | undefined;
+        .prepare(
+          'SELECT relative_path, filename, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ? AND is_missing = 0'
+        )
+        .get(id) as
+        | { relative_path: string; filename: string; is_uploaded_reference: number }
+        | undefined;
       if (!row) continue;
 
-      const absPath = path.resolve(appConfig.comfyuiOutputDir, row.relative_path);
+      const absPath = resolveImageDiskPath(row);
       if (!fs.existsSync(absPath)) continue;
 
       let entryName = row.filename;

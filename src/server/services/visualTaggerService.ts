@@ -5,6 +5,7 @@ import sharp from 'sharp';
 import * as ort from 'onnxruntime-node';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
+import { resolveImageDiskPath } from './scannerService.ts';
 import type { VisualTagItem, VisualTaggerStatus } from '../../shared/types.ts';
 
 const HF_MODEL_URL =
@@ -333,6 +334,7 @@ export async function interrogateImageBufferWithWd14(
 function resolveReadableImagePath(imgRow: {
   relative_path: string;
   thumbnail_path: string | null;
+  is_uploaded_reference?: number;
 }): string | null {
   if (imgRow.thumbnail_path) {
     const thumbAbs = path.isAbsolute(imgRow.thumbnail_path)
@@ -341,7 +343,7 @@ function resolveReadableImagePath(imgRow: {
     if (fs.existsSync(thumbAbs)) return thumbAbs;
   }
 
-  const origAbs = path.join(appConfig.comfyuiOutputDir, imgRow.relative_path);
+  const origAbs = resolveImageDiskPath(imgRow);
   if (fs.existsSync(origAbs)) return origAbs;
 
   return null;
@@ -364,10 +366,16 @@ export async function tagSingleImageById(
 
   const imgRow = db
     .prepare(
-      'SELECT id, content_hash, relative_path, thumbnail_path FROM images WHERE id = ? AND is_missing = 0'
+      'SELECT id, content_hash, relative_path, thumbnail_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ? AND is_missing = 0'
     )
     .get(imageId) as
-    | { id: number; content_hash: string; relative_path: string; thumbnail_path: string | null }
+    | {
+        id: number;
+        content_hash: string;
+        relative_path: string;
+        thumbnail_path: string | null;
+        is_uploaded_reference: number;
+      }
     | undefined;
 
   if (!imgRow) return [];

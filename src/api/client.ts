@@ -622,6 +622,7 @@ export const api = {
       pipelineUsed: 'vision' | 'wd14_text';
       tags: string[];
       modelUsed: string;
+      savedFilename?: string | null;
     }>('/api/generation/interrogate-image', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -645,6 +646,7 @@ export const api = {
     baseSeed?: number;
     seriesId?: number | null;
     branchFromImageId?: number | null;
+    inspirationFilename?: string | null;
     chatSnapshot?: QuickGenChatMessage[];
   }) =>
     requestJson<{ batch: GenerationBatchRecord; batches: GenerationBatchRecord[] }>(

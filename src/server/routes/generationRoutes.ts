@@ -19,7 +19,10 @@ import {
   saveLmStudioGuidingTemplate,
   updateLmStudioSettings,
 } from '../services/lmStudioService.ts';
-import { copyImageMetadataToDerivedImage } from '../services/scannerService.ts';
+import {
+  copyImageMetadataToDerivedImage,
+  indexUploadedInspirationImage,
+} from '../services/scannerService.ts';
 import {
   COUCHY_COMFY_CLIENT_ID,
   invalidateComfyQueueCache,
@@ -479,6 +482,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
       baseSeed,
       seriesId,
       branchFromImageId,
+      inspirationFilename,
       chatSnapshot,
     } = req.body || {};
 
@@ -535,22 +539,48 @@ generationRouter.post('/submit-batch', async (req, res) => {
         ? JSON.stringify(chatSnapshot)
         : null;
 
-    // Auto-create a shared multi-shot stack series whenever a multi-image batch (>1 shot) is submitted
-    // from either Quick Gen or Generation Studio without continuing/branching an existing series.
+    // Auto-create a shared stack series when a multi-image batch (>1 shot) or an uploaded
+    // prompt inspiration image starts a fresh generation without continuing/branching an existing series.
     let effectiveSeriesId = seriesId ? Number(seriesId) : null;
-    if (!effectiveSeriesId && !branchFromImageId && promptList.length > 1) {
+    let inspirationImageId: number | null = null;
+    if (!effectiveSeriesId && !branchFromImageId && typeof inspirationFilename === 'string' && inspirationFilename.trim()) {
+      inspirationImageId = await indexUploadedInspirationImage(
+        inspirationFilename.trim(),
+        promptList[0]
+      );
+    }
+
+    if (!effectiveSeriesId && !branchFromImageId && (promptList.length > 1 || inspirationImageId)) {
+      const seriesKind = promptList.length > 1 ? 'multi_shot' : 'iterative';
       const createdSeries = db
-        .prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (NULL, 'multi_shot')`)
-        .run();
+        .prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (NULL, ?)`)
+        .run(seriesKind);
       effectiveSeriesId = Number(createdSeries.lastInsertRowid);
+
+      if (inspirationImageId) {
+        const inspSeedSnapshot =
+          serializedChatSnapshot ||
+          JSON.stringify([
+            {
+              id: `insp-${inspirationImageId}`,
+              role: 'assistant',
+              content: 'Uploaded inspiration image:',
+              proposedPrompt: promptList[0],
+            },
+          ]);
+        db.prepare(
+          `INSERT OR REPLACE INTO image_series_items (series_id, image_id, step_order, chat_snapshot_json)
+           VALUES (?, ?, 0, ?)`
+        ).run(effectiveSeriesId, inspirationImageId, inspSeedSnapshot);
+      }
     }
 
     // 1. Create batch and items in SQLite
     const batchInfo = db
       .prepare(
         `INSERT INTO generation_batches
-          (character_id, workflow_id, theme_title, mode, total_count, aspect_ratio, megapixels, width, height, checkpoint_name, lora_count, lora_names_json, series_id, branch_from_image_id, chat_snapshot_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          (character_id, workflow_id, theme_title, mode, total_count, aspect_ratio, megapixels, width, height, checkpoint_name, lora_count, lora_names_json, series_id, branch_from_image_id, inspiration_image_id, chat_snapshot_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         characterId ? Number(characterId) : null,
@@ -567,6 +597,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
         serializedLoraNames,
         effectiveSeriesId,
         branchFromImageId ? Number(branchFromImageId) : null,
+        inspirationImageId,
         serializedChatSnapshot
       );
     const batchId = Number(batchInfo.lastInsertRowid);
