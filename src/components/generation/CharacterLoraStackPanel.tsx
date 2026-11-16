@@ -162,8 +162,8 @@ export const CharacterLoraStackPanel: React.FC<CharacterLoraStackPanelProps> = (
                   </div>
                   <input
                     type="range"
-                    min="0"
-                    max="2"
+                    min="-10"
+                    max="10"
                     step="0.05"
                     value={item.modelStrength}
                     onChange={(e) => {
@@ -186,8 +186,8 @@ export const CharacterLoraStackPanel: React.FC<CharacterLoraStackPanelProps> = (
                   </div>
                   <input
                     type="range"
-                    min="0"
-                    max="2"
+                    min="-10"
+                    max="10"
                     step="0.05"
                     value={item.clipStrength}
                     onChange={(e) => {

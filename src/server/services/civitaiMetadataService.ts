@@ -320,7 +320,7 @@ export function extractStaticPreviewImages(
 }
 
 function clampWeight(n: number): number | null {
-  if (!Number.isFinite(n) || n < 0.05 || n > 2.0) return null;
+  if (!Number.isFinite(n) || n < -10.0 || n > 10.0) return null;
   return Number(n.toFixed(2));
 }
 
@@ -588,7 +588,7 @@ export function applyCivitaiEnrichmentToModel(
     meta.recommendedWeight !== null &&
     meta.recommendedWeight !== undefined
   ) {
-    nextModelStrength = Math.max(0.0, Math.min(2.0, Number(meta.recommendedWeight)));
+    nextModelStrength = Math.max(-10.0, Math.min(10.0, Number(meta.recommendedWeight)));
     filledDefaultStrength = true;
   }
 

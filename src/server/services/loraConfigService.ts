@@ -92,11 +92,11 @@ export function updateLoraMentionConfig(input: LoraMentionConfigInput): void {
 
   const cleanModelStr =
     defaultModelStrength !== undefined && !Number.isNaN(Number(defaultModelStrength))
-      ? Math.max(0.0, Math.min(2.0, Number(defaultModelStrength)))
+      ? Math.max(-10.0, Math.min(10.0, Number(defaultModelStrength)))
       : (existingRow?.default_model_strength ?? 1.0);
   const cleanClipStr =
     defaultClipStrength !== undefined && !Number.isNaN(Number(defaultClipStrength))
-      ? Math.max(0.0, Math.min(2.0, Number(defaultClipStrength)))
+      ? Math.max(-10.0, Math.min(10.0, Number(defaultClipStrength)))
       : (existingRow?.default_clip_strength ?? 1.0);
   const isMention =
     mentionEnabled !== undefined ? (mentionEnabled ? 1 : 0) : (existingRow?.mention_enabled ?? 0);

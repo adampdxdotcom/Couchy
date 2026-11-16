@@ -201,8 +201,8 @@ export const PowerLoraLoaderEditor: React.FC<PowerLoraLoaderEditorProps> = ({
                   <input
                     type="number"
                     step="0.05"
-                    min="-4"
-                    max="4"
+                    min="-10"
+                    max="10"
                     value={entry.strength}
                     onChange={(e) => {
                       const val = parseFloat(e.target.value);

@@ -437,8 +437,8 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
             <input
               key={`${lora.filename}-model-str-${lora.defaultModelStrength ?? 1.0}`}
               type="number"
-              min="0.0"
-              max="2.0"
+              min="-10.0"
+              max="10.0"
               step="0.05"
               defaultValue={lora.defaultModelStrength ?? 1.0}
               onBlur={(e) => {
@@ -450,7 +450,7 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
               className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs font-mono text-zinc-100 focus:outline-none"
             />
             <div className="flex items-center justify-between text-[11px] text-zinc-500">
-              <span>Range 0.0 to 2.0</span>
+              <span>Range -10.0 to +10.0</span>
               {lora.recommendedWeight !== null && lora.recommendedWeight !== undefined && (
                 <span className="font-mono text-indigo-300">
                   Rec: {lora.recommendedWeight.toFixed(2)}x
@@ -482,8 +482,8 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
             <input
               key={`${lora.filename}-clip-str-${lora.defaultClipStrength ?? 1.0}`}
               type="number"
-              min="0.0"
-              max="2.0"
+              min="-10.0"
+              max="10.0"
               step="0.05"
               defaultValue={lora.defaultClipStrength ?? 1.0}
               onBlur={(e) => {
@@ -494,7 +494,7 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
               }}
               className="w-full px-3 py-1.5 bg-zinc-950 border border-zinc-800 focus:border-indigo-500 rounded-lg text-xs font-mono text-zinc-100 focus:outline-none"
             />
-            <p className="text-[11px] text-zinc-500">CLIP conditioning weight (0.0 to 2.0).</p>
+            <p className="text-[11px] text-zinc-500">CLIP conditioning weight (-10.0 to +10.0).</p>
           </div>
         </div>
 

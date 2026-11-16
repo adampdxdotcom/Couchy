@@ -37,8 +37,8 @@ interface QuickGenAttachmentsBarProps {
   onUpdateCharacterStrength?: (nextStrength: number) => void;
 }
 
-const MIN_STRENGTH = 0.0;
-const MAX_STRENGTH = 3.0;
+const MIN_STRENGTH = -10.0;
+const MAX_STRENGTH = 10.0;
 const STEP_STRENGTH = 0.05;
 const CHARACTER_EDIT_KEY = '__character__';
 
@@ -205,7 +205,7 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
             onChange={(e) => setDraftValue(e.target.value)}
             onBlur={() => commitEdit(onCommit)}
             onKeyDown={(e) => handleEditKeyDown(e, currentStrength, onCommit)}
-            className={`w-9 rounded px-1 text-[11px] font-mono tabular-nums text-center focus:outline-none ring-1 ${styleSet.strengthInput}`}
+            className={`w-12 rounded px-1 text-[11px] font-mono tabular-nums text-center focus:outline-none ring-1 ${styleSet.strengthInput}`}
           />
           <span>x</span>
         </span>
@@ -216,7 +216,7 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
       <button
         type="button"
         onClick={() => startEditing(editKey, currentStrength, onCommit)}
-        title={`Click to adjust ${label} strength for this generation (0.0–3.0)`}
+        title={`Click to adjust ${label} strength for this generation (-10.0 to +10.0)`}
         className={`text-[11px] font-mono tabular-nums ${styleSet.strengthText} ${
           onCommit ? 'cursor-text transition-colors' : ''
         }`}

@@ -399,10 +399,10 @@ export function useQuickGenSubmit({
     }
   };
 
-  /** Updates a session-only LoRA's model/CLIP strength (0.0–3.0) without mutating global defaults. */
+  /** Updates a session-only LoRA's model/CLIP strength (-10.0 to +10.0) without mutating global defaults. */
   const handleUpdateLoraStrength = (loraName: string, nextStrength: number) => {
     if (!Number.isFinite(nextStrength)) return;
-    const clamped = Math.max(0.0, Math.min(3.0, Math.round(nextStrength * 100) / 100));
+    const clamped = Math.max(-10.0, Math.min(10.0, Math.round(nextStrength * 100) / 100));
     const targetKey = normalizeLoraKey(loraName);
 
     if (
@@ -421,10 +421,10 @@ export function useQuickGenSubmit({
     );
   };
 
-  /** Updates the attached base character LoRA's session strength (0.0–3.0). */
+  /** Updates the attached base character LoRA's session strength (-10.0 to +10.0). */
   const handleUpdateCharacterStrength = (nextStrength: number) => {
     if (!Number.isFinite(nextStrength) || !attachedCharacter) return;
-    const clamped = Math.max(0.0, Math.min(3.0, Math.round(nextStrength * 100) / 100));
+    const clamped = Math.max(-10.0, Math.min(10.0, Math.round(nextStrength * 100) / 100));
     setCharacterLoraStrength(clamped);
 
     const charKeys = new Set(attachedCharacter.loras.map((cl) => normalizeLoraKey(cl.loraName)));
