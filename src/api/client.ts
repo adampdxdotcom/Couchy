@@ -15,6 +15,7 @@ import type {
   LmStudioStatus,
   LoraCategory,
   LoraExplorerItem,
+  LoraMentionAutomation,
   ModelCleanupStatus,
   ModelInventoryItem,
   PortraitCrop,
@@ -428,6 +429,7 @@ export const api = {
     civitaiMeta?: Record<string, any> | null;
     loraCategory?: LoraCategory | null;
     characterAutomation?: CharacterDownloadAutomation | null;
+    mentionAutomation?: LoraMentionAutomation | null;
     scheduledFor?: string | null;
   }) =>
     requestJson<{ job: any }>('/api/downloads/start', {

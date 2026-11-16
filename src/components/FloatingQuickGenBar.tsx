@@ -99,6 +99,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     allImages,
     prompt: submitState.prompt,
     setPrompt: submitState.setPrompt,
+    attachedCharacter: submitState.attachedCharacter,
     setAttachedCharacter: submitState.setAttachedCharacter,
     setCharacterLoraStrength: submitState.setCharacterLoraStrength,
     setAttachedCheckpoint: submitState.setAttachedCheckpoint,

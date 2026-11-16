@@ -76,7 +76,14 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
   const [draftValue, setDraftValue] = useState('');
   const editInputRef = useRef<HTMLInputElement | null>(null);
 
-  const visibleLoras = attachedLoras.filter((l) => l.showPill !== false);
+  const attachedCharLoraKeys = new Set(
+    attachedCharacter
+      ? attachedCharacter.loras.map((l) => normalizeLoraKey(l.loraName))
+      : []
+  );
+  const visibleLoras = attachedLoras.filter(
+    (l) => l.showPill !== false && !attachedCharLoraKeys.has(normalizeLoraKey(l.loraName))
+  );
 
   const resolveLoraCategory = (lora: GenerationLoraSelection): LoraCategory => {
     if (lora.isCharacterPill) return 'character';

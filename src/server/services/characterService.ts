@@ -149,6 +149,7 @@ function buildCharacterProfile(row: any): CharacterProfile {
       FROM character_loras cl
       LEFT JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
       WHERE cl.character_id = ?
+      GROUP BY cl.id
       ORDER BY cl.lora_name ASC
     `
     )

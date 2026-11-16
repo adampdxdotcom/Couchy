@@ -34,12 +34,17 @@ import {
   CharacterLoraDownloadOptions,
   deriveDefaultCharacterAutomation,
 } from './models/CharacterLoraDownloadOptions.tsx';
+import {
+  DEFAULT_LORA_MENTION_AUTOMATION,
+  LoraMentionDownloadOptions,
+} from './models/LoraMentionDownloadOptions.tsx';
 import type {
   CharacterDownloadAutomation,
   ComfyModelSubfolder,
   ExternalModelFileOption,
   ExternalModelSearchResult,
   LoraCategory,
+  LoraMentionAutomation,
   ModelType,
   PillTypeSettings,
 } from '../shared/types.ts';
@@ -193,6 +198,9 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   const [characterAutoByCard, setCharacterAutoByCard] = useState<
     Record<string, CharacterDownloadAutomation>
   >({});
+  const [mentionAutoByCard, setMentionAutoByCard] = useState<
+    Record<string, LoraMentionAutomation>
+  >({});
   const [pendingCharacterAutomation, setPendingCharacterAutomation] =
     useState<CharacterDownloadAutomation>({
       addCharacter: true,
@@ -200,11 +208,14 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       characterName: '',
       triggerWord: '',
     });
+  const [pendingMentionAutomation, setPendingMentionAutomation] =
+    useState<LoraMentionAutomation>({ ...DEFAULT_LORA_MENTION_AUTOMATION });
 
   useEffect(() => {
     setSelectedVersionByCard({});
     setSelectedCategoryByCard({});
     setCharacterAutoByCard({});
+    setMentionAutoByCard({});
   }, [searchBatchTimestamp]);
 
   const getCategoryMapKey = (cardKey: string, versionId?: string | null) =>
@@ -230,6 +241,14 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   ): CharacterDownloadAutomation => {
     const mapKey = getCategoryMapKey(cardKey, item.versionId);
     return characterAutoByCard[mapKey] || deriveDefaultCharacterAutomation(item);
+  };
+
+  const getEffectiveMentionAutomation = (
+    item: ExternalModelSearchResult,
+    cardKey: string
+  ): LoraMentionAutomation => {
+    const mapKey = getCategoryMapKey(cardKey, item.versionId);
+    return mentionAutoByCard[mapKey] || { ...DEFAULT_LORA_MENTION_AUTOMATION };
   };
 
   const handleInspectInstalledItem = (target: ExternalModelSearchResult) => {
@@ -289,6 +308,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
     setDlSubfolder(initialFolder);
     setPendingLoraCategory(getEffectiveCardCategory(item, cardKey));
     setPendingCharacterAutomation(getEffectiveCharacterAutomation(item, cardKey));
+    setPendingMentionAutomation(getEffectiveMentionAutomation(item, cardKey));
     setCustomFilename(initialFile?.filename || item.filename);
     setAllowOverwrite(preferOverwrite);
     setScheduleDownload(shouldSchedule);
@@ -341,6 +361,14 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       const primary = item.availableFiles?.[0];
       const targetFilename = primary?.filename || item.filename;
       const chosenCategory = getEffectiveCardCategory(item, cardKey);
+      const mentionConfig = getEffectiveMentionAutomation(item, cardKey);
+      const normalizedMention =
+        mentionConfig.mentionEnabled || mentionConfig.nickname.trim()
+          ? {
+              mentionEnabled: mentionConfig.mentionEnabled,
+              nickname: mentionConfig.nickname.trim().replace(/^@+/, '').toLowerCase(),
+            }
+          : null;
       const res = await api.startModelDownload({
         provider: item.provider,
         modelName: item.name,
@@ -370,6 +398,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
           chosenCategory === 'character' && !item.isInstalled
             ? getEffectiveCharacterAutomation(item, cardKey)
             : null,
+        mentionAutomation: normalizedMention,
         scheduledFor: scheduledForIso || null,
       });
       if (res?.job?.id) {
@@ -453,6 +482,14 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
           pendingLoraCategory === 'character' &&
           !pendingDownload.isInstalled
             ? pendingCharacterAutomation
+            : null,
+        mentionAutomation:
+          effectiveType === 'lora' &&
+          (pendingMentionAutomation.mentionEnabled || pendingMentionAutomation.nickname.trim())
+            ? {
+                mentionEnabled: pendingMentionAutomation.mentionEnabled,
+                nickname: pendingMentionAutomation.nickname.trim().replace(/^@+/, '').toLowerCase(),
+              }
             : null,
         scheduledFor: scheduledForIso,
       });
@@ -893,6 +930,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                           activeCategory !== (item.installedLoraCategory || 'unclassified');
 
                         const charAuto = getEffectiveCharacterAutomation(item, cardKey);
+                        const mentionAuto = getEffectiveMentionAutomation(item, cardKey);
                         const showCharAutomation =
                           !item.isInstalled && activeCategory === 'character';
 
@@ -945,6 +983,19 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                                 </button>
                               )}
                             </div>
+
+                            {!item.isInstalled && (
+                              <LoraMentionDownloadOptions
+                                value={mentionAuto}
+                                disabled={isDownloadingNow}
+                                onChange={(nextMention) =>
+                                  setMentionAutoByCard((prev) => ({
+                                    ...prev,
+                                    [catMapKey]: nextMention,
+                                  }))
+                                }
+                              />
+                            )}
 
                             {showCharAutomation && (
                               <CharacterLoraDownloadOptions
@@ -1158,6 +1209,8 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
           setLoraCategory={setPendingLoraCategory}
           characterAutomation={pendingCharacterAutomation}
           setCharacterAutomation={setPendingCharacterAutomation}
+          mentionAutomation={pendingMentionAutomation}
+          setMentionAutomation={setPendingMentionAutomation}
           pillTypeSettings={pillTypeSettings}
           customFilename={customFilename}
           setCustomFilename={setCustomFilename}

@@ -379,9 +379,14 @@ export function compileWorkflowForGeneration(params: {
     const combinedLoras: { on: boolean; lora: string; strength: number }[] = [];
     const seenLoraNames = new Set<string>();
     for (const lora of activeLoras) {
-      const key = lora.loraName.toLowerCase();
-      if (!seenLoraNames.has(key)) {
-        seenLoraNames.add(key);
+      const normalizedBasename = lora.loraName
+        .trim()
+        .replace(/\\/g, '/')
+        .split('/')
+        .pop()!
+        .toLowerCase();
+      if (!seenLoraNames.has(normalizedBasename)) {
+        seenLoraNames.add(normalizedBasename);
         const loraRow = loraPathLookup.get(lora.loraName, lora.loraName) as
           | { comfyui_path: string | null }
           | undefined;

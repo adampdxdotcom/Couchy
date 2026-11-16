@@ -239,15 +239,20 @@ export function useQuickGenSubmit({
     if (prefillPayload.loras !== undefined) {
       const reusedSelections: GenerationLoraSelection[] = [];
       const seenLoraNames = new Set<string>();
+      const prefillCharLoraKeys = new Set(
+        (prefillPayload.character?.loras || []).map((cl) => normalizeLoraKey(cl.loraName))
+      );
 
       for (const imgLora of prefillPayload.loras) {
-        const rawKey = imgLora.loraName.toLowerCase();
-        if (seenLoraNames.has(rawKey)) continue;
+        const rawKey = normalizeLoraKey(imgLora.loraName);
+        if (!rawKey || seenLoraNames.has(rawKey)) continue;
         seenLoraNames.add(rawKey);
 
         const cleanBase = imgLora.loraName.replace(/\.(safetensors|pt|ckpt)$/i, '').toLowerCase();
         const matchedExplorerLora = loras.find(
-          (l) => l.filename.toLowerCase() === rawKey || l.name.toLowerCase() === cleanBase
+          (l) =>
+            l.filename.toLowerCase() === imgLora.loraName.toLowerCase() ||
+            l.name.toLowerCase() === cleanBase
         );
 
         const prefillExtra = imgLora as {
@@ -258,6 +263,8 @@ export function useQuickGenSubmit({
           portraitThumbnailUrl?: string | null;
           portraitCrop?: CharacterProfile['portraitCrop'];
         };
+
+        const belongsToAttachedChar = prefillCharLoraKeys.has(rawKey);
 
         reusedSelections.push({
           loraName: matchedExplorerLora?.filename || imgLora.loraName,
@@ -271,10 +278,11 @@ export function useQuickGenSubmit({
           nickname:
             prefillExtra.nickname ||
             getCleanLoraLabel(matchedExplorerLora || { loraName: imgLora.loraName }),
-          showPill:
-            prefillExtra.showPill !== undefined
-              ? Boolean(prefillExtra.showPill)
-              : Boolean(matchedExplorerLora?.mentionEnabled),
+          showPill: belongsToAttachedChar
+            ? false
+            : prefillExtra.showPill !== undefined
+            ? Boolean(prefillExtra.showPill)
+            : Boolean(matchedExplorerLora?.mentionEnabled),
           isCharacterPill: prefillExtra.isCharacterPill,
           portraitThumbnailUrl: prefillExtra.portraitThumbnailUrl,
           portraitCrop: prefillExtra.portraitCrop,
@@ -355,8 +363,21 @@ export function useQuickGenSubmit({
           const matchRes = await api.matchCharacterFace({ imageBase64DataUrl: dataUrl });
           if (matchRes.matched && matchRes.character) {
             effectiveCharacter = matchRes.character;
+            const matchedCharKeys = new Set(
+              matchRes.character.loras.map((cl) => normalizeLoraKey(cl.loraName))
+            );
+            const preExistingCharLora = attachedLoras.find((al) =>
+              matchedCharKeys.has(normalizeLoraKey(al.loraName))
+            );
             setAttachedCharacter(matchRes.character);
-            setCharacterLoraStrength(1.0);
+            setCharacterLoraStrength(preExistingCharLora ? preExistingCharLora.modelStrength : 1.0);
+            setAttachedLoras((prev) =>
+              prev.map((al) =>
+                matchedCharKeys.has(normalizeLoraKey(al.loraName))
+                  ? { ...al, showPill: false }
+                  : al
+              )
+            );
             setRemovedLoraKeys((prev) => {
               const next = new Set(prev);
               for (const cl of matchRes.character!.loras) {
@@ -705,8 +726,13 @@ export function useQuickGenSubmit({
           'warning'
         );
       } else {
-        const loraCountNotice =
-          attachedLoras.length > 0 ? ` + ${attachedLoras.length} LoRA(s)` : '';
+        const attachedCharKeys = new Set(
+          (attachedCharacter?.loras || []).map((cl) => normalizeLoraKey(cl.loraName))
+        );
+        const extraLoraCount = selectedLoras.filter(
+          (sl) => !attachedCharKeys.has(normalizeLoraKey(sl.loraName))
+        ).length;
+        const loraCountNotice = extraLoraCount > 0 ? ` + ${extraLoraCount} LoRA(s)` : '';
         onPushToast(
           `Queued Batch #${res.batch.id} (${submittedCount}/${res.batch.totalCount} sent${
             attachedCharacter ? ` · ${attachedCharacter.name}` : ''

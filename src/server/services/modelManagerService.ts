@@ -35,6 +35,7 @@ import {
   classifySafetensorsHeaderOnDisk,
 } from './loraClassifierService.ts';
 import { handleDownloadedCharacterLoraAutomation } from './characterDownloadAutomationService.ts';
+import { updateLoraMentionConfig } from './loraConfigService.ts';
 import { VALID_LORA_CATEGORIES } from '../../shared/pillSettings.ts';
 import type {
   CharacterDownloadAutomation,
@@ -42,6 +43,7 @@ import type {
   ExternalModelFileOption,
   ExternalModelSearchResult,
   LoraCategory,
+  LoraMentionAutomation,
   ModelType,
 } from '../../shared/types.ts';
 
@@ -436,6 +438,7 @@ export interface ScheduledDownloadPayload {
   civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
   loraCategory?: LoraCategory | null;
   characterAutomation?: CharacterDownloadAutomation | null;
+  mentionAutomation?: LoraMentionAutomation | null;
   retryCount?: number;
 }
 
@@ -451,6 +454,7 @@ export interface ExecuteDownloadJobParams {
   civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
   loraCategory?: LoraCategory | null;
   characterAutomation?: CharacterDownloadAutomation | null;
+  mentionAutomation?: LoraMentionAutomation | null;
   /** When true, caller handles HTTP 401/403 re-scheduling instead of marking failed immediately. */
   deferAuthErrorToCaller?: boolean;
 }
@@ -687,6 +691,26 @@ export async function executeDownloadJob(
 
     if (
       params.effectiveModelType === 'lora' &&
+      params.mentionAutomation &&
+      (params.mentionAutomation.mentionEnabled || params.mentionAutomation.nickname.trim())
+    ) {
+      const cleanNick = params.mentionAutomation.nickname.trim().replace(/^@+/, '').toLowerCase();
+      try {
+        updateLoraMentionConfig({
+          loraName: params.safeFilename,
+          mentionEnabled: params.mentionAutomation.mentionEnabled,
+          ...(cleanNick ? { nickname: cleanNick } : {}),
+        });
+      } catch (err) {
+        console.warn(
+          `[Download] Failed to apply @mention config for ${params.safeFilename}:`,
+          err
+        );
+      }
+    }
+
+    if (
+      params.effectiveModelType === 'lora' &&
       resolvedLoraCategory === 'character' &&
       params.characterAutomation?.addCharacter
     ) {
@@ -734,6 +758,7 @@ export async function startConfirmedModelDownload(params: {
   civitaiMeta?: Partial<CivitaiNormalizedMeta> | null;
   loraCategory?: LoraCategory | null;
   characterAutomation?: CharacterDownloadAutomation | null;
+  mentionAutomation?: LoraMentionAutomation | null;
   scheduledFor?: string | null;
 }): Promise<any> {
   // Sanitize filename and subfolder against path traversal
@@ -796,6 +821,33 @@ export async function startConfirmedModelDownload(params: {
         }
       : null;
 
+  const cleanMentionNick =
+    effectiveModelType === 'lora' && params.mentionAutomation?.nickname
+      ? String(params.mentionAutomation.nickname).trim().replace(/^@+/, '').toLowerCase()
+      : '';
+  const wantMentionEnabled = Boolean(
+    effectiveModelType === 'lora' && params.mentionAutomation?.mentionEnabled
+  );
+
+  if (cleanMentionNick) {
+    const existingNick = db
+      .prepare(`SELECT filename FROM models WHERE LOWER(nickname) = ? AND LOWER(filename) != LOWER(?)`)
+      .get(cleanMentionNick, safeFilename) as { filename: string } | undefined;
+    if (existingNick) {
+      throw new Error(
+        `Mention tag "@${cleanMentionNick}" is already assigned to ${existingNick.filename}.`
+      );
+    }
+  }
+
+  const normalizedMentionAutomation: LoraMentionAutomation | null =
+    wantMentionEnabled || cleanMentionNick
+      ? {
+          mentionEnabled: wantMentionEnabled,
+          nickname: cleanMentionNick,
+        }
+      : null;
+
   const payloadJson = JSON.stringify({
     subfolder: safeSubfolder,
     allowOverwrite: Boolean(params.allowOverwrite),
@@ -803,6 +855,7 @@ export async function startConfirmedModelDownload(params: {
     civitaiMeta: params.civitaiMeta || null,
     loraCategory: normalizedLoraCategory,
     characterAutomation: normalizedCharacterAutomation,
+    mentionAutomation: normalizedMentionAutomation,
     retryCount: 0,
   } satisfies ScheduledDownloadPayload);
 
@@ -841,6 +894,7 @@ export async function startConfirmedModelDownload(params: {
         civitaiMeta: params.civitaiMeta || null,
         loraCategory: normalizedLoraCategory,
         characterAutomation: normalizedCharacterAutomation,
+        mentionAutomation: normalizedMentionAutomation,
       }).catch(() => {});
     });
   }

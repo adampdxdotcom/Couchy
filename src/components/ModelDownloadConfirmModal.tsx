@@ -11,12 +11,14 @@ import {
   formatUnlockLocalTime,
 } from './models/earlyAccessUtils.ts';
 import { CharacterLoraDownloadOptions } from './models/CharacterLoraDownloadOptions.tsx';
+import { LoraMentionDownloadOptions } from './models/LoraMentionDownloadOptions.tsx';
 import type {
   CharacterDownloadAutomation,
   ComfyModelSubfolder,
   ExternalModelFileOption,
   ExternalModelSearchResult,
   LoraCategory,
+  LoraMentionAutomation,
   ModelType,
   PillTypeSettings,
 } from '../shared/types.ts';
@@ -81,6 +83,8 @@ interface ModelDownloadConfirmModalProps {
   setLoraCategory: (cat: LoraCategory) => void;
   characterAutomation?: CharacterDownloadAutomation;
   setCharacterAutomation?: (next: CharacterDownloadAutomation) => void;
+  mentionAutomation?: LoraMentionAutomation;
+  setMentionAutomation?: (next: LoraMentionAutomation) => void;
   pillTypeSettings?: PillTypeSettings;
   customFilename: string;
   setCustomFilename: (name: string) => void;
@@ -110,6 +114,8 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
   setLoraCategory,
   characterAutomation,
   setCharacterAutomation,
+  mentionAutomation,
+  setMentionAutomation,
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   customFilename,
   setCustomFilename,
@@ -383,6 +389,14 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
                   ))}
                 </select>
               </div>
+
+              {mentionAutomation && setMentionAutomation && (
+                <LoraMentionDownloadOptions
+                  value={mentionAutomation}
+                  onChange={setMentionAutomation}
+                  disabled={isSubmitting}
+                />
+              )}
 
               {loraCategory === 'character' &&
                 !pendingDownload.isInstalled &&

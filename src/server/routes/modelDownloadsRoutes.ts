@@ -116,6 +116,7 @@ modelDownloadsRouter.post('/downloads/start', async (req, res) => {
       civitaiMeta,
       loraCategory,
       characterAutomation,
+      mentionAutomation,
       scheduledFor,
     } = req.body || {};
 
@@ -150,6 +151,13 @@ modelDownloadsRouter.post('/downloads/start', async (req, res) => {
               generateHeadshot: Boolean(characterAutomation.generateHeadshot),
               characterName: String(characterAutomation.characterName || ''),
               triggerWord: String(characterAutomation.triggerWord || ''),
+            }
+          : null,
+      mentionAutomation:
+        mentionAutomation && typeof mentionAutomation === 'object'
+          ? {
+              mentionEnabled: Boolean(mentionAutomation.mentionEnabled),
+              nickname: String(mentionAutomation.nickname || ''),
             }
           : null,
       scheduledFor: scheduledFor || null,

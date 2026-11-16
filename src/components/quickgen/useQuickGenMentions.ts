@@ -24,6 +24,7 @@ interface UseQuickGenMentionsParams {
   allImages: ImageRecord[];
   prompt: string;
   setPrompt: React.Dispatch<React.SetStateAction<string>>;
+  attachedCharacter: CharacterProfile | null;
   setAttachedCharacter: React.Dispatch<React.SetStateAction<CharacterProfile | null>>;
   setCharacterLoraStrength: React.Dispatch<React.SetStateAction<number>>;
   setAttachedCheckpoint: React.Dispatch<React.SetStateAction<string | null>>;
@@ -44,6 +45,7 @@ export function useQuickGenMentions({
   allImages,
   prompt,
   setPrompt,
+  attachedCharacter,
   setAttachedCharacter,
   setCharacterLoraStrength,
   setAttachedCheckpoint,
@@ -147,6 +149,9 @@ export function useQuickGenMentions({
       const lora = entry.loraItem;
       const cleanLabel = getCleanLoraLabel(lora);
       const loraKey = normalizeLoraKey(lora.filename);
+      const belongsToAttachedChar = Boolean(
+        attachedCharacter?.loras.some((cl) => normalizeLoraKey(cl.loraName) === loraKey)
+      );
       setRemovedLoraKeys((prev) => {
         if (!prev.has(loraKey)) return prev;
         const next = new Set(prev);
@@ -161,7 +166,7 @@ export function useQuickGenMentions({
             ...updated[existingIdx],
             nickname: cleanLabel,
             triggerWord: lora.triggerWord || updated[existingIdx].triggerWord || '',
-            showPill: true,
+            showPill: belongsToAttachedChar ? false : true,
           };
           return updated;
         }
@@ -173,7 +178,7 @@ export function useQuickGenMentions({
             clipStrength: lora.defaultClipStrength ?? 1.0,
             triggerWord: lora.triggerWord || '',
             nickname: cleanLabel,
-            showPill: true,
+            showPill: !belongsToAttachedChar,
           },
         ];
       });
@@ -191,8 +196,15 @@ export function useQuickGenMentions({
       );
     } else if (entry.character) {
       const char = entry.character;
+      const charKeys = new Set(char.loras.map((cl) => normalizeLoraKey(cl.loraName)));
       setAttachedCharacter(char);
-      setCharacterLoraStrength(1.0);
+      setAttachedLoras((prev) => {
+        const preExisting = prev.find((al) => charKeys.has(normalizeLoraKey(al.loraName)));
+        setCharacterLoraStrength(preExisting ? preExisting.modelStrength : 1.0);
+        return prev.map((al) =>
+          charKeys.has(normalizeLoraKey(al.loraName)) ? { ...al, showPill: false } : al
+        );
+      });
       setRemovedLoraKeys((prev) => {
         const next = new Set(prev);
         for (const cl of char.loras) {

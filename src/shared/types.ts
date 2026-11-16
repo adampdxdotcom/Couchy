@@ -342,6 +342,11 @@ export interface CharacterDownloadAutomation {
   triggerWord?: string;
 }
 
+export interface LoraMentionAutomation {
+  mentionEnabled: boolean;
+  nickname: string;
+}
+
 export interface LoraExplorerItem {
   name: string;
   modelId: number | null;
