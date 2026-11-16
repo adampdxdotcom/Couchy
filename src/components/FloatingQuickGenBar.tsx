@@ -394,6 +394,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               expandingMessageId={submitState.expandingMessageId}
               isSubmitting={submitState.isSubmitting}
               batchCount={submitState.batchCount}
+              onUpdateProposedPrompt={submitState.handleUpdateProposedPrompt}
               onSubmitPrompt={(proposedPrompt) =>
                 submitState.handleSubmitProposedPrompt(proposedPrompt, mentions.resetMentions)
               }

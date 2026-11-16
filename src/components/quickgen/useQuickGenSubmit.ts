@@ -708,6 +708,13 @@ export function useQuickGenSubmit({
     }
   };
 
+  /** Manually edits a proposed prompt or concept inside Agent conversation before submitting. */
+  const handleUpdateProposedPrompt = (messageId: string, nextValue: string) => {
+    setChatMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, proposedPrompt: nextValue } : m))
+    );
+  };
+
   /** Manually edits one shot prompt inside an expanded set preview. */
   const handleUpdateExpandedPrompt = (messageId: string, shotIndex: number, nextValue: string) => {
     setChatMessages((prev) =>
@@ -832,6 +839,7 @@ export function useQuickGenSubmit({
     handleUpdateCharacterStrength,
     handleClearBox,
     handleSubmit,
+    handleUpdateProposedPrompt,
     handleSubmitProposedPrompt,
     handlePreviewExpandConcept,
     handleUpdateExpandedPrompt,

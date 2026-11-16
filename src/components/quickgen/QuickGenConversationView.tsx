@@ -1,5 +1,15 @@
 import React, { useEffect, useRef } from 'react';
-import { ArrowRight, Bot, Eye, Loader2, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
+import {
+  ArrowRight,
+  Bot,
+  Eye,
+  Loader2,
+  Pencil,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+  X,
+} from 'lucide-react';
 import type { QuickGenChatMessage } from '../../shared/types.ts';
 
 interface QuickGenConversationViewProps {
@@ -8,6 +18,7 @@ interface QuickGenConversationViewProps {
   expandingMessageId: string | null;
   isSubmitting: boolean;
   batchCount: number;
+  onUpdateProposedPrompt: (messageId: string, value: string) => void;
   onSubmitPrompt: (promptText: string) => void;
   onPreviewExpand: (messageId: string, conceptText: string) => void;
   onUpdateExpandedShot: (messageId: string, shotIndex: number, value: string) => void;
@@ -18,7 +29,7 @@ interface QuickGenConversationViewProps {
 
 /**
  * Inline conversation thread inside FloatingQuickGenBar when Agent mode is active.
- * Supports single-shot <proposed_prompt> submit and batch Set Concept -> Preview/Edit or Expand & Submit.
+ * Supports editing single-shot <proposed_prompt> text before submit and batch Set Concept -> Preview/Edit or Expand & Submit.
  */
 export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> = ({
   messages,
@@ -26,6 +37,7 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
   expandingMessageId,
   isSubmitting,
   batchCount,
+  onUpdateProposedPrompt,
   onSubmitPrompt,
   onPreviewExpand,
   onUpdateExpandedShot,
@@ -112,26 +124,55 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
                     msg.role === 'user'
                       ? 'bg-indigo-600/25 border border-indigo-500/40 text-indigo-100'
                       : 'bg-zinc-900/95 border border-zinc-800 text-zinc-200'
+                  } ${
+                    msg.role === 'assistant' &&
+                    msg.proposedPrompt !== null &&
+                    msg.proposedPrompt !== undefined
+                      ? 'w-[92%]'
+                      : ''
                   }`}
                 >
                   <p className="whitespace-pre-wrap break-words">{msg.content}</p>
 
-                  {msg.role === 'assistant' && msg.proposedPrompt && (
+                  {msg.role === 'assistant' &&
+                    msg.proposedPrompt !== null &&
+                    msg.proposedPrompt !== undefined && (
                     <div className="mt-2.5 p-2.5 rounded-xl bg-zinc-950 border border-indigo-500/40 space-y-2">
                       <div className="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wider text-indigo-300">
                         <span className="inline-flex items-center gap-1">
                           <Sparkles className="w-3 h-3 text-amber-400" />
                           {isConceptCard ? 'Set Concept' : 'Proposed Prompt'}
                         </span>
-                        {batchCount > 1 && (
-                          <span className="font-mono text-indigo-300/90">
-                            x{batchCount} shots
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center gap-1 font-normal normal-case tracking-normal text-zinc-400">
+                            <Pencil className="w-2.5 h-2.5 text-zinc-400" />
+                            <span>Editable</span>
                           </span>
-                        )}
+                          {batchCount > 1 && (
+                            <span className="font-mono text-indigo-300/90">
+                              x{batchCount} shots
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      <p className="text-xs text-zinc-100 bg-zinc-900/80 border border-zinc-800/80 rounded-lg p-2 font-sans whitespace-pre-wrap break-words select-all">
-                        {msg.proposedPrompt}
-                      </p>
+                      <textarea
+                        rows={Math.min(
+                          9,
+                          Math.max(
+                            3,
+                            Math.max(
+                              msg.proposedPrompt.split('\n').length,
+                              Math.ceil((msg.proposedPrompt.length || 1) / 62)
+                            )
+                          )
+                        )}
+                        value={msg.proposedPrompt}
+                        onChange={(e) => onUpdateProposedPrompt(msg.id, e.target.value)}
+                        disabled={isSubmitting || isExpandingThis}
+                        aria-label={isConceptCard ? 'Edit Set Concept' : 'Edit Proposed Prompt'}
+                        placeholder="Edit prompt before submitting..."
+                        className="w-full text-xs text-zinc-100 bg-zinc-900/80 border border-zinc-800/80 focus:border-indigo-500 rounded-lg p-2 font-sans leading-relaxed resize-y focus:outline-none disabled:opacity-60"
+                      />
                       {msg.selectedLoras && msg.selectedLoras.length > 0 && (
                         <div className="text-[11px] text-amber-300/90 font-mono truncate">
                           Agent attached:{' '}
@@ -234,7 +275,12 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
                           {batchCount > 1 && (
                             <button
                               type="button"
-                              disabled={isSubmitting || isChatting || Boolean(expandingMessageId)}
+                              disabled={
+                                isSubmitting ||
+                                isChatting ||
+                                Boolean(expandingMessageId) ||
+                                !msg.proposedPrompt.trim()
+                              }
                               onClick={() => onPreviewExpand(msg.id, msg.proposedPrompt!)}
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 disabled:opacity-40 text-zinc-100 font-medium text-xs transition-colors cursor-pointer"
                               title={`Expand this concept into ${batchCount} editable shot prompts to review before submitting`}
@@ -255,7 +301,12 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
 
                           <button
                             type="button"
-                            disabled={isSubmitting || isChatting || Boolean(expandingMessageId)}
+                            disabled={
+                              isSubmitting ||
+                              isChatting ||
+                              Boolean(expandingMessageId) ||
+                              !msg.proposedPrompt.trim()
+                            }
                             onClick={() => onSubmitPrompt(msg.proposedPrompt!)}
                             className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-xs transition-colors cursor-pointer shadow-sm"
                             title={
