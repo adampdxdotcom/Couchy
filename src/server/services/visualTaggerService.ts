@@ -275,14 +275,25 @@ async function preprocessImageToTensor(imageInput: string | Buffer): Promise<ort
 const OUTFIT_COLOR_TAG_REGEX =
   /\b(?:red|blue|black|white|pink|green|yellow|purple|orange|brown|grey|gray|silver|gold|golden|aqua|cyan|teal|navy|maroon|burgundy|crimson|violet|lavender|beige|tan|cream|ivory|multicolored|two-tone|striped|plaid|polka dot|floral|checkered|camouflage|sheer|see-through|lace|leather|latex|denim|silk|satin)\s+(?:dress|shirt|T-shirt|blouse|top|crop top|tank top|sweater|hoodie|jacket|coat|blazer|cardigan|suit|vest|skirt|miniskirt|pants|jeans|shorts|trousers|leggings|bikini|swimsuit|one-piece swimsuit|swimwear|bra|panties|underwear|lingerie|bodysuit|leotard|corset|bustier|negligee|nightgown|pajamas|robe|kimono|yukata|cheongsam|apron|maid headdress|uniform|school uniform|serafuku|sailor collar|necktie|bowtie|ribbon|bow|scarf|choker|collar|gloves|sleeves|stockings|thighhighs|pantyhose|socks|kneehighs|footwear|shoes|heels|high heels|boots|sandals|sneakers|hat|cap|beret|headband|hairband|glasses|sunglasses|earrings|necklace|bracelet|belt|bag|handbag|umbrella|cape|cloak)\b/i;
 
-/**
- * Runs WD14 v3 ONNX inference directly on an in-memory image Buffer (for on-demand image interrogation)
- * without requiring the image to be indexed in the gallery database.
- */
-export async function interrogateImageBufferWithWd14(
-  imageBuffer: Buffer,
-  customThreshold?: number
-): Promise<VisualTagItem[]> {
+// Unambiguous exposure/undress cues (separate from clothed traits like "breasts" alone)
+const STRONG_EXPOSURE_TRIGGER_REGEX =
+  /^(?:nude|completely nude|naked|topless|bottomless|nipples|areolae|areola|pussy|vaginal|penis|testicles|anus|pubic hair|crotch|uncensored|no bra|no panties|no underwear|panties aside|clothes lift|shirt lift|skirt lift|dress lift|bra lift|clothing aside|undressing|underboob|sideboob|spread legs|see-through|bare breasts|erection)$/i;
+
+const REPORTABLE_ANATOMY_EXPOSURE_REGEX =
+  /^(?:nude|completely nude|naked|topless|bottomless|nipples|areolae|areola|breasts|small breasts|medium breasts|large breasts|huge breasts|pussy|vaginal|penis|testicles|anus|ass|buttocks|pubic hair|crotch|uncensored|no bra|no panties|no underwear|panties aside|clothes lift|shirt lift|skirt lift|dress lift|bra lift|clothing aside|undressing|underboob|sideboob|spread legs|see-through|bare breasts|erection|cum|lactation)$/i;
+
+export interface Wd14ExposureCues {
+  hasNudityOrExplicit: boolean;
+  explicitScore: number;
+  questionableScore: number;
+  exposureTags: string[];
+  highConfidenceTags: string[];
+}
+
+async function runWd14RawInference(imageBuffer: Buffer): Promise<{
+  probs: Float32Array;
+  tagsList: TagDefinition[];
+}> {
   if (!isTaggerModelDownloaded()) {
     const ok = await ensureTaggerModelDownloaded();
     if (!ok) {
@@ -291,10 +302,6 @@ export async function interrogateImageBufferWithWd14(
   }
 
   const settings = getTaggerSettings();
-  const threshold = customThreshold ?? Math.min(settings.threshold, 0.25);
-  // Allow compound clothing/outfit color tags at a slightly lower threshold (0.18) so garment colors aren't dropped
-  const outfitColorThreshold = Math.min(threshold, 0.18);
-
   const session = await getOrCreateSession(settings.device);
   const tagsList = loadTagDefinitions();
   const inputTensor = await preprocessImageToTensor(imageBuffer);
@@ -302,7 +309,84 @@ export async function interrogateImageBufferWithWd14(
   const inputName = session.inputNames[0];
   const outputName = session.outputNames[0];
   const results = await session.run({ [inputName]: inputTensor });
-  const probs = results[outputName].data as Float32Array;
+  return {
+    probs: results[outputName].data as Float32Array,
+    tagsList,
+  };
+}
+
+/**
+ * Runs WD14 v3 ONNX strictly as an uncensored NSFW rating & anatomical exposure sensor
+ * without leaking general Danbooru scene/prop tags into Vision LLM prompts.
+ */
+export async function detectExposureCuesWithWd14(
+  imageBuffer: Buffer
+): Promise<Wd14ExposureCues> {
+  const { probs, tagsList } = await runWd14RawInference(imageBuffer);
+  const limit = Math.min(probs.length, tagsList.length);
+
+  let explicitScore = 0;
+  let questionableScore = 0;
+  let hasStrongTrigger = false;
+  const matchedAll: Array<{ tag: string; score: number }> = [];
+
+  for (let i = 0; i < limit; i++) {
+    const def = tagsList[i];
+    const score = probs[i];
+    if (def.category === 9) {
+      if (def.name === 'explicit') explicitScore = score;
+      else if (def.name === 'questionable') questionableScore = score;
+      continue;
+    }
+
+    if (score < 0.25) continue;
+    const cleanTag = def.name.replace(/_/g, ' ');
+    if (STRONG_EXPOSURE_TRIGGER_REGEX.test(cleanTag) && score >= 0.28) {
+      hasStrongTrigger = true;
+    }
+    if (REPORTABLE_ANATOMY_EXPOSURE_REGEX.test(cleanTag)) {
+      matchedAll.push({ tag: cleanTag, score });
+    }
+  }
+
+  matchedAll.sort((a, b) => b.score - a.score);
+  const hasNudityOrExplicit =
+    explicitScore >= 0.35 || questionableScore >= 0.45 || hasStrongTrigger;
+
+  const exposureTags = hasNudityOrExplicit
+    ? matchedAll.slice(0, 14).map((m) => m.tag)
+    : [];
+
+  const highConfidenceTags = hasNudityOrExplicit
+    ? matchedAll
+        .filter((m) => m.score >= 0.48 && STRONG_EXPOSURE_TRIGGER_REGEX.test(m.tag))
+        .slice(0, 8)
+        .map((m) => m.tag)
+    : [];
+
+  return {
+    hasNudityOrExplicit,
+    explicitScore: Math.round(explicitScore * 1000) / 1000,
+    questionableScore: Math.round(questionableScore * 1000) / 1000,
+    exposureTags,
+    highConfidenceTags,
+  };
+}
+
+/**
+ * Runs WD14 v3 ONNX inference directly on an in-memory image Buffer (for on-demand image interrogation)
+ * without requiring the image to be indexed in the gallery database.
+ */
+export async function interrogateImageBufferWithWd14(
+  imageBuffer: Buffer,
+  customThreshold?: number
+): Promise<VisualTagItem[]> {
+  const settings = getTaggerSettings();
+  const threshold = customThreshold ?? Math.min(settings.threshold, 0.25);
+  // Allow compound clothing/outfit color tags at a slightly lower threshold (0.18) so garment colors aren't dropped
+  const outfitColorThreshold = Math.min(threshold, 0.18);
+
+  const { probs, tagsList } = await runWd14RawInference(imageBuffer);
 
   const matched: VisualTagItem[] = [];
   const limit = Math.min(probs.length, tagsList.length);

@@ -14,7 +14,11 @@ import {
   DEFAULT_CONVERSATION_SYSTEM_PROMPT,
   DEFAULT_BATCH_EXPANSION_PROMPT,
 } from '../../shared/agentPromptDefaults.ts';
-import { interrogateImageBufferWithWd14 } from './visualTaggerService.ts';
+import {
+  detectExposureCuesWithWd14,
+  interrogateImageBufferWithWd14,
+  type Wd14ExposureCues,
+} from './visualTaggerService.ts';
 
 export { DEFAULT_CONVERSATION_SYSTEM_PROMPT, DEFAULT_BATCH_EXPANSION_PROMPT };
 
@@ -836,14 +840,107 @@ export function stripCharacterPhysicalTraits(prompt: string): string {
 }
 
 /**
+ * Ensures high-confidence WD14 nudity/anatomical exposure tags are never silently skipped
+ * or reduced to vague euphemisms in an interrogated Vision LLM prompt.
+ */
+export function mergeMissedExposureCues(
+  prompt: string,
+  cues: Wd14ExposureCues | null | undefined
+): string {
+  if (!cues?.hasNudityOrExplicit || cues.highConfidenceTags.length === 0) {
+    return prompt;
+  }
+
+  const tags = new Set(cues.highConfidenceTags.map((t) => t.toLowerCase()));
+  const additions: string[] = [];
+
+  if (tags.has('completely nude')) {
+    if (!/\b(?:completely\s+nude|fully\s+nude|entirely\s+nude|fully\s+naked)\b/i.test(prompt)) {
+      if (!/\b(?:nude|naked)\b/i.test(prompt)) additions.push('completely nude');
+    }
+  } else if (tags.has('nude') || tags.has('naked')) {
+    if (!/\b(?:nude|naked|unclothed|fully\s+undressed)\b/i.test(prompt)) {
+      additions.push('nude');
+    }
+  }
+
+  if (tags.has('topless') && !/\b(?:topless|bare\s+breasts?|exposed\s+breasts?|shirtless)\b/i.test(prompt)) {
+    additions.push('topless');
+  }
+  if (
+    tags.has('bottomless') &&
+    !/\b(?:bottomless|no\s+pants|pantiless|exposed\s+(?:genitals?|vulva|pussy|penis))\b/i.test(prompt)
+  ) {
+    additions.push('bottomless');
+  }
+  if (
+    (tags.has('nipples') || tags.has('areolae') || tags.has('areola')) &&
+    !/\b(?:nipples?|areolae?)\b/i.test(prompt)
+  ) {
+    additions.push('exposed breasts and nipples');
+  }
+  if (
+    (tags.has('pussy') || tags.has('vaginal')) &&
+    !/\b(?:pussy|vulva|vagina|vaginal|labia|exposed\s+genitals?)\b/i.test(prompt)
+  ) {
+    additions.push('exposed vulva');
+  }
+  if (
+    (tags.has('penis') || tags.has('testicles') || tags.has('erection')) &&
+    !/\b(?:penis|cock|shaft|testicles|scrotum|erection|exposed\s+genitals?)\b/i.test(prompt)
+  ) {
+    additions.push('exposed penis');
+  }
+  if (tags.has('pubic hair') && !/\b(?:pubic\s+hair|pubic|trimmed\s+hair|bush)\b/i.test(prompt)) {
+    additions.push('visible pubic hair');
+  }
+  if (
+    tags.has('spread legs') &&
+    !/\b(?:spread(?:ing)?\s+(?:her|his|their)?\s*legs|legs\s+(?:spread|apart|parted|wide))\b/i.test(prompt)
+  ) {
+    additions.push('legs spread wide');
+  }
+  if (
+    (tags.has('panties aside') || tags.has('clothing aside')) &&
+    !/\b(?:pulled\s+aside|pushed\s+aside|shifted\s+aside|aside)\b/i.test(prompt)
+  ) {
+    additions.push('clothing pulled aside');
+  }
+  if (
+    (tags.has('no panties') || tags.has('no underwear')) &&
+    !/\b(?:no\s+panties|no\s+underwear|pantiless|without\s+(?:panties|underwear))\b/i.test(prompt)
+  ) {
+    additions.push('no underwear');
+  }
+  if (
+    tags.has('no bra') &&
+    !/\b(?:no\s+bra|braless|without\s+(?:a\s+)?bra)\b/i.test(prompt)
+  ) {
+    additions.push('no bra');
+  }
+  if (
+    tags.has('see-through') &&
+    !/\b(?:see-through|sheer|transparent|translucent)\b/i.test(prompt)
+  ) {
+    additions.push('sheer see-through fabric');
+  }
+
+  if (additions.length === 0) return prompt;
+  const trimmed = prompt.trim().replace(/[.,;:\s]+$/, '');
+  return `${trimmed}, ${additions.join(', ')}`;
+}
+
+/**
  * Hybrid Image-to-Prompt Interrogation Pipeline:
  * 1. Verifies LM Studio is online.
- * 2. If a Vision-capable model is loaded in LM Studio, sends the downscaled 1MP image directly to `/v1/chat/completions`.
+ * 2. If a Vision-capable model is loaded in LM Studio, runs WD14 strictly as an uncensored
+ *    exposure/nudity sensor (without scene/prop tags), sends the 1MP image directly to `/v1/chat/completions`
+ *    with a 90s timeout, and verifies no high-confidence exposure details were omitted.
  * 3. If a Text-only model is loaded (or if the Vision call is unsupported/refused), runs the image through
  *    local uncensored WD14 v3 ONNX (`interrogateImageBufferWithWd14`) and passes the extracted tags to the LM Studio
  *    text model to synthesize a detailed generation prompt.
- * 4. When `characterName` is provided, strips physical identity traits (hair color, eye color, facial features,
- *    skin tone/ethnicity, body proportions) across tag extraction, LLM instructions, and post-sanitization.
+ * 4. When `characterName` is provided, omits ONLY hair color and eye color across tag extraction,
+ *    LLM instructions, and post-sanitization.
  */
 export async function interrogateImageToPrompt(params: {
   imageBase64DataUrl: string;
@@ -903,9 +1000,9 @@ export async function interrogateImageToPrompt(params: {
 
   const characterConstraintBlock = hasCharacter
     ? `\nCHARACTER LORA RULE:
-A character LoRA defines the subject's biological traits.
+A character LoRA defines hair color and eye color.
 - DO NOT mention the subject's hair color or eye color.
-- DO keep hairstyle shape/length (without hair color), facial expression, pose, actions, physical interactions with surrounding objects, clothing/colors, and every detail of objects and setting.`
+- DO keep hairstyle shape/length (without hair color), facial expression, pose, actions, physical interactions with surrounding objects, clothing/colors, AND full nudity or anatomical exposure details (never omit nudity when a character is attached).`
     : '';
 
   const userHintBlock = cleanUserHint
@@ -919,14 +1016,15 @@ Describe the entire scene accurately in one cohesive, vivid image generation pro
 1. Core Action & Spatial Interaction: What the subject is physically doing and how they interact with surrounding objects or surfaces (e.g., climbing into, sitting on, leaning against, holding).
 2. Prominent Objects, Machinery & Props: Name specific appliances, machines, furniture, vehicles, structures, and props using concrete nouns, scale, colors, and materials (never collapse notable props into vague words like "indoors", "equipment", or "room").
 3. Setting, Lighting & Framing: Specific environment/location, background elements, lighting mood, and camera angle/shot framing.
-4. Subject Details: Transient facial expression, pose, ${
+4. Subject Details & Exposure State: Transient facial expression, pose, ${
     hasCharacter
-      ? 'hairstyle shape (without hair color), and clothing (with colors/materials) or nudity/NSFW state'
-      : 'appearance, hairstyle, and clothing (with colors/materials) or nudity/anatomical details (including explicit or NSFW elements if present)'
-  }.${characterConstraintBlock}${userHintBlock}
+      ? 'hairstyle shape (without hair color), and exact clothing/coverage state'
+      : 'appearance, hairstyle, and exact clothing/coverage state'
+  }. Whenever nudity, partial undress, or sheer fabric is present, explicitly state the exact state of undress (completely nude, topless, bottomless, underwear-only, pulled-aside clothing, or see-through fabric) and name every visible exposed anatomical detail directly in plain clinical terms (bare breasts, exposed nipples/areolae, vulva/genitals, penis, pubic hair, bare buttocks) without softening, euphemisms, or omitting lower/upper body exposure.${characterConstraintBlock}${userHintBlock}
 Rules:
 - Refer to the subject descriptively ("a woman", "the subject", "a man", etc.) without inventing personal names.
 - Never mention LoRA or checkpoint filenames.
+- Never gloss over or lightly summarize nudity—if skin, breasts, nipples, buttocks, or genitals are exposed, describe them explicitly and completely.
 - Output ONLY the final image generation prompt text with no preamble, no quotes, and no markdown.`;
 
   const finalizePrompt = (rawText: string): string => {
@@ -934,19 +1032,33 @@ Rules:
     return sanitizeAgentPrompt(stripped, params.characterName);
   };
 
-  // Try Vision directly (omitting WD14 tags so Danbooru tag limits never bias real-world scenes/props)
+  // Try Vision directly (omitting general WD14 scene/prop tags, running WD14 strictly as an uncensored nudity/exposure sensor)
   const tryVisionFirst = await checkLmStudioVisionSupport(baseUrl, modelToUse);
 
   if (tryVisionFirst) {
+    let exposureCues: Wd14ExposureCues | null = null;
+    try {
+      exposureCues = await detectExposureCuesWithWd14(imageBuffer);
+    } catch {
+      // Non-fatal if WD14 model isn't downloaded or fails; proceed cleanly with Vision alone
+    }
+
+    const exposureAuditBlock =
+      exposureCues?.hasNudityOrExplicit && exposureCues.exposureTags.length > 0
+        ? `\n\nMANDATORY EXPOSURE & ANATOMY AUDIT: An uncensored visual check detected explicit/undress cues (${exposureCues.exposureTags.join(
+            ', '
+          )}). Verify what is visible and explicitly describe the exact state of undress and every exposed anatomical feature—do not soften, imply lightly, or omit nudity.`
+        : '';
+
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 90_000);
 
       const visionUserPrompt = `${
         hasCharacter
-          ? 'Analyze this image and write a detailed image generation prompt capturing: (1) the exact action and spatial interaction between the subject and any objects/machinery/props, (2) specific concrete objects, appliances, furniture, or props in the foreground/midground with their colors and materials, (3) camera framing, lighting, and setting, and (4) the subject’s expression, pose, hairstyle shape, and clothing with colors/materials (or nudity/NSFW state). Only omit hair color and eye color.'
-          : 'Analyze this image and write a detailed image generation prompt capturing: (1) the exact action and spatial interaction between the subject and any objects/machinery/props, (2) specific concrete objects, appliances, furniture, or props in the foreground/midground with their colors and materials, (3) camera framing, lighting, and setting, and (4) the subject’s appearance, expression, pose, and clothing with colors/materials (or anatomical/NSFW details).'
-      }${cleanUserHint ? `\n\nUser focus hint: ${cleanUserHint}` : ''}`;
+          ? 'Analyze this image and write a detailed image generation prompt capturing: (1) the exact action and spatial interaction between the subject and any objects/machinery/props, (2) specific concrete objects, appliances, furniture, or props in the foreground/midground with their colors and materials, (3) camera framing, lighting, and setting, and (4) the subject’s expression, pose, hairstyle shape, and complete clothing/nudity state (explicitly naming any exposed breasts, nipples, buttocks, pubic hair, or genitals—never omit or soften nudity). Only omit hair color and eye color.'
+          : 'Analyze this image and write a detailed image generation prompt capturing: (1) the exact action and spatial interaction between the subject and any objects/machinery/props, (2) specific concrete objects, appliances, furniture, or props in the foreground/midground with their colors and materials, (3) camera framing, lighting, and setting, and (4) the subject’s appearance, expression, pose, and complete clothing/nudity state (explicitly naming any exposed breasts, nipples, buttocks, pubic hair, or genitals—never omit or soften nudity).'
+      }${exposureAuditBlock}${cleanUserHint ? `\n\nUser focus hint: ${cleanUserHint}` : ''}`;
 
       const visionRes = await fetch(chatEndpoint, {
         method: 'POST',
@@ -990,8 +1102,9 @@ Rules:
           );
 
         if (cleaned.length > 10 && !looksLikeRefusal) {
+          const withExposure = mergeMissedExposureCues(cleaned, exposureCues);
           return {
-            prompt: finalizePrompt(cleaned),
+            prompt: finalizePrompt(withExposure),
             pipelineUsed: 'vision',
             tags: [],
             modelUsed: data?.model || modelToUse,
@@ -1019,8 +1132,8 @@ Rules:
   try {
     const textUserPrompt = `${
       hasCharacter
-        ? `Convert the following ordered visual tags into a single cohesive image generation prompt preserving the action, pose, any scene objects/props, setting, lighting, camera framing, facial expressions, hairstyle shape, and clothing colors/materials (or nudity/NSFW details). Only omit hair color and eye color:\n\nVisual Tags: ${extractedTags.join(', ')}`
-        : `Convert the following ordered visual tags (from highest confidence to lowest) into a single cohesive image generation prompt preserving subject, action, pose, scene objects/props, clothing colors/materials, anatomical/NSFW details, lighting, and setting:\n\nVisual Tags: ${extractedTags.join(', ')}`
+        ? `Convert the following ordered visual tags into a single cohesive image generation prompt preserving the action, pose, any scene objects/props, setting, lighting, camera framing, facial expressions, hairstyle shape, clothing colors/materials, and ALL nudity/anatomical exposure tags (nude, topless, bottomless, nipples, vulva/genitals, pubic hair, etc.) in full explicit detail without softening. Only omit hair color and eye color:\n\nVisual Tags: ${extractedTags.join(', ')}`
+        : `Convert the following ordered visual tags (from highest confidence to lowest) into a single cohesive image generation prompt preserving subject, action, pose, scene objects/props, clothing colors/materials, lighting, setting, and ALL nudity/anatomical exposure tags (nude, topless, bottomless, nipples, vulva/genitals, pubic hair, etc.) in full explicit detail without softening:\n\nVisual Tags: ${extractedTags.join(', ')}`
     }${cleanUserHint ? `\n\nUser focus hint: ${cleanUserHint}` : ''}\n\nOutput ONLY the prompt text:`;
 
     const textRes = await fetch(chatEndpoint, {
