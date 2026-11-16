@@ -225,7 +225,8 @@ The **Quick Gen Box** is an always-accessible floating bottom dock available acr
     - **Text-Only Model Loaded in Local LLM**: Runs the image through the local `wd-vit-tagger-v3` ONNX visual tagger first, then feeds the extracted tags into the local text LLM to write a natural prose prompt.
     - Automatically disabled with a helpful tooltip whenever the Local LLM server is offline.
   - **Character-Aware Physical Trait Stripping**: If a character is already attached in the Quick Gen Box when you drop or upload a photo, Couchy automatically strips conflicting physical identity traits—such as hair color, eye color, permanent facial features (freckles, moles), skin tone, race/ethnicity, and body proportions—while keeping hairstyle structure, transient facial expressions/emotions (e.g., smiling, blushing), pose, clothing/NSFW state, lighting, and framing so the character's LoRA defines their appearance cleanly.
-  - **Optional Reference Archiving**: Enable *"Save Uploaded Prompt Images"* under **System &rarr; Search** to automatically archive each 1MP downscaled reference image to `data/uploaded`.
+  - **Reference Archiving & Automatic Inspiration Stacks**: When **Save Uploaded Prompt Images (1MP)** is turned **On** (at the top of the **System** workspace), each interrogated 1MP reference photo is archived to `data/uploaded` (`UPLOADED_IMAGES_DIR`). Submitting a fresh single-image (`x1`) or multi-shot (`x2`–`x8`) Quick Gen batch from that prompt automatically creates a new **Series Stack** with the uploaded photo injected as the first tile (labeled with a cyan **`Inspo`** badge) followed by the generated result(s). Inspiration references are excluded from standalone gallery cards and **Stats** generation totals, and only appear inside their stack for inspection or **A/B Split Compare**.
+  - **Disabling Upload Archiving & Auto-Stack Injection**: Toggle **Save Uploaded Prompt Images (1MP)** **Off** in **System** at any time to disable saving uploaded prompt photos to disk and disable automatic `Inspo` stack creation—Quick Gen will still interrogate dropped/pasted images into text prompts normally without archiving or starting a reference stack.
 
 - **Unified Local LLM Agent (`Agent` Toggle)**:
   - Toggle the **Agent** button directly in the Quick Gen Box to open an inline Agent chat drawer inside the dock (no separate window).
@@ -278,6 +279,7 @@ The **Quick Gen Box** is an always-accessible floating bottom dock available acr
   - **Iterative Stacks** link progressive `x1` Agent refinements (saving full chat snapshots across steps) and upscales. Click the yellow **Agent (`MessageSquare`)** icon on a card, or use **Continue Chat** / **Branch #N** inside the Inspector, to continue or branch off the stack.
   - **Multi-Shot Sets** group parallel shots generated as a batch (`x2`–`x8`). On Main Gallery and Character Gallery cards, the yellow **Agent (`MessageSquare`)** icon is shown in a **disabled** state on multi-shot set cards to prevent ambiguous whole-set edits; open the **Image Inspector** or **Series Mini Gallery** (`Gallery` button) and click **Iterate** / **Iterate #N** on a specific shot to start a new `x1` iterative Agent stack seeded from that shot's prompt without altering the original set.
   - **Continue Latest vs. Branch from Middle**: Continuing from the latest iteration overlays a translucent live **Pending** / `%` progress indicator on that existing stack's card (and a simplified `#N` **Pending** / `%` tile inside the **Series Stack** strip) and appends the result to the same stack. Branching from a middle step (`Branch #3`) or iterating from a multi-shot set spawns a separate new gallery card during generation and splits off a new iterative stack on completion.
+  - **Uploaded Inspiration Step (`Inspo`)**: Stacks started from an archived Quick Gen image upload show the reference photo as the first tile with a cyan **`Inspo`** badge in both the Series Stack strip and Series Mini Gallery so you can compare results directly against your source inspiration in **A/B Split Compare**.
   - **Exclusive Poster / Hearted Image**: Within a stack, only one iteration can be hearted at a time. That hearted image serves as the stack's **Poster Image** in both Main and Character galleries (falling back to the newest step if none is hearted).
 - **Full-Screen Inspector & Loupe Magnifier**:
   - Click any card to open the Inspector; click the image canvas itself (or press `Space`) to toggle fullscreen, or toggle the **Loupe (`L`)** magnifier with `2×`, `4×`, and `1:1 Native` presets and click-to-pin locking.
@@ -368,22 +370,25 @@ Open **LoRAs & Models** to browse three integrated sub-views (`LoRA Explorer`, `
 
 ### System Administration & In-App Help
 
-The **System** workspace organizes administration into six focused sub-tabs:
+The **System** workspace includes a global **Save Uploaded Prompt Images (1MP)** bar at the top—controlling whether Quick Gen prompt uploads are archived to `data/uploaded` and auto-injected as Step 1 (`Inspo`) of new stacks—and organizes administration into focused sub-tabs:
 
-1. **Search** (`Workspace Preferences` + `Local ONNX Visual Keyword Tagger`):
-   - Toggle **Enable Floating Quick Gen Box** globally and toggle **Save Uploaded Prompt Images** (`data/uploaded`).
+1. **Search** (`Local ONNX Visual Keyword Tagger`):
    - Enable/disable the built-in **`wd-vit-tagger-v3`** ONNX tagger (stored in `/app/data/local_models`), switch **CPU vs. NVIDIA GPU** inference, tune confidence threshold, monitor live indexing progress, and trigger **Pause / Resume**, **Scan Unindexed**, or **Rescan All**. Supports offline/text-LLM fallback paths for Quick Gen interrogation and Character portrait analysis.
-2. **Agent** (`Local LLM Endpoint & Prompts`):
+2. **Quick Gen & Pills** (`Quick Gen UI & Model Type Pills`):
+   - Toggle **Enable Floating Quick Gen Box** globally, toggle **Gallery Pill Colors**, and customize per-type pill colors and `@mention` name insertion rules for Characters, Base Models, and LoRAs.
+3. **Stats** (`Generations Over Time`):
+   - Inspect generation activity on an adjustable bar graph across **Day**, **Week**, **Month**, and **Year** views with selectable sub-divisions (excluding uploaded `Inspo` references while counting all ComfyUI outputs).
+4. **Agent** (`Local LLM Endpoint & Prompts`):
    - Configure any OpenAI-compatible `/v1` base URL using one-click presets (**Ollama `:11434/v1`**, **llama.cpp `:8080/v1`**, **KoboldCpp `:5001/v1`**, **vLLM `:8000/v1`**, **Port 1234 `:1234/v1`**) and test live connectivity + **Vision vs. Text-Only** model capabilities.
    - Edit and save the **Primary Agent System Prompt** and **Batch Expansion Instructions** (with **Editorial Variety**, **Storyboard Arc**, and **Lookbook Angles** presets) or reset to defaults.
-3. **ComfyUI** (`Connection, Paths & Auto-Clean`):
+5. **ComfyUI** (`Connection, Paths & Auto-Clean`):
    - Configure and test `COMFYUI_URL` connectivity and inspect active `output`, `models`, and `downloads` directories.
    - **Auto-Clean Copied Downloads**: Optional cleanup daemon with configurable retention hours (`24h` default). When enabled, verifies an identical **filename, byte size, and SHA-256 hash** inside your read-only `COMFYUI_MODELS_DIR` before removing Couchy's duplicate from `DOWNLOADS_DIR`—leaving ComfyUI's copy and all metadata untouched (automatically guards against deleting if both paths point to the same directory).
-4. **Database** (`Backups & Annotation Restore`):
+6. **Database** (`Backups & Annotation Restore`):
    - Create verified SQLite snapshots (`gallery-backup-*.db` via `PRAGMA integrity_check`) and export/import portable JSON backups of all human annotations (ratings, favorites, rejection/archive flags, notes, tags, collections, characters, and portrait crops).
-5. **Metadata** (`Filesystem Scanner & Machine Rebuild`):
+7. **Metadata** (`Filesystem Scanner & Machine Rebuild`):
    - Trigger an **Incremental Scan** (adding/updating changed files without touching existing records) or **Rebuild Machine Metadata** (re-parsing embedded PNG `tEXt`/`zTXt`/`iTXt` chunks across all images while preserving all ratings, tags, collections, series stacks, and characters), and review the recent **Scan History** log.
-6. **Help** (`Live Documentation & Ask the Docs`):
+8. **Help** (`Live Documentation & Ask the Docs`):
    - Renders `README.md` live inside the app with a **Filter Sections** search input, **Jump to Section** dropdown, smooth clickable anchor links, **Reload** from disk, and one-click **Copy** buttons on every code block.
    - **Ask the Docs (Conditional Local LLM Assistant)**: When a Local LLM is online (`lmStatus.online`), a sticky **Ask the Docs** chat sidebar appears alongside the README. Questions are answered using a ranked retrieval slice of `README.md` sections, returning Markdown answers with clickable **Source** section chips that scroll directly to the cited heading.
 
