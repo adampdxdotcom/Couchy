@@ -729,6 +729,49 @@ export interface PillTypeBehavior {
 
 export type PillTypeSettings = Record<PillEntityType, PillTypeBehavior>;
 
+export type StatsPeriod = 'day' | 'week' | 'month' | 'year';
+
+export type StatsGranularity =
+  | 'hour'
+  | 'half_hour'
+  | 'quarter_hour'
+  | 'day'
+  | 'half_day'
+  | '6_hour'
+  | 'week'
+  | 'month';
+
+export interface GenerationStatsBucket {
+  key: string;
+  label: string;
+  shortLabel: string;
+  rangeLabel: string;
+  count: number;
+  /** Alternates 0 / 1 every calendar day (or bucket on week/month aggregates) for contrasting bar colors. */
+  dayParity: 0 | 1;
+  startIso: string;
+  endIso: string;
+}
+
+export interface GenerationStatsResponse {
+  period: StatsPeriod;
+  granularity: StatsGranularity;
+  anchorDate: string;
+  rangeLabel: string;
+  rangeStartIso: string;
+  rangeEndIso: string;
+  totalCount: number;
+  totalAllTime: number;
+  latestGenerationIso: string | null;
+  peakBucket: {
+    label: string;
+    rangeLabel: string;
+    count: number;
+  } | null;
+  averagePerBucket: number;
+  buckets: GenerationStatsBucket[];
+}
+
 export {
   ASPECT_RATIO_PRESETS,
   RESOLUTION_SELECTOR_OPTIONS,

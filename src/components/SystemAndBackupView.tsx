@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Bot, Database, RefreshCw, Server, Sparkles, Tags } from 'lucide-react';
+import { BarChart3, BookOpen, Bot, Database, RefreshCw, Server, Sparkles, Tags } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { normalizePillTypeSettings } from '../shared/pillSettings.ts';
 import type {
@@ -16,10 +16,12 @@ import { ModelCleanupSection } from './system/ModelCleanupSection.tsx';
 import { DatabaseBackupSection } from './system/DatabaseBackupSection.tsx';
 import { CollectionsAndScannerSection } from './system/CollectionsAndScannerSection.tsx';
 import { SystemHelpSection } from './system/SystemHelpSection.tsx';
+import { StatsSection } from './system/StatsSection.tsx';
 
 export type SystemSubTab =
   | 'tagger'
   | 'quick_gen'
+  | 'stats'
   | 'lm_studio'
   | 'comfyui'
   | 'backup'
@@ -33,6 +35,7 @@ const SYSTEM_SUB_TABS: {
 }[] = [
   { id: 'tagger', label: 'Search', icon: Tags },
   { id: 'quick_gen', label: 'Quick Gen & Pills', icon: Sparkles },
+  { id: 'stats', label: 'Stats', icon: BarChart3 },
   { id: 'lm_studio', label: 'Agent', icon: Bot },
   { id: 'comfyui', label: 'ComfyUI', icon: Server },
   { id: 'backup', label: 'Database', icon: Database },
@@ -545,6 +548,8 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
           onReloadSystemDetails={loadSystemDetails}
         />
       )}
+
+      {activeSubTab === 'stats' && <StatsSection />}
 
       {activeSubTab === 'help' && <SystemHelpSection lmStatus={lmStatus} />}
     </div>

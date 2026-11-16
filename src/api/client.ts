@@ -20,6 +20,9 @@ import type {
   QuickGenChatMessage,
   ReproductionValidationResult,
   SavedSearchPreset,
+  StatsGranularity,
+  StatsPeriod,
+  GenerationStatsResponse,
   VisualTagItem,
   VisualTaggerStatus,
   WorkflowLibraryItem,
@@ -705,4 +708,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ messages }),
     }),
+
+  // System Generation Stats
+  getGenerationStats: (params: {
+    period: StatsPeriod;
+    granularity: StatsGranularity;
+    anchorDate: string;
+    tzOffsetMinutes: number;
+  }) => {
+    const qs = new URLSearchParams({
+      period: params.period,
+      granularity: params.granularity,
+      anchorDate: params.anchorDate,
+      tzOffsetMinutes: String(params.tzOffsetMinutes),
+    });
+    return requestJson<GenerationStatsResponse>(`/api/stats/generations?${qs.toString()}`);
+  },
 };

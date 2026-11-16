@@ -29,6 +29,7 @@ import {
   askReadmeHelpAssistant,
   getHelpDocsPayload,
 } from '../services/helpDocsService.ts';
+import { getGenerationStats } from '../services/statsService.ts';
 import { normalizePillTypeSettings } from '../../shared/pillSettings.ts';
 
 export const systemRouter = Router();
@@ -502,5 +503,32 @@ systemRouter.post('/help/ask', async (req, res) => {
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Help Assistant request failed' });
+  }
+});
+
+/**
+ * GET /api/stats/generations
+ * Returns bucketed generation counts (including rejected & archived images)
+ * for a calendar day, week, month, or year.
+ */
+systemRouter.get('/stats/generations', (req, res) => {
+  try {
+    const period = typeof req.query.period === 'string' ? req.query.period : undefined;
+    const granularity =
+      typeof req.query.granularity === 'string' ? req.query.granularity : undefined;
+    const anchorDate =
+      typeof req.query.anchorDate === 'string' ? req.query.anchorDate : undefined;
+    const tzOffsetRaw =
+      typeof req.query.tzOffsetMinutes === 'string' ? Number(req.query.tzOffsetMinutes) : 0;
+
+    const result = getGenerationStats({
+      period,
+      granularity,
+      anchorDate,
+      tzOffsetMinutes: Number.isFinite(tzOffsetRaw) ? tzOffsetRaw : 0,
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to compute generation stats' });
   }
 });
