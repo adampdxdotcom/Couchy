@@ -3,11 +3,14 @@ import { Cpu, Layers, X } from 'lucide-react';
 import {
   DEFAULT_PILL_TYPE_SETTINGS,
   PILL_COLOR_STYLES,
+  resolveLoraCategoryStyle,
   type PillColorStyleSet,
 } from '../../shared/pillSettings.ts';
 import type {
   CharacterProfile,
   GenerationLoraSelection,
+  LoraCategory,
+  LoraExplorerItem,
   ModelInventoryItem,
   PillTypeSettings,
 } from '../../shared/types.ts';
@@ -24,6 +27,7 @@ interface QuickGenAttachmentsBarProps {
   attachedCheckpoint?: string | null;
   attachedLoras: GenerationLoraSelection[];
   removedLoraKeys?: Set<string>;
+  loras?: LoraExplorerItem[];
   models?: ModelInventoryItem[];
   pillTypeSettings?: PillTypeSettings;
   onRemoveCharacter: () => void;
@@ -57,6 +61,7 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
   attachedCheckpoint,
   attachedLoras,
   removedLoraKeys,
+  loras = [],
   models = [],
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   onRemoveCharacter,
@@ -67,12 +72,33 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
 }) => {
   const charStyle = PILL_COLOR_STYLES[pillTypeSettings.character.color];
   const baseModelStyle = PILL_COLOR_STYLES[pillTypeSettings.baseModel.color];
-  const loraStyle = PILL_COLOR_STYLES[pillTypeSettings.lora.color];
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [draftValue, setDraftValue] = useState('');
   const editInputRef = useRef<HTMLInputElement | null>(null);
 
   const visibleLoras = attachedLoras.filter((l) => l.showPill !== false);
+
+  const resolveLoraCategory = (lora: GenerationLoraSelection): LoraCategory => {
+    if (lora.isCharacterPill) return 'character';
+    const key = normalizeLoraKey(lora.loraName);
+    const match = loras.find(
+      (l) => normalizeLoraKey(l.filename) === key || normalizeLoraKey(l.name) === key
+    );
+    if (match?.loraCategory) return match.loraCategory;
+    if (match && match.characters.length > 0) return 'character';
+    return 'unclassified';
+  };
+
+  const characterLoraItems: Array<{ lora: GenerationLoraSelection; category: LoraCategory }> = [];
+  const otherLoraItems: Array<{ lora: GenerationLoraSelection; category: LoraCategory }> = [];
+  for (const lora of visibleLoras) {
+    const category = resolveLoraCategory(lora);
+    if (lora.isCharacterPill || category === 'character') {
+      characterLoraItems.push({ lora, category: 'character' });
+    } else {
+      otherLoraItems.push({ lora, category });
+    }
+  }
   const activeCharLoras = attachedCharacter
     ? attachedCharacter.loras.filter(
         (l) => !removedLoraKeys?.has(normalizeLoraKey(l.loraName))
@@ -239,6 +265,81 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
         </div>
       )}
 
+      {/* Additional Character LoRAs (Friends + character-categorized LoRAs grouped next to main character) */}
+      {characterLoraItems.map(({ lora, category }) => {
+        const label = getCleanLoraLabel(lora);
+        const pillStyle = resolveLoraCategoryStyle(category, pillTypeSettings);
+
+        if (lora.isCharacterPill) {
+          return (
+            <div
+              key={lora.loraName}
+              className={`inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-full border text-xs shadow-sm ${pillStyle.pill}`}
+            >
+              <div className="w-5 h-5 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
+                <CharacterPortraitImage
+                  src={lora.portraitThumbnailUrl || null}
+                  alt={label}
+                  crop={lora.portraitCrop}
+                  iconClassName={`w-3 h-3 ${pillStyle.icon}`}
+                />
+              </div>
+              <span className="font-medium">{label}</span>
+              {lora.triggerWord && (
+                <span className={`text-[11px] font-mono ${pillStyle.textAccent}`}>
+                  ({lora.triggerWord})
+                </span>
+              )}
+              {renderStrengthControl(
+                lora.loraName,
+                lora.modelStrength,
+                label,
+                pillStyle,
+                onUpdateLoraStrength
+                  ? (nextStrength) => onUpdateLoraStrength(lora.loraName, nextStrength)
+                  : undefined
+              )}
+              <button
+                type="button"
+                onClick={() => onRemoveLora(lora.loraName)}
+                className={`${pillStyle.removeButton} cursor-pointer ml-0.5`}
+                title={`Remove ${label}`}
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          );
+        }
+
+        return (
+          <div
+            key={lora.loraName}
+            className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs shadow-sm ${pillStyle.pill}`}
+          >
+            <Layers className={`w-3.5 h-3.5 shrink-0 ${pillStyle.icon}`} />
+            <span className={`font-medium ${pillStyle.textLight}`}>{label}</span>
+            {renderStrengthControl(
+              lora.loraName,
+              lora.modelStrength,
+              label,
+              pillStyle,
+              onUpdateLoraStrength
+                ? (nextStrength) => onUpdateLoraStrength(lora.loraName, nextStrength)
+                : undefined
+            )}
+            <button
+              type="button"
+              onClick={() => onRemoveLora(lora.loraName)}
+              className={`${pillStyle.removeButton} cursor-pointer ml-0.5`}
+              title={`Remove ${label}`}
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        );
+      })}
+
+      {/* Base Model Pill */}
       {attachedCheckpoint && (
         <div
           className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs shadow-sm max-w-full ${baseModelStyle.pill}`}
@@ -261,61 +362,23 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
         </div>
       )}
 
-      {visibleLoras.map((lora) => {
+      {/* Non-Character LoRA Pills (styled per category) */}
+      {otherLoraItems.map(({ lora, category }) => {
         const label = getCleanLoraLabel(lora);
-        if (lora.isCharacterPill) {
-          return (
-            <div
-              key={lora.loraName}
-              className={`inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-full border text-xs shadow-sm ${charStyle.pill}`}
-            >
-              <div className="w-5 h-5 rounded-full bg-zinc-800 overflow-hidden flex items-center justify-center shrink-0">
-                <CharacterPortraitImage
-                  src={lora.portraitThumbnailUrl || null}
-                  alt={label}
-                  crop={lora.portraitCrop}
-                  iconClassName={`w-3 h-3 ${charStyle.icon}`}
-                />
-              </div>
-              <span className="font-medium">{label}</span>
-              {lora.triggerWord && (
-                <span className={`text-[11px] font-mono ${charStyle.textAccent}`}>
-                  ({lora.triggerWord})
-                </span>
-              )}
-              {renderStrengthControl(
-                lora.loraName,
-                lora.modelStrength,
-                label,
-                charStyle,
-                onUpdateLoraStrength
-                  ? (nextStrength) => onUpdateLoraStrength(lora.loraName, nextStrength)
-                  : undefined
-              )}
-              <button
-                type="button"
-                onClick={() => onRemoveLora(lora.loraName)}
-                className={`${charStyle.removeButton} cursor-pointer ml-0.5`}
-                title={`Remove ${label}`}
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          );
-        }
+        const pillStyle = resolveLoraCategoryStyle(category, pillTypeSettings);
 
         return (
           <div
             key={lora.loraName}
-            className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs shadow-sm ${loraStyle.pill}`}
+            className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs shadow-sm ${pillStyle.pill}`}
           >
-            <Layers className={`w-3.5 h-3.5 shrink-0 ${loraStyle.icon}`} />
-            <span className={`font-medium ${loraStyle.textLight}`}>{label}</span>
+            <Layers className={`w-3.5 h-3.5 shrink-0 ${pillStyle.icon}`} />
+            <span className={`font-medium ${pillStyle.textLight}`}>{label}</span>
             {renderStrengthControl(
               lora.loraName,
               lora.modelStrength,
               label,
-              loraStyle,
+              pillStyle,
               onUpdateLoraStrength
                 ? (nextStrength) => onUpdateLoraStrength(lora.loraName, nextStrength)
                 : undefined
@@ -323,7 +386,7 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
             <button
               type="button"
               onClick={() => onRemoveLora(lora.loraName)}
-              className={`${loraStyle.removeButton} cursor-pointer ml-0.5`}
+              className={`${pillStyle.removeButton} cursor-pointer ml-0.5`}
               title={`Remove ${label}`}
             >
               <X className="w-3.5 h-3.5" />

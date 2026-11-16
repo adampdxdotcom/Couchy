@@ -1,7 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Cpu, Layers, Sparkles, Users } from 'lucide-react';
 import { api } from '../../api/client.ts';
-import { DEFAULT_PILL_TYPE_SETTINGS, PILL_COLOR_STYLES } from '../../shared/pillSettings.ts';
+import {
+  DEFAULT_PILL_TYPE_SETTINGS,
+  PILL_COLOR_STYLES,
+  resolveLoraCategoryStyle,
+} from '../../shared/pillSettings.ts';
 import type {
   CharacterProfile,
   ImageRecord,
@@ -360,12 +364,13 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                   const isSelected = selectedAddonKeys.has(addon.key);
                   const isDisabled = !addon.isInstalled || (!isSelected && atLoraLimit);
                   const availability = getModelAvailabilityInfo(addon);
+                  const addonStyle = resolveLoraCategoryStyle(addon.category, pillTypeSettings);
                   return (
                     <div
                       key={addon.key}
                       className={`flex items-center justify-between gap-2 bg-zinc-950 border rounded-lg px-2 py-1.5 min-w-0 transition-colors ${
                         isSelected
-                          ? loraStyle.rowSelected
+                          ? addonStyle.rowSelected
                           : 'border-zinc-800 hover:border-zinc-700'
                       }`}
                     >
@@ -386,21 +391,21 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                           !addon.isInstalled
                             ? 'bg-zinc-900 border-zinc-800 text-zinc-500 opacity-55 cursor-not-allowed'
                             : isSelected
-                            ? loraStyle.pillSelected
+                            ? addonStyle.pillSelected
                             : isDisabled
-                            ? loraStyle.pillDisabledCap
-                            : loraStyle.pillHover
+                            ? addonStyle.pillDisabledCap
+                            : addonStyle.pillHover
                         }`}
                       >
                         <Layers
                           className={`w-3.5 h-3.5 shrink-0 ${
-                            addon.isInstalled ? loraStyle.icon : 'text-zinc-500'
+                            addon.isInstalled ? addonStyle.icon : 'text-zinc-500'
                           }`}
                         />
                         <span className="font-medium truncate">{addon.displayName}</span>
                         <span
                           className={`text-[11px] font-mono tabular-nums shrink-0 ${
-                            addon.isInstalled ? loraStyle.textAccent : 'text-zinc-500'
+                            addon.isInstalled ? addonStyle.textAccent : 'text-zinc-500'
                           }`}
                         >
                           {formatPillStrength(addon.avgModelStrength)}x
@@ -410,7 +415,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                             ({availability.label.toLowerCase()})
                           </span>
                         ) : (
-                          isSelected && <Check className={`w-3 h-3 shrink-0 ${loraStyle.checkIcon}`} />
+                          isSelected && <Check className={`w-3 h-3 shrink-0 ${addonStyle.checkIcon}`} />
                         )}
                       </button>
 

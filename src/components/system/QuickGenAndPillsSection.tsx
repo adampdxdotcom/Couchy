@@ -1,11 +1,14 @@
 import React from 'react';
 import { Check, Cpu, Layers, RotateCcw, Sparkles, User } from 'lucide-react';
 import {
+  CUSTOMIZABLE_LORA_CATEGORIES,
   DEFAULT_PILL_TYPE_SETTINGS,
   PILL_COLOR_OPTIONS,
   PILL_COLOR_STYLES,
+  resolveLoraCategoryStyle,
 } from '../../shared/pillSettings.ts';
 import type {
+  CustomizableLoraCategory,
   PillColorKey,
   PillEntityType,
   PillTypeBehavior,
@@ -31,7 +34,8 @@ const ENTITY_META: {
   {
     key: 'character',
     label: 'Characters',
-    description: 'Character attachments, Friends pills, and character LoRA pills in Quick Gen & Gallery.',
+    description:
+      'Character attachments, Friends pills, and Character-categorized LoRA pills in Quick Gen & Gallery.',
     sampleLabel: 'Elena',
     icon: User,
   },
@@ -44,15 +48,18 @@ const ENTITY_META: {
   },
   {
     key: 'lora',
-    label: 'LoRAs',
-    description: 'Style, pose, and addon LoRA pills across Quick Gen, Gallery cards, and Character Addons.',
+    label: 'LoRAs (Default)',
+    description: 'Default color for style, pose, clothing, and addon LoRA pills unless overridden below.',
     sampleLabel: 'Detail Tweaker',
     icon: Layers,
   },
 ];
 
 function isDefaultPillSettings(settings: PillTypeSettings): boolean {
+  const hasCategoryOverrides =
+    Object.keys(settings.loraCategoryColors || {}).length > 0;
   return (
+    !hasCategoryOverrides &&
     settings.character.color === DEFAULT_PILL_TYPE_SETTINGS.character.color &&
     settings.character.insertMentionName === DEFAULT_PILL_TYPE_SETTINGS.character.insertMentionName &&
     settings.baseModel.color === DEFAULT_PILL_TYPE_SETTINGS.baseModel.color &&
@@ -87,7 +94,24 @@ export const QuickGenAndPillsSection: React.FC<QuickGenAndPillsSectionProps> = (
     });
   };
 
+  const handleChangeCategoryColor = (
+    category: CustomizableLoraCategory,
+    color: PillColorKey | null
+  ) => {
+    const nextOverrides = { ...(pillTypeSettings.loraCategoryColors || {}) };
+    if (color === null) {
+      delete nextOverrides[category];
+    } else {
+      nextOverrides[category] = color;
+    }
+    onUpdatePillTypeSettings({
+      ...pillTypeSettings,
+      loraCategoryColors: nextOverrides,
+    });
+  };
+
   const atDefaults = isDefaultPillSettings(pillTypeSettings);
+  const categoryOverrideCount = Object.keys(pillTypeSettings.loraCategoryColors || {}).length;
 
   return (
     <div className="space-y-5">
@@ -270,6 +294,100 @@ export const QuickGenAndPillsSection: React.FC<QuickGenAndPillsSectionProps> = (
                     />
                     <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all relative peer-checked:bg-indigo-600" />
                   </label>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Per-Category LoRA Pill Colors */}
+      <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-amber-400" />
+              <h2 className="text-sm font-display font-semibold text-zinc-100">
+                LoRA Category Pill Colors
+              </h2>
+            </div>
+            <p className="text-xs text-zinc-400">
+              Override pill colors for specific LoRA categories across Quick Gen, Gallery cards, and Character Addons.{' '}
+              <span className="text-zinc-300">Character</span> LoRAs always use your Characters pill color above.
+            </p>
+          </div>
+
+          {categoryOverrideCount > 0 && (
+            <button
+              type="button"
+              onClick={() =>
+                onUpdatePillTypeSettings({
+                  ...pillTypeSettings,
+                  loraCategoryColors: {},
+                })
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-800 bg-zinc-950 hover:bg-zinc-800 text-zinc-300 text-[11px] font-medium transition-colors cursor-pointer"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Use Default LoRA Color for All</span>
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+          {CUSTOMIZABLE_LORA_CATEGORIES.map((cat) => {
+            const override = pillTypeSettings.loraCategoryColors?.[cat.key] || null;
+            const resolvedStyle = resolveLoraCategoryStyle(cat.key, pillTypeSettings);
+
+            return (
+              <div
+                key={cat.key}
+                className="bg-zinc-950/80 border border-zinc-800 rounded-xl px-3.5 py-3 space-y-2.5"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border text-xs font-medium shadow-sm ${resolvedStyle.pill}`}
+                  >
+                    <Layers className={`w-3 h-3 shrink-0 ${resolvedStyle.icon}`} />
+                    <span>{cat.label}</span>
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => handleChangeCategoryColor(cat.key, null)}
+                    disabled={!override}
+                    className={`text-[10px] px-2 py-0.5 rounded border transition-colors ${
+                      !override
+                        ? 'border-zinc-700/80 bg-zinc-900 text-zinc-300 font-medium'
+                        : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 cursor-pointer'
+                    }`}
+                    title="Inherit the base LoRAs color"
+                  >
+                    {!override ? `Default (${PILL_COLOR_STYLES[pillTypeSettings.lora.color].label})` : 'Reset to Default'}
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {PILL_COLOR_OPTIONS.map((colorKey: PillColorKey) => {
+                    const swatch = PILL_COLOR_STYLES[colorKey];
+                    const isSelected = override === colorKey;
+                    return (
+                      <button
+                        key={colorKey}
+                        type="button"
+                        onClick={() => handleChangeCategoryColor(cat.key, colorKey)}
+                        aria-label={`Set ${cat.label} LoRA pill color to ${swatch.label}`}
+                        title={swatch.label}
+                        className={`w-5 h-5 rounded-full flex items-center justify-center transition-transform cursor-pointer ${swatch.swatchBg} ${
+                          isSelected
+                            ? 'ring-2 ring-white ring-offset-2 ring-offset-zinc-950 scale-105'
+                            : 'opacity-70 hover:opacity-100 hover:scale-105'
+                        }`}
+                      >
+                        {isSelected && <Check className="w-3 h-3 text-white drop-shadow" />}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             );

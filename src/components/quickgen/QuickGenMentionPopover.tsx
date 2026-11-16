@@ -1,6 +1,10 @@
 import React from 'react';
 import { Cpu, Layers, Search, User, X } from 'lucide-react';
-import { DEFAULT_PILL_TYPE_SETTINGS, PILL_COLOR_STYLES } from '../../shared/pillSettings.ts';
+import {
+  DEFAULT_PILL_TYPE_SETTINGS,
+  PILL_COLOR_STYLES,
+  resolveLoraCategoryStyle,
+} from '../../shared/pillSettings.ts';
 import type { PillTypeSettings } from '../../shared/types.ts';
 import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
 import {
@@ -44,7 +48,6 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
 }) => {
   const charStyle = PILL_COLOR_STYLES[pillTypeSettings.character.color];
   const baseModelStyle = PILL_COLOR_STYLES[pillTypeSettings.baseModel.color];
-  const loraStyle = PILL_COLOR_STYLES[pillTypeSettings.lora.color];
   return (
     <div className="flex-1 min-h-0 md:flex-none flex flex-col md:mb-2 bg-zinc-950/98 backdrop-blur-2xl md:border border-b border-zinc-800 md:rounded-3xl shadow-2xl overflow-hidden text-xs w-full">
       {/* Top Search Header */}
@@ -136,7 +139,14 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                 >
                   <div className="w-9 h-9 rounded-xl bg-zinc-900 border border-zinc-700/60 overflow-hidden shrink-0 flex items-center justify-center">
                     {entry.type === 'lora' ? (
-                      <div className={`w-full h-full flex items-center justify-center ${loraStyle.iconBg}`}>
+                      <div
+                        className={`w-full h-full flex items-center justify-center ${
+                          resolveLoraCategoryStyle(
+                            entry.loraItem?.loraCategory,
+                            pillTypeSettings
+                          ).iconBg
+                        }`}
+                      >
                         <Layers className="w-4 h-4" />
                       </div>
                     ) : entry.type === 'model' ? (
@@ -164,7 +174,14 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                     <div className="flex items-center gap-1.5">
                       <span className="font-medium text-zinc-100 truncate">{entry.title}</span>
                       {entry.type === 'lora' && (
-                        <span className={`text-[10px] uppercase font-mono px-1.5 py-0.2 rounded border shrink-0 ${loraStyle.badge}`}>
+                        <span
+                          className={`text-[10px] uppercase font-mono px-1.5 py-0.2 rounded border shrink-0 ${
+                            resolveLoraCategoryStyle(
+                              entry.loraItem?.loraCategory,
+                              pillTypeSettings
+                            ).badge
+                          }`}
+                        >
                           LoRA
                         </span>
                       )}
@@ -192,23 +209,29 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
           {highlightedEntry && (
             <div className="order-1 md:order-2 md:col-span-6 p-3 md:p-3.5 flex flex-col justify-between bg-zinc-950/60 border-b md:border-b-0 border-zinc-800/70 shrink-0">
               <div className="relative rounded-2xl bg-zinc-900 border border-zinc-800/80 overflow-hidden h-36 md:h-56 flex items-center justify-center">
-                {highlightedEntry.type === 'lora' ? (
-                  <div className="flex flex-col items-center gap-2.5 p-4 text-center">
-                    <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center shadow-inner ${loraStyle.iconBg}`}>
-                      <Layers className="w-6 h-6" />
+                {highlightedEntry.type === 'lora' ? (() => {
+                  const previewLoraStyle = resolveLoraCategoryStyle(
+                    highlightedEntry.loraItem?.loraCategory,
+                    pillTypeSettings
+                  );
+                  return (
+                    <div className="flex flex-col items-center gap-2.5 p-4 text-center">
+                      <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center shadow-inner ${previewLoraStyle.iconBg}`}>
+                        <Layers className="w-6 h-6" />
+                      </div>
+                      <div className="text-sm font-semibold text-zinc-100">
+                        {getCleanLoraLabel(highlightedEntry.loraItem || { name: highlightedEntry.title })}
+                      </div>
+                      <div className="text-[11px] text-zinc-400 flex items-center gap-2">
+                        <span className="capitalize">{highlightedEntry.loraItem?.loraCategory}</span>
+                        <span>·</span>
+                        <span className={`font-mono ${previewLoraStyle.textAccent}`}>
+                          Strength: {(highlightedEntry.loraItem?.defaultModelStrength ?? 1.0).toFixed(1)}x
+                        </span>
+                      </div>
                     </div>
-                    <div className="text-sm font-semibold text-zinc-100">
-                      {getCleanLoraLabel(highlightedEntry.loraItem || { name: highlightedEntry.title })}
-                    </div>
-                    <div className="text-[11px] text-zinc-400 flex items-center gap-2">
-                      <span className="capitalize">{highlightedEntry.loraItem?.loraCategory}</span>
-                      <span>·</span>
-                      <span className={`font-mono ${loraStyle.textAccent}`}>
-                        Strength: {(highlightedEntry.loraItem?.defaultModelStrength ?? 1.0).toFixed(1)}x
-                      </span>
-                    </div>
-                  </div>
-                ) : highlightedEntry.type === 'model' ? (
+                  );
+                })() : highlightedEntry.type === 'model' ? (
                   highlightedEntry.thumbnailUrl ? (
                     <img
                       src={highlightedEntry.thumbnailUrl}
@@ -270,7 +293,10 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                       highlightedEntry.type === 'model'
                         ? baseModelStyle.textAccent
                         : highlightedEntry.type === 'lora'
-                        ? loraStyle.textAccent
+                        ? resolveLoraCategoryStyle(
+                            highlightedEntry.loraItem?.loraCategory,
+                            pillTypeSettings
+                          ).textAccent
                         : charStyle.textAccent
                     }`}
                   >

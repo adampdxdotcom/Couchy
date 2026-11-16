@@ -375,6 +375,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               attachedCheckpoint={submitState.attachedCheckpoint}
               attachedLoras={submitState.attachedLoras}
               removedLoraKeys={submitState.removedLoraKeys}
+              loras={loras}
               models={models}
               pillTypeSettings={pillTypeSettings}
               onRemoveCharacter={submitState.handleRemoveCharacter}

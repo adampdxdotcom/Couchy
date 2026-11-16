@@ -1,10 +1,30 @@
-import type { PillColorKey, PillEntityType, PillTypeSettings } from './types.ts';
+import type {
+  CustomizableLoraCategory,
+  LoraCategory,
+  PillColorKey,
+  PillEntityType,
+  PillTypeSettings,
+} from './types.ts';
 
 export const DEFAULT_PILL_TYPE_SETTINGS: PillTypeSettings = {
   character: { color: 'indigo', insertMentionName: false },
   baseModel: { color: 'emerald', insertMentionName: false },
   lora: { color: 'amber', insertMentionName: false },
+  loraCategoryColors: {},
 };
+
+export const CUSTOMIZABLE_LORA_CATEGORIES: Array<{
+  key: CustomizableLoraCategory;
+  label: string;
+}> = [
+  { key: 'style', label: 'Style' },
+  { key: 'clothing', label: 'Clothing' },
+  { key: 'pose', label: 'Pose' },
+  { key: 'concept', label: 'Concept' },
+  { key: 'object', label: 'Object' },
+  { key: 'other', label: 'Other' },
+  { key: 'unclassified', label: 'Unclassified' },
+];
 
 export interface PillColorStyleSet {
   label: string;
@@ -212,6 +232,9 @@ export const PILL_COLOR_OPTIONS: PillColorKey[] = [
 
 const VALID_COLOR_SET = new Set<string>(PILL_COLOR_OPTIONS);
 const ENTITY_KEYS: PillEntityType[] = ['character', 'baseModel', 'lora'];
+const VALID_CUSTOM_CATEGORY_SET = new Set<string>(
+  CUSTOMIZABLE_LORA_CATEGORIES.map((c) => c.key)
+);
 
 export function normalizePillTypeSettings(raw: unknown): PillTypeSettings {
   const input = raw && typeof raw === 'object' ? (raw as Record<string, any>) : {};
@@ -219,6 +242,7 @@ export function normalizePillTypeSettings(raw: unknown): PillTypeSettings {
     character: { ...DEFAULT_PILL_TYPE_SETTINGS.character },
     baseModel: { ...DEFAULT_PILL_TYPE_SETTINGS.baseModel },
     lora: { ...DEFAULT_PILL_TYPE_SETTINGS.lora },
+    loraCategoryColors: {},
   };
 
   for (const entity of ENTITY_KEYS) {
@@ -232,5 +256,49 @@ export function normalizePillTypeSettings(raw: unknown): PillTypeSettings {
       }
     }
   }
+
+  if (input.loraCategoryColors && typeof input.loraCategoryColors === 'object') {
+    const normalizedCategories: Partial<Record<CustomizableLoraCategory, PillColorKey>> = {};
+    for (const [catKey, colorVal] of Object.entries(input.loraCategoryColors)) {
+      if (
+        VALID_CUSTOM_CATEGORY_SET.has(catKey) &&
+        typeof colorVal === 'string' &&
+        VALID_COLOR_SET.has(colorVal)
+      ) {
+        normalizedCategories[catKey as CustomizableLoraCategory] = colorVal as PillColorKey;
+      }
+    }
+    result.loraCategoryColors = normalizedCategories;
+  }
+
   return result;
+}
+
+/**
+ * Resolves the active PillColorKey for a LoRA category:
+ * - 'character' always mirrors the Characters pill color.
+ * - Other categories use their configured override if set, falling back to the base LoRA color.
+ */
+export function resolveLoraCategoryColorKey(
+  category: LoraCategory | null | undefined,
+  settings: PillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS
+): PillColorKey {
+  if (category === 'character') {
+    return settings.character.color;
+  }
+  if (category && settings.loraCategoryColors) {
+    const override = settings.loraCategoryColors[category as CustomizableLoraCategory];
+    if (override && VALID_COLOR_SET.has(override)) {
+      return override;
+    }
+  }
+  return settings.lora.color;
+}
+
+/** Resolves the static Tailwind class set for a LoRA based on its category and pill settings. */
+export function resolveLoraCategoryStyle(
+  category: LoraCategory | null | undefined,
+  settings: PillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS
+): PillColorStyleSet {
+  return PILL_COLOR_STYLES[resolveLoraCategoryColorKey(category, settings)];
 }

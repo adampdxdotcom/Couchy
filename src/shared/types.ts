@@ -724,12 +724,19 @@ export type PillColorKey =
 
 export type PillEntityType = 'character' | 'baseModel' | 'lora';
 
+export type CustomizableLoraCategory = Exclude<LoraCategory, 'character'>;
+
 export interface PillTypeBehavior {
   color: PillColorKey;
   insertMentionName: boolean;
 }
 
-export type PillTypeSettings = Record<PillEntityType, PillTypeBehavior>;
+export interface PillTypeSettings {
+  character: PillTypeBehavior;
+  baseModel: PillTypeBehavior;
+  lora: PillTypeBehavior;
+  loraCategoryColors?: Partial<Record<CustomizableLoraCategory, PillColorKey>>;
+}
 
 export type StatsPeriod = 'day' | 'week' | 'month' | 'year';
 

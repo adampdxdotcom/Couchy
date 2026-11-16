@@ -21,7 +21,11 @@ import {
   Layers,
   MessageSquare,
 } from 'lucide-react';
-import { DEFAULT_PILL_TYPE_SETTINGS, PILL_COLOR_STYLES } from '../shared/pillSettings.ts';
+import {
+  DEFAULT_PILL_TYPE_SETTINGS,
+  PILL_COLOR_STYLES,
+  resolveLoraCategoryStyle,
+} from '../shared/pillSettings.ts';
 import type {
   CharacterProfile,
   DependencyStatus,
@@ -170,7 +174,6 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   isLoading = false,
 }) => {
   const neutralPillClass = 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200';
-  const charPillClass = PILL_COLOR_STYLES[pillTypeSettings.character.color].pill;
   const baseModelPillClass = PILL_COLOR_STYLES[pillTypeSettings.baseModel.color].pill;
   const loraPillClass = PILL_COLOR_STYLES[pillTypeSettings.lora.color].pill;
   const [bulkTagInput, setBulkTagInput] = useState('');
@@ -628,11 +631,9 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                               { loraName },
                               loras
                             );
-                            const pillColorClass = !galleryPillColorsEnabled
-                              ? neutralPillClass
-                              : category === 'character'
-                              ? charPillClass
-                              : loraPillClass;
+                            const pillColorClass = galleryPillColorsEnabled
+                              ? resolveLoraCategoryStyle(category, pillTypeSettings).pill
+                              : neutralPillClass;
                             return (
                               <span
                                 key={`${loraName}-${idx}`}
@@ -929,11 +930,9 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                       )}
                       {img.loras.map((lora, idx) => {
                         const { label, category } = resolveGalleryLoraMeta(lora, loras);
-                        const pillColorClass = !galleryPillColorsEnabled
-                          ? neutralPillClass
-                          : category === 'character'
-                          ? charPillClass
-                          : loraPillClass;
+                        const pillColorClass = galleryPillColorsEnabled
+                          ? resolveLoraCategoryStyle(category, pillTypeSettings).pill
+                          : neutralPillClass;
                         return (
                           <span
                             key={`${lora.loraName}-${idx}`}
