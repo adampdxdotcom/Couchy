@@ -777,6 +777,33 @@ export function runMigrations(): void {
         ALTER TABLE lm_studio_settings ADD COLUMN follow_loaded_model INTEGER NOT NULL DEFAULT 1;
       `,
     },
+    {
+      version: 28,
+      name: 'lora_presets',
+      sql: `
+        CREATE TABLE IF NOT EXISTS lora_presets (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          nickname TEXT NOT NULL DEFAULT '',
+          user_description TEXT NOT NULL DEFAULT '',
+          agent_description TEXT NOT NULL DEFAULT '',
+          pill_color TEXT NOT NULL DEFAULT 'fuchsia',
+          checkpoint_name TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS lora_preset_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          preset_id INTEGER NOT NULL REFERENCES lora_presets(id) ON DELETE CASCADE,
+          lora_name TEXT NOT NULL,
+          model_strength REAL NOT NULL DEFAULT 1.0,
+          clip_strength REAL NOT NULL DEFAULT 1.0,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          UNIQUE(preset_id, lora_name)
+        );
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

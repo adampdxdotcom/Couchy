@@ -9,7 +9,7 @@ import type { ExternalModelSearchResult } from '../../shared/types.ts';
  * so navigating across LoRA/Model sub-tabs preserves queued downloads.
  */
 export function useModelDownloaderState(
-  subTab: 'loras' | 'dependencies' | 'downloader',
+  subTab: 'loras' | 'dependencies' | 'presets' | 'downloader',
   onRefreshInventory: () => Promise<void>
 ) {
   const [extQuery, setExtQuery] = useState('');

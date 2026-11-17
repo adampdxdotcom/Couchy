@@ -753,6 +753,57 @@ export type PillColorKey =
   | 'teal'
   | 'zinc';
 
+/** Custom pill color palette reserved for LoRA Presets (distinct from PillColorKey). */
+export type PresetPillColorKey =
+  | 'fuchsia'
+  | 'cyan'
+  | 'orange'
+  | 'lime'
+  | 'pink'
+  | 'purple';
+
+export interface LoraPresetItem {
+  id?: number;
+  presetId?: number;
+  loraName: string;
+  modelStrength: number;
+  clipStrength: number;
+  sortOrder: number;
+  displayName?: string;
+  triggerWord?: string | null;
+  isInstalled?: boolean;
+  loraCategory?: LoraCategory;
+}
+
+export interface LoraPreset {
+  id: number;
+  name: string;
+  nickname: string;
+  userDescription: string;
+  agentDescription: string;
+  pillColor: PresetPillColorKey;
+  checkpointName: string | null;
+  checkpointDisplayName?: string | null;
+  checkpointInstalled?: boolean;
+  items: LoraPresetItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LoraPresetPayload {
+  name: string;
+  nickname?: string;
+  userDescription?: string;
+  agentDescription?: string;
+  pillColor?: PresetPillColorKey;
+  checkpointName?: string | null;
+  items: Array<{
+    loraName: string;
+    modelStrength: number;
+    clipStrength: number;
+  }>;
+}
+
 export type PillEntityType = 'character' | 'baseModel' | 'lora';
 
 export type CustomizableLoraCategory = Exclude<LoraCategory, 'character'>;

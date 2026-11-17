@@ -7,10 +7,12 @@ import { LoraDetailView } from './LoraDetailView.tsx';
 import { ModelDownloaderTab } from './ModelDownloaderTab.tsx';
 import { LoraExplorerTab } from './models/LoraExplorerTab.tsx';
 import { ModelInventoryTab } from './models/ModelInventoryTab.tsx';
+import { PresetsManagerTab } from './models/PresetsManagerTab.tsx';
 import { useModelDownloaderState } from './models/useModelDownloaderState.ts';
 import type {
   ImageRecord,
   LoraExplorerItem,
+  LoraPreset,
   ModelInventoryItem,
   PillTypeSettings,
 } from '../shared/types.ts';
@@ -18,6 +20,7 @@ import type {
 interface LoraAndModelManagerViewProps {
   loras: LoraExplorerItem[];
   models: ModelInventoryItem[];
+  presets?: LoraPreset[];
   allImages: ImageRecord[];
   pillTypeSettings?: PillTypeSettings;
   onRefresh: () => Promise<void>;
@@ -35,6 +38,7 @@ interface LoraAndModelManagerViewProps {
 export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = ({
   loras,
   models,
+  presets = [],
   allImages,
   pillTypeSettings,
   onRefresh,
@@ -43,7 +47,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   onFilterGalleryByModel,
   onPushToast,
 }) => {
-  const [subTab, setSubTab] = useState<'loras' | 'dependencies' | 'downloader'>('loras');
+  const [subTab, setSubTab] = useState<'loras' | 'dependencies' | 'presets' | 'downloader'>('loras');
   const [selectedLoraName, setSelectedLoraName] = useState<string | null>(null);
   const [selectedModelId, setSelectedModelId] = useState<number | null>(null);
   const [highlightedModelFilename, setHighlightedModelFilename] = useState<string | null>(null);
@@ -352,6 +356,17 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           </button>
           <button
             type="button"
+            onClick={() => setSubTab('presets')}
+            className={`px-3.5 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+              subTab === 'presets'
+                ? 'bg-fuchsia-600 text-white'
+                : 'bg-zinc-900 text-zinc-300 hover:bg-zinc-800'
+            }`}
+          >
+            Presets ({presets.length})
+          </button>
+          <button
+            type="button"
             onClick={() => setSubTab('downloader')}
             className={`px-3.5 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
               subTab === 'downloader'
@@ -409,6 +424,16 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           onSelectModel={setSelectedModelId}
           onUpdateModelConfig={handleUpdateModelConfig}
           onToggleVisibility={handleToggleModelVisibility}
+        />
+      )}
+
+      {subTab === 'presets' && (
+        <PresetsManagerTab
+          presets={presets}
+          loras={loras}
+          models={models}
+          onRefresh={onRefresh}
+          onPushToast={onPushToast}
         />
       )}
 

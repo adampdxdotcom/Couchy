@@ -4,11 +4,13 @@ import type {
   CharacterProfile,
   GenerationLoraSelection,
   LoraExplorerItem,
+  LoraPreset,
   QuickGenChatMessage,
   WorkflowLibraryItem,
 } from '../../shared/types.ts';
 import { resolveClosestAspectRatio, resolveDefaultWorkflow } from '../../shared/utils.ts';
 import {
+  MAX_SYSTEM_LORAS,
   downscaleImageFileTo1Mp,
   getCleanLoraLabel,
   isCharacterLora,
@@ -19,6 +21,7 @@ import {
 
 interface UseQuickGenSubmitParams {
   loras: LoraExplorerItem[];
+  presets?: LoraPreset[];
   workflows: WorkflowLibraryItem[];
   prefillPayload?: QuickGenPrefill | null;
   lmStudioOnline: boolean;
@@ -35,6 +38,7 @@ interface UseQuickGenSubmitParams {
  */
 export function useQuickGenSubmit({
   loras,
+  presets = [],
   workflows,
   prefillPayload,
   lmStudioOnline,
@@ -59,6 +63,7 @@ export function useQuickGenSubmit({
   const [batchCount, setBatchCount] = useState<number>(1);
   const [attachedCharacter, setAttachedCharacter] = useState<CharacterProfile | null>(null);
   const [characterLoraStrength, setCharacterLoraStrength] = useState<number>(1.0);
+  const [attachedPreset, setAttachedPreset] = useState<LoraPreset | null>(null);
   const [attachedCheckpoint, setAttachedCheckpoint] = useState<string | null>(null);
   const [attachedLoras, setAttachedLoras] = useState<GenerationLoraSelection[]>([]);
   const [removedLoraKeys, setRemovedLoraKeys] = useState<Set<string>>(new Set());
@@ -225,6 +230,7 @@ export function useQuickGenSubmit({
 
     setIsMinimized(false);
     setInspirationFilename(null);
+    setAttachedPreset(null);
     setRemovedLoraKeys(
       new Set((prefillPayload.excludedLoras || []).map((k) => normalizeLoraKey(k)).filter(Boolean))
     );
@@ -449,6 +455,145 @@ export function useQuickGenSubmit({
     setAttachedCheckpoint(null);
   };
 
+  /**
+   * Applies a saved LoRA Preset (used by @mention and Local LLM Agent picks), loading its
+   * Base Model (or system workflow default when null) and preset default LoRA strengths as editable pills.
+   */
+  const applyPreset = (
+    preset: LoraPreset,
+    options?: { respectRemovedKeys?: boolean; silent?: boolean }
+  ) => {
+    const respectRemoved = Boolean(options?.respectRemovedKeys);
+    const charLoraKeys = new Set(
+      attachedCharacter
+        ? attachedCharacter.loras.map((cl) => normalizeLoraKey(cl.loraName))
+        : []
+    );
+    const activeCharLoraCount = attachedCharacter
+      ? attachedCharacter.loras.filter((cl) => !removedLoraKeys.has(normalizeLoraKey(cl.loraName)))
+          .length
+      : 0;
+
+    const prevPresetKeys = new Set(
+      (attachedPreset?.items || []).map((it) => normalizeLoraKey(it.loraName))
+    );
+
+    if (!respectRemoved) {
+      setRemovedLoraKeys((prev) => {
+        const next = new Set(prev);
+        for (const item of preset.items) {
+          next.delete(normalizeLoraKey(item.loraName));
+        }
+        return next;
+      });
+    }
+
+    setAttachedCheckpoint(preset.checkpointName || null);
+
+    let truncatedCount = 0;
+    setAttachedLoras((prev) => {
+      // Keep character LoRAs + any user-attached LoRAs that did not come solely from the previous preset
+      const baseList = prev.filter((al) => {
+        const k = normalizeLoraKey(al.loraName);
+        if (charLoraKeys.has(k)) return true;
+        return !prevPresetKeys.has(k);
+      });
+
+      const nextList = [...baseList];
+      const countActiveNonChar = () =>
+        nextList.filter((al) => !charLoraKeys.has(normalizeLoraKey(al.loraName))).length;
+
+      for (const item of preset.items) {
+        const itemKey = normalizeLoraKey(item.loraName);
+        if (respectRemoved && removedLoraKeys.has(itemKey)) continue;
+
+        const matchedExplorer = loras.find(
+          (l) => normalizeLoraKey(l.filename) === itemKey || normalizeLoraKey(l.name) === itemKey
+        );
+        const belongsToChar = charLoraKeys.has(itemKey);
+        const resolvedLabel = getCleanLoraLabel(
+          matchedExplorer || { name: item.displayName, loraName: item.loraName }
+        );
+        const resolvedTrigger =
+          matchedExplorer?.triggerWord || item.triggerWord || '';
+
+        const existingIdx = nextList.findIndex(
+          (al) => normalizeLoraKey(al.loraName) === itemKey
+        );
+
+        if (existingIdx >= 0) {
+          nextList[existingIdx] = {
+            ...nextList[existingIdx],
+            loraName: matchedExplorer?.filename || item.loraName,
+            modelStrength: item.modelStrength,
+            clipStrength: item.clipStrength,
+            triggerWord: resolvedTrigger || nextList[existingIdx].triggerWord || '',
+            nickname: resolvedLabel,
+            showPill: belongsToChar ? false : true,
+          };
+          if (belongsToChar) {
+            setCharacterLoraStrength(item.modelStrength);
+          }
+          continue;
+        }
+
+        if (!belongsToChar && activeCharLoraCount + countActiveNonChar() >= MAX_SYSTEM_LORAS) {
+          truncatedCount += 1;
+          continue;
+        }
+
+        nextList.push({
+          loraName: matchedExplorer?.filename || item.loraName,
+          modelStrength: item.modelStrength,
+          clipStrength: item.clipStrength,
+          triggerWord: resolvedTrigger,
+          nickname: resolvedLabel,
+          showPill: !belongsToChar,
+        });
+      }
+
+      return nextList;
+    });
+
+    setAttachedPreset(preset);
+    if (truncatedCount > 0 && !options?.silent) {
+      onPushToast(
+        `Applied "${preset.name}" (${truncatedCount} LoRA skipped due to ${MAX_SYSTEM_LORAS}-LoRA limit)`,
+        'warning'
+      );
+    }
+  };
+
+  /** Detaches the active Preset pill and clears LoRAs/checkpoint introduced solely by that preset. */
+  const handleRemovePreset = () => {
+    const presetToRemove = attachedPreset;
+    setAttachedPreset(null);
+    if (!presetToRemove) return;
+
+    if (
+      presetToRemove.checkpointName &&
+      attachedCheckpoint &&
+      normalizeLoraKey(presetToRemove.checkpointName) === normalizeLoraKey(attachedCheckpoint)
+    ) {
+      setAttachedCheckpoint(null);
+    }
+
+    const presetKeys = new Set(presetToRemove.items.map((it) => normalizeLoraKey(it.loraName)));
+    const charKeys = new Set(
+      attachedCharacter
+        ? attachedCharacter.loras.map((cl) => normalizeLoraKey(cl.loraName))
+        : []
+    );
+
+    setAttachedLoras((prev) =>
+      prev.filter((al) => {
+        const k = normalizeLoraKey(al.loraName);
+        if (charKeys.has(k)) return true;
+        return !presetKeys.has(k);
+      })
+    );
+  };
+
   /** Detaches any pre-linked source stack so the next generation outputs a standalone image. */
   const handleRemoveStackTarget = () => {
     setActiveSeriesId(null);
@@ -575,8 +720,18 @@ export function useQuickGenSubmit({
         characterPhysicalDescription: attachedCharacter?.physicalDescription || undefined,
         loraNames: selectedLoras.map((l) => l.loraName),
         excludedLoras: currentRemovedKeys,
+        activePresetName: attachedPreset?.name || undefined,
         batchCount,
       });
+
+      let appliedAgentPreset: LoraPreset | null = null;
+      if (res.selectedPreset?.id) {
+        const matchedPreset = presets.find((p) => p.id === res.selectedPreset!.id) || null;
+        if (matchedPreset) {
+          appliedAgentPreset = matchedPreset;
+          applyPreset(matchedPreset, { respectRemovedKeys: true, silent: true });
+        }
+      }
 
       const resolvedPickedLoras: LoraExplorerItem[] = [];
       if (Array.isArray(res.selectedLoras) && res.selectedLoras.length > 0) {
@@ -618,7 +773,7 @@ export function useQuickGenSubmit({
                 triggerWord: matched.triggerWord || next[existingIdx].triggerWord || '',
                 showPill: true,
               };
-            } else {
+            } else if (next.length < MAX_SYSTEM_LORAS) {
               next.push({
                 loraName: matched.filename,
                 modelStrength: matched.defaultModelStrength ?? 1.0,
@@ -633,14 +788,20 @@ export function useQuickGenSubmit({
         });
       }
 
+      const pickedLoraHistory = Array.from(
+        new Set([
+          ...(appliedAgentPreset ? appliedAgentPreset.items.map((it) => it.loraName) : []),
+          ...resolvedPickedLoras.map((l) => l.filename),
+        ])
+      );
+
       const assistantMsg: QuickGenChatMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
         content: res.reply,
         proposedPrompt: res.proposedPrompt,
         proposalKind: res.proposalKind,
-        selectedLoras:
-          resolvedPickedLoras.length > 0 ? resolvedPickedLoras.map((l) => l.filename) : undefined,
+        selectedLoras: pickedLoraHistory.length > 0 ? pickedLoraHistory : undefined,
         excludedLoras: currentRemovedKeys.length > 0 ? currentRemovedKeys : undefined,
       };
       setChatMessages((prev) => [...prev, assistantMsg]);
@@ -764,6 +925,7 @@ export function useQuickGenSubmit({
       setAgentEnabled(false);
       setAttachedCharacter(null);
       setCharacterLoraStrength(1.0);
+      setAttachedPreset(null);
       setAttachedCheckpoint(null);
       setAttachedLoras([]);
       setRemovedLoraKeys(new Set());
@@ -866,6 +1028,7 @@ export function useQuickGenSubmit({
     setPrompt('');
     setAttachedCharacter(null);
     setCharacterLoraStrength(1.0);
+    setAttachedPreset(null);
     setAttachedCheckpoint(null);
     setAttachedLoras([]);
     setRemovedLoraKeys(new Set());
@@ -930,6 +1093,8 @@ export function useQuickGenSubmit({
     setAttachedCharacter,
     characterLoraStrength,
     setCharacterLoraStrength,
+    attachedPreset,
+    setAttachedPreset,
     attachedCheckpoint,
     setAttachedCheckpoint,
     attachedLoras,
@@ -950,7 +1115,9 @@ export function useQuickGenSubmit({
     toggleModelMatch,
     workflowDefaultMp,
     handleInterrogateImageFile,
+    applyPreset,
     handleRemoveCharacter,
+    handleRemovePreset,
     handleRemoveCheckpoint,
     handleRemoveStackTarget,
     handleRemoveLora,

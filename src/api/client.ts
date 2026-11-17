@@ -16,6 +16,8 @@ import type {
   LoraCategory,
   LoraExplorerItem,
   LoraMentionAutomation,
+  LoraPreset,
+  LoraPresetPayload,
   ModelCleanupStatus,
   ModelInventoryItem,
   PortraitCrop,
@@ -332,6 +334,25 @@ export const api = {
 
   listModelInventory: () => requestJson<{ items: ModelInventoryItem[] }>('/api/models/inventory'),
 
+  listPresets: () => requestJson<{ items: LoraPreset[] }>('/api/presets'),
+
+  createPreset: (payload: LoraPresetPayload) =>
+    requestJson<{ preset: LoraPreset; items: LoraPreset[] }>('/api/presets', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  updatePreset: (id: number, payload: LoraPresetPayload) =>
+    requestJson<{ preset: LoraPreset; items: LoraPreset[] }>(`/api/presets/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }),
+
+  deletePreset: (id: number) =>
+    requestJson<{ ok: boolean; items: LoraPreset[] }>(`/api/presets/${id}`, {
+      method: 'DELETE',
+    }),
+
   updateModelVisibility: (modelId: number, isHidden: boolean) =>
     requestJson<{ ok: boolean; items: ModelInventoryItem[] }>(`/api/models/${modelId}/visibility`, {
       method: 'PATCH',
@@ -616,6 +637,7 @@ export const api = {
     characterPhysicalDescription?: string;
     loraNames?: string[];
     excludedLoras?: string[];
+    activePresetName?: string;
     batchCount?: number;
   }) =>
     requestJson<{
@@ -623,6 +645,7 @@ export const api = {
       proposedPrompt: string | null;
       proposalKind?: 'prompt' | 'concept';
       selectedLoras?: string[];
+      selectedPreset?: { id: number; name: string; nickname: string } | null;
       modelUsed: string;
     }>('/api/generation/lmstudio/chat', {
       method: 'POST',

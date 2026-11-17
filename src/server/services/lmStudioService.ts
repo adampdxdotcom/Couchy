@@ -1507,12 +1507,14 @@ export async function converseQuickGenPrompt(params: {
   characterPhysicalDescription?: string;
   loraNames?: string[];
   excludedLoras?: string[];
+  activePresetName?: string;
   batchCount?: number;
 }): Promise<{
   reply: string;
   proposedPrompt: string | null;
   proposalKind: 'prompt' | 'concept';
   selectedLoras: string[];
+  selectedPreset: { id: number; name: string; nickname: string } | null;
   modelUsed: string;
 }> {
   const status = await checkLmStudioStatus();
@@ -1556,6 +1558,41 @@ export async function converseQuickGenPrompt(params: {
     llm_description: string;
   }>;
 
+  // Query saved LoRA Presets that have an Agent Description configured
+  const presetRows = db
+    .prepare(
+      `SELECT id, name, nickname, agent_description, checkpoint_name
+       FROM lora_presets
+       WHERE TRIM(COALESCE(agent_description, '')) != ''
+       ORDER BY LOWER(name) ASC`
+    )
+    .all() as Array<{
+    id: number;
+    name: string;
+    nickname: string;
+    agent_description: string;
+    checkpoint_name: string | null;
+  }>;
+
+  const presetItemRows =
+    presetRows.length > 0
+      ? (db
+          .prepare(
+            `SELECT preset_id, lora_name, model_strength
+             FROM lora_preset_items
+             ORDER BY preset_id ASC, sort_order ASC, id ASC`
+          )
+          .all() as Array<{ preset_id: number; lora_name: string; model_strength: number }>)
+      : [];
+
+  const presetItemsMap = new Map<number, string[]>();
+  for (const pi of presetItemRows) {
+    const label = `${pi.lora_name.replace(/\.(safetensors|pt|ckpt)$/i, '')}@${Number(pi.model_strength).toFixed(2)}x`;
+    const list = presetItemsMap.get(pi.preset_id) || [];
+    list.push(label);
+    presetItemsMap.set(pi.preset_id, list);
+  }
+
   const getCandidateHandle = (c: { nickname: string | null; name: string }) =>
     (c.nickname || '').trim().replace(/^@+/, '') || c.name.trim();
 
@@ -1577,8 +1614,31 @@ export async function converseQuickGenPrompt(params: {
   if (characterBlock) {
     contextNotes.push(characterBlock);
   }
+  if (params.activePresetName?.trim()) {
+    contextNotes.push(`Active LoRA Preset: ${params.activePresetName.trim()}`);
+  }
   if (attachedLoraBlock) {
     contextNotes.push(attachedLoraBlock);
+  }
+  if (presetRows.length > 0) {
+    const presetLines = presetRows.map((p) => {
+      const handle = getCandidateHandle(p);
+      const baseLabel = p.checkpoint_name
+        ? `Base: ${p.checkpoint_name.replace(/\.(safetensors|pt|ckpt|gguf|sft)$/i, '')}`
+        : 'Base: System Workflow Default';
+      const lorasSummary = (presetItemsMap.get(p.id) || []).join(', ');
+      const composition = lorasSummary ? `${baseLabel}; LoRAs: ${lorasSummary}` : baseLabel;
+      return `- @${handle} [${composition}]: ${p.agent_description.trim()}`;
+    });
+    contextNotes.push(
+      [
+        `Saved LoRA Presets available for selection (each applies a curated Base Model + LoRA stack with tuned strengths):`,
+        ...presetLines,
+        `Preset Selection Rules:`,
+        `- If one of these saved Presets best fits the user's request, emit <selected_preset>"@handle"</selected_preset> (choose at most 1 preset).`,
+        `- Do NOT write preset handles or LoRA filenames inside the generated prompt itself.`,
+      ].join('\n')
+    );
   }
   if (availableCandidates.length > 0) {
     const catalogLines = availableCandidates.map((c) => {
@@ -1733,8 +1793,40 @@ export async function converseQuickGenPrompt(params: {
       }
     }
 
+    // Extract optional <selected_preset>...</selected_preset>
+    let selectedPreset: { id: number; name: string; nickname: string } | null = null;
+    const presetTagMatch = withoutThink.match(
+      /<selected_preset>([\s\S]*?)(?:<\/selected_preset>|$)/i
+    );
+    if (presetTagMatch && presetTagMatch[1]?.trim() && presetRows.length > 0) {
+      let rawPreset = presetTagMatch[1].trim();
+      try {
+        const parsed = JSON.parse(rawPreset);
+        if (typeof parsed === 'string') rawPreset = parsed;
+        else if (Array.isArray(parsed) && parsed[0]) rawPreset = String(parsed[0]);
+      } catch {
+        // Treat as raw handle string
+      }
+      const cleanPresetKey = rawPreset.replace(/^["'\s@]+|["'\s]+$/g, '').toLowerCase();
+      if (cleanPresetKey) {
+        const matchedPreset = presetRows.find(
+          (p) =>
+            (p.nickname && p.nickname.trim().replace(/^@+/, '').toLowerCase() === cleanPresetKey) ||
+            p.name.trim().toLowerCase() === cleanPresetKey
+        );
+        if (matchedPreset) {
+          selectedPreset = {
+            id: matchedPreset.id,
+            name: matchedPreset.name,
+            nickname: matchedPreset.nickname || '',
+          };
+        }
+      }
+    }
+
     const cleanedContent = withoutThink
       .replace(/<selected_loras>[\s\S]*?(?:<\/selected_loras>|$)/gi, '')
+      .replace(/<selected_preset>[\s\S]*?(?:<\/selected_preset>|$)/gi, '')
       .trim();
 
     let proposedPrompt: string | null = null;
@@ -1793,7 +1885,7 @@ export async function converseQuickGenPrompt(params: {
       'LocalLLM',
       `Conversation turn completed (${data?.model || modelToUse}) | proposalKind=${proposalKind} | hasProposal=${Boolean(
         proposedPrompt
-      )} | selectedLoras=${selectedLoras.length > 0 ? selectedLoras.join(', ') : 'none'}`
+      )} | selectedLoras=${selectedLoras.length > 0 ? selectedLoras.join(', ') : 'none'} | selectedPreset=${selectedPreset ? selectedPreset.name : 'none'}`
     );
 
     return {
@@ -1801,6 +1893,7 @@ export async function converseQuickGenPrompt(params: {
       proposedPrompt,
       proposalKind,
       selectedLoras,
+      selectedPreset,
       modelUsed: data?.model || modelToUse,
     };
   } finally {

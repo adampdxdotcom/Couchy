@@ -16,6 +16,7 @@ import { charactersRouter } from './src/server/routes/charactersRoutes.ts';
 import { modelsAndWorkflowsRouter } from './src/server/routes/modelsAndWorkflowsRoutes.ts';
 import { systemRouter } from './src/server/routes/systemRoutes.ts';
 import { generationRouter } from './src/server/routes/generationRoutes.ts';
+import { presetsRouter } from './src/server/routes/presetsRoutes.ts';
 import {
   getTaggerSettings,
   isTaggerModelDownloaded,
@@ -46,6 +47,7 @@ async function startServer() {
   app.use('/api/images', imagesRouter);
   app.use('/api/characters', charactersRouter);
   app.use('/api/generation', generationRouter);
+  app.use('/api/presets', presetsRouter);
   app.use('/api', modelsAndWorkflowsRouter);
   app.use('/api', systemRouter);
 

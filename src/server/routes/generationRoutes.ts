@@ -261,6 +261,7 @@ generationRouter.post('/lmstudio/chat', async (req, res) => {
       characterPhysicalDescription,
       loraNames,
       excludedLoras,
+      activePresetName,
       batchCount,
     } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -275,6 +276,7 @@ generationRouter.post('/lmstudio/chat', async (req, res) => {
         : undefined,
       loraNames: Array.isArray(loraNames) ? loraNames.map(String) : [],
       excludedLoras: Array.isArray(excludedLoras) ? excludedLoras.map(String) : [],
+      activePresetName: activePresetName ? String(activePresetName) : undefined,
       batchCount: batchCount ? Number(batchCount) : 1,
     });
     res.json(result);

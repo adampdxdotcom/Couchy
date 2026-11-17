@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Cpu, Layers, X } from 'lucide-react';
+import { Bookmark, Cpu, Layers, X } from 'lucide-react';
 import {
   DEFAULT_PILL_TYPE_SETTINGS,
   PILL_COLOR_STYLES,
   resolveLoraCategoryStyle,
+  resolvePresetPillStyle,
   type PillColorStyleSet,
 } from '../../shared/pillSettings.ts';
 import type {
@@ -11,12 +12,14 @@ import type {
   GenerationLoraSelection,
   LoraCategory,
   LoraExplorerItem,
+  LoraPreset,
   ModelInventoryItem,
   PillTypeSettings,
 } from '../../shared/types.ts';
 import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
 import {
   getCleanLoraLabel,
+  getCleanPresetLabel,
   normalizeLoraKey,
   resolveBaseModelDisplayLabel,
 } from './quickGenUtils.ts';
@@ -24,6 +27,7 @@ import {
 interface QuickGenAttachmentsBarProps {
   attachedCharacter: CharacterProfile | null;
   characterStrength?: number;
+  attachedPreset?: LoraPreset | null;
   attachedCheckpoint?: string | null;
   attachedLoras: GenerationLoraSelection[];
   removedLoraKeys?: Set<string>;
@@ -32,6 +36,7 @@ interface QuickGenAttachmentsBarProps {
   pillTypeSettings?: PillTypeSettings;
   stackSourceLabel?: string | null;
   onRemoveCharacter: () => void;
+  onRemovePreset?: () => void;
   onRemoveCheckpoint?: () => void;
   onRemoveStackTarget?: () => void;
   onRemoveLora: (loraName: string) => void;
@@ -60,6 +65,7 @@ function formatStrengthDigits(value: number): string {
 export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
   attachedCharacter,
   characterStrength = 1.0,
+  attachedPreset = null,
   attachedCheckpoint,
   attachedLoras,
   removedLoraKeys,
@@ -68,6 +74,7 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   stackSourceLabel = null,
   onRemoveCharacter,
+  onRemovePreset,
   onRemoveCheckpoint,
   onRemoveStackTarget,
   onRemoveLora,
@@ -76,6 +83,7 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
 }) => {
   const charStyle = PILL_COLOR_STYLES[pillTypeSettings.character.color];
   const baseModelStyle = PILL_COLOR_STYLES[pillTypeSettings.baseModel.color];
+  const presetStyle = attachedPreset ? resolvePresetPillStyle(attachedPreset.pillColor) : null;
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [draftValue, setDraftValue] = useState('');
   const editInputRef = useRef<HTMLInputElement | null>(null);
@@ -147,7 +155,13 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
     }
   }, [editingKey, attachedCharacter, hasActiveCharLora, visibleLoras]);
 
-  if (!attachedCharacter && !attachedCheckpoint && visibleLoras.length === 0 && !stackSourceLabel) {
+  if (
+    !attachedCharacter &&
+    !attachedPreset &&
+    !attachedCheckpoint &&
+    visibleLoras.length === 0 &&
+    !stackSourceLabel
+  ) {
     return null;
   }
 
@@ -256,6 +270,31 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
               onClick={onRemoveStackTarget}
               className="text-indigo-300/80 hover:text-white cursor-pointer ml-0.5 shrink-0"
               title="Unlink stack (generate as a separate standalone photo)"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {attachedPreset && presetStyle && (
+        <div
+          className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs shadow-sm max-w-full ${presetStyle.pill}`}
+          title={
+            attachedPreset.userDescription ||
+            `Preset: ${attachedPreset.name} (${attachedPreset.items.length} LoRA(s))`
+          }
+        >
+          <Bookmark className={`w-3.5 h-3.5 shrink-0 ${presetStyle.icon}`} />
+          <span className={`font-medium truncate max-w-[180px] ${presetStyle.textLight}`}>
+            {getCleanPresetLabel(attachedPreset)}
+          </span>
+          {onRemovePreset && (
+            <button
+              type="button"
+              onClick={onRemovePreset}
+              className={`${presetStyle.removeButton} cursor-pointer ml-0.5 shrink-0`}
+              title={`Remove preset ${attachedPreset.name}`}
             >
               <X className="w-3.5 h-3.5" />
             </button>

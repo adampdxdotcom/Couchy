@@ -1,22 +1,24 @@
 import React from 'react';
-import { Cpu, Layers, Search, User, X } from 'lucide-react';
+import { Bookmark, Cpu, Layers, Search, User, X } from 'lucide-react';
 import {
   DEFAULT_PILL_TYPE_SETTINGS,
   PILL_COLOR_STYLES,
   resolveLoraCategoryStyle,
+  resolvePresetPillStyle,
 } from '../../shared/pillSettings.ts';
 import type { PillTypeSettings } from '../../shared/types.ts';
 import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
 import {
   getCleanLoraLabel,
   getCleanModelMentionLabel,
+  getCleanPresetLabel,
   type MentionEntry,
   type MentionTab,
 } from './quickGenUtils.ts';
 
 interface QuickGenMentionPopoverProps {
   entries: MentionEntry[];
-  counts: { all: number; characters: number; loras: number; models: number };
+  counts: { all: number; characters: number; loras: number; models: number; presets: number };
   activeTab: MentionTab;
   activeIndex: number;
   query: string;
@@ -72,12 +74,13 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
         </button>
       </div>
 
-      {/* Filter Tabs: All | Characters | LoRAs | Models */}
+      {/* Filter Tabs: All | Characters | Presets | LoRAs | Models */}
       <div className="px-3.5 sm:px-4 py-2 border-b border-zinc-800/80 bg-zinc-900/40 flex items-center gap-1.5 overflow-x-auto overscroll-x-contain shrink-0">
         {(
           [
             { id: 'all', label: 'All', count: counts.all },
             { id: 'characters', label: 'Characters', count: counts.characters },
+            { id: 'presets', label: 'Presets', count: counts.presets },
             { id: 'loras', label: 'LoRAs', count: counts.loras },
             { id: 'models', label: 'Models', count: counts.models },
           ] as const
@@ -92,6 +95,8 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                 isTabActive
                   ? tab.id === 'models'
                     ? 'bg-emerald-600 text-white shadow-sm'
+                    : tab.id === 'presets'
+                    ? 'bg-fuchsia-600 text-white shadow-sm'
                     : 'bg-indigo-600 text-white shadow-sm'
                   : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
               }`}
@@ -111,13 +116,15 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
 
       {entries.length === 0 ? (
         <div className="p-6 text-center text-zinc-400 flex-1 flex items-center justify-center">
-          {activeTab === 'models'
+          {activeTab === 'presets'
+            ? 'No matching LoRA Presets found. Create one in LoRAs & Models → Presets!'
+            : activeTab === 'models'
             ? 'No matching @mention Base Models found. Enable @mention on Base Models in the Models workspace!'
             : activeTab === 'loras'
             ? 'No matching @mention LoRAs found. Enable LoRAs and set nicknames in the LoRA Explorer!'
             : activeTab === 'characters'
             ? 'No matching characters found. Create a character in the Characters tab to @mention them.'
-            : 'No matching characters, @mentioned LoRAs, or Base Models found.'}
+            : 'No matching characters, presets, @mentioned LoRAs, or Base Models found.'}
         </div>
       ) : (
         <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-cols-12 md:max-h-[380px] overflow-y-auto overscroll-contain md:overflow-hidden">
@@ -138,7 +145,15 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                   }`}
                 >
                   <div className="w-9 h-9 rounded-xl bg-zinc-900 border border-zinc-700/60 overflow-hidden shrink-0 flex items-center justify-center">
-                    {entry.type === 'lora' ? (
+                    {entry.type === 'preset' ? (
+                      <div
+                        className={`w-full h-full flex items-center justify-center ${
+                          resolvePresetPillStyle(entry.presetItem?.pillColor).iconBg
+                        }`}
+                      >
+                        <Bookmark className="w-4 h-4" />
+                      </div>
+                    ) : entry.type === 'lora' ? (
                       <div
                         className={`w-full h-full flex items-center justify-center ${
                           resolveLoraCategoryStyle(
@@ -173,6 +188,15 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className="font-medium text-zinc-100 truncate">{entry.title}</span>
+                      {entry.type === 'preset' && (
+                        <span
+                          className={`text-[10px] uppercase font-mono px-1.5 py-0.2 rounded border shrink-0 ${
+                            resolvePresetPillStyle(entry.presetItem?.pillColor).badge
+                          }`}
+                        >
+                          Preset
+                        </span>
+                      )}
                       {entry.type === 'lora' && (
                         <span
                           className={`text-[10px] uppercase font-mono px-1.5 py-0.2 rounded border shrink-0 ${
@@ -209,7 +233,38 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
           {highlightedEntry && (
             <div className="order-1 md:order-2 md:col-span-6 p-3 md:p-3.5 flex flex-col justify-between bg-zinc-950/60 border-b md:border-b-0 border-zinc-800/70 shrink-0">
               <div className="relative rounded-2xl bg-zinc-900 border border-zinc-800/80 overflow-hidden h-28 md:h-56 flex items-center justify-center">
-                {highlightedEntry.type === 'lora' ? (() => {
+                {highlightedEntry.type === 'preset' && highlightedEntry.presetItem ? (() => {
+                  const p = highlightedEntry.presetItem;
+                  const pStyle = resolvePresetPillStyle(p.pillColor);
+                  return (
+                    <div className="w-full h-full p-3 pb-11 flex flex-col justify-center gap-1.5 overflow-y-auto text-center">
+                      <div className={`mx-auto w-8 h-8 md:w-10 md:h-10 rounded-xl border flex items-center justify-center shrink-0 ${pStyle.iconBg}`}>
+                        <Bookmark className="w-4 h-4 md:w-5 md:h-5" />
+                      </div>
+                      <div className="text-xs md:text-sm font-semibold text-zinc-100 truncate">
+                        {p.name}
+                      </div>
+                      {p.userDescription && (
+                        <p className="text-[11px] text-zinc-400 line-clamp-2 max-w-xs mx-auto">
+                          {p.userDescription}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap items-center justify-center gap-1 pt-0.5">
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-950/90 border border-emerald-500/35 text-emerald-300">
+                          {p.checkpointDisplayName || 'System Workflow Default'}
+                        </span>
+                        {p.items.map((it) => (
+                          <span
+                            key={it.loraName}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-mono border ${pStyle.badge}`}
+                          >
+                            {it.displayName || it.loraName} · {it.modelStrength.toFixed(2)}x
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })() : highlightedEntry.type === 'lora' ? (() => {
                   const previewLoraStyle = resolveLoraCategoryStyle(
                     highlightedEntry.loraItem?.loraCategory,
                     pillTypeSettings
@@ -280,7 +335,9 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                 )}
                 <div className="absolute bottom-2 left-2 right-2 px-2.5 py-1.5 rounded-xl bg-zinc-950/85 backdrop-blur-md border border-zinc-800/80 flex items-center justify-between text-[11px]">
                   <span className="font-medium text-zinc-200 truncate">
-                    {highlightedEntry.type === 'lora'
+                    {highlightedEntry.type === 'preset'
+                      ? getCleanPresetLabel(highlightedEntry.presetItem)
+                      : highlightedEntry.type === 'lora'
                       ? getCleanLoraLabel(highlightedEntry.loraItem || { name: highlightedEntry.title })
                       : highlightedEntry.type === 'model'
                       ? getCleanModelMentionLabel(
@@ -290,7 +347,9 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                   </span>
                   <span
                     className={`font-mono shrink-0 ml-2 ${
-                      highlightedEntry.type === 'model'
+                      highlightedEntry.type === 'preset'
+                        ? resolvePresetPillStyle(highlightedEntry.presetItem?.pillColor).textAccent
+                        : highlightedEntry.type === 'model'
                         ? baseModelStyle.textAccent
                         : highlightedEntry.type === 'lora'
                         ? resolveLoraCategoryStyle(
@@ -300,7 +359,9 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                         : charStyle.textAccent
                     }`}
                   >
-                    {highlightedEntry.type === 'lora'
+                    {highlightedEntry.type === 'preset'
+                      ? `${highlightedEntry.presetItem?.items.length || 0} LoRA(s)`
+                      : highlightedEntry.type === 'lora'
                       ? highlightedEntry.loraItem?.isInstalled
                         ? 'Installed'
                         : 'Missing'

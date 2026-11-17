@@ -28,6 +28,7 @@ import type {
   GalleryFilterState,
   ImageRecord,
   LoraExplorerItem,
+  LoraPreset,
   ModelInventoryItem,
   QuickGenChatMessage,
   SavedSearchPreset,
@@ -79,6 +80,7 @@ export default function App() {
   const [characters, setCharacters] = useState<CharacterProfile[]>([]);
   const [loras, setLoras] = useState<LoraExplorerItem[]>([]);
   const [models, setModels] = useState<ModelInventoryItem[]>([]);
+  const [presets, setPresets] = useState<LoraPreset[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowLibraryItem[]>([]);
   const [collections, setCollections] = useState<
     { id: number; name: string; description: string; imageCount: number }[]
@@ -194,8 +196,9 @@ export default function App() {
       api.listCharacters(),
       api.listLoras(),
       api.listModelInventory(),
+      api.listPresets(),
       api.listWorkflows(),
-    ]).then(([healthRes, orgMetaRes, charRes, loraRes, modelRes, wfRes]) => {
+    ]).then(([healthRes, orgMetaRes, charRes, loraRes, modelRes, presetRes, wfRes]) => {
       if (healthRes.status === 'fulfilled') {
         setHealthData(healthRes.value);
       }
@@ -213,6 +216,9 @@ export default function App() {
       }
       if (modelRes.status === 'fulfilled') {
         setModels(modelRes.value.items || []);
+      }
+      if (presetRes.status === 'fulfilled') {
+        setPresets(presetRes.value.items || []);
       }
       if (wfRes.status === 'fulfilled') {
         setWorkflows(wfRes.value.items || []);
@@ -1019,6 +1025,7 @@ export default function App() {
           <LoraAndModelManagerView
             loras={loras}
             models={models}
+            presets={presets}
             allImages={allImages}
             pillTypeSettings={pillTypeSettings}
             onRefresh={refreshAll}
@@ -1108,6 +1115,7 @@ export default function App() {
           characters={characters}
           loras={visibleLoras}
           models={models}
+          presets={presets}
           allImages={allImages}
           workflows={workflows}
           prefillPayload={quickGenPrefill}

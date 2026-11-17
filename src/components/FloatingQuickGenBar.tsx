@@ -17,6 +17,7 @@ import type {
   CharacterProfile,
   ImageRecord,
   LoraExplorerItem,
+  LoraPreset,
   ModelInventoryItem,
   PillTypeSettings,
   WorkflowLibraryItem,
@@ -36,6 +37,7 @@ interface FloatingQuickGenBarProps {
   characters: CharacterProfile[];
   loras?: LoraExplorerItem[];
   models?: ModelInventoryItem[];
+  presets?: LoraPreset[];
   allImages: ImageRecord[];
   workflows: WorkflowLibraryItem[];
   prefillPayload?: QuickGenPrefill | null;
@@ -56,6 +58,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   characters,
   loras = [],
   models = [],
+  presets = [],
   allImages,
   workflows,
   prefillPayload,
@@ -85,6 +88,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
 
   const submitState = useQuickGenSubmit({
     loras,
+    presets,
     workflows,
     prefillPayload,
     lmStudioOnline,
@@ -99,6 +103,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     characters,
     loras,
     models,
+    presets,
     allImages,
     prompt: submitState.prompt,
     setPrompt: submitState.setPrompt,
@@ -108,6 +113,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     setAttachedCheckpoint: submitState.setAttachedCheckpoint,
     setAttachedLoras: submitState.setAttachedLoras,
     setRemovedLoraKeys: submitState.setRemovedLoraKeys,
+    onApplyPreset: submitState.applyPreset,
     setShowSettingsMenu: submitState.setShowSettingsMenu,
     pillTypeSettings,
     inputRef,
@@ -123,6 +129,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
       const hasDraft =
         submitState.prompt.trim().length > 0 ||
         Boolean(submitState.attachedCharacter) ||
+        Boolean(submitState.attachedPreset) ||
         Boolean(submitState.attachedCheckpoint) ||
         submitState.attachedLoras.length > 0 ||
         submitState.chatMessages.length > 0;
@@ -479,6 +486,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             <QuickGenAttachmentsBar
               attachedCharacter={submitState.attachedCharacter}
               characterStrength={submitState.characterLoraStrength}
+              attachedPreset={submitState.attachedPreset}
               attachedCheckpoint={submitState.attachedCheckpoint}
               attachedLoras={submitState.attachedLoras}
               removedLoraKeys={submitState.removedLoraKeys}
@@ -487,6 +495,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               pillTypeSettings={pillTypeSettings}
               stackSourceLabel={submitState.stackSourceLabel}
               onRemoveCharacter={submitState.handleRemoveCharacter}
+              onRemovePreset={submitState.handleRemovePreset}
               onRemoveCheckpoint={submitState.handleRemoveCheckpoint}
               onRemoveStackTarget={submitState.handleRemoveStackTarget}
               onRemoveLora={submitState.handleRemoveLora}
@@ -573,6 +582,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             />
             {(submitState.prompt.length > 0 ||
               Boolean(submitState.attachedCharacter) ||
+              Boolean(submitState.attachedPreset) ||
               Boolean(submitState.attachedCheckpoint) ||
               Boolean(submitState.stackSourceLabel) ||
               submitState.attachedLoras.length > 0 ||

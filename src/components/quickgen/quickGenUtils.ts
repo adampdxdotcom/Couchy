@@ -3,6 +3,7 @@ import type {
   ImageLoraRecord,
   ImageRecord,
   LoraExplorerItem,
+  LoraPreset,
   ModelInventoryItem,
   PortraitCrop,
   QuickGenChatMessage,
@@ -39,18 +40,28 @@ export interface QuickGenPrefill {
   timestamp: number;
 }
 
-export type MentionTab = 'all' | 'characters' | 'loras' | 'models';
+export type MentionTab = 'all' | 'characters' | 'loras' | 'models' | 'presets';
 
 export interface MentionEntry {
   key: string;
-  type: 'character' | 'image' | 'lora' | 'model';
+  type: 'character' | 'image' | 'lora' | 'model' | 'preset';
   character?: CharacterProfile;
   loraItem?: LoraExplorerItem;
   modelItem?: ModelInventoryItem;
+  presetItem?: LoraPreset;
   title: string;
   subtitle: string;
   thumbnailUrl: string | null;
   promptSnippet?: string | null;
+}
+
+/** Returns preferred display label for a LoRA Preset (nickname without @ first, fallback to name). */
+export function getCleanPresetLabel(
+  preset?: { nickname?: string | null; name?: string } | null
+): string {
+  if (!preset) return 'Preset';
+  const nick = (preset.nickname || '').trim().replace(/^@+/, '');
+  return nick || preset.name?.trim() || 'Preset';
 }
 
 export const BATCH_COUNT_OPTIONS = [1, 2, 4, 6, 8] as const;
@@ -243,18 +254,26 @@ export function buildMentionEntries(params: {
   characters: CharacterProfile[];
   loras: LoraExplorerItem[];
   models?: ModelInventoryItem[];
+  presets?: LoraPreset[];
   allImages: ImageRecord[];
   query: string;
   tab: MentionTab;
 }): {
   mentionEntries: MentionEntry[];
-  mentionCounts: { all: number; characters: number; loras: number; models: number };
+  mentionCounts: {
+    all: number;
+    characters: number;
+    loras: number;
+    models: number;
+    presets: number;
+  };
 } {
-  const { characters, loras, models = [], allImages, query, tab } = params;
+  const { characters, loras, models = [], presets = [], allImages, query, tab } = params;
   const q = query.trim().toLowerCase();
   const directCharEntries: MentionEntry[] = [];
   const loraEntries: MentionEntry[] = [];
   const modelEntries: MentionEntry[] = [];
+  const presetEntries: MentionEntry[] = [];
   const imagePromptEntries: MentionEntry[] = [];
 
   for (const char of characters) {
@@ -366,14 +385,58 @@ export function buildMentionEntries(params: {
     }
   }
 
-  // Place Character, LoRA, and Base Model matches at the top of the list, above matching image prompts
+  for (const preset of presets) {
+    const pName = preset.name.toLowerCase();
+    const pNick = (preset.nickname || '').toLowerCase();
+    const pUser = (preset.userDescription || '').toLowerCase();
+    const pAgent = (preset.agentDescription || '').toLowerCase();
+    const pCkpt = (preset.checkpointName || '').toLowerCase();
+
+    const matchesPreset =
+      !q ||
+      pName.includes(q) ||
+      (pNick && pNick.includes(q)) ||
+      (pUser && pUser.includes(q)) ||
+      (pAgent && pAgent.includes(q)) ||
+      (pCkpt && pCkpt.includes(q)) ||
+      preset.items.some(
+        (it) =>
+          it.loraName.toLowerCase().includes(q) ||
+          (it.displayName || '').toLowerCase().includes(q)
+      );
+
+    if (matchesPreset) {
+      const displayLabel = getCleanPresetLabel(preset);
+      const basePart = preset.checkpointDisplayName
+        ? ` + ${preset.checkpointDisplayName}`
+        : '';
+      presetEntries.push({
+        key: `preset-${preset.id}`,
+        type: 'preset',
+        presetItem: preset,
+        title: displayLabel,
+        subtitle: `Preset · ${preset.items.length} LoRA${preset.items.length === 1 ? '' : 's'}${basePart}`,
+        thumbnailUrl: null,
+        promptSnippet: preset.name,
+      });
+    }
+  }
+
+  // Place Character, Preset, LoRA, and Base Model matches above matching image prompts
   const charTabEntries = [...directCharEntries, ...imagePromptEntries];
-  const allCombined = [...directCharEntries, ...loraEntries, ...modelEntries, ...imagePromptEntries];
+  const allCombined = [
+    ...directCharEntries,
+    ...presetEntries,
+    ...loraEntries,
+    ...modelEntries,
+    ...imagePromptEntries,
+  ];
   const mentionCounts = {
     all: allCombined.length,
     characters: charTabEntries.length,
     loras: loraEntries.length,
     models: modelEntries.length,
+    presets: presetEntries.length,
   };
 
   const mentionEntries =
@@ -383,6 +446,8 @@ export function buildMentionEntries(params: {
       ? loraEntries
       : tab === 'models'
       ? modelEntries
+      : tab === 'presets'
+      ? presetEntries
       : allCombined;
 
   return { mentionEntries, mentionCounts };

@@ -5,6 +5,7 @@ import type {
   GenerationLoraSelection,
   ImageRecord,
   LoraExplorerItem,
+  LoraPreset,
   ModelInventoryItem,
   PillTypeSettings,
 } from '../../shared/types.ts';
@@ -21,6 +22,7 @@ interface UseQuickGenMentionsParams {
   characters: CharacterProfile[];
   loras: LoraExplorerItem[];
   models?: ModelInventoryItem[];
+  presets?: LoraPreset[];
   allImages: ImageRecord[];
   prompt: string;
   setPrompt: React.Dispatch<React.SetStateAction<string>>;
@@ -30,6 +32,7 @@ interface UseQuickGenMentionsParams {
   setAttachedCheckpoint: React.Dispatch<React.SetStateAction<string | null>>;
   setAttachedLoras: React.Dispatch<React.SetStateAction<GenerationLoraSelection[]>>;
   setRemovedLoraKeys: React.Dispatch<React.SetStateAction<Set<string>>>;
+  onApplyPreset: (preset: LoraPreset) => void;
   setShowSettingsMenu: React.Dispatch<React.SetStateAction<boolean>>;
   pillTypeSettings?: PillTypeSettings;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -42,6 +45,7 @@ export function useQuickGenMentions({
   characters,
   loras,
   models = [],
+  presets = [],
   allImages,
   prompt,
   setPrompt,
@@ -51,6 +55,7 @@ export function useQuickGenMentions({
   setAttachedCheckpoint,
   setAttachedLoras,
   setRemovedLoraKeys,
+  onApplyPreset,
   setShowSettingsMenu,
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   inputRef,
@@ -77,11 +82,12 @@ export function useQuickGenMentions({
         characters,
         loras,
         models,
+        presets,
         allImages,
         query: mentionQuery,
         tab: mentionTab,
       }),
-    [characters, loras, models, allImages, mentionQuery, mentionTab]
+    [characters, loras, models, presets, allImages, mentionQuery, mentionTab]
   );
 
   useEffect(() => {
@@ -145,7 +151,10 @@ export function useQuickGenMentions({
   const handleSelectMention = (entry: MentionEntry) => {
     let nextPrompt = prompt;
 
-    if (entry.type === 'lora' && entry.loraItem) {
+    if (entry.type === 'preset' && entry.presetItem) {
+      onApplyPreset(entry.presetItem);
+      nextPrompt = applyMentionPromptUpdate('', false);
+    } else if (entry.type === 'lora' && entry.loraItem) {
       const lora = entry.loraItem;
       const cleanLabel = getCleanLoraLabel(lora);
       const loraKey = normalizeLoraKey(lora.filename);

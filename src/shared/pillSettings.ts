@@ -4,6 +4,7 @@ import type {
   PillColorKey,
   PillEntityType,
   PillTypeSettings,
+  PresetPillColorKey,
 } from './types.ts';
 
 export const DEFAULT_PILL_TYPE_SETTINGS: PillTypeSettings = {
@@ -319,4 +320,159 @@ export function resolveLoraCategoryStyle(
   settings: PillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS
 ): PillColorStyleSet {
   return PILL_COLOR_STYLES[resolveLoraCategoryColorKey(category, settings)];
+}
+
+/**
+ * Distinct Tailwind class sets reserved exclusively for LoRA Presets so they never blend
+ * visually with Character, Base Model, or individual LoRA pills.
+ */
+export const PRESET_PILL_COLOR_STYLES: Record<PresetPillColorKey, PillColorStyleSet> = {
+  fuchsia: {
+    label: 'Fuchsia',
+    swatchBg: 'bg-fuchsia-500',
+    pill: 'bg-fuchsia-950/70 border-fuchsia-500/50 text-fuchsia-200',
+    pillHover:
+      'bg-fuchsia-950/70 border-fuchsia-500/50 text-fuchsia-200 hover:border-fuchsia-400/80 hover:bg-fuchsia-950/90 cursor-pointer',
+    pillSelected:
+      'bg-fuchsia-600/35 border-fuchsia-400 text-fuchsia-100 ring-1 ring-fuchsia-400/60 cursor-pointer',
+    pillDisabledCap:
+      'bg-fuchsia-950/30 border-fuchsia-500/20 text-fuchsia-200/50 opacity-55 cursor-not-allowed',
+    rowSelected: 'border-fuchsia-500/50 bg-fuchsia-950/20',
+    icon: 'text-fuchsia-400',
+    iconBg: 'bg-fuchsia-500/15 text-fuchsia-300 border-fuchsia-500/35',
+    textAccent: 'text-fuchsia-300',
+    textLight: 'text-fuchsia-100',
+    removeButton: 'text-fuchsia-300/75 hover:text-white',
+    strengthText: 'text-fuchsia-300 hover:text-white',
+    strengthInput: 'bg-fuchsia-900/60 text-fuchsia-100 ring-fuchsia-400/60',
+    checkIcon: 'text-fuchsia-200',
+    badge: 'bg-fuchsia-400/15 text-fuchsia-300 border-fuchsia-400/30',
+  },
+  cyan: {
+    label: 'Cyan',
+    swatchBg: 'bg-cyan-500',
+    pill: 'bg-cyan-950/70 border-cyan-500/50 text-cyan-200',
+    pillHover:
+      'bg-cyan-950/70 border-cyan-500/50 text-cyan-200 hover:border-cyan-400/80 hover:bg-cyan-950/90 cursor-pointer',
+    pillSelected:
+      'bg-cyan-600/35 border-cyan-400 text-cyan-100 ring-1 ring-cyan-400/60 cursor-pointer',
+    pillDisabledCap:
+      'bg-cyan-950/30 border-cyan-500/20 text-cyan-200/50 opacity-55 cursor-not-allowed',
+    rowSelected: 'border-cyan-500/50 bg-cyan-950/20',
+    icon: 'text-cyan-400',
+    iconBg: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/35',
+    textAccent: 'text-cyan-300',
+    textLight: 'text-cyan-100',
+    removeButton: 'text-cyan-300/75 hover:text-white',
+    strengthText: 'text-cyan-300 hover:text-white',
+    strengthInput: 'bg-cyan-900/60 text-cyan-100 ring-cyan-400/60',
+    checkIcon: 'text-cyan-200',
+    badge: 'bg-cyan-400/15 text-cyan-300 border-cyan-400/30',
+  },
+  orange: {
+    label: 'Orange',
+    swatchBg: 'bg-orange-500',
+    pill: 'bg-orange-950/70 border-orange-500/50 text-orange-200',
+    pillHover:
+      'bg-orange-950/70 border-orange-500/50 text-orange-200 hover:border-orange-400/80 hover:bg-orange-950/90 cursor-pointer',
+    pillSelected:
+      'bg-orange-600/35 border-orange-400 text-orange-100 ring-1 ring-orange-400/60 cursor-pointer',
+    pillDisabledCap:
+      'bg-orange-950/30 border-orange-500/20 text-orange-200/50 opacity-55 cursor-not-allowed',
+    rowSelected: 'border-orange-500/50 bg-orange-950/20',
+    icon: 'text-orange-400',
+    iconBg: 'bg-orange-500/15 text-orange-300 border-orange-500/35',
+    textAccent: 'text-orange-300',
+    textLight: 'text-orange-100',
+    removeButton: 'text-orange-300/75 hover:text-white',
+    strengthText: 'text-orange-300 hover:text-white',
+    strengthInput: 'bg-orange-900/60 text-orange-100 ring-orange-400/60',
+    checkIcon: 'text-orange-200',
+    badge: 'bg-orange-400/15 text-orange-300 border-orange-400/30',
+  },
+  lime: {
+    label: 'Lime',
+    swatchBg: 'bg-lime-500',
+    pill: 'bg-lime-950/70 border-lime-500/50 text-lime-200',
+    pillHover:
+      'bg-lime-950/70 border-lime-500/50 text-lime-200 hover:border-lime-400/80 hover:bg-lime-950/90 cursor-pointer',
+    pillSelected:
+      'bg-lime-600/35 border-lime-400 text-lime-100 ring-1 ring-lime-400/60 cursor-pointer',
+    pillDisabledCap:
+      'bg-lime-950/30 border-lime-500/20 text-lime-200/50 opacity-55 cursor-not-allowed',
+    rowSelected: 'border-lime-500/50 bg-lime-950/20',
+    icon: 'text-lime-400',
+    iconBg: 'bg-lime-500/15 text-lime-300 border-lime-500/35',
+    textAccent: 'text-lime-300',
+    textLight: 'text-lime-100',
+    removeButton: 'text-lime-300/75 hover:text-white',
+    strengthText: 'text-lime-300 hover:text-white',
+    strengthInput: 'bg-lime-900/60 text-lime-100 ring-lime-400/60',
+    checkIcon: 'text-lime-200',
+    badge: 'bg-lime-400/15 text-lime-300 border-lime-400/30',
+  },
+  pink: {
+    label: 'Pink',
+    swatchBg: 'bg-pink-500',
+    pill: 'bg-pink-950/70 border-pink-500/50 text-pink-200',
+    pillHover:
+      'bg-pink-950/70 border-pink-500/50 text-pink-200 hover:border-pink-400/80 hover:bg-pink-950/90 cursor-pointer',
+    pillSelected:
+      'bg-pink-600/35 border-pink-400 text-pink-100 ring-1 ring-pink-400/60 cursor-pointer',
+    pillDisabledCap:
+      'bg-pink-950/30 border-pink-500/20 text-pink-200/50 opacity-55 cursor-not-allowed',
+    rowSelected: 'border-pink-500/50 bg-pink-950/20',
+    icon: 'text-pink-400',
+    iconBg: 'bg-pink-500/15 text-pink-300 border-pink-500/35',
+    textAccent: 'text-pink-300',
+    textLight: 'text-pink-100',
+    removeButton: 'text-pink-300/75 hover:text-white',
+    strengthText: 'text-pink-300 hover:text-white',
+    strengthInput: 'bg-pink-900/60 text-pink-100 ring-pink-400/60',
+    checkIcon: 'text-pink-200',
+    badge: 'bg-pink-400/15 text-pink-300 border-pink-400/30',
+  },
+  purple: {
+    label: 'Purple',
+    swatchBg: 'bg-purple-500',
+    pill: 'bg-purple-950/70 border-purple-500/50 text-purple-200',
+    pillHover:
+      'bg-purple-950/70 border-purple-500/50 text-purple-200 hover:border-purple-400/80 hover:bg-purple-950/90 cursor-pointer',
+    pillSelected:
+      'bg-purple-600/35 border-purple-400 text-purple-100 ring-1 ring-purple-400/60 cursor-pointer',
+    pillDisabledCap:
+      'bg-purple-950/30 border-purple-500/20 text-purple-200/50 opacity-55 cursor-not-allowed',
+    rowSelected: 'border-purple-500/50 bg-purple-950/20',
+    icon: 'text-purple-400',
+    iconBg: 'bg-purple-500/15 text-purple-300 border-purple-500/35',
+    textAccent: 'text-purple-300',
+    textLight: 'text-purple-100',
+    removeButton: 'text-purple-300/75 hover:text-white',
+    strengthText: 'text-purple-300 hover:text-white',
+    strengthInput: 'bg-purple-900/60 text-purple-100 ring-purple-400/60',
+    checkIcon: 'text-purple-200',
+    badge: 'bg-purple-400/15 text-purple-300 border-purple-400/30',
+  },
+};
+
+export const PRESET_PILL_COLOR_OPTIONS: PresetPillColorKey[] = [
+  'fuchsia',
+  'cyan',
+  'orange',
+  'lime',
+  'pink',
+  'purple',
+];
+
+const VALID_PRESET_COLOR_SET = new Set<string>(PRESET_PILL_COLOR_OPTIONS);
+
+export function normalizePresetPillColor(color?: string | null): PresetPillColorKey {
+  if (color && VALID_PRESET_COLOR_SET.has(color)) {
+    return color as PresetPillColorKey;
+  }
+  return 'fuchsia';
+}
+
+export function resolvePresetPillStyle(color?: string | null): PillColorStyleSet {
+  return PRESET_PILL_COLOR_STYLES[normalizePresetPillColor(color)];
 }
