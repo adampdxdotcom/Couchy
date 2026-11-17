@@ -10,7 +10,7 @@ import {
   runDirectoryScan,
   startFilesystemWatcher,
 } from './src/server/services/scannerService.ts';
-import { syncModelInventory } from './src/server/services/comfyuiService.ts';
+import { syncModelInventory } from './src/server/services/modelInventoryService.ts';
 import { imagesRouter } from './src/server/routes/imagesRoutes.ts';
 import { charactersRouter } from './src/server/routes/charactersRoutes.ts';
 import { modelsAndWorkflowsRouter } from './src/server/routes/modelsAndWorkflowsRoutes.ts';

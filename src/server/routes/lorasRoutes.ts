@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { listLoraExplorerItems } from '../services/galleryQueryService.ts';
 import { updateLoraCategory } from '../services/characterService.ts';
-import { triggerBackgroundCivitaiLinkHealOnce } from '../services/civitaiMetadataService.ts';
-import { updateLoraMentionConfig, updateLoraVisibility } from '../services/loraConfigService.ts';
+import { triggerBackgroundCivitaiLinkHealOnce } from '../services/civitai/civitaiModelEnrichmentService.ts';
+import { updateLoraMentionConfig, updateLoraVisibility } from '../services/modelInventoryService.ts';
 
 export const lorasRouter = Router();
 

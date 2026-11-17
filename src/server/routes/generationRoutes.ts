@@ -11,15 +11,17 @@ import {
 } from '../services/workflowCompilerService.ts';
 import {
   checkLmStudioStatus,
-  converseQuickGenPrompt,
   deleteLmStudioGuidingTemplate,
-  generatePhotoSetPromptsWithAgent,
-  interrogateImageToPrompt,
   listLmStudioGuidingTemplates,
   saveLmStudioGuidingTemplate,
   updateLmStudioSettings,
-} from '../services/lmStudioService.ts';
-import { importCivitaiImageForQuickGen } from '../services/civitaiImageImportService.ts';
+} from '../services/llm/llmClientService.ts';
+import { interrogateImageToPrompt } from '../services/llm/llmImageAnalysisService.ts';
+import {
+  converseQuickGenPrompt,
+  generatePhotoSetPromptsWithAgent,
+} from '../services/llm/llmAgentService.ts';
+import { importCivitaiImageForQuickGen } from '../services/civitai/civitaiImageShareService.ts';
 import {
   copyImageMetadataToDerivedImage,
   indexUploadedInspirationImage,
@@ -30,7 +32,7 @@ import {
   notifyImageIndexed,
   recordComfyExecutionError,
 } from '../services/comfyuiLiveMonitor.ts';
-import { pollComfyPromptCompletion } from '../services/comfyuiPoller.ts';
+import { pollComfyPromptCompletion } from '../services/comfyuiService.ts';
 import {
   attachGenerationItemOutputToSeries,
   preserveFailedGenerationConversation,

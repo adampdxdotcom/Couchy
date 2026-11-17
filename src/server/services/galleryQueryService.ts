@@ -4,7 +4,7 @@ import {
   collapseSeriesInGalleryPool,
   enrichSingleImageWithSeries,
 } from './seriesService.ts';
-import { parsePreviewImagesJson } from './civitaiMetadataService.ts';
+import { parsePreviewImagesJson } from './civitai/civitaiHttpAndParse.ts';
 import { getCharacterPortraitMetadataMap } from './characterService.ts';
 import type {
   GalleryFilterState,

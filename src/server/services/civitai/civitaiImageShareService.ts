@@ -2,40 +2,35 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
-import { appConfig } from '../config.ts';
-import { db } from '../db.ts';
+import { appConfig } from '../../config.ts';
+import { db } from '../../db.ts';
 import {
+  buildCivitaiSearchResultCard,
+  extractCivitaiVersions,
   fetchCivitaiJsonWithFallback,
+  fetchCivitaiParentModelWithDomain,
   getCivitaiHeaders,
+  isBaseModelResourceType,
+  isKrea2BaseModel,
+  isLoraResourceType,
+  parseCivitaiShareUrl,
+  probeCivitaiWebDomain,
+  resolveCivitaiDomain,
   type CivitaiDomain,
-} from './civitaiMetadataService.ts';
-import { resolveClosestAspectRatio } from '../../shared/utils.ts';
-import type { CivitaiImageImportResult } from '../../shared/types.ts';
+  type ParsedCivitaiShareUrl,
+} from './civitaiHttpAndParse.ts';
+import {
+  annotateInstalledSearchResults,
+  findInstalledModelMatch,
+  loadInstalledModelsForMatching,
+  normalizeModelStem,
+} from './civitaiModelEnrichmentService.ts';
+import { resolveClosestAspectRatio } from '../../../shared/utils.ts';
+import type { CivitaiImageImportResult, ExternalModelSearchResult } from '../../../shared/types.ts';
 
 const MAX_SYSTEM_LORAS = 5;
 const CIVITAI_INSPIRATION_MAX_PIXELS = 1_000_000;
 const CIVITAI_INSPIRATION_MAX_BYTES = 25 * 1024 * 1024;
-
-interface ParsedShareUrl {
-  kind: 'image' | 'post';
-  id: number;
-  domain: CivitaiDomain;
-  cleanUrl: string;
-}
-
-interface InstalledModelRow {
-  id: number;
-  name: string;
-  filename: string;
-  model_type: string;
-  sha256_hash: string | null;
-  autov2_hash: string | null;
-  civitai_version_id: string | null;
-  default_model_strength: number | null;
-  default_clip_strength: number | null;
-  trigger_word: string | null;
-  nickname: string | null;
-}
 
 interface LoraCandidate {
   versionId: string | null;
@@ -50,48 +45,19 @@ interface BaseModelCandidate {
   hash: string | null;
 }
 
-/**
- * Parses a Civitai share URL (`/images/:id` or `/posts/:id`) on `civitai.com` or `civitai.red`.
- */
-export function parseCivitaiShareUrl(rawUrl: string): ParsedShareUrl | null {
-  const trimmed = String(rawUrl || '').trim();
-  if (!trimmed) return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    return null;
-  }
-
-  const host = parsed.hostname.toLowerCase();
-  if (!/^(www\.)?civitai\.(com|red)$/.test(host)) return null;
-
-  const match = parsed.pathname.match(/^\/(images|posts)\/(\d+)(?:\/|$)/i);
-  if (!match) return null;
-
-  const id = Number(match[2]);
-  if (!Number.isFinite(id) || id <= 0) return null;
-
-  return {
-    kind: match[1].toLowerCase() === 'posts' ? 'post' : 'image',
-    id,
-    domain: host.endsWith('civitai.red') ? 'civitai.red' : 'civitai.com',
-    cleanUrl: parsed.toString(),
-  };
-}
-
-function normalizeModelStem(raw: string): string {
-  return String(raw || '')
-    .trim()
-    .replace(/\\/g, '/')
-    .split('/')
-    .pop()!
-    .replace(/\.(safetensors|pt|ckpt|pth|bin|gguf|sft)$/i, '')
-    .toLowerCase();
-}
-
-function normalizeAlnum(raw: string): string {
-  return normalizeModelStem(raw).replace(/[^a-z0-9]/g, '');
+export interface CivitaiImageFetchedMetadata {
+  parsed: ParsedCivitaiShareUrl;
+  activeDomain: CivitaiDomain;
+  targetImageId: number;
+  restItem: any;
+  trpcGenData: any;
+  meta: Record<string, any>;
+  sourceBaseModel: string | null;
+  rawPrompt: string;
+  negativePrompt: string;
+  aspectRatio: string | null;
+  loraCandidates: LoraCandidate[];
+  baseCandidates: BaseModelCandidate[];
 }
 
 function clampWeight(val: unknown, fallback = 1.0): number {
@@ -107,87 +73,6 @@ function stripLoraTagsFromPrompt(rawPrompt: string): string {
     .replace(/^[,\s]+|[,\s]+$/g, '')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
-}
-
-export function isLoraResourceType(rawType: unknown): boolean {
-  const t = String(rawType || '').trim().toLowerCase();
-  return t === 'lora' || t === 'locon' || t === 'dora' || t === 'lycoris';
-}
-
-export function isBaseModelResourceType(rawType: unknown): boolean {
-  const t = String(rawType || '').trim().toLowerCase();
-  return t === 'checkpoint' || t === 'model' || t === 'diffusion';
-}
-
-/**
- * Returns true strictly for Krea 2 ecosystem baseModel labels (excluding Flux.1 Krea, SDXL, Pony, etc.).
- */
-export function isKrea2BaseModel(rawBaseModel?: string | null): boolean {
-  const clean = String(rawBaseModel || '').trim().toLowerCase();
-  if (!clean || clean === 'other') return false;
-  if (clean.includes('flux')) return false;
-  return clean === 'krea' || /\bkrea\s*2\b/i.test(clean) || /^krea\b/i.test(clean);
-}
-
-function matchInstalledModel<T extends InstalledModelRow>(
-  candidates: { versionId: string | null; name: string; hash: string | null },
-  installedRows: T[]
-): T | null {
-  if (candidates.versionId) {
-    const byVer = installedRows.find(
-      (r) => r.civitai_version_id && String(r.civitai_version_id).trim() === candidates.versionId
-    );
-    if (byVer) return byVer;
-  }
-
-  if (candidates.hash) {
-    const h = candidates.hash.trim().toLowerCase();
-    const byHash = installedRows.find(
-      (r) =>
-        (r.autov2_hash && r.autov2_hash.toLowerCase() === h) ||
-        (r.sha256_hash && r.sha256_hash.toLowerCase().startsWith(h))
-    );
-    if (byHash) return byHash;
-  }
-
-  const candStem = normalizeModelStem(candidates.name);
-  const candAlnum = normalizeAlnum(candidates.name);
-  if (!candStem && !candAlnum) return null;
-
-  const exactStem = installedRows.find(
-    (r) =>
-      normalizeModelStem(r.filename) === candStem ||
-      normalizeModelStem(r.name) === candStem ||
-      (r.nickname && normalizeModelStem(r.nickname) === candStem)
-  );
-  if (exactStem) return exactStem;
-
-  if (candAlnum.length >= 4) {
-    return (
-      installedRows.find((r) => {
-        const fAlnum = normalizeAlnum(r.filename);
-        const nAlnum = normalizeAlnum(r.name);
-        return fAlnum === candAlnum || nAlnum === candAlnum;
-      }) || null
-    );
-  }
-
-  return null;
-}
-
-export interface CivitaiImageFetchedMetadata {
-  parsed: ParsedShareUrl;
-  activeDomain: CivitaiDomain;
-  targetImageId: number;
-  restItem: any;
-  trpcGenData: any;
-  meta: Record<string, any>;
-  sourceBaseModel: string | null;
-  rawPrompt: string;
-  negativePrompt: string;
-  aspectRatio: string | null;
-  loraCandidates: LoraCandidate[];
-  baseCandidates: BaseModelCandidate[];
 }
 
 /**
@@ -505,17 +390,7 @@ export async function importCivitaiImageForQuickGen(
       : null);
 
   const baseCandidate = baseCandidates[0] || null;
-
-  // Match candidates strictly against installed local Couchy models
-  const installedRows = db
-    .prepare(
-      `SELECT id, name, filename, model_type, sha256_hash, autov2_hash, civitai_version_id,
-              default_model_strength, default_clip_strength, trigger_word, nickname
-       FROM models
-       WHERE is_installed = 1 AND is_hidden = 0`
-    )
-    .all() as InstalledModelRow[];
-
+  const installedRows = loadInstalledModelsForMatching({ excludeHidden: true });
   const installedLoras = installedRows.filter((r) => r.model_type === 'lora');
   const installedBases = installedRows.filter(
     (r) => r.model_type === 'diffusion' || r.model_type === 'checkpoint'
@@ -524,7 +399,7 @@ export async function importCivitaiImageForQuickGen(
   let checkpointName: string | null = null;
   let skippedCheckpoint: string | null = null;
   if (baseCandidate) {
-    const matchedBase = matchInstalledModel(baseCandidate, installedBases);
+    const matchedBase = findInstalledModelMatch(baseCandidate, installedBases);
     if (matchedBase) {
       checkpointName = matchedBase.filename;
     } else if (baseCandidate.name) {
@@ -537,7 +412,7 @@ export async function importCivitaiImageForQuickGen(
   const addedFilenames = new Set<string>();
 
   for (const cand of loraCandidates) {
-    const matched = matchInstalledModel(cand, installedLoras);
+    const matched = findInstalledModelMatch(cand, installedLoras);
     if (!matched) {
       skippedLoras.push(cand.name);
       continue;
@@ -577,5 +452,240 @@ export async function importCivitaiImageForQuickGen(
     sourceBaseModel,
     hasPromptMetadata: cleanedPrompt.length > 0,
     inspirationFilename: savedInspiration?.filename ?? null,
+  };
+}
+
+/**
+ * Resolves a single Civitai model version (by versionId or SHA256/AutoV2 hash) into a full
+ * Downloader preview card using shared Civitai version extraction helpers.
+ */
+async function resolveCivitaiResourceCard(params: {
+  versionId: string | null;
+  hash: string | null;
+  domain: CivitaiDomain;
+  preferredType: 'lora' | 'checkpoint';
+}): Promise<ExternalModelSearchResult | null> {
+  const headers = getCivitaiHeaders();
+  let detectedDomain = params.domain;
+  let targetVer: any = null;
+
+  if (params.versionId) {
+    const res = await fetchCivitaiJsonWithFallback(
+      `/api/v1/model-versions/${encodeURIComponent(params.versionId)}`,
+      headers,
+      detectedDomain,
+      9000
+    );
+    if (res?.data) {
+      targetVer = res.data;
+      detectedDomain = res.domain;
+    }
+  } else if (params.hash) {
+    const res = await fetchCivitaiJsonWithFallback(
+      `/api/v1/model-versions/by-hash/${encodeURIComponent(params.hash)}`,
+      headers,
+      detectedDomain,
+      9000
+    );
+    if (res?.data) {
+      targetVer = res.data;
+      detectedDomain = res.domain;
+    }
+  }
+
+  if (!targetVer) return null;
+
+  let parentModel: any = null;
+  const parentId = targetVer.modelId;
+  if (parentId) {
+    const parentRes = await fetchCivitaiParentModelWithDomain(
+      parentId,
+      headers,
+      detectedDomain
+    );
+    parentModel = parentRes.model;
+    if (parentRes.domain === 'civitai.red') detectedDomain = 'civitai.red';
+  }
+
+  let finalDomain = resolveCivitaiDomain(parentModel, targetVer, detectedDomain);
+  if (finalDomain === 'civitai.com' && parentId) {
+    finalDomain = await probeCivitaiWebDomain(parentId, finalDomain);
+  }
+
+  const rawType = String(
+    parentModel?.type ||
+      targetVer?.model?.type ||
+      (params.preferredType === 'lora' ? 'LORA' : 'Checkpoint')
+  );
+  const availableVersions = extractCivitaiVersions(
+    parentModel,
+    targetVer,
+    rawType,
+    finalDomain
+  );
+  const activeVersion =
+    availableVersions.find((v) => v.versionId === String(targetVer.id)) ||
+    availableVersions[0];
+
+  if (!activeVersion) return null;
+
+  return buildCivitaiSearchResultCard({
+    parentModel,
+    targetVer,
+    availableVersions,
+    activeVersion,
+    fallbackDescription: 'Resolved from Civitai Image URL',
+  });
+}
+
+/**
+ * Resolves all Krea 2 Base Models and LoRAs referenced by a Civitai image/post share URL
+ * for the Model Downloader, rejecting non-Krea-2 images with an explicit user message.
+ */
+export async function resolveCivitaiImageModelsForDownloader(
+  rawUrl: string,
+  typeFilter?: string
+): Promise<{ items: ExternalModelSearchResult[]; notice: string | null }> {
+  const {
+    activeDomain,
+    sourceBaseModel,
+    baseCandidates,
+    loraCandidates,
+  } = await fetchCivitaiImageMetadata(rawUrl);
+
+  const imageIsExplicitNonKrea =
+    Boolean(sourceBaseModel) &&
+    sourceBaseModel!.toLowerCase() !== 'other' &&
+    !isKrea2BaseModel(sourceBaseModel);
+
+  if (imageIsExplicitNonKrea) {
+    const err: any = new Error(
+      `Only Krea 2 images are supported (this image uses ${sourceBaseModel}).`
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const resolvableTasks: Array<{
+    kind: 'checkpoint' | 'lora';
+    versionId: string | null;
+    hash: string | null;
+    label: string;
+  }> = [];
+  let unlinkedCount = 0;
+
+  for (const b of baseCandidates) {
+    if (b.versionId || b.hash) {
+      resolvableTasks.push({
+        kind: 'checkpoint',
+        versionId: b.versionId,
+        hash: b.hash,
+        label: b.name || 'Base Model',
+      });
+    } else if (b.name) {
+      unlinkedCount += 1;
+    }
+  }
+
+  for (const l of loraCandidates) {
+    if (l.versionId || l.hash) {
+      resolvableTasks.push({
+        kind: 'lora',
+        versionId: l.versionId,
+        hash: l.hash,
+        label: l.name || 'LoRA',
+      });
+    } else if (l.name) {
+      unlinkedCount += 1;
+    }
+  }
+
+  if (resolvableTasks.length === 0) {
+    const err: any = new Error(
+      isKrea2BaseModel(sourceBaseModel)
+        ? 'No linked downloadable Civitai models were found on this Krea 2 image.'
+        : 'Only Krea 2 images are supported (no linked Krea 2 models found on this image).'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const settled = await Promise.allSettled(
+    resolvableTasks.map((t) =>
+      resolveCivitaiResourceCard({
+        versionId: t.versionId,
+        hash: t.hash,
+        domain: activeDomain,
+        preferredType: t.kind,
+      })
+    )
+  );
+
+  const seenCardIds = new Set<string>();
+  const kreaCards: ExternalModelSearchResult[] = [];
+  const nonKreaLabels = new Set<string>();
+  let failedLookups = 0;
+
+  for (const res of settled) {
+    if (res.status !== 'fulfilled' || !res.value) {
+      failedLookups += 1;
+      continue;
+    }
+    const card = res.value;
+    const dedupeKey = `${card.provider}-${card.id}-${card.versionId || card.filename}`;
+    if (seenCardIds.has(dedupeKey)) continue;
+    seenCardIds.add(dedupeKey);
+
+    const cardBase = card.baseModel ? card.baseModel.trim() : '';
+    const isCardKrea =
+      isKrea2BaseModel(cardBase) ||
+      ((!cardBase || cardBase.toLowerCase() === 'other') && isKrea2BaseModel(sourceBaseModel));
+
+    if (!isCardKrea) {
+      nonKreaLabels.add(cardBase || card.name);
+      continue;
+    }
+
+    kreaCards.push(card);
+  }
+
+  if (kreaCards.length === 0) {
+    const detectedList = Array.from(nonKreaLabels);
+    const err: any = new Error(
+      detectedList.length > 0
+        ? `Only Krea 2 images are supported (detected ${detectedList.join(', ')}).`
+        : 'Only Krea 2 images are supported — no Krea 2 models were found on this image.'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const filteredCards = kreaCards.filter((c) => {
+    if (!typeFilter) return true;
+    if (typeFilter === 'lora') return c.modelType === 'lora';
+    if (typeFilter === 'checkpoint') {
+      return c.modelType === 'checkpoint' || c.modelType === 'diffusion';
+    }
+    return c.modelType === typeFilter;
+  });
+
+  const annotated = annotateInstalledSearchResults(filteredCards);
+
+  const noticeParts: string[] = [];
+  if (nonKreaLabels.size > 0) {
+    noticeParts.push(
+      `Only Krea 2 models shown · skipped non-Krea (${Array.from(nonKreaLabels).join(', ')})`
+    );
+  }
+  if (unlinkedCount > 0 || failedLookups > 0) {
+    const skippedTotal = unlinkedCount + failedLookups;
+    noticeParts.push(
+      `${skippedTotal} unlinked/unavailable resource${skippedTotal === 1 ? '' : 's'} omitted`
+    );
+  }
+
+  return {
+    items: annotated,
+    notice: noticeParts.length > 0 ? noticeParts.join(' · ') : null,
   };
 }

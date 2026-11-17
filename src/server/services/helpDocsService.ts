@@ -4,7 +4,7 @@ import {
   checkLmStudioStatus,
   getLmStudioSettings,
   getLocalLlmHeaders,
-} from './lmStudioService.ts';
+} from './llm/llmClientService.ts';
 import { logger } from '../logger.ts';
 
 export interface ReadmeSection {

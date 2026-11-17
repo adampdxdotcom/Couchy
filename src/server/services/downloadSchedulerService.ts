@@ -4,12 +4,12 @@ import { db } from '../db.ts';
 import { logger } from '../logger.ts';
 import {
   extractCivitaiEarlyAccessInfo,
+  extractCivitaiVersionFiles,
   fetchCivitaiJsonWithFallback,
   getCivitaiHeaders,
   resolveCivitaiDomain,
   type CivitaiDomain,
-} from './civitaiMetadataService.ts';
-import { extractCivitaiVersionFiles } from './modelDownloadResolverService.ts';
+} from './civitai/civitaiHttpAndParse.ts';
 import {
   executeDownloadJob,
   type ScheduledDownloadPayload,

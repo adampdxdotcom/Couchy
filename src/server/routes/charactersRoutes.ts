@@ -12,7 +12,7 @@ import {
   resolveCharacterPortraitId,
   runAssistedCharacterIdentificationForAll,
 } from '../services/characterService.ts';
-import { analyzeCharacterPortraitPhysicalTraits } from '../services/lmStudioService.ts';
+import { analyzeCharacterPortraitPhysicalTraits } from '../services/llm/llmImageAnalysisService.ts';
 import { matchFaceToCharacter } from '../services/faceRecognitionService.ts';
 import { resolveImageDiskPath } from '../services/scannerService.ts';
 import { normalizePortraitCrop } from '../../shared/utils.ts';

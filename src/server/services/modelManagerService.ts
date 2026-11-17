@@ -4,40 +4,44 @@ import crypto from 'crypto';
 import { Readable } from 'stream';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
-import { syncModelInventory } from './comfyuiService.ts';
-import {
-  applyCivitaiEnrichmentToModel,
-  cacheModelPreviewImages,
-  extractCivitaiEarlyAccessInfo,
-  fetchAndEnrichModelFromCivitai,
-  fetchCivitaiJsonWithFallback,
-  fetchCivitaiParentModelWithDomain,
-  getCivitaiHeaders,
-  normalizeCivitaiData,
-  probeCivitaiWebDomain,
-  resolveCivitaiDomain,
-  rewriteCivitaiDownloadUrl,
-  type CivitaiDomain,
-  type CivitaiNormalizedMeta,
-} from './civitaiMetadataService.ts';
+import { syncModelInventory, updateLoraMentionConfig } from './modelInventoryService.ts';
 import {
   DOWNLOAD_WEIGHT_EXTS,
   MODEL_TYPE_TO_DEFAULT_SUBFOLDER,
   SUBFOLDER_TO_MODEL_TYPE,
-  annotateInstalledSearchResults,
-  extractCivitaiVersions,
   inferSubfolderAndTypeFromPath,
+} from './modelDownloadPaths.ts';
+import {
+  listHuggingFaceRepoFiles,
   parseHuggingFaceRepoAndFile,
-  resolveDirectModelUrl,
-} from './modelDownloadResolverService.ts';
-import { parseCivitaiShareUrl } from './civitaiImageImportService.ts';
-import { resolveCivitaiImageModelsForDownloader } from './civitaiImageDownloaderService.ts';
+} from './huggingFaceMetadataService.ts';
+import {
+  extractCivitaiEarlyAccessInfo,
+  extractCivitaiVersions,
+  fetchCivitaiJsonWithFallback,
+  fetchCivitaiParentModelWithDomain,
+  getCivitaiHeaders,
+  normalizeCivitaiData,
+  parseCivitaiShareUrl,
+  probeCivitaiWebDomain,
+  resolveCivitaiDomain,
+  resolveCivitaiModelUrl,
+  rewriteCivitaiDownloadUrl,
+  type CivitaiDomain,
+  type CivitaiNormalizedMeta,
+} from './civitai/civitaiHttpAndParse.ts';
+import {
+  annotateInstalledSearchResults,
+  applyCivitaiEnrichmentToModel,
+  cacheModelPreviewImages,
+  fetchAndEnrichModelFromCivitai,
+} from './civitai/civitaiModelEnrichmentService.ts';
+import { resolveCivitaiImageModelsForDownloader } from './civitai/civitaiImageShareService.ts';
 import {
   classifyLoraFromMetadata,
   classifySafetensorsHeaderOnDisk,
 } from './loraClassifierService.ts';
 import { handleDownloadedCharacterLoraAutomation } from './characterDownloadAutomationService.ts';
-import { updateLoraMentionConfig } from './loraConfigService.ts';
 import { VALID_LORA_CATEGORIES } from '../../shared/pillSettings.ts';
 import type {
   CharacterDownloadAutomation,
@@ -372,6 +376,125 @@ export async function searchHuggingFaceModels(
   }
 
   return annotateInstalledSearchResults(results);
+}
+
+/**
+ * Resolves a pasted Civitai URL (.com or .red), Hugging Face URL/repo, or direct weight link into an ExternalModelSearchResult.
+ */
+export async function resolveDirectModelUrl(rawInput: string): Promise<ExternalModelSearchResult> {
+  const input = rawInput.trim();
+  if (!input) {
+    throw new Error('Please paste a URL or Hugging Face repository ID.');
+  }
+
+  // 1. Hugging Face URL or owner/repo
+  const hfParsed = parseHuggingFaceRepoAndFile(input);
+  if (hfParsed) {
+    const repoData = await listHuggingFaceRepoFiles(hfParsed.repoId, hfParsed.branch);
+    if (repoData.files.length === 0) {
+      throw new Error(`No supported model weight files found in Hugging Face repo ${hfParsed.repoId}.`);
+    }
+
+    const matchedFile =
+      (hfParsed.filePath
+        ? repoData.files.find(
+            (f) =>
+              f.rfilename.toLowerCase() === hfParsed.filePath!.toLowerCase() ||
+              f.filename.toLowerCase() === path.basename(hfParsed.filePath!).toLowerCase()
+          )
+        : null) || repoData.files[0];
+
+    const suggestedLoraCategory: LoraCategory | null =
+      matchedFile.modelType === 'lora'
+        ? classifyLoraFromMetadata({
+            name: repoData.repoId,
+            filename: matchedFile.filename,
+            tags: repoData.tags,
+          })
+        : null;
+
+    return annotateInstalledSearchResults([
+      {
+        provider: 'huggingface',
+        id: repoData.repoId,
+        hfRepoId: repoData.repoId,
+        name: repoData.repoId,
+        modelType: matchedFile.modelType,
+        suggestedSubfolder: matchedFile.suggestedSubfolder,
+        suggestedLoraCategory,
+        versionName: hfParsed.branch,
+        filename: matchedFile.filename,
+        fileSize: matchedFile.fileSize,
+        sha256Hash: matchedFile.sha256Hash,
+        downloadUrl: matchedFile.downloadUrl,
+        creator: repoData.repoId.split('/')[0] || 'HuggingFace',
+        description: `Hugging Face repository ${repoData.repoId} (${repoData.files.length} weight file${
+          repoData.files.length === 1 ? '' : 's'
+        })`,
+        availableFiles: repoData.files,
+        totalRepoFilesCount: repoData.files.length,
+      },
+    ])[0];
+  }
+
+  // 2. Civitai Model Page or API Download URL (.com or .red)
+  if (/^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(input)) {
+    const result = await resolveCivitaiModelUrl(input);
+    return annotateInstalledSearchResults([result])[0];
+  }
+
+  // 3. Generic Direct File URL
+  if (/^https?:\/\//i.test(input)) {
+    const parsedUrl = new URL(input);
+    const rawBasename =
+      decodeURIComponent(path.basename(parsedUrl.pathname)) || 'downloaded_model.safetensors';
+    const cleanFilename = DOWNLOAD_WEIGHT_EXTS.has(path.extname(rawBasename).toLowerCase())
+      ? rawBasename
+      : `${rawBasename}.safetensors`;
+    const inferred = inferSubfolderAndTypeFromPath(parsedUrl.pathname);
+
+    const suggestedLoraCategory: LoraCategory | null =
+      inferred.modelType === 'lora'
+        ? classifyLoraFromMetadata({
+            name: cleanFilename,
+            filename: cleanFilename,
+          })
+        : null;
+
+    return annotateInstalledSearchResults([
+      {
+        provider: 'direct',
+        id: cleanFilename,
+        name: cleanFilename.replace(/\.(safetensors|gguf|ckpt|pt|pth|bin|sft)$/i, ''),
+        modelType: inferred.modelType,
+        suggestedSubfolder: inferred.suggestedSubfolder,
+        suggestedLoraCategory,
+        versionName: 'Direct URL',
+        filename: cleanFilename,
+        fileSize: null,
+        sha256Hash: null,
+        downloadUrl: input,
+        creator: parsedUrl.hostname,
+        description: `Direct download from ${parsedUrl.hostname}`,
+        availableFiles: [
+          {
+            rfilename: cleanFilename,
+            filename: cleanFilename,
+            fileSize: null,
+            sha256Hash: null,
+            downloadUrl: input,
+            modelType: inferred.modelType,
+            suggestedSubfolder: inferred.suggestedSubfolder,
+          },
+        ],
+        totalRepoFilesCount: 1,
+      },
+    ])[0];
+  }
+
+  throw new Error(
+    'Unrecognized URL or repository format. Paste a Civitai URL, Hugging Face URL/repo (owner/repo), or direct model file link.'
+  );
 }
 
 /**

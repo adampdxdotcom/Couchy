@@ -1,17 +1,15 @@
 import { Router } from 'express';
 import path from 'path';
 import { db } from '../db.ts';
-import { parsePreviewImagesJson } from '../services/civitaiMetadataService.ts';
+import { parsePreviewImagesJson } from '../services/civitai/civitaiHttpAndParse.ts';
+import { listHuggingFaceRepoFiles } from '../services/huggingFaceMetadataService.ts';
 import {
+  resolveDirectModelUrl,
   searchCivitaiModels,
   searchHuggingFaceModels,
   smartSearchModelsWithNotice,
   startConfirmedModelDownload,
 } from '../services/modelManagerService.ts';
-import {
-  listHuggingFaceRepoFiles,
-  resolveDirectModelUrl,
-} from '../services/modelDownloadResolverService.ts';
 import {
   cancelScheduledDownload,
   rescheduleFailedDownload,

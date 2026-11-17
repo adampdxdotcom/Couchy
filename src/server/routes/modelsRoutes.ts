@@ -2,13 +2,17 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { db } from '../db.ts';
-import { listModelInventory, syncModelInventory } from '../services/comfyuiService.ts';
+import {
+  listModelInventory,
+  syncModelInventory,
+  updateModelConfig,
+  updateModelVisibility,
+} from '../services/modelInventoryService.ts';
 import {
   fetchAndEnrichModelFromCivitai,
   healExistingCivitaiLinks,
   resolveSafeModelPreviewPath,
-} from '../services/civitaiMetadataService.ts';
-import { updateModelConfig, updateModelVisibility } from '../services/loraConfigService.ts';
+} from '../services/civitai/civitaiModelEnrichmentService.ts';
 
 export const modelsRouter = Router();
 

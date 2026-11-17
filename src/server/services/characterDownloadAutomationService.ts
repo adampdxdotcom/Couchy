@@ -1,7 +1,7 @@
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import { logger } from '../logger.ts';
-import { syncModelInventory } from './comfyuiService.ts';
+import { syncModelInventory } from './modelInventoryService.ts';
 import { runAssistedCharacterIdentificationForAll } from './characterService.ts';
 import { copyImageMetadataToDerivedImage } from './scannerService.ts';
 import {
@@ -10,7 +10,7 @@ import {
   notifyImageIndexed,
   recordComfyExecutionError,
 } from './comfyuiLiveMonitor.ts';
-import { pollComfyPromptCompletion } from './comfyuiPoller.ts';
+import { pollComfyPromptCompletion } from './comfyuiService.ts';
 import {
   compileUpscaleWorkflow,
   compileWorkflowForGeneration,

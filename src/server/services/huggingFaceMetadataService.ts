@@ -1,5 +1,7 @@
 import path from 'path';
 import { appConfig } from '../config.ts';
+import { DOWNLOAD_WEIGHT_EXTS, inferSubfolderAndTypeFromPath } from './modelDownloadPaths.ts';
+import type { ExternalModelFileOption } from '../../shared/types.ts';
 
 export interface HuggingFaceNormalizedMeta {
   hfRepoId: string;
@@ -371,5 +373,137 @@ export async function resolveHuggingFaceModelDetails(params: {
     description,
     previewImages,
     matchedBy,
+  };
+}
+
+/**
+ * Normalizes a Hugging Face repo ID from a plain `owner/repo` string or full URL.
+ */
+export function parseHuggingFaceRepoAndFile(input: string): {
+  repoId: string;
+  branch: string;
+  filePath: string | null;
+} | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  try {
+    if (/^https?:\/\/(www\.)?huggingface\.co\//i.test(trimmed)) {
+      const url = new URL(trimmed);
+      const parts = url.pathname.split('/').filter(Boolean);
+      if (parts.length < 2) return null;
+      const repoId = `${parts[0]}/${parts[1]}`;
+      if (parts.length >= 4 && (parts[2] === 'blob' || parts[2] === 'resolve' || parts[2] === 'tree')) {
+        const branch = parts[3] || 'main';
+        const filePath = parts.length > 4 ? decodeURIComponent(parts.slice(4).join('/')) : null;
+        return { repoId, branch, filePath };
+      }
+      return { repoId, branch: 'main', filePath: null };
+    }
+  } catch {
+    return null;
+  }
+
+  // Plain owner/repo format
+  if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(trimmed)) {
+    return { repoId: trimmed, branch: 'main', filePath: null };
+  }
+
+  return null;
+}
+
+/**
+ * Queries Hugging Face Hub for all weight files in a repository (with recursive tree sizes & LFS SHA-256).
+ */
+export async function listHuggingFaceRepoFiles(
+  repoIdInput: string,
+  branch = 'main'
+): Promise<{
+  repoId: string;
+  tags: string[];
+  downloads: number;
+  files: ExternalModelFileOption[];
+}> {
+  const parsed = parseHuggingFaceRepoAndFile(repoIdInput);
+  const repoId = parsed ? parsed.repoId : repoIdInput.trim();
+  const targetBranch = parsed?.branch || branch || 'main';
+  const headers = getHfHeaders();
+
+  const metaRes = await fetch(`https://huggingface.co/api/models/${repoId}`, { headers });
+  if (!metaRes.ok) {
+    throw new Error(`Hugging Face repository "${repoId}" not found (HTTP ${metaRes.status})`);
+  }
+  const repoMeta = (await metaRes.json()) as any;
+  const tags: string[] = Array.isArray(repoMeta.tags) ? repoMeta.tags : [];
+
+  // Fetch recursive tree for exact file sizes and LFS SHA-256 hashes
+  let treeEntries: any[] = [];
+  try {
+    const treeRes = await fetch(
+      `https://huggingface.co/api/models/${repoId}/tree/${encodeURIComponent(targetBranch)}?recursive=true`,
+      { headers }
+    );
+    if (treeRes.ok) {
+      treeEntries = (await treeRes.json()) as any[];
+    }
+  } catch {
+    // Fallback to repoMeta.siblings below
+  }
+
+  const files: ExternalModelFileOption[] = [];
+
+  if (treeEntries.length > 0) {
+    for (const entry of treeEntries) {
+      if (entry.type !== 'file' || !entry.path) continue;
+      const rfilename = String(entry.path);
+      const ext = path.extname(rfilename).toLowerCase();
+      if (!DOWNLOAD_WEIGHT_EXTS.has(ext)) continue;
+
+      const inferred = inferSubfolderAndTypeFromPath(rfilename, tags);
+      const encodedPath = rfilename
+        .split('/')
+        .map((seg) => encodeURIComponent(seg))
+        .join('/');
+
+      files.push({
+        rfilename,
+        filename: path.basename(rfilename),
+        fileSize: typeof entry.size === 'number' ? entry.size : entry.lfs?.size ?? null,
+        sha256Hash: entry.lfs?.oid ? String(entry.lfs.oid).toUpperCase() : null,
+        downloadUrl: `https://huggingface.co/${repoId}/resolve/${encodeURIComponent(targetBranch)}/${encodedPath}`,
+        modelType: inferred.modelType,
+        suggestedSubfolder: inferred.suggestedSubfolder,
+      });
+    }
+  } else {
+    const siblings = Array.isArray(repoMeta.siblings) ? repoMeta.siblings : [];
+    for (const s of siblings) {
+      const rfilename = String(s.rfilename || '');
+      const ext = path.extname(rfilename).toLowerCase();
+      if (!DOWNLOAD_WEIGHT_EXTS.has(ext)) continue;
+
+      const inferred = inferSubfolderAndTypeFromPath(rfilename, tags);
+      const encodedPath = rfilename
+        .split('/')
+        .map((seg) => encodeURIComponent(seg))
+        .join('/');
+
+      files.push({
+        rfilename,
+        filename: path.basename(rfilename),
+        fileSize: typeof s.size === 'number' ? s.size : s.lfs?.size ?? null,
+        sha256Hash: s.lfs?.oid ? String(s.lfs.oid).toUpperCase() : null,
+        downloadUrl: `https://huggingface.co/${repoId}/resolve/${encodeURIComponent(targetBranch)}/${encodedPath}`,
+        modelType: inferred.modelType,
+        suggestedSubfolder: inferred.suggestedSubfolder,
+      });
+    }
+  }
+
+  return {
+    repoId,
+    tags,
+    downloads: Number(repoMeta.downloads || 0),
+    files,
   };
 }
