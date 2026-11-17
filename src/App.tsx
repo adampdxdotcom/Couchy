@@ -1070,6 +1070,8 @@ export default function App() {
           image={inspectedImage}
           allImages={allImages}
           loras={visibleLoras}
+          models={models}
+          presets={presets}
           ghostItems={activeGhostItems}
           onClose={() => setInspectedImageId(null)}
           onPrev={
@@ -1081,6 +1083,7 @@ export default function App() {
               : undefined
           }
           onUpdated={refreshAll}
+          onPushToast={pushToast}
           onRateImage={handleQuickRate}
           onToggleFavoriteImage={handleQuickFavorite}
           onRejectImage={handleQuickReject}

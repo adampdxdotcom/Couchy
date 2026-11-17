@@ -1,5 +1,5 @@
-import React from 'react';
-import { Columns2, Heart, Keyboard, RotateCcw, Star, Trash2, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { BookmarkPlus, Columns2, Heart, Keyboard, Loader2, RotateCcw, Star, Trash2, X } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
@@ -12,10 +12,13 @@ import { InspectorWorkflowSection } from './inspector/InspectorWorkflowSection.t
 import { InspectorPromptAndParamsSection } from './inspector/InspectorPromptAndParamsSection.tsx';
 import { InspectorTagsAndNotesSection } from './inspector/InspectorTagsAndNotesSection.tsx';
 import { useInspectorState } from './inspector/useInspectorState.ts';
+import { MAX_SYSTEM_LORAS, normalizeLoraKey } from './quickgen/quickGenUtils.ts';
 import type {
   CharacterProfile,
   ImageRecord,
   LoraExplorerItem,
+  LoraPreset,
+  ModelInventoryItem,
   QueuedGhostCardItem,
 } from '../shared/types.ts';
 
@@ -23,11 +26,14 @@ interface ImageInspectorDrawerProps {
   image: ImageRecord;
   allImages?: ImageRecord[];
   loras?: LoraExplorerItem[];
+  models?: ModelInventoryItem[];
+  presets?: LoraPreset[];
   ghostItems?: QueuedGhostCardItem[];
   onClose: () => void;
   onPrev?: () => void;
   onNext?: () => void;
   onUpdated: () => void | Promise<void>;
+  onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   onRateImage?: (imageId: number, rating: number) => Promise<void> | void;
   onToggleFavoriteImage?: (imageId: number, nextFavorite: boolean) => Promise<void> | void;
   onRejectImage?: (imageId: number, nextRejected: boolean) => Promise<void> | void;
@@ -43,6 +49,24 @@ interface ImageInspectorDrawerProps {
   onFilterByVisualKeyword?: (keyword: string) => void;
 }
 
+/** Finds the lowest unused `userX` preset name (starting at user0, reusing gaps). */
+function resolveNextUserPresetName(existingPresets: LoraPreset[]): string {
+  const usedNumbers = new Set<number>();
+  for (const preset of existingPresets) {
+    for (const candidate of [preset.name, preset.nickname]) {
+      const match = candidate?.trim().match(/^user(\d+)$/i);
+      if (match) {
+        usedNumbers.add(Number(match[1]));
+      }
+    }
+  }
+  let idx = 0;
+  while (usedNumbers.has(idx)) {
+    idx += 1;
+  }
+  return `user${idx}`;
+}
+
 /**
  * Full-Screen Lightbox & Comprehensive Image Detail Inspector Coordinator.
  */
@@ -50,11 +74,14 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   image,
   allImages = [],
   loras = [],
+  models = [],
+  presets = [],
   ghostItems = [],
   onClose,
   onPrev,
   onNext,
   onUpdated,
+  onPushToast,
   onRateImage,
   onToggleFavoriteImage,
   onRejectImage,
@@ -130,6 +157,88 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     onAdvanceAfterReject,
     onNavigateToImage,
   });
+
+  const [isCreatingPreset, setIsCreatingPreset] = useState(false);
+
+  const nextUserPresetName = useMemo(() => resolveNextUserPresetName(presets), [presets]);
+  const hasPresetModels = Boolean(
+    activeImage.checkpointName?.trim() || (activeImage.loras && activeImage.loras.length > 0)
+  );
+
+  const handleCreatePresetFromImage = async () => {
+    if (isCreatingPreset || !hasPresetModels) return;
+    setIsCreatingPreset(true);
+    try {
+      // Resolve canonical installed checkpoint filename if present in inventory, else preserve raw metadata name
+      const rawCkpt = activeImage.checkpointName?.trim() || '';
+      let resolvedCheckpoint: string | null = rawCkpt || null;
+      if (rawCkpt && models.length > 0) {
+        const ckptKey = normalizeLoraKey(rawCkpt);
+        const matchedModel = models.find(
+          (m) =>
+            m.modelType !== 'lora' &&
+            (normalizeLoraKey(m.filename) === ckptKey || normalizeLoraKey(m.name) === ckptKey)
+        );
+        if (matchedModel) {
+          resolvedCheckpoint = matchedModel.filename;
+        }
+      }
+
+      // Collect all LoRAs (including character LoRAs), deduplicated and capped at MAX_SYSTEM_LORAS
+      const seenLoraKeys = new Set<string>();
+      const collectedItems: Array<{
+        loraName: string;
+        modelStrength: number;
+        clipStrength: number;
+      }> = [];
+      let skippedOverLimit = 0;
+
+      for (const imgLora of activeImage.loras || []) {
+        const key = normalizeLoraKey(imgLora.loraName);
+        if (!key || seenLoraKeys.has(key)) continue;
+        seenLoraKeys.add(key);
+
+        if (collectedItems.length >= MAX_SYSTEM_LORAS) {
+          skippedOverLimit += 1;
+          continue;
+        }
+
+        const matchedLora = loras.find(
+          (l) => normalizeLoraKey(l.filename) === key || normalizeLoraKey(l.name) === key
+        );
+        collectedItems.push({
+          loraName: matchedLora?.filename || imgLora.loraName,
+          modelStrength: Number(imgLora.modelStrength ?? 1.0),
+          clipStrength: Number(imgLora.clipStrength ?? imgLora.modelStrength ?? 1.0),
+        });
+      }
+
+      const presetName = resolveNextUserPresetName(presets);
+      await api.createPreset({
+        name: presetName,
+        nickname: presetName,
+        pillColor: 'fuchsia',
+        checkpointName: resolvedCheckpoint,
+        items: collectedItems,
+      });
+      await onUpdated();
+
+      const parts = [
+        resolvedCheckpoint ? 'Base Model' : null,
+        collectedItems.length > 0 ? `${collectedItems.length} LoRA(s)` : null,
+      ].filter(Boolean);
+      const limitNote =
+        skippedOverLimit > 0 ? ` · skipped ${skippedOverLimit} over ${MAX_SYSTEM_LORAS}-LoRA cap` : '';
+      onPushToast?.(
+        `Created preset "${presetName}" (${parts.join(' + ')}${limitNote})`,
+        skippedOverLimit > 0 ? 'warning' : 'success'
+      );
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Failed to create preset from image.', 'error');
+    } finally {
+      setIsCreatingPreset(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm flex flex-col lg:flex-row overflow-hidden">
@@ -225,6 +334,28 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   }
                 >
                   <Heart className={`w-4 h-4 ${activeImage.isFavorite ? 'fill-rose-400' : ''}`} />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={!hasPresetModels || isCreatingPreset}
+                  onClick={() => void handleCreatePresetFromImage()}
+                  className={`p-1.5 rounded-lg border shrink-0 transition-colors ${
+                    !hasPresetModels
+                      ? 'bg-zinc-950 border-zinc-800/70 text-zinc-600 cursor-not-allowed opacity-50'
+                      : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-fuchsia-300 hover:border-fuchsia-500/50 cursor-pointer'
+                  }`}
+                  title={
+                    !hasPresetModels
+                      ? 'No Base Model or LoRAs found on this image'
+                      : `Create Preset (${nextUserPresetName}) from this image's Base Model & LoRA(s)`
+                  }
+                >
+                  {isCreatingPreset ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-fuchsia-400" />
+                  ) : (
+                    <BookmarkPlus className="w-4 h-4" />
+                  )}
                 </button>
 
                 <button
