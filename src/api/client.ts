@@ -410,7 +410,7 @@ export const api = {
     }>(`/api/models/${encodeURIComponent(name)}/impact`),
 
   searchModels: (q: string, type = '') =>
-    requestJson<{ items: ExternalModelSearchResult[] }>(
+    requestJson<{ items: ExternalModelSearchResult[]; notice?: string | null }>(
       `/api/models/search?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}`
     ),
 

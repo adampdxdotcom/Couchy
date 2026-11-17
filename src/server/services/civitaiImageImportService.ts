@@ -102,14 +102,24 @@ function stripLoraTagsFromPrompt(rawPrompt: string): string {
     .trim();
 }
 
-function isLoraResourceType(rawType: unknown): boolean {
+export function isLoraResourceType(rawType: unknown): boolean {
   const t = String(rawType || '').trim().toLowerCase();
   return t === 'lora' || t === 'locon' || t === 'dora' || t === 'lycoris';
 }
 
-function isBaseModelResourceType(rawType: unknown): boolean {
+export function isBaseModelResourceType(rawType: unknown): boolean {
   const t = String(rawType || '').trim().toLowerCase();
   return t === 'checkpoint' || t === 'model' || t === 'diffusion';
+}
+
+/**
+ * Returns true strictly for Krea 2 ecosystem baseModel labels (excluding Flux.1 Krea, SDXL, Pony, etc.).
+ */
+export function isKrea2BaseModel(rawBaseModel?: string | null): boolean {
+  const clean = String(rawBaseModel || '').trim().toLowerCase();
+  if (!clean || clean === 'other') return false;
+  if (clean.includes('flux')) return false;
+  return clean === 'krea' || /\bkrea\s*2\b/i.test(clean) || /^krea\b/i.test(clean);
 }
 
 function matchInstalledModel<T extends InstalledModelRow>(
@@ -158,13 +168,28 @@ function matchInstalledModel<T extends InstalledModelRow>(
   return null;
 }
 
+export interface CivitaiImageFetchedMetadata {
+  parsed: ParsedShareUrl;
+  activeDomain: CivitaiDomain;
+  targetImageId: number;
+  restItem: any;
+  trpcGenData: any;
+  meta: Record<string, any>;
+  sourceBaseModel: string | null;
+  rawPrompt: string;
+  negativePrompt: string;
+  aspectRatio: string | null;
+  loraCandidates: LoraCandidate[];
+  baseCandidates: BaseModelCandidate[];
+}
+
 /**
- * Fetches metadata for a shared Civitai image/post URL and resolves any matching locally
- * installed Base Model and up to 5 LoRAs. Anything unavailable in Couchy is omitted gracefully.
+ * Queries Civitai REST + tRPC endpoints for an `/images/:id` or `/posts/:id` URL and
+ * returns extracted prompt, dimensions, and normalized LoRA/Base Model candidates.
  */
-export async function importCivitaiImageForQuickGen(
+export async function fetchCivitaiImageMetadata(
   rawUrl: string
-): Promise<CivitaiImageImportResult> {
+): Promise<CivitaiImageFetchedMetadata> {
   const parsed = parseCivitaiShareUrl(rawUrl);
   if (!parsed) {
     throw new Error('Please paste a valid Civitai image or post URL.');
@@ -213,36 +238,44 @@ export async function importCivitaiImageForQuickGen(
     throw new Error('Could not retrieve that image from Civitai.');
   }
 
-  const meta = (trpcGenData?.meta && typeof trpcGenData.meta === 'object'
-    ? { ...(restItem?.meta || {}), ...trpcGenData.meta }
-    : restItem?.meta) || {};
+  const meta =
+    (trpcGenData?.meta && typeof trpcGenData.meta === 'object'
+      ? { ...(restItem?.meta || {}), ...trpcGenData.meta }
+      : restItem?.meta) || {};
 
   const width = Number(restItem?.width || 0);
   const height = Number(restItem?.height || 0);
   const aspectRatio = width > 0 && height > 0 ? resolveClosestAspectRatio(width, height) : null;
 
   const rawPrompt = typeof meta?.prompt === 'string' ? meta.prompt : '';
-  const negativePrompt = typeof meta?.negativePrompt === 'string' ? meta.negativePrompt.trim() : '';
+  const negativePrompt =
+    typeof meta?.negativePrompt === 'string' ? meta.negativePrompt.trim() : '';
 
-  // 3. Collect LoRA & Base Model candidates from structured resources + prompt tags + hashes
   const loraCandidates: LoraCandidate[] = [];
-  const seenCandKeys = new Set<string>();
+  const seenLoraKeys = new Set<string>();
   const pushLoraCandidate = (cand: LoraCandidate) => {
     const key = cand.versionId
       ? `v:${cand.versionId}`
       : cand.hash
       ? `h:${cand.hash.toLowerCase()}`
       : `n:${normalizeModelStem(cand.name)}`;
-    if (!key || key === 'n:' || seenCandKeys.has(key)) return;
-    seenCandKeys.add(key);
+    if (!key || key === 'n:' || seenLoraKeys.has(key)) return;
+    seenLoraKeys.add(key);
     loraCandidates.push(cand);
   };
 
-  let baseCandidate: BaseModelCandidate | null = null;
-  const setBaseIfEmpty = (cand: BaseModelCandidate) => {
-    if (baseCandidate) return;
+  const baseCandidates: BaseModelCandidate[] = [];
+  const seenBaseKeys = new Set<string>();
+  const pushBaseCandidate = (cand: BaseModelCandidate) => {
     if (!cand.versionId && !cand.name && !cand.hash) return;
-    baseCandidate = cand;
+    const key = cand.versionId
+      ? `v:${cand.versionId}`
+      : cand.hash
+      ? `h:${cand.hash.toLowerCase()}`
+      : `n:${normalizeModelStem(cand.name)}`;
+    if (!key || key === 'n:' || seenBaseKeys.has(key)) return;
+    seenBaseKeys.add(key);
+    baseCandidates.push(cand);
   };
 
   const resourceLists = [
@@ -255,7 +288,8 @@ export async function importCivitaiImageForQuickGen(
     for (const r of list) {
       if (!r || typeof r !== 'object') continue;
       const rType = r.modelType ?? r.type;
-      const vId = r.versionId || r.modelVersionId ? String(r.versionId || r.modelVersionId).trim() : null;
+      const vId =
+        r.versionId || r.modelVersionId ? String(r.versionId || r.modelVersionId).trim() : null;
       const rName = String(r.modelName || r.name || r.versionName || '').trim();
       const rHash = typeof r.hash === 'string' ? r.hash.trim() : null;
 
@@ -267,7 +301,7 @@ export async function importCivitaiImageForQuickGen(
           weight: clampWeight(r.strength ?? r.weight, 1.0),
         });
       } else if (isBaseModelResourceType(rType)) {
-        setBaseIfEmpty({
+        pushBaseCandidate({
           versionId: vId,
           name: rName,
           hash: rHash,
@@ -308,7 +342,7 @@ export async function importCivitaiImageForQuickGen(
           weight: 1.0,
         });
       } else if (key.toLowerCase() === 'model') {
-        setBaseIfEmpty({
+        pushBaseCandidate({
           versionId: null,
           name: typeof meta?.Model === 'string' ? meta.Model.trim() : '',
           hash: val.trim(),
@@ -317,11 +351,53 @@ export async function importCivitaiImageForQuickGen(
     }
   }
 
-  if (!baseCandidate && typeof meta?.Model === 'string' && meta.Model.trim()) {
-    baseCandidate = { versionId: null, name: meta.Model.trim(), hash: null };
+  if (baseCandidates.length === 0 && typeof meta?.Model === 'string' && meta.Model.trim()) {
+    pushBaseCandidate({ versionId: null, name: meta.Model.trim(), hash: null });
   }
 
-  // 4. Match candidates strictly against installed local Couchy models
+  const sourceBaseModel =
+    (typeof restItem?.baseModel === 'string' && restItem.baseModel.trim()) ||
+    (typeof trpcGenData?.baseModel === 'string' && trpcGenData.baseModel.trim()) ||
+    null;
+
+  return {
+    parsed,
+    activeDomain,
+    targetImageId,
+    restItem,
+    trpcGenData,
+    meta,
+    sourceBaseModel,
+    rawPrompt,
+    negativePrompt,
+    aspectRatio,
+    loraCandidates,
+    baseCandidates,
+  };
+}
+
+/**
+ * Fetches metadata for a shared Civitai image/post URL and resolves any matching locally
+ * installed Base Model and up to 5 LoRAs. Anything unavailable in Couchy is omitted gracefully.
+ */
+export async function importCivitaiImageForQuickGen(
+  rawUrl: string
+): Promise<CivitaiImageImportResult> {
+  const {
+    parsed,
+    activeDomain,
+    targetImageId,
+    sourceBaseModel,
+    rawPrompt,
+    negativePrompt,
+    aspectRatio,
+    loraCandidates,
+    baseCandidates,
+  } = await fetchCivitaiImageMetadata(rawUrl);
+
+  const baseCandidate = baseCandidates[0] || null;
+
+  // Match candidates strictly against installed local Couchy models
   const installedRows = db
     .prepare(
       `SELECT id, name, filename, model_type, sha256_hash, autov2_hash, civitai_version_id,
@@ -377,10 +453,6 @@ export async function importCivitaiImageForQuickGen(
   }
 
   const cleanedPrompt = stripLoraTagsFromPrompt(rawPrompt);
-  const sourceBaseModel =
-    (typeof restItem?.baseModel === 'string' && restItem.baseModel.trim()) ||
-    (typeof trpcGenData?.baseModel === 'string' && trpcGenData.baseModel.trim()) ||
-    null;
 
   return {
     sourceUrl: parsed.cleanUrl,

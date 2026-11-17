@@ -5,6 +5,7 @@ import {
   ExternalLink,
   FolderGit2,
   HardDriveDownload,
+  Info,
   Layers,
   Loader2,
   Play,
@@ -20,6 +21,7 @@ import {
   resolveLoraCategoryStyle,
 } from '../shared/pillSettings.ts';
 import { DownloadHistoryList } from './models/DownloadHistoryList.tsx';
+import { DownloaderBatchBar } from './models/DownloaderBatchBar.tsx';
 import {
   formatUnlockCountdown,
   formatUnlockLocalTime,
@@ -70,6 +72,8 @@ interface ModelDownloaderTabProps {
   setActivePreviewDownloads: React.Dispatch<React.SetStateAction<ActivePreviewDownloadEntry[]>>;
   isSearchingExt: boolean;
   searchError: string | null;
+  searchNotice?: string | null;
+  onDismissSearchNotice?: () => void;
   downloads: any[];
   pillTypeSettings?: PillTypeSettings;
   onSearch: (e?: React.FormEvent, customQ?: string) => Promise<void>;
@@ -169,6 +173,8 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   setActivePreviewDownloads,
   isSearchingExt,
   searchError,
+  searchNotice,
+  onDismissSearchNotice,
   downloads,
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   onSearch,
@@ -189,6 +195,8 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [directStartingKey, setDirectStartingKey] = useState<string | null>(null);
   const [savingCategoryKey, setSavingCategoryKey] = useState<string | null>(null);
+  const [isBatchDownloading, setIsBatchDownloading] = useState(false);
+  const [selectedBatchKeys, setSelectedBatchKeys] = useState<Set<string>>(() => new Set());
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
   const [selectedPreviewIdx, setSelectedPreviewIdx] = useState<Record<string, number>>({});
   const [selectedVersionByCard, setSelectedVersionByCard] = useState<Record<string, string>>({});
@@ -211,11 +219,32 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   const [pendingMentionAutomation, setPendingMentionAutomation] =
     useState<LoraMentionAutomation>({ ...DEFAULT_LORA_MENTION_AUTOMATION });
 
+  const isItemBatchEligible = (item: ExternalModelSearchResult): boolean => {
+    const primary = item.availableFiles?.[0];
+    const hasDownloadUrl = Boolean(primary?.downloadUrl || item.downloadUrl);
+    const isMultiFileHfRepo =
+      item.provider === 'huggingface' && (item.totalRepoFilesCount || 0) > 1;
+    return (
+      hasDownloadUrl &&
+      !isMultiFileHfRepo &&
+      !item.isInstalled &&
+      !item.isEarlyAccessActive
+    );
+  };
+
   useEffect(() => {
     setSelectedVersionByCard({});
     setSelectedCategoryByCard({});
     setCharacterAutoByCard({});
     setMentionAutoByCard({});
+    // Auto-select all downloadable, missing, non-Early-Access models for quick Download All
+    const nextSelected = new Set<string>();
+    for (const r of searchResults) {
+      if (isItemBatchEligible(r)) {
+        nextSelected.add(getDownloaderCardKey(r));
+      }
+    }
+    setSelectedBatchKeys(nextSelected);
   }, [searchBatchTimestamp]);
 
   const getCategoryMapKey = (cardKey: string, versionId?: string | null) =>
@@ -520,6 +549,113 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
 
   const handleDismissSearchCard = (cardKey: string) => {
     setSearchResults((prev) => prev.filter((r) => getDownloaderCardKey(r) !== cardKey));
+    setSelectedBatchKeys((prev) => {
+      if (!prev.has(cardKey)) return prev;
+      const next = new Set(prev);
+      next.delete(cardKey);
+      return next;
+    });
+  };
+
+  const toggleBatchKey = (cardKey: string) => {
+    setSelectedBatchKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(cardKey)) next.delete(cardKey);
+      else next.add(cardKey);
+      return next;
+    });
+  };
+
+  const handleBatchDownloadAll = async (
+    entries: Array<{ cardKey: string; item: ExternalModelSearchResult }>
+  ) => {
+    if (entries.length === 0 || isBatchDownloading) return;
+    setIsBatchDownloading(true);
+    let startedCount = 0;
+    const errors: string[] = [];
+
+    try {
+      for (const { cardKey, item } of entries) {
+        const primary = item.availableFiles?.[0];
+        const targetFilename = primary?.filename || item.filename;
+        const targetFolder = primary?.suggestedSubfolder || getDefaultSubfolderForItem(item);
+        const effectiveType = (primary?.modelType || item.modelType) as ModelType;
+        const isLora = effectiveType === 'lora' || targetFolder === 'loras';
+        const chosenCategory = isLora ? getEffectiveCardCategory(item, cardKey) : null;
+        const mentionConfig = isLora ? getEffectiveMentionAutomation(item, cardKey) : null;
+        const normalizedMention =
+          mentionConfig && (mentionConfig.mentionEnabled || mentionConfig.nickname.trim())
+            ? {
+                mentionEnabled: mentionConfig.mentionEnabled,
+                nickname: mentionConfig.nickname.trim().replace(/^@+/, '').toLowerCase(),
+              }
+            : null;
+
+        try {
+          const res = await api.startModelDownload({
+            provider: item.provider,
+            modelName: item.name,
+            filename: targetFilename,
+            modelType: effectiveType,
+            sourceUrl: primary?.downloadUrl || item.downloadUrl,
+            expectedHash: primary?.sha256Hash || item.sha256Hash || null,
+            subfolder: targetFolder,
+            allowOverwrite: false,
+            userConfirmed: true,
+            hfRepoId: item.hfRepoId || null,
+            civitaiMeta:
+              item.provider === 'civitai'
+                ? {
+                    civitaiId: item.id,
+                    civitaiVersionId: item.versionId || null,
+                    civitaiUrl: item.civitaiUrl || null,
+                    baseModel: item.baseModel || null,
+                    trainedWords: item.trainedWords || [],
+                    recommendedWeight: item.recommendedWeight ?? null,
+                    civitaiDescription: item.civitaiDescription || null,
+                    previewImages: item.previewImages || [],
+                  }
+                : null,
+            loraCategory: chosenCategory,
+            characterAutomation:
+              isLora && chosenCategory === 'character' && !item.isInstalled
+                ? getEffectiveCharacterAutomation(item, cardKey)
+                : null,
+            mentionAutomation: normalizedMention,
+            scheduledFor: null,
+          });
+          if (res?.job?.id) {
+            registerStartedDownload(
+              Number(res.job.id),
+              item,
+              targetFilename,
+              targetFolder,
+              res.job.status === 'scheduled'
+            );
+            startedCount += 1;
+          }
+        } catch (err: any) {
+          errors.push(`${item.name}: ${err?.message || 'Download could not start'}`);
+        }
+      }
+
+      await onRefreshDownloads();
+      if (startedCount > 0 && errors.length === 0) {
+        onPushToast?.(
+          `Queued ${startedCount} download${startedCount === 1 ? '' : 's'}`,
+          'success'
+        );
+      } else if (startedCount > 0 && errors.length > 0) {
+        onPushToast?.(
+          `Queued ${startedCount} download(s); ${errors.length} failed (${errors[0]})`,
+          'warning'
+        );
+      } else if (errors.length > 0) {
+        onPushToast?.(errors[0], 'error');
+      }
+    } finally {
+      setIsBatchDownloading(false);
+    }
   };
 
   const handleSaveInstalledCategory = async (
@@ -582,6 +718,42 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       .filter((entry) => !activeKeySet.has(entry.cardKey)),
   ].sort((a, b) => b.sortTime - a.sortTime);
 
+  // Evaluate active-versioned items once so batch bar stats stay accurate if user switches versions
+  const resolvedPreviews = combinedPreviews.map(({ cardKey, item: rawItem, activeEntry }) => {
+    const item = activeEntry
+      ? rawItem
+      : applySelectedVersion(rawItem, selectedVersionByCard[cardKey]);
+    const displayFilename = activeEntry?.targetFilename || item.filename;
+    const matchingJob = activeEntry
+      ? downloads.find((d) => Number(d.id) === activeEntry.jobId)
+      : downloads.find(
+          (d) =>
+            d.status === 'downloading' &&
+            typeof d.destination_path === 'string' &&
+            d.destination_path.toLowerCase().endsWith(`/${displayFilename.toLowerCase()}`)
+        );
+    const isDownloadingNow =
+      Boolean(activeEntry) ||
+      directStartingKey === cardKey ||
+      matchingJob?.status === 'downloading';
+    const isEligible = !isDownloadingNow && isItemBatchEligible(item);
+    return { cardKey, item, activeEntry, matchingJob, isDownloadingNow, isEligible };
+  });
+
+  const eligibleEntries = resolvedPreviews
+    .filter((entry) => entry.isEligible)
+    .map((entry) => ({ cardKey: entry.cardKey, item: entry.item }));
+  const selectedBatchEntries = eligibleEntries.filter((e) => selectedBatchKeys.has(e.cardKey));
+  const selectedTotalBytes = selectedBatchEntries.reduce(
+    (sum, e) => sum + (e.item.availableFiles?.[0]?.fileSize || e.item.fileSize || 0),
+    0
+  );
+  const installedBatchCount = resolvedPreviews.filter((e) => e.item.isInstalled).length;
+  const earlyAccessBatchCount = resolvedPreviews.filter(
+    (e) => e.item.isEarlyAccessActive && !e.item.isInstalled
+  ).length;
+  const showBatchBar = combinedPreviews.length > 1 || Boolean(searchNotice);
+
   return (
     <div className="space-y-6">
       {/* Single Unified Smart Search Bar */}
@@ -595,7 +767,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
             type="text"
             value={extQuery}
             onChange={(e) => setExtQuery(e.target.value)}
-            placeholder="Search Civitai & Hugging Face, or paste a hash, owner/repo, or direct URL..."
+            placeholder="Search Civitai & Hugging Face, or paste a Civitai image/model URL, hash, or owner/repo..."
             className="w-full pl-9 pr-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
           />
         </div>
@@ -630,13 +802,46 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
         </div>
       )}
 
+      {searchNotice && (
+        <div className="p-3 bg-amber-500/10 border border-amber-500/35 rounded-lg text-xs text-amber-200 flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2">
+            <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+            <span>{searchNotice}</span>
+          </div>
+          {onDismissSearchNotice && (
+            <button
+              type="button"
+              onClick={onDismissSearchNotice}
+              aria-label="Dismiss notice"
+              className="p-0.5 text-amber-300/80 hover:text-amber-100 cursor-pointer shrink-0"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {showBatchBar && (
+        <DownloaderBatchBar
+          totalEligibleCount={eligibleEntries.length}
+          selectedCount={selectedBatchEntries.length}
+          selectedTotalBytes={selectedTotalBytes}
+          installedCount={installedBatchCount}
+          earlyAccessCount={earlyAccessBatchCount}
+          isBatchDownloading={isBatchDownloading}
+          onSelectAll={() =>
+            setSelectedBatchKeys(new Set(eligibleEntries.map((e) => e.cardKey)))
+          }
+          onClearSelection={() => setSelectedBatchKeys(new Set())}
+          onDownloadAll={() => handleBatchDownloadAll(selectedBatchEntries)}
+        />
+      )}
+
       {/* Full-Width Preview Stack (Newest First; Active Downloads Clear Automatically on Completion) */}
-      {combinedPreviews.length > 0 && (
+      {resolvedPreviews.length > 0 && (
         <div className="space-y-4">
-          {combinedPreviews.map(({ cardKey, item: rawItem, activeEntry }) => {
-            const item = activeEntry
-              ? rawItem
-              : applySelectedVersion(rawItem, selectedVersionByCard[cardKey]);
+          {resolvedPreviews.map(
+            ({ cardKey, item, activeEntry, matchingJob, isDownloadingNow, isEligible }) => {
             const previews =
               item.previewImages && item.previewImages.length > 0
                 ? item.previewImages
@@ -661,20 +866,6 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                 : item.provider === 'huggingface'
                 ? 'Hugging Face'
                 : 'Direct URL';
-
-            const matchingJob = activeEntry
-              ? downloads.find((d) => Number(d.id) === activeEntry.jobId)
-              : downloads.find(
-                  (d) =>
-                    d.status === 'downloading' &&
-                    typeof d.destination_path === 'string' &&
-                    d.destination_path.toLowerCase().endsWith(`/${displayFilename.toLowerCase()}`)
-                );
-
-            const isDownloadingNow =
-              Boolean(activeEntry) ||
-              directStartingKey === cardKey ||
-              matchingJob?.status === 'downloading';
 
             const dlPct =
               matchingJob && matchingJob.total_bytes > 0
@@ -852,6 +1043,21 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0">
+                        {isEligible && (
+                          <label
+                            title="Include in Download All batch"
+                            className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-zinc-950 hover:bg-zinc-800 border border-zinc-700/80 text-xs text-zinc-200 cursor-pointer select-none"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedBatchKeys.has(cardKey)}
+                              disabled={isBatchDownloading}
+                              onChange={() => toggleBatchKey(cardKey)}
+                              className="rounded border-zinc-600 bg-zinc-900 text-indigo-500 focus:ring-indigo-500 cursor-pointer"
+                            />
+                            <span>Batch</span>
+                          </label>
+                        )}
                         {item.civitaiUrl && (
                           <a
                             href={item.civitaiUrl}

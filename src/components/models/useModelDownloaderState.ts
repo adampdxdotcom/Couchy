@@ -21,6 +21,7 @@ export function useModelDownloaderState(
   >([]);
   const [isSearchingExt, setIsSearchingExt] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchNotice, setSearchNotice] = useState<string | null>(null);
   const [downloads, setDownloads] = useState<any[]>([]);
 
   const refreshDownloads = async () => {
@@ -89,9 +90,11 @@ export function useModelDownloaderState(
     const qToUse = customQ !== undefined ? customQ : extQuery;
     setIsSearchingExt(true);
     setSearchError(null);
+    setSearchNotice(null);
     try {
       const res = await api.searchModels(qToUse, extTypeFilter);
       setSearchResults(res.items || []);
+      setSearchNotice(res.notice || null);
       setSearchBatchTimestamp(Date.now());
     } catch (err: any) {
       setSearchError(err.message || 'External model search failed');
@@ -112,6 +115,8 @@ export function useModelDownloaderState(
     setActivePreviewDownloads,
     isSearchingExt,
     searchError,
+    searchNotice,
+    setSearchNotice,
     downloads,
     refreshDownloads,
     handleExternalSearch,

@@ -450,6 +450,8 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
           setActivePreviewDownloads={downloader.setActivePreviewDownloads}
           isSearchingExt={downloader.isSearchingExt}
           searchError={downloader.searchError}
+          searchNotice={downloader.searchNotice}
+          onDismissSearchNotice={() => downloader.setSearchNotice(null)}
           downloads={downloader.downloads}
           pillTypeSettings={pillTypeSettings}
           onSearch={downloader.handleExternalSearch}

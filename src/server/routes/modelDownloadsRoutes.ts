@@ -5,7 +5,7 @@ import { parsePreviewImagesJson } from '../services/civitaiMetadataService.ts';
 import {
   searchCivitaiModels,
   searchHuggingFaceModels,
-  smartSearchModels,
+  smartSearchModelsWithNotice,
   startConfirmedModelDownload,
 } from '../services/modelManagerService.ts';
 import {
@@ -30,10 +30,11 @@ modelDownloadsRouter.get('/models/search', async (req, res) => {
   try {
     const q = String(req.query.q || '');
     const type = String(req.query.type || '');
-    const items = await smartSearchModels(q, type);
-    res.json({ items });
+    const result = await smartSearchModelsWithNotice(q, type);
+    res.json({ items: result.items, notice: result.notice ?? null });
   } catch (err: any) {
-    res.status(502).json({ error: err?.message || 'Model search failed' });
+    const status = Number(err?.statusCode) || 502;
+    res.status(status).json({ error: err?.message || 'Model search failed' });
   }
 });
 

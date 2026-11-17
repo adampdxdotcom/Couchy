@@ -30,6 +30,8 @@ import {
   parseHuggingFaceRepoAndFile,
   resolveDirectModelUrl,
 } from './modelDownloadResolverService.ts';
+import { parseCivitaiShareUrl } from './civitaiImageImportService.ts';
+import { resolveCivitaiImageModelsForDownloader } from './civitaiImageDownloaderService.ts';
 import {
   classifyLoraFromMetadata,
   classifySafetensorsHeaderOnDisk,
@@ -429,6 +431,22 @@ export async function smartSearchModels(
   }
 
   return combined;
+}
+
+/**
+ * Wrapper around `smartSearchModels` that handles Civitai image/post share URLs (Krea 2 only)
+ * and returns optional status notices alongside resolved cards.
+ */
+export async function smartSearchModelsWithNotice(
+  query: string,
+  typeFilter?: string
+): Promise<{ items: ExternalModelSearchResult[]; notice: string | null }> {
+  const trimmed = query.trim();
+  if (parseCivitaiShareUrl(trimmed)) {
+    return resolveCivitaiImageModelsForDownloader(trimmed, typeFilter);
+  }
+  const items = await smartSearchModels(query, typeFilter);
+  return { items, notice: null };
 }
 
 export interface ScheduledDownloadPayload {
