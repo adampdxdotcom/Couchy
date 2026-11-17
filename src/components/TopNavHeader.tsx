@@ -190,7 +190,7 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
       </div>
 
       {/* Zone 2: Navigation Links (Desktop only, hidden on mobile) */}
-      <nav className="hidden md:flex items-center gap-6 overflow-x-auto">
+      <nav className="hidden md:flex items-center gap-6 overflow-x-auto min-w-0">
         {navItems.map((item) => {
           const isActive = activeTab === item.id;
           return (
@@ -218,14 +218,18 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
             setDropdownOpen((prev) => !prev);
             if (mobileMenuOpen) setMobileMenuOpenState(false);
           }}
-          className={`relative overflow-hidden inline-flex items-center justify-between gap-2 px-2.5 sm:px-3.5 py-1.5 rounded-xl border text-xs font-medium transition-all min-w-[140px] xs:min-w-[180px] sm:min-w-[230px] max-w-[190px] xs:max-w-[240px] sm:max-w-[340px] cursor-pointer ${
+          className={`relative overflow-hidden inline-flex items-center justify-between gap-2 px-2.5 sm:px-3.5 py-1.5 rounded-xl border text-xs font-medium transition-colors w-[170px] sm:w-[250px] lg:w-[270px] shrink-0 cursor-pointer ${
             activeToast
               ? getToastPillStyle(activeToast.type)
               : isComfyBusy
               ? 'bg-zinc-900 border-indigo-500/50 text-indigo-100'
               : 'bg-zinc-900/90 hover:bg-zinc-900 border-zinc-800 text-zinc-300'
           }`}
-          title="Click to view recent messages and ComfyUI status"
+          title={
+            activeToast?.text ||
+            messages[0]?.text ||
+            'Click to view recent messages and ComfyUI status'
+          }
         >
           {/* Progress Bar Fill when ComfyUI is actively running and no 3-second toast is overriding */}
           {!activeToast && isComfyBusy && comfyStatus.progressPercent !== null && (

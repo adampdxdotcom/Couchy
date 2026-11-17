@@ -26,7 +26,7 @@ Couchy bridges raw ComfyUI output folders and an organized creative studio—let
   - [Image Inspector, Series Stacks & A/B Split Compare](#image-inspector-series-stacks--ab-split-compare)
   - [Characters, Portrait Framing & Assisted Identification](#characters-portrait-framing--assisted-identification)
   - [Generation Studio](#generation-studio)
-  - [LoRAs, Base Models & Downloader](#loras-base-models--downloader)
+  - [LoRAs, Base Models, Presets & Downloader](#loras-base-models-presets--downloader)
   - [Workflows & Structured Node Editor](#workflows--structured-node-editor)
   - [System Administration & In-App Help](#system-administration--in-app-help)
 - [Keyboard Shortcuts & Hotkeys](#keyboard-shortcuts--hotkeys)
@@ -192,9 +192,10 @@ The sticky top bar spans every workspace:
 
 The **Quick Gen Box** is a collapsible bottom bar accessible from **Gallery**, **Characters**, **LoRAs & Models**, and **Workflow** (toggleable globally under **System &rarr; Quick Gen & Pills**). Click its tab handle to minimize or expand it, and press `Enter` to submit (`Shift+Enter` for a new line).
 
-- **`@Character`, `@LoRA` & `@Model` Mention Picker**:
-  - Type `@` (or click **`+`**) to search **Characters**, **LoRAs**, and **Base Models** alongside matching reference image prompts.
-  - Selections attach color-coded **Pill Badges** above the prompt (blue for characters, amber for LoRAs, green for user-selected Base Models) that automatically inject LoRAs, weights, trigger words, Base Model overrides, and character workflows on submission.
+- **`@Character`, `@LoRA`, `@Model` & `@Preset` Mention Picker**:
+  - Type `@` (or click **`+`**) to search **Characters**, **LoRAs**, **Base Models**, and **LoRA Presets** alongside matching reference image prompts.
+  - Selections attach color-coded **Pill Badges** above the prompt (blue for characters, amber for LoRAs, green for user-selected Base Models, and distinct custom preset colors such as fuchsia/cyan/orange/lime/pink/purple for **Presets**) that automatically inject LoRAs, weights, trigger words, Base Model overrides, and character workflows on submission.
+  - Attaching a **Preset** loads its bundled Base Model (or leaves the system workflow default when none is set) and up to 5 LoRAs at their saved preset default strengths—each LoRA pill remains individually editable or removable for that run.
   - Click any LoRA pill's strength value (e.g., `0.8x`) to adjust it inline (`-10.0` to `+10.0`, or nudge with `↑`/`↓`) for the current generation without changing system defaults. *(Base Models are user-selected only and are never auto-picked by the **Agent**.)*
 
 - **Face Scan (Visual Character Matching on Uploads)**:
@@ -210,7 +211,7 @@ The **Quick Gen Box** is a collapsible bottom bar accessible from **Gallery**, *
   - **Optional Inspiration Archiving (`Inspo`)**: When **Save Uploaded Prompt Images (1MP)** is turned **On** in **System**, interrogated uploads are saved and automatically placed as the cyan **`Inspo`** Step 1 tile on the resulting **Series Stack** (excluded from standalone gallery cards and **Stats** totals). Turn it **Off** anytime to interrogate without saving uploads or starting reference stacks.
 
 - **Agent (`Agent` Toggle)**:
-  - Opens an inline chat drawer inside the **Quick Gen Box** (with a **Clear** button to reset the conversation) and can auto-attach up to 3 relevant non-character `@mention` LoRAs that have Agent descriptions configured, while respecting manual removals.
+  - Opens an inline chat drawer inside the **Quick Gen Box** (with a **Clear** button to reset the conversation) and can auto-attach up to 3 relevant non-character `@mention` LoRAs—or 1 matching **Preset**—that have **Agent Descriptions** configured, while respecting manual removals.
   - **Iterative Stack Mode (`x1`)**: Produces a **Proposed Prompt** card with structured scene phrasing that locks earlier details across follow-up turns.
   - **Multi-Shot Set Mode (`x2`–`x8`)**: Given one theme, the **Agent** generates a **Set Concept** card outlining medium, wardrobe plan, lighting, and shot progression. Choose **`Preview Shots (xN)`** to inspect, hand-edit, or **Re-expand** individual shots before submitting, or **`Expand & Submit (xN)`** to queue the **Multi-Shot Set** directly. Batch count resets to `x1` after submission or when reopening from an image or stack.
 
@@ -239,8 +240,9 @@ The **Quick Gen Box** is a collapsible bottom bar accessible from **Gallery**, *
   - **Iterative Stack**: Working with the **Agent** to refine a single photo concept across multiple turns (plus any upscales or **Branch #N** offshoots). Continuing from the latest step overlays live `%` progress on that stack card and appends in place; branching from an earlier step splits into a new **Iterative Stack**.
   - **Multi-Shot Set**: Giving the **Agent** (or **Quick Gen Box** / **Generation Studio**) one idea or prompt to generate multiple distinct shots (`x2`–`x8`) together. Grid cards disable whole-set **Agent** iteration; open the Inspector or **Series Mini Gallery (`S`)** and click **Iterate / Iterate #N** on a single shot to start a new **Iterative Stack** from it.
   - Stacks started from an archived upload display **`Inspo`** as Step 1. Only one step per stack can be hearted at a time, serving as that **Series Stack**'s gallery **Poster Image**.
-- **Full-Screen Inspector & Loupe**:
+- **Full-Screen Inspector, Loupe & Quick Preset Capture**:
   - Toggle fullscreen (`Space`) or **Loupe (`L`)** (`2×`, `4×`, `1:1 Native`, click-to-pin).
+  - Click the **Create Preset** bookmark button between **Favorite** and **Delete/Reject** in the Inspector header to save the active image's Base Model and up to 5 LoRAs (including character LoRAs and exact strengths) as a reusable preset auto-named `user0`, `user1`, etc. (reusing the lowest open number).
   - The right sidebar surfaces **Assigned Character**, **Workflow & Reproducibility** (`Run Workflow` and inline `4x` ESRGAN `Upscale`), **Series Stack** strip, copyable prompts, generation parameters, LoRA weights, visual tags, custom tags, collections, and notes.
 - **A/B Split Compare**:
   - Click **Compare** in the Inspector header for **Side-by-Side** or draggable **Overlay Wipe** comparison (`Fit` vs. `100% Native`), synchronized **Dual / Split `[A | B]` Loupe (`L`)**, a filterable **Compare with...** stack picker, per-slot step switching, **Swap**, and a collapsible **Diff Drawer** highlighting prompt, parameter, and LoRA differences with per-slot curation actions.
@@ -265,15 +267,19 @@ The **Quick Gen Box** is a collapsible bottom bar accessible from **Gallery**, *
 
 ---
 
-### LoRAs, Base Models & Downloader
+### LoRAs, Base Models, Presets & Downloader
 
-Open **LoRAs & Models** for three integrated tabs:
+Open **LoRAs & Models** for four integrated tabs:
 
 - **LoRA Explorer & Detail Inspector**:
   - Search by name, filename, base model, trigger word, SHA-256, or character; filter by category (`character`, `style`, `clothing`, `concept`, `pose`, `object`, `unclassified`); switch between **Grid / List**, **Hide / Unhide (`Show Hidden (N)`)**, inline **`@Mention`** checkboxes, and `@nicknames`.
   - Click any LoRA for **LoRA Detail View** (cached previews, recommended vs. default strengths, triggers, **Agent Description**, **User Notes**, Civitai/HF descriptions, linked characters, **Usage Impact Report**, and associated images).
 - **Base Models Explorer**:
   - Indexes both your ComfyUI models folder and downloads folder, switching between **Base Models (Krea 2)** *(default)* and **Support Models (CLIP / VAE / Upscalers / Other)** with Grid/List views, Hide/Unhide, `@Mention` toggles, and **Base Model Detail View**.
+- **Presets (`LoRA Presets`)**:
+  - Bundle **1 optional Base Model** (falls back to your system workflow default when omitted) + **up to 5 LoRAs** with custom per-LoRA default strengths into a single `@mention`-able preset.
+  - Click **Create Preset** (or click any saved preset pill at the top to edit) to enter click-to-select mode across read-only Base Model and LoRA cards, manage items in the 6-slot preview strip (`×` to remove, inline strength controls), and configure **Name**, **Pill Nickname**, **User Description**, **Agent Description**, and a dedicated **Pill Color** (`fuchsia`, `cyan`, `orange`, `lime`, `pink`, `purple`).
+  - Integrates with both **Quick Gen Box** `@mentions` (loading default strengths while keeping pills editable) and the **Agent** (via **Agent Description**).
 - **Metadata Enrichment (`Fetch Details`)**: Queries **Civitai first** (`.com` / `.red`) and **Hugging Face second** to import model cards, base-model tags, download URLs, and preview thumbnails.
 - **Civitai & Hugging Face Downloader**:
   - **Authentication**: Add `CIVITAI_API_KEY` or `HF_API_TOKEN` in `.env` for gated/mature weights.
@@ -350,9 +356,9 @@ Single-key shortcuts pause inside text inputs/selects and inside A/B Split Compa
 ### Customizing Agent Prompts
 
 If you edit prompts under **System &rarr; Agent**, keep these built-in contracts in mind:
-- **Primary Agent System Prompt**: Sent on every **Agent** turn (`x1` and `x2`–`x8`) and every batch expansion. Expects `<proposed_prompt>` in `x1` mode, `<proposed_concept>` in `x2`–`x8` mode, and optional `<selected_loras>` tags for auto-attaching non-character `@mention` LoRAs.
+- **Primary Agent System Prompt**: Sent on every **Agent** turn (`x1` and `x2`–`x8`) and every batch expansion. Expects `<proposed_prompt>` in `x1` mode, `<proposed_concept>` in `x2`–`x8` mode, and optional `<selected_loras>` / `<selected_preset>` tags for auto-attaching non-character `@mention` LoRAs or a saved Preset.
 - **Batch Expansion Instructions**: Appended after the Primary prompt when expanding **Multi-Shot Set** concepts or Generation Studio **Photo Set Themes** into `{count}` `<shot_1>...</shot_{count}>` tags (`4096` max tokens, `90s` timeout).
-- **Automatic Runtime Context**: Automatically injects character bio/physical guides, attached LoRA descriptions, available `@mention` LoRAs, and long-thread anchor recall beyond the 10-message chat window.
+- **Automatic Runtime Context**: Automatically injects character bio/physical guides, attached LoRA descriptions, available `@mention` LoRAs and Presets, and long-thread anchor recall beyond the 10-message chat window.
 
 ### Technical Architecture
 
@@ -366,7 +372,7 @@ Couchy runs as a single Node.js service (React + TypeScript + Tailwind CSS front
   - *Images & Metadata*: `images`, `image_metadata`, `image_loras`, `image_models`, `image_visual_tags`, `image_workflows`
   - *Series & Generations*: `image_series`, `image_series_items`, `generation_batches`, `generation_items`, `reproduction_jobs`
   - *Curation & Characters*: `ratings`, `tags`, `image_tags`, `collections`, `collection_images`, `saved_searches`, `characters`, `character_aliases`, `character_loras`, `character_workflows`, `character_face_embeddings`, `image_characters`
-  - *Models & System*: `models`, `download_jobs`, `downloaded_model_copies`, `pending_lora_character_tasks`, `workflows`, `workflow_mappings`, `prompt_templates`, `lm_studio_settings`, `lm_studio_prompt_templates`, `app_settings`, `scan_jobs`, `schema_migrations`
+  - *Models & System*: `models`, `lora_presets`, `lora_preset_items`, `download_jobs`, `downloaded_model_copies`, `pending_lora_character_tasks`, `workflows`, `workflow_mappings`, `prompt_templates`, `lm_studio_settings`, `lm_studio_prompt_templates`, `app_settings`, `scan_jobs`, `schema_migrations`
 
 ### Backup, Restore & Maintenance
 
