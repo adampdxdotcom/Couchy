@@ -35,6 +35,7 @@ export interface QuickGenPrefill {
   chatMessages?: QuickGenChatMessage[];
   seriesId?: number | null;
   branchFromImageId?: number | null;
+  stackSourceLabel?: string | null;
   timestamp: number;
 }
 

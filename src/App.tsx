@@ -511,7 +511,7 @@ export default function App() {
   };
 
   const handleReusePrompt = useCallback(
-    (img: ImageRecord) => {
+    (img: ImageRecord, options?: { stackFromSource?: boolean }) => {
       // Find character profile associated with image
       const confirmedCharLink = img.characters.find((c) => c.status === 'confirmed');
       const firstCharLink = confirmedCharLink || img.characters[0];
@@ -532,6 +532,11 @@ export default function App() {
         models
       );
 
+      const stackFromSource = Boolean(options?.stackFromSource);
+      const isFromMultiShot = img.seriesKind === 'multi_shot';
+      const hasExistingIterativeStack =
+        stackFromSource && !isFromMultiShot && Boolean(img.seriesId) && (img.seriesCount || 1) > 1;
+
       setQuickGenPrefill({
         prompt: promptText,
         character: matchedChar,
@@ -539,6 +544,13 @@ export default function App() {
         loras: img.loras || [],
         aspectRatio: targetRatio,
         batchCount: 1,
+        seriesId: stackFromSource && !isFromMultiShot ? (img.seriesId ?? null) : null,
+        branchFromImageId: stackFromSource ? img.id : null,
+        stackSourceLabel: stackFromSource
+          ? hasExistingIterativeStack
+            ? `Add to stack · ${img.filename}`
+            : `New stack · ${img.filename}`
+          : null,
         timestamp: Date.now(),
       });
 
@@ -548,11 +560,16 @@ export default function App() {
         : '';
       const loraCount = img.loras?.length || 0;
       const loraLabel = loraCount > 0 ? ` + ${loraCount} LoRA(s)` : '';
+      const stackNotice = stackFromSource
+        ? hasExistingIterativeStack
+          ? ' · adding to stack'
+          : ' · new stack'
+        : '';
       const skippedNotice = unavailableLabel
         ? ` (skipped unavailable base model: ${unavailableLabel})`
         : '';
       pushToast(
-        `Reused prompt${charLabel}${ckptLabel}${loraLabel} (${targetRatio}, 1 image) in Quick Gen${skippedNotice}`,
+        `Reused prompt${charLabel}${ckptLabel}${loraLabel} (${targetRatio}, 1 image${stackNotice}) in Quick Gen${skippedNotice}`,
         unavailableLabel ? 'warning' : 'success'
       );
     },
@@ -1063,7 +1080,7 @@ export default function App() {
           onAdvanceAfterReject={handleAdvanceAfterReject}
           onNavigateToImage={(targetId) => setInspectedImageId(targetId)}
           onOpenConversation={handleOpenConversationForImage}
-          onReusePrompt={handleReusePrompt}
+          onReusePrompt={(img) => handleReusePrompt(img, { stackFromSource: true })}
           characters={characters}
           collections={collections}
           onFilterByLora={(loraName) => {

@@ -30,8 +30,10 @@ interface QuickGenAttachmentsBarProps {
   loras?: LoraExplorerItem[];
   models?: ModelInventoryItem[];
   pillTypeSettings?: PillTypeSettings;
+  stackSourceLabel?: string | null;
   onRemoveCharacter: () => void;
   onRemoveCheckpoint?: () => void;
+  onRemoveStackTarget?: () => void;
   onRemoveLora: (loraName: string) => void;
   onUpdateLoraStrength?: (loraName: string, nextStrength: number) => void;
   onUpdateCharacterStrength?: (nextStrength: number) => void;
@@ -64,8 +66,10 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
   loras = [],
   models = [],
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
+  stackSourceLabel = null,
   onRemoveCharacter,
   onRemoveCheckpoint,
+  onRemoveStackTarget,
   onRemoveLora,
   onUpdateLoraStrength,
   onUpdateCharacterStrength,
@@ -143,7 +147,9 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
     }
   }, [editingKey, attachedCharacter, hasActiveCharLora, visibleLoras]);
 
-  if (!attachedCharacter && !attachedCheckpoint && visibleLoras.length === 0) return null;
+  if (!attachedCharacter && !attachedCheckpoint && visibleLoras.length === 0 && !stackSourceLabel) {
+    return null;
+  }
 
   const startEditing = (
     editKey: string,
@@ -235,6 +241,28 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
 
   return (
     <div className="mb-2 flex flex-wrap items-center gap-2">
+      {stackSourceLabel && (
+        <div
+          className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border border-indigo-500/50 bg-indigo-950/60 text-indigo-200 text-xs shadow-sm max-w-full"
+          title="Generated photo will be added to this image's stack (click × to generate a standalone photo instead)"
+        >
+          <Layers className="w-3.5 h-3.5 shrink-0 text-indigo-400" />
+          <span className="font-medium truncate max-w-[200px] sm:max-w-[260px]">
+            {stackSourceLabel}
+          </span>
+          {onRemoveStackTarget && (
+            <button
+              type="button"
+              onClick={onRemoveStackTarget}
+              className="text-indigo-300/80 hover:text-white cursor-pointer ml-0.5 shrink-0"
+              title="Unlink stack (generate as a separate standalone photo)"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
       {attachedCharacter && (
         <div
           className={`inline-flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-full border text-xs shadow-sm ${charStyle.pill}`}

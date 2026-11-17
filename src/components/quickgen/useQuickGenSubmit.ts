@@ -49,6 +49,7 @@ export function useQuickGenSubmit({
   const [chatMessages, setChatMessages] = useState<QuickGenChatMessage[]>([]);
   const [activeSeriesId, setActiveSeriesId] = useState<number | null>(null);
   const [branchFromImageId, setBranchFromImageId] = useState<number | null>(null);
+  const [stackSourceLabel, setStackSourceLabel] = useState<string | null>(null);
   const [inspirationFilename, setInspirationFilename] = useState<string | null>(null);
   const [isChatting, setIsChatting] = useState(false);
   const [expandingMessageId, setExpandingMessageId] = useState<string | null>(null);
@@ -324,11 +325,13 @@ export function useQuickGenSubmit({
       setChatMessages(prefillPayload.chatMessages || []);
       setActiveSeriesId(prefillPayload.seriesId ?? null);
       setBranchFromImageId(prefillPayload.branchFromImageId ?? null);
+      setStackSourceLabel(prefillPayload.stackSourceLabel ?? null);
     } else {
       setAgentEnabled(false);
       setChatMessages([]);
-      setActiveSeriesId(null);
-      setBranchFromImageId(null);
+      setActiveSeriesId(prefillPayload.seriesId ?? null);
+      setBranchFromImageId(prefillPayload.branchFromImageId ?? null);
+      setStackSourceLabel(prefillPayload.stackSourceLabel ?? null);
     }
 
     onClearPrefill?.();
@@ -444,6 +447,13 @@ export function useQuickGenSubmit({
 
   const handleRemoveCheckpoint = () => {
     setAttachedCheckpoint(null);
+  };
+
+  /** Detaches any pre-linked source stack so the next generation outputs a standalone image. */
+  const handleRemoveStackTarget = () => {
+    setActiveSeriesId(null);
+    setBranchFromImageId(null);
+    setStackSourceLabel(null);
   };
 
   const handleRemoveCharacter = () => {
@@ -749,6 +759,7 @@ export function useQuickGenSubmit({
       setExpandingMessageId(null);
       setActiveSeriesId(null);
       setBranchFromImageId(null);
+      setStackSourceLabel(null);
       setInspirationFilename(null);
       setAgentEnabled(false);
       setAttachedCharacter(null);
@@ -862,6 +873,7 @@ export function useQuickGenSubmit({
     setExpandingMessageId(null);
     setActiveSeriesId(null);
     setBranchFromImageId(null);
+    setStackSourceLabel(null);
     setInspirationFilename(null);
     setAgentEnabled(false);
     setAspectRatio(workflowDefaultAr);
@@ -905,6 +917,7 @@ export function useQuickGenSubmit({
     setActiveSeriesId,
     branchFromImageId,
     setBranchFromImageId,
+    stackSourceLabel,
     isChatting,
     expandingMessageId,
     aspectRatio,
@@ -939,6 +952,7 @@ export function useQuickGenSubmit({
     handleInterrogateImageFile,
     handleRemoveCharacter,
     handleRemoveCheckpoint,
+    handleRemoveStackTarget,
     handleRemoveLora,
     handleUpdateLoraStrength,
     handleUpdateCharacterStrength,

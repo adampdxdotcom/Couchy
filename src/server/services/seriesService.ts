@@ -296,13 +296,14 @@ export function attachGenerationItemOutputToSeries(itemId: number, imageId: numb
   if (!itemId || !imageId || imageId <= 0) return null;
   const batchMeta = db
     .prepare(
-      `SELECT gi.item_index, gb.total_count, gb.series_id, gb.branch_from_image_id, gb.inspiration_image_id, gb.chat_snapshot_json
+      `SELECT gb.id AS batch_id, gi.item_index, gb.total_count, gb.series_id, gb.branch_from_image_id, gb.inspiration_image_id, gb.chat_snapshot_json
        FROM generation_items gi
        JOIN generation_batches gb ON gb.id = gi.batch_id
        WHERE gi.id = ?`
     )
     .get(itemId) as
     | {
+        batch_id: number;
         item_index: number;
         total_count: number;
         series_id: number | null;
@@ -331,13 +332,23 @@ export function attachGenerationItemOutputToSeries(itemId: number, imageId: numb
       ? batchMeta.item_index - 1
       : null;
 
-  return attachGeneratedImageToSeries({
+  const resolvedSeriesId = attachGeneratedImageToSeries({
     imageId,
     seriesId: batchMeta.series_id,
     branchFromImageId: batchMeta.branch_from_image_id,
     chatSnapshotJson: batchMeta.chat_snapshot_json,
     preferredStepOrder,
   });
+
+  // For multi-image Quick Gen batches branching/starting from a single image, route remaining
+  // items in the same batch onto the newly created stack instead of creating separate stacks.
+  if (resolvedSeriesId && batchMeta.total_count > 1 && resolvedSeriesId !== batchMeta.series_id) {
+    db.prepare(
+      `UPDATE generation_batches SET series_id = ?, branch_from_image_id = NULL WHERE id = ?`
+    ).run(resolvedSeriesId, batchMeta.batch_id);
+  }
+
+  return resolvedSeriesId;
 }
 
 /**

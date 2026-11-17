@@ -85,7 +85,7 @@ export const InspectorPromptAndParamsSection: React.FC<
                     })
                   }
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/40 text-indigo-300 hover:text-indigo-200 font-medium cursor-pointer transition-colors"
-                  title="Load this prompt, character, base model, and LoRAs into the Quick Gen Box"
+                  title="Load into Quick Gen Box to add to this image's stack (or start a new stack)"
                 >
                   <Sparkles className="w-3 h-3" />
                   <span>Quick Gen</span>

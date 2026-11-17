@@ -485,8 +485,10 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               loras={loras}
               models={models}
               pillTypeSettings={pillTypeSettings}
+              stackSourceLabel={submitState.stackSourceLabel}
               onRemoveCharacter={submitState.handleRemoveCharacter}
               onRemoveCheckpoint={submitState.handleRemoveCheckpoint}
+              onRemoveStackTarget={submitState.handleRemoveStackTarget}
               onRemoveLora={submitState.handleRemoveLora}
               onUpdateLoraStrength={submitState.handleUpdateLoraStrength}
               onUpdateCharacterStrength={submitState.handleUpdateCharacterStrength}
@@ -517,8 +519,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               }
               onClearChat={() => {
                 submitState.setChatMessages([]);
-                submitState.setActiveSeriesId(null);
-                submitState.setBranchFromImageId(null);
+                submitState.handleRemoveStackTarget();
               }}
             />
           )}
@@ -573,6 +574,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             {(submitState.prompt.length > 0 ||
               Boolean(submitState.attachedCharacter) ||
               Boolean(submitState.attachedCheckpoint) ||
+              Boolean(submitState.stackSourceLabel) ||
               submitState.attachedLoras.length > 0 ||
               submitState.chatMessages.length > 0) && (
               <button
