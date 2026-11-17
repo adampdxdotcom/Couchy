@@ -63,6 +63,11 @@ systemRouter.get('/health', (_req, res) => {
     .get() as { value: string } | undefined;
   const saveUploadedPromptImages = saveUploadedRow ? saveUploadedRow.value === '1' : false;
 
+  const saveCivitaiRow = db
+    .prepare("SELECT value FROM app_settings WHERE key = 'save_civitai_import_images'")
+    .get() as { value: string } | undefined;
+  const saveCivitaiImportImages = saveCivitaiRow ? saveCivitaiRow.value === '1' : true;
+
   const galleryPillColorsRow = db
     .prepare("SELECT value FROM app_settings WHERE key = 'gallery_pill_colors_enabled'")
     .get() as { value: string } | undefined;
@@ -105,6 +110,7 @@ systemRouter.get('/health', (_req, res) => {
       scheduledBackupHours: appConfig.scheduledBackupHours,
       quickGenBoxEnabled,
       saveUploadedPromptImages,
+      saveCivitaiImportImages,
       galleryPillColorsEnabled,
       pillTypeSettings,
       autoCleanCopiedModels: cleanupSettings.enabled,
@@ -131,6 +137,7 @@ systemRouter.patch('/config', (req, res) => {
       scheduledBackupHours,
       quickGenBoxEnabled,
       saveUploadedPromptImages,
+      saveCivitaiImportImages,
       galleryPillColorsEnabled,
       pillTypeSettings,
     } = req.body || {};
@@ -173,6 +180,13 @@ systemRouter.patch('/config', (req, res) => {
          VALUES ('save_uploaded_prompt_images', ?, datetime('now'))
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
       ).run(saveUploadedPromptImages ? '1' : '0');
+    }
+    if (saveCivitaiImportImages !== undefined) {
+      db.prepare(
+        `INSERT INTO app_settings (key, value, updated_at)
+         VALUES ('save_civitai_import_images', ?, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+      ).run(saveCivitaiImportImages ? '1' : '0');
     }
     if (galleryPillColorsEnabled !== undefined) {
       db.prepare(

@@ -210,6 +210,10 @@ The **Quick Gen Box** is a collapsible bottom bar accessible from **Gallery**, *
   - **Balanced Descriptions, Focus Hints & Scoped Omission**: Descriptions balance action/interaction, prominent props or machinery, setting/lighting/framing, and subject details/exposure. Any text already in the prompt box is treated as a priority hint. When a character is attached (manually or via **Face Scan**), only **hair color and eye color** are omitted—preserving hairstyles, poses, outfits, nudity/exposure, and props.
   - **Optional Inspiration Archiving (`Inspo`)**: When **Save Uploaded Prompt Images (1MP)** is turned **On** in **System**, interrogated uploads are saved and automatically placed as the cyan **`Inspo`** Step 1 tile on the resulting **Series Stack** (excluded from standalone gallery cards and **Stats** totals). Turn it **Off** anytime to interrogate without saving uploads or starting reference stacks.
 
+- **Civitai Image/Post URL Import (Empty Quick Gen Only)**:
+  - Paste (`Ctrl+V` / `Cmd+V`) any `civitai.com` or `civitai.red` `/images/<id>` or `/posts/<id>` share URL into an **empty Quick Gen Box** to populate its prompt, closest aspect ratio, and any matching locally installed **Base Model** and up to **5 LoRAs** at their exact weights (any missing models or unavailable fields are omitted gracefully so you can add or swap models right away).
+  - **Automatic 1MP Stack Photo (`Save Civitai Import Images (1MP)`)**: When enabled in **System** *(**On** by default)*, Couchy fetches the source photo server-side (skipping videos/non-images gracefully), downscales it to ≤ 1MP JPEG in `data/uploaded`, and silently attaches it as the **`Inspo`** Step 1 tile on the resulting **Series Stack**.
+
 - **Agent (`Agent` Toggle)**:
   - Opens an inline chat drawer inside the **Quick Gen Box** (with a **Clear** button to reset the conversation) and can auto-attach up to 3 relevant non-character `@mention` LoRAs—or 1 matching **Preset**—that have **Agent Descriptions** configured, while respecting manual removals.
   - **Iterative Stack Mode (`x1`)**: Produces a **Proposed Prompt** card with structured scene phrasing that locks earlier details across follow-up turns.
@@ -283,7 +287,8 @@ Open **LoRAs & Models** for four integrated tabs:
 - **Metadata Enrichment (`Fetch Details`)**: Queries **Civitai first** (`.com` / `.red`) and **Hugging Face second** to import model cards, base-model tags, download URLs, and preview thumbnails.
 - **Civitai & Hugging Face Downloader**:
   - **Authentication**: Add `CIVITAI_API_KEY` or `HF_API_TOKEN` in `.env` for gated/mature weights.
-  - **Smart Inputs**: Supports keywords, `civitai.com` / `civitai.red` URLs, SHA-256 or AutoV2 hashes, Hugging Face `owner/repo` IDs/URLs, and direct weight links.
+  - **Smart Inputs**: Supports keywords, `civitai.com` / `civitai.red` model URLs, **Civitai image/post share URLs (Krea 2 only)**, SHA-256 or AutoV2 hashes, Hugging Face `owner/repo` IDs/URLs, and direct weight links.
+  - **Civitai Image Multi-Model Resolution & Batch Download All**: Paste a `civitai.com` / `civitai.red` `/images/<id>` or `/posts/<id>` share URL and click **Search Models** to resolve all linked **Krea 2** LoRAs and Base Models into individual cards *(images/models from other architectures such as SDXL, Pony, or Flux are rejected or skipped with an explicit notice that only Krea 2 images are supported)*. Use per-card **Batch** checkboxes, **Select All**, and **Download All** to queue multiple missing models sequentially.
   - **Link Healing, Versions & Early Access**: Mature/delisted Civitai entries automatically retry `civitai.red` (**Heal Civitai Links** repairs existing records). Switch versions in-card (`✓ Installed`, `⏳ Early Access`), detect already-installed weights, and **Schedule Download** for Early Access unlocks.
   - **`@Mention` & Character Automation on Download**: Set `@mention` nickname and activation right on LoRA download, or enable automatic character creation + headshot generation once ComfyUI detects the new file.
 
@@ -301,11 +306,11 @@ Open **LoRAs & Models** for four integrated tabs:
 
 ### System Administration & In-App Help
 
-The **System** workspace includes the top **Save Uploaded Prompt Images (1MP)** toggle (controlling **Quick Gen Box** `Inspo` archiving) and 8 tabs:
+The **System** workspace includes the top **Save Uploaded Prompt Images (1MP)** and **Save Civitai Import Images (1MP)** toggles (controlling **Quick Gen Box** `Inspo` Step 1 archiving) and 8 tabs:
 
 1. **Search**: Enable/disable local visual keyword tagging, switch **CPU vs. NVIDIA GPU**, adjust confidence threshold, and **Pause / Resume**, **Scan Unindexed**, or **Rescan All**.
 2. **Quick Gen & Pills**: Toggle the **Quick Gen Box**, **Gallery Pill Colors**, and per-type `@mention` insertion rules (Characters, Base Models, LoRAs).
-3. **Stats**: Adjustable **Day / Week / Month / Year** generation activity charts (excluding uploaded `Inspo` references).
+3. **Stats**: Adjustable **Day / Week / Month / Year** generation activity charts (excluding uploaded `Inspo` references) plus **Storage Usage** breakdowns for ComfyUI assets (LoRAs, Base Models, photos) and local Couchy storage (imported 1MP reference photos, thumbnails, and models queued for cleanup).
 4. **Agent**: Choose Local LLM endpoint presets, test **Vision vs. Text-Only** capabilities, and edit or reset the **Primary Agent System Prompt** and **Batch Expansion Instructions** (**Editorial Variety**, **Storyboard Arc**, **Lookbook Angles**).
 5. **ComfyUI**: Test your ComfyUI connection, inspect active paths, and enable **Auto-Clean Copied Downloads** (safely removes duplicate files from Couchy's downloads folder once verified identical inside your read-only ComfyUI models folder).
 6. **Database**: Create integrity-verified SQLite backups and export/import portable JSON annotation backups.
@@ -329,7 +334,7 @@ Single-key shortcuts pause inside text inputs/selects and inside A/B Split Compa
 | **Gallery** | `Shift + Click` / `Esc` | Select contiguous range / clear selection or close nav menus |
 | **Quick Gen Box** | `Enter` / `Shift+Enter` | Submit prompt or **Agent** turn / newline |
 | **Quick Gen Box** | `↑` `↓` / `Enter` `Tab` / `Esc` | Navigate, pick, or close `@Mention` popover |
-| **Quick Gen Box** | `Ctrl+V` / `Cmd+V` | Paste clipboard image for 1MP interrogation |
+| **Quick Gen Box** | `Ctrl+V` / `Cmd+V` | Paste clipboard image for 1MP interrogation, or paste a Civitai image/post URL into an empty box |
 
 ---
 

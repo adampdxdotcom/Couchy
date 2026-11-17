@@ -459,11 +459,12 @@ export function useQuickGenSubmit({
     !attachedCheckpoint &&
     attachedLoras.length === 0 &&
     !stackSourceLabel &&
+    !inspirationFilename &&
     chatMessages.length === 0;
 
   /**
-   * Imports prompt, aspect ratio, and locally available Base Model / LoRAs from a Civitai image URL.
-   * Only runs when Quick Gen is empty; anything unavailable in Couchy is omitted gracefully.
+   * Imports prompt, aspect ratio, 1MP inspiration image, and locally available Base Model / LoRAs
+   * from a Civitai image URL. Only runs when Quick Gen is empty; unavailable items fail gracefully.
    */
   const handleImportCivitaiUrl = async (rawUrl: string) => {
     if (isImportingCivitai || isInterrogating) return;
@@ -478,7 +479,10 @@ export function useQuickGenSubmit({
     try {
       const res = await api.importCivitaiImageUrl(rawUrl);
       const hasAnyPayload =
-        Boolean(res.prompt) || Boolean(res.checkpointName) || res.loras.length > 0;
+        Boolean(res.prompt) ||
+        Boolean(res.checkpointName) ||
+        res.loras.length > 0 ||
+        Boolean(res.inspirationFilename);
 
       if (!hasAnyPayload) {
         onPushToast(
@@ -488,6 +492,7 @@ export function useQuickGenSubmit({
         return;
       }
 
+      if (res.inspirationFilename) setInspirationFilename(res.inspirationFilename);
       if (res.prompt) setPrompt(res.prompt);
       if (res.aspectRatio) setAspectRatio(res.aspectRatio);
       if (res.checkpointName) setAttachedCheckpoint(res.checkpointName);
@@ -519,6 +524,7 @@ export function useQuickGenSubmit({
       focusInputAtEnd(60, true);
 
       const importedParts: string[] = [];
+      if (res.inspirationFilename) importedParts.push('1MP photo');
       if (res.prompt) importedParts.push('prompt');
       if (res.checkpointName) importedParts.push('base model');
       if (res.loras.length > 0) {
@@ -1203,6 +1209,7 @@ export function useQuickGenSubmit({
     isInterrogating,
     isImportingCivitai,
     isQuickGenEmpty,
+    hasInspirationImage: Boolean(inspirationFilename),
     modelMatchEnabled,
     isMatchingFace,
     toggleModelMatch,

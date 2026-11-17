@@ -596,6 +596,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               Boolean(submitState.attachedPreset) ||
               Boolean(submitState.attachedCheckpoint) ||
               Boolean(submitState.stackSourceLabel) ||
+              submitState.hasInspirationImage ||
               submitState.attachedLoras.length > 0 ||
               submitState.chatMessages.length > 0) && (
               <button

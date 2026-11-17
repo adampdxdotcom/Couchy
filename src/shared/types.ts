@@ -909,6 +909,7 @@ export interface CivitaiImageImportResult {
   skippedCheckpoint: string | null;
   sourceBaseModel: string | null;
   hasPromptMetadata: boolean;
+  inspirationFilename?: string | null;
 }
 
 export {

@@ -84,6 +84,9 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   const [saveUploadedPromptImages, setSaveUploadedPromptImages] = useState<boolean>(
     healthData?.config?.saveUploadedPromptImages === true
   );
+  const [saveCivitaiImportImages, setSaveCivitaiImportImages] = useState<boolean>(
+    healthData?.config?.saveCivitaiImportImages !== false
+  );
   const [galleryPillColorsEnabled, setGalleryPillColorsEnabled] = useState<boolean>(
     healthData?.config?.galleryPillColorsEnabled === true
   );
@@ -104,6 +107,9 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
     if (healthData?.config?.saveUploadedPromptImages !== undefined) {
       setSaveUploadedPromptImages(healthData.config.saveUploadedPromptImages === true);
     }
+    if (healthData?.config?.saveCivitaiImportImages !== undefined) {
+      setSaveCivitaiImportImages(healthData.config.saveCivitaiImportImages !== false);
+    }
     if (healthData?.config?.galleryPillColorsEnabled !== undefined) {
       setGalleryPillColorsEnabled(healthData.config.galleryPillColorsEnabled === true);
     }
@@ -116,6 +122,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   }, [
     healthData?.config?.quickGenBoxEnabled,
     healthData?.config?.saveUploadedPromptImages,
+    healthData?.config?.saveCivitaiImportImages,
     healthData?.config?.galleryPillColorsEnabled,
     healthData?.config?.pillTypeSettings,
     healthData?.visualTagger,
@@ -292,6 +299,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       scheduledBackupHours: scheduledHours,
       quickGenBoxEnabled,
       saveUploadedPromptImages,
+      saveCivitaiImportImages,
       galleryPillColorsEnabled,
       pillTypeSettings,
     });
@@ -333,6 +341,24 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       await onRefreshAll();
     } catch (err: any) {
       setBackupMsg(`Failed to update uploaded prompt images setting: ${err.message}`);
+    }
+  };
+
+  const handleToggleSaveCivitaiImportImages = async (enabled: boolean) => {
+    setSaveCivitaiImportImages(enabled);
+    try {
+      await api.updateConfig({
+        saveCivitaiImportImages: enabled,
+      });
+      setBackupMsg(
+        enabled
+          ? `Civitai URL images (1MP) will be saved to ${healthData?.config?.uploadedImagesDir || 'data/uploaded'} as stack #1.`
+          : 'Civitai URL images will not be saved to disk.'
+      );
+      setTimeout(() => setBackupMsg(null), 3000);
+      await onRefreshAll();
+    } catch (err: any) {
+      setBackupMsg(`Failed to update Civitai import images setting: ${err.message}`);
     }
   };
 
@@ -463,8 +489,10 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       {/* Compact Global Workspace UI Toggles */}
       <WorkspacePreferencesSection
         saveUploadedPromptImages={saveUploadedPromptImages}
+        saveCivitaiImportImages={saveCivitaiImportImages}
         uploadedImagesDir={healthData?.config?.uploadedImagesDir}
         onToggleSaveUploadedPromptImages={handleToggleSaveUploadedPromptImages}
+        onToggleSaveCivitaiImportImages={handleToggleSaveCivitaiImportImages}
       />
 
       {/* System Sub-Tab Navigation */}

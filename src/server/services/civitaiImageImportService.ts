@@ -1,3 +1,8 @@
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import sharp from 'sharp';
+import { appConfig } from '../config.ts';
 import { db } from '../db.ts';
 import {
   fetchCivitaiJsonWithFallback,
@@ -8,6 +13,8 @@ import { resolveClosestAspectRatio } from '../../shared/utils.ts';
 import type { CivitaiImageImportResult } from '../../shared/types.ts';
 
 const MAX_SYSTEM_LORAS = 5;
+const CIVITAI_INSPIRATION_MAX_PIXELS = 1_000_000;
+const CIVITAI_INSPIRATION_MAX_BYTES = 25 * 1024 * 1024;
 
 interface ParsedShareUrl {
   kind: 'image' | 'post';
@@ -376,6 +383,91 @@ export async function fetchCivitaiImageMetadata(
   };
 }
 
+function isSaveCivitaiImportImagesEnabled(): boolean {
+  const row = db
+    .prepare("SELECT value FROM app_settings WHERE key = 'save_civitai_import_images'")
+    .get() as { value: string } | undefined;
+  return row ? row.value === '1' : true;
+}
+
+/**
+ * Downloads a Civitai image URL server-side, downscales it to <= 1MP JPEG,
+ * and stores it in `appConfig.uploadedImagesDir` so Quick Gen can seed step #0 of a stack.
+ * Returns null gracefully if disabled, non-image (e.g. video), or CDN fetch fails.
+ */
+async function fetchAndSaveCivitaiInspirationImage(
+  imageUrl: string | null | undefined
+): Promise<{ filename: string; width: number; height: number } | null> {
+  if (!isSaveCivitaiImportImagesEnabled()) return null;
+  const trimmedUrl = String(imageUrl || '').trim();
+  if (!/^https?:\/\//i.test(trimmedUrl)) return null;
+  if (/\.(mp4|webm|mov|avi)(\?|$)/i.test(trimmedUrl)) return null;
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    const res = await fetch(trimmedUrl, {
+      signal: controller.signal,
+      headers: {
+        Accept: 'image/*,*/*;q=0.8',
+        'User-Agent': 'Couchy-ComfyUI-Gallery/1.0',
+      },
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    if (contentType && !contentType.startsWith('image/')) {
+      return null;
+    }
+
+    const arrayBuf = await res.arrayBuffer();
+    if (arrayBuf.byteLength === 0 || arrayBuf.byteLength > CIVITAI_INSPIRATION_MAX_BYTES) {
+      return null;
+    }
+
+    const inputBuf = Buffer.from(arrayBuf);
+    // Normalize EXIF orientation before computing 1MP target dimensions
+    const { data: rotatedBuf, info: rotatedInfo } = await sharp(inputBuf)
+      .rotate()
+      .toBuffer({ resolveWithObject: true });
+    const srcW = Number(rotatedInfo.width || 0);
+    const srcH = Number(rotatedInfo.height || 0);
+    if (srcW <= 0 || srcH <= 0) return null;
+
+    const totalPixels = srcW * srcH;
+    let pipeline = sharp(rotatedBuf);
+    let outW = srcW;
+    let outH = srcH;
+
+    if (totalPixels > CIVITAI_INSPIRATION_MAX_PIXELS) {
+      const scale = Math.sqrt(CIVITAI_INSPIRATION_MAX_PIXELS / totalPixels);
+      outW = Math.max(1, Math.round(srcW * scale));
+      outH = Math.max(1, Math.round(srcH * scale));
+      pipeline = pipeline.resize(outW, outH, { fit: 'inside', withoutEnlargement: true });
+    }
+
+    const { data: outBuf, info: outInfo } = await pipeline
+      .jpeg({ quality: 88, mozjpeg: true })
+      .toBuffer({ resolveWithObject: true });
+    if (outBuf.length === 0) return null;
+
+    fs.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
+    const hashPrefix = crypto.createHash('sha256').update(outBuf).digest('hex').slice(0, 10);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `civitai-1mp-${timestamp}-${hashPrefix}.jpg`;
+    fs.writeFileSync(path.join(appConfig.uploadedImagesDir, filename), outBuf);
+
+    return {
+      filename,
+      width: Number(outInfo.width || outW),
+      height: Number(outInfo.height || outH),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fetches metadata for a shared Civitai image/post URL and resolves any matching locally
  * installed Base Model and up to 5 LoRAs. Anything unavailable in Couchy is omitted gracefully.
@@ -387,6 +479,8 @@ export async function importCivitaiImageForQuickGen(
     parsed,
     activeDomain,
     targetImageId,
+    restItem,
+    trpcGenData,
     sourceBaseModel,
     rawPrompt,
     negativePrompt,
@@ -394,6 +488,21 @@ export async function importCivitaiImageForQuickGen(
     loraCandidates,
     baseCandidates,
   } = await fetchCivitaiImageMetadata(rawUrl);
+
+  const rawMediaType = String(restItem?.type || trpcGenData?.type || '').toLowerCase();
+  const sourceImageUrl =
+    rawMediaType === 'video'
+      ? null
+      : (typeof restItem?.url === 'string' && restItem.url.trim()) ||
+        (typeof trpcGenData?.url === 'string' && trpcGenData.url.trim()) ||
+        null;
+
+  const savedInspiration = await fetchAndSaveCivitaiInspirationImage(sourceImageUrl);
+  const resolvedAspectRatio =
+    aspectRatio ||
+    (savedInspiration && savedInspiration.width > 0 && savedInspiration.height > 0
+      ? resolveClosestAspectRatio(savedInspiration.width, savedInspiration.height)
+      : null);
 
   const baseCandidate = baseCandidates[0] || null;
 
@@ -460,12 +569,13 @@ export async function importCivitaiImageForQuickGen(
     imageId: targetImageId || parsed.id,
     prompt: cleanedPrompt,
     negativePrompt,
-    aspectRatio,
+    aspectRatio: resolvedAspectRatio,
     checkpointName,
     loras: matchedLoras,
     skippedLoras,
     skippedCheckpoint,
     sourceBaseModel,
     hasPromptMetadata: cleanedPrompt.length > 0,
+    inspirationFilename: savedInspiration?.filename ?? null,
   };
 }
