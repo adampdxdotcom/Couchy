@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BarChart3, Calendar, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import { api } from '../../api/client.ts';
+import { StorageUsageCard } from './StorageUsageCard.tsx';
 import type {
   GenerationStatsBucket,
   GenerationStatsResponse,
@@ -516,6 +517,9 @@ export const StatsSection: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Storage Usage Breakdown */}
+      <StorageUsageCard />
     </div>
   );
 };

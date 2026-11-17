@@ -30,6 +30,7 @@ import {
   getHelpDocsPayload,
 } from '../services/helpDocsService.ts';
 import { getGenerationStats } from '../services/statsService.ts';
+import { getStorageUsageStats } from '../services/storageStatsService.ts';
 import { normalizePillTypeSettings } from '../../shared/pillSettings.ts';
 
 export const systemRouter = Router();
@@ -534,5 +535,18 @@ systemRouter.get('/stats/generations', (req, res) => {
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to compute generation stats' });
+  }
+});
+
+/**
+ * GET /api/stats/storage
+ * Returns ComfyUI cached model/photo usage alongside local uploaded, thumbnail, and cleanup queue usage.
+ */
+systemRouter.get('/stats/storage', async (_req, res) => {
+  try {
+    const result = await getStorageUsageStats();
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to compute storage usage stats' });
   }
 });

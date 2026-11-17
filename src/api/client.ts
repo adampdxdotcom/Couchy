@@ -28,6 +28,7 @@ import type {
   StatsGranularity,
   StatsPeriod,
   GenerationStatsResponse,
+  StorageUsageStatsResponse,
   VisualTagItem,
   VisualTaggerStatus,
   WorkflowLibraryItem,
@@ -766,4 +767,6 @@ export const api = {
     });
     return requestJson<GenerationStatsResponse>(`/api/stats/generations?${qs.toString()}`);
   },
+
+  getStorageStats: () => requestJson<StorageUsageStatsResponse>('/api/stats/storage'),
 };

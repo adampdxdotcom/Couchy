@@ -863,6 +863,33 @@ export interface GenerationStatsResponse {
   buckets: GenerationStatsBucket[];
 }
 
+export interface StorageCategoryStat {
+  count: number;
+  sizeBytes: number;
+  unsizedCount?: number;
+}
+
+export interface StorageUsageStatsResponse {
+  comfy: {
+    loras: StorageCategoryStat;
+    baseModels: StorageCategoryStat;
+    photos: StorageCategoryStat;
+    totalBytes: number;
+  };
+  local: {
+    importedImages: StorageCategoryStat;
+    thumbnails: StorageCategoryStat;
+    pendingDeleteModels: StorageCategoryStat & {
+      eligibleCount: number;
+      retentionHours: number;
+      lastScanAt: string | null;
+    };
+    totalBytes: number;
+  };
+  totalTrackedBytes: number;
+  generatedAt: string;
+}
+
 export {
   ASPECT_RATIO_PRESETS,
   RESOLUTION_SELECTOR_OPTIONS,
