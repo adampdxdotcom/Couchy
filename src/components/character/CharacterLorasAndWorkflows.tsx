@@ -65,7 +65,7 @@ export const CharacterLorasAndWorkflows: React.FC<CharacterLorasAndWorkflowsProp
   onQuickReject,
 }) => {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
       {/* Highest-Rated Images (2x2 Scrollable Spotlight Grid) */}
       <CharacterHighestRatedCard
         character={character}

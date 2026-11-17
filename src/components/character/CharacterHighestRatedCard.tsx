@@ -35,8 +35,8 @@ export const CharacterHighestRatedCard: React.FC<CharacterHighestRatedCardProps>
   onQuickReject,
 }) => {
   return (
-    <div className="min-w-0 bg-zinc-900 border border-zinc-800/80 rounded-xl p-4 sm:p-5 space-y-3 text-xs overflow-hidden flex flex-col">
-      <div className="flex items-center justify-between gap-2">
+    <div className="min-w-0 h-[480px] sm:h-[580px] lg:h-[660px] bg-zinc-900 border border-zinc-800/80 rounded-xl p-4 sm:p-5 flex flex-col gap-3 text-xs overflow-hidden">
+      <div className="flex items-center justify-between gap-2 shrink-0">
         <div>
           <h3 className="text-sm font-display font-semibold text-zinc-100 flex items-center gap-1.5">
             <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400 shrink-0" />
@@ -53,26 +53,28 @@ export const CharacterHighestRatedCard: React.FC<CharacterHighestRatedCardProps>
       </div>
 
       {images.length === 0 ? (
-        <div className="bg-zinc-950/60 border border-zinc-800/70 rounded-lg px-3.5 py-6 text-center text-zinc-500">
+        <div className="flex-1 min-h-0 flex items-center justify-center bg-zinc-950/60 border border-zinc-800/70 rounded-lg px-3.5 py-6 text-center text-zinc-500">
           No 4★ or 5★ images yet for {character.name}.
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3 max-h-[580px] overflow-y-auto pr-1">
-          {images.map((img) => (
-            <CharacterImageTile
-              key={img.id}
-              img={img}
-              character={character}
-              activePortraitId={activePortraitId}
-              onOpenImage={onOpenImage}
-              onQuickRate={onQuickRate}
-              onQuickFavorite={onQuickFavorite}
-              onSetPortrait={onSetPortrait}
-              onReusePrompt={onReusePrompt}
-              onOpenConversation={onOpenConversation}
-              onQuickReject={onQuickReject}
-            />
-          ))}
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
+          <div className="grid grid-cols-2 gap-3 content-start items-start">
+            {images.map((img) => (
+              <CharacterImageTile
+                key={img.id}
+                img={img}
+                character={character}
+                activePortraitId={activePortraitId}
+                onOpenImage={onOpenImage}
+                onQuickRate={onQuickRate}
+                onQuickFavorite={onQuickFavorite}
+                onSetPortrait={onSetPortrait}
+                onReusePrompt={onReusePrompt}
+                onOpenConversation={onOpenConversation}
+                onQuickReject={onQuickReject}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>

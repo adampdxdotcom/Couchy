@@ -54,20 +54,20 @@ export const CharacterImageTile: React.FC<CharacterImageTileProps> = ({
 
   return (
     <div
-      className={`bg-zinc-900 rounded-lg overflow-hidden group flex flex-col justify-between transition-all duration-300 ${
+      className={`bg-zinc-900 rounded-lg overflow-hidden group flex flex-col transition-all duration-300 ${
         isPortrait
-          ? 'border-2 border-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.35)] ring-1 ring-amber-400/50'
+          ? 'border border-amber-400 shadow-[0_0_15px_rgba(251,191,36,0.35)] ring-1 ring-amber-400/80'
           : 'border border-zinc-800 hover:border-zinc-700'
       }`}
     >
       <div
         onClick={() => onOpenImage(img)}
-        className="relative aspect-square bg-black cursor-pointer overflow-hidden"
+        className="relative w-full aspect-square bg-black cursor-pointer overflow-hidden shrink-0"
       >
         <img
           src={img.thumbnailUrl}
           alt={img.filename}
-          className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
+          className="absolute inset-0 w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
         />
 
         {attachedGhost && <PendingGhostOverlay ghost={attachedGhost} />}

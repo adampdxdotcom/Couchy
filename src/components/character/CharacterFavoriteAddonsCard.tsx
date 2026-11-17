@@ -194,9 +194,9 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
     Boolean(selectedCheckpoint) || Boolean(selectedFriendKey) || selectedAddonKeys.size > 0;
 
   return (
-    <div className="min-w-0 bg-zinc-900 border border-zinc-800/80 rounded-xl p-4 sm:p-5 space-y-4 text-xs overflow-hidden">
+    <div className="min-w-0 h-[480px] sm:h-[580px] lg:h-[660px] bg-zinc-900 border border-zinc-800/80 rounded-xl p-4 sm:p-5 flex flex-col gap-4 text-xs overflow-hidden">
       {/* Header + Sort Toggle + New Image Action */}
-      <div className="flex flex-wrap items-start justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-2 shrink-0">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-display font-semibold text-zinc-100">
@@ -267,20 +267,21 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
         </div>
       </div>
 
-      {!hasAnyStats ? (
-        <div className="bg-zinc-950/60 border border-zinc-800/70 rounded-lg px-3.5 py-4 text-zinc-500">
-          No base model or addon LoRA usage recorded yet for this character.
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {/* Base Models / Checkpoints (Single-Select Radio) */}
-          {baseModels.length > 0 && (
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
-                <Cpu className={`w-3.5 h-3.5 shrink-0 ${baseModelStyle.icon}`} />
-                <span>Base Models ({baseModels.length})</span>
-              </div>
-              <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+      <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-4 [scrollbar-gutter:stable]">
+        {!hasAnyStats ? (
+          <div className="bg-zinc-950/60 border border-zinc-800/70 rounded-lg px-3.5 py-6 text-center text-zinc-500">
+            No base model or addon LoRA usage recorded yet for this character.
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {/* Base Models / Checkpoints (Single-Select Radio) */}
+            {baseModels.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
+                  <Cpu className={`w-3.5 h-3.5 shrink-0 ${baseModelStyle.icon}`} />
+                  <span>Base Models ({baseModels.length})</span>
+                </div>
+                <div className="space-y-1.5">
                 {baseModels.map((bm) => {
                   const isSelected = selectedCheckpoint === bm.name;
                   const availability = getModelAvailabilityInfo(bm);
@@ -359,7 +360,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                 <span>Addon LoRAs ({addonLoras.length})</span>
               </div>
 
-              <div className="space-y-1.5 max-h-80 overflow-y-auto pr-1">
+              <div className="space-y-1.5">
                 {addonLoras.map((addon) => {
                   const isSelected = selectedAddonKeys.has(addon.key);
                   const isDisabled = !addon.isInstalled || (!isSelected && atLoraLimit);
@@ -455,7 +456,7 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                 <Users className={`w-3.5 h-3.5 shrink-0 ${charStyle.icon}`} />
                 <span>Friends ({friends.length})</span>
               </div>
-              <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+              <div className="space-y-1.5">
                 {friends.map((friend) => {
                   const isSelected = selectedFriendKey === friend.key;
                   // Allow switching when another friend is already picked, block only when adding from 0 at cap
@@ -547,43 +548,44 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {/* Character Collections */}
-      {collections.length > 0 && (
-        <div className="pt-3 border-t border-zinc-800">
-          <span className="text-zinc-400 block mb-1.5">Character Collections:</span>
-          <div className="flex flex-wrap gap-1.5">
-            {collections.map((col) => {
-              const isLinked = character.collections.some((c) => c.id === col.id);
-              return (
-                <button
-                  key={col.id}
-                  type="button"
-                  onClick={async () => {
-                    const currentIds = character.collections.map((c) => c.id);
-                    const nextIds = isLinked
-                      ? currentIds.filter((id) => id !== col.id)
-                      : [...currentIds, col.id];
-                    await api.updateCharacter(character.id, {
-                      collectionIds: nextIds,
-                    });
-                    await onRefresh();
-                  }}
-                  className={`px-2.5 py-1 rounded border cursor-pointer ${
-                    isLinked
-                      ? 'bg-indigo-600/20 border-indigo-500 text-indigo-200'
-                      : 'bg-zinc-950 border-zinc-800 text-zinc-400'
-                  }`}
-                >
-                  {col.name}
-                </button>
-              );
-            })}
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Character Collections */}
+        {collections.length > 0 && (
+          <div className="pt-3 border-t border-zinc-800">
+            <span className="text-zinc-400 block mb-1.5">Character Collections:</span>
+            <div className="flex flex-wrap gap-1.5">
+              {collections.map((col) => {
+                const isLinked = character.collections.some((c) => c.id === col.id);
+                return (
+                  <button
+                    key={col.id}
+                    type="button"
+                    onClick={async () => {
+                      const currentIds = character.collections.map((c) => c.id);
+                      const nextIds = isLinked
+                        ? currentIds.filter((id) => id !== col.id)
+                        : [...currentIds, col.id];
+                      await api.updateCharacter(character.id, {
+                        collectionIds: nextIds,
+                      });
+                      await onRefresh();
+                    }}
+                    className={`px-2.5 py-1 rounded border cursor-pointer ${
+                      isLinked
+                        ? 'bg-indigo-600/20 border-indigo-500 text-indigo-200'
+                        : 'bg-zinc-950 border-zinc-800 text-zinc-400'
+                    }`}
+                  >
+                    {col.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
