@@ -171,7 +171,7 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
                         disabled={isSubmitting || isExpandingThis}
                         aria-label={isConceptCard ? 'Edit Set Concept' : 'Edit Proposed Prompt'}
                         placeholder="Edit prompt before submitting..."
-                        className="w-full text-xs text-zinc-100 bg-zinc-900/80 border border-zinc-800/80 focus:border-indigo-500 rounded-lg p-2 font-sans leading-relaxed resize-y focus:outline-none disabled:opacity-60"
+                        className="w-full text-base md:text-xs text-zinc-100 bg-zinc-900/80 border border-zinc-800/80 focus:border-indigo-500 rounded-lg p-2 font-sans leading-relaxed resize-y focus:outline-none disabled:opacity-60"
                       />
                       {msg.selectedLoras && msg.selectedLoras.length > 0 && (
                         <div className="text-[11px] text-amber-300/90 font-mono truncate">
@@ -223,7 +223,7 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
                                     onUpdateExpandedShot(msg.id, idx, e.target.value)
                                   }
                                   disabled={isSubmitting}
-                                  className="w-full px-2 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded text-zinc-100 focus:outline-none focus:border-indigo-500 resize-y"
+                                  className="w-full px-2 py-1.5 text-base md:text-xs bg-zinc-950 border border-zinc-800 rounded text-zinc-100 focus:outline-none focus:border-indigo-500 resize-y"
                                 />
                               </div>
                             ))}

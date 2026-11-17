@@ -124,6 +124,7 @@ export function deleteLmStudioGuidingTemplate(id: number): LmStudioGuidingTempla
 export function getLmStudioSettings(): {
   baseUrl: string;
   selectedModel: string;
+  followLoadedModel: boolean;
   systemPrompt: string;
   conversationSystemPrompt: string;
   batchExpansionPrompt: string;
@@ -133,6 +134,7 @@ export function getLmStudioSettings(): {
     return {
       baseUrl: appConfig.lmStudioUrl,
       selectedModel: '',
+      followLoadedModel: true,
       systemPrompt:
         'You are a creative photography director and Stable Diffusion / Flux prompt engineer.',
       conversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
@@ -142,6 +144,8 @@ export function getLmStudioSettings(): {
   return {
     baseUrl: row.base_url || appConfig.lmStudioUrl,
     selectedModel: row.selected_model || '',
+    followLoadedModel:
+      row.follow_loaded_model !== undefined ? Boolean(row.follow_loaded_model) : true,
     systemPrompt: row.system_prompt || '',
     conversationSystemPrompt:
       row.conversation_system_prompt?.trim() || DEFAULT_CONVERSATION_SYSTEM_PROMPT,
@@ -156,12 +160,14 @@ export function getLmStudioSettings(): {
 export function updateLmStudioSettings(payload: {
   baseUrl?: string;
   selectedModel?: string;
+  followLoadedModel?: boolean;
   systemPrompt?: string;
   conversationSystemPrompt?: string;
   batchExpansionPrompt?: string;
 }): {
   baseUrl: string;
   selectedModel: string;
+  followLoadedModel: boolean;
   systemPrompt: string;
   conversationSystemPrompt: string;
   batchExpansionPrompt: string;
@@ -169,6 +175,10 @@ export function updateLmStudioSettings(payload: {
   const current = getLmStudioSettings();
   const nextUrl = (payload.baseUrl ?? current.baseUrl).replace(/\/+$/, '');
   const nextModel = payload.selectedModel ?? current.selectedModel;
+  const nextFollowLoaded =
+    payload.followLoadedModel !== undefined
+      ? Boolean(payload.followLoadedModel)
+      : current.followLoadedModel;
   const nextPrompt = payload.systemPrompt ?? current.systemPrompt;
   const nextConversationPrompt =
     payload.conversationSystemPrompt !== undefined
@@ -181,14 +191,22 @@ export function updateLmStudioSettings(payload: {
 
   db.prepare(
     `UPDATE lm_studio_settings
-     SET base_url = ?, selected_model = ?, system_prompt = ?, conversation_system_prompt = ?, batch_expansion_prompt = ?, updated_at = datetime('now')
+     SET base_url = ?, selected_model = ?, follow_loaded_model = ?, system_prompt = ?, conversation_system_prompt = ?, batch_expansion_prompt = ?, updated_at = datetime('now')
      WHERE id = 1`
-  ).run(nextUrl, nextModel, nextPrompt, nextConversationPrompt, nextBatchExpansionPrompt);
+  ).run(
+    nextUrl,
+    nextModel,
+    nextFollowLoaded ? 1 : 0,
+    nextPrompt,
+    nextConversationPrompt,
+    nextBatchExpansionPrompt
+  );
 
   appConfig.lmStudioUrl = nextUrl;
   return {
     baseUrl: nextUrl,
     selectedModel: nextModel,
+    followLoadedModel: nextFollowLoaded,
     systemPrompt: nextPrompt,
     conversationSystemPrompt: nextConversationPrompt,
     batchExpansionPrompt: nextBatchExpansionPrompt,
@@ -211,7 +229,97 @@ export function getLocalLlmHeaders(includeJsonContentType = false): Record<strin
 }
 
 /**
- * Checks connectivity to Local LLM (/v1/models) and lists loaded models + guiding templates.
+ * Queries server-specific runtime endpoints to detect which chat/vision model(s)
+ * are actively loaded in memory right now:
+ * - LM Studio: GET /api/v0/models -> state === 'loaded' (excluding embeddings)
+ * - Ollama: GET /api/ps -> currently loaded models in VRAM/RAM
+ * - Single-model OpenAI servers (llama.cpp, KoboldCpp, vLLM): single entry in /v1/models
+ */
+async function detectLoadedServerModels(
+  baseUrl: string,
+  availableModels: string[]
+): Promise<{
+  loadedModels: string[];
+  detectedProvider: LmStudioStatus['detectedProvider'];
+}> {
+  const rootUrl = baseUrl.replace(/\/v1\/?$/, '');
+
+  // 1. Try LM Studio native /api/v0/models (exposes state: "loaded" | "not-loaded" and type)
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(`${rootUrl}/api/v0/models`, {
+      headers: getLocalLlmHeaders(false),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const payload = (await res.json()) as {
+        data?: Array<{ id?: string; state?: string; type?: string }>;
+      };
+      if (Array.isArray(payload?.data)) {
+        const loadedModels = payload.data
+          .filter(
+            (m) =>
+              Boolean(m?.id) &&
+              m?.state === 'loaded' &&
+              String(m?.type || '').toLowerCase() !== 'embeddings'
+          )
+          .map((m) => String(m.id));
+        return {
+          loadedModels: Array.from(new Set(loadedModels)),
+          detectedProvider: 'lmstudio',
+        };
+      }
+    }
+  } catch {
+    // Not LM Studio or endpoint unavailable; try Ollama next
+  }
+
+  // 2. Try Ollama native /api/ps (lists currently loaded models in RAM/VRAM)
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(`${rootUrl}/api/ps`, {
+      headers: getLocalLlmHeaders(false),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const payload = (await res.json()) as {
+        models?: Array<{ name?: string; model?: string }>;
+      };
+      if (Array.isArray(payload?.models)) {
+        const loadedModels = payload.models
+          .map((m) => (m?.model || m?.name || '').trim())
+          .filter(Boolean);
+        return {
+          loadedModels: Array.from(new Set(loadedModels)),
+          detectedProvider: 'ollama',
+        };
+      }
+    }
+  } catch {
+    // Generic OpenAI-compatible server
+  }
+
+  if (availableModels.length === 1) {
+    return {
+      loadedModels: [availableModels[0]],
+      detectedProvider: 'openai_single',
+    };
+  }
+
+  return {
+    loadedModels: [],
+    detectedProvider: 'openai_multi',
+  };
+}
+
+/**
+ * Checks connectivity to Local LLM (/v1/models), detects currently loaded models,
+ * resolves the active model (auto-following loaded models unless manually pinned),
+ * and returns guiding templates.
  */
 export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStudioStatus> {
   const settings = getLmStudioSettings();
@@ -237,12 +345,34 @@ export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStu
       ? data.data.map((m) => m.id).filter(Boolean)
       : [];
 
-    const selectedModel =
-      settings.selectedModel && availableModels.includes(settings.selectedModel)
-        ? settings.selectedModel
-        : availableModels[0] || settings.selectedModel || 'local-model';
+    const { loadedModels, detectedProvider } = await detectLoadedServerModels(
+      baseUrl,
+      availableModels
+    );
 
-    if (selectedModel !== settings.selectedModel && availableModels.length > 0) {
+    const savedIsAvailable =
+      Boolean(settings.selectedModel) && availableModels.includes(settings.selectedModel);
+    const savedIsLoaded =
+      Boolean(settings.selectedModel) && loadedModels.includes(settings.selectedModel);
+
+    let selectedModel: string;
+    if (settings.followLoadedModel && loadedModels.length > 0) {
+      // Follow the server's currently loaded model (keeping current choice if multiple are loaded)
+      selectedModel = savedIsLoaded ? settings.selectedModel : loadedModels[0];
+    } else if (savedIsAvailable) {
+      selectedModel = settings.selectedModel;
+    } else if (loadedModels.length > 0) {
+      selectedModel = loadedModels[0];
+    } else {
+      selectedModel = availableModels[0] || settings.selectedModel || 'local-model';
+    }
+
+    const isDefaultUrl = !customBaseUrl || baseUrl === settings.baseUrl.replace(/\/+$/, '');
+    if (
+      isDefaultUrl &&
+      selectedModel !== settings.selectedModel &&
+      (loadedModels.length > 0 || availableModels.length > 0)
+    ) {
       updateLmStudioSettings({ baseUrl, selectedModel });
     }
 
@@ -250,6 +380,9 @@ export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStu
       online: true,
       baseUrl,
       selectedModel,
+      followLoadedModel: settings.followLoadedModel,
+      loadedModels,
+      detectedProvider,
       systemPrompt: settings.systemPrompt,
       conversationSystemPrompt: settings.conversationSystemPrompt,
       defaultConversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
@@ -265,6 +398,8 @@ export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStu
       online: false,
       baseUrl,
       selectedModel: settings.selectedModel,
+      followLoadedModel: settings.followLoadedModel,
+      loadedModels: [],
       systemPrompt: settings.systemPrompt,
       conversationSystemPrompt: settings.conversationSystemPrompt,
       defaultConversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,

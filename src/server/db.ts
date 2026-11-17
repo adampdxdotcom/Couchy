@@ -770,6 +770,13 @@ export function runMigrations(): void {
           );
       `,
     },
+    {
+      version: 27,
+      name: 'lm_studio_follow_loaded_model',
+      sql: `
+        ALTER TABLE lm_studio_settings ADD COLUMN follow_loaded_model INTEGER NOT NULL DEFAULT 1;
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

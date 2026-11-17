@@ -156,7 +156,6 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             onReusePrompt
               ? (targetImg) => {
                   onReusePrompt(targetImg);
-                  onClose();
                 }
               : undefined
           }
@@ -305,7 +304,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             </div>
 
             {/* Inspector Body */}
-            <div className="p-4 sm:p-5 space-y-5 text-xs min-w-0">
+            <div className="p-4 sm:p-5 pb-20 space-y-5 text-xs min-w-0">
               <InspectorCharacterSection
                 activeImage={activeImage}
                 characters={characters}
@@ -349,6 +348,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 editablePositivePrompt={editablePositivePrompt}
                 onChangeEditablePositivePrompt={setEditablePositivePrompt}
                 onFilterByLora={onFilterByLora}
+                onReusePrompt={onReusePrompt}
                 onClose={onClose}
               />
 

@@ -649,6 +649,9 @@ export interface LmStudioStatus {
   online: boolean;
   baseUrl: string;
   selectedModel: string;
+  followLoadedModel: boolean;
+  loadedModels: string[];
+  detectedProvider?: 'lmstudio' | 'ollama' | 'openai_single' | 'openai_multi';
   systemPrompt: string;
   conversationSystemPrompt: string;
   defaultConversationSystemPrompt?: string;

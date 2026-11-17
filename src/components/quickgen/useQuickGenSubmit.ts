@@ -26,6 +26,7 @@ interface UseQuickGenSubmitParams {
   onPushToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   onClearPrefill?: () => void;
   inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  isInspectorOpen?: boolean;
 }
 
 /**
@@ -41,6 +42,7 @@ export function useQuickGenSubmit({
   onPushToast,
   onClearPrefill,
   inputRef,
+  isInspectorOpen = false,
 }: UseQuickGenSubmitParams) {
   const [prompt, setPrompt] = useState('');
   const [agentEnabled, setAgentEnabled] = useState(false);
@@ -759,7 +761,7 @@ export function useQuickGenSubmit({
       setBatchCount(1);
       setShowSettingsMenu(false);
       setIsPromptFocused(false);
-      if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      if (isInspectorOpen || (typeof window !== 'undefined' && window.innerWidth < 768)) {
         setIsMinimized(true);
       }
       onAfterReset?.();

@@ -44,6 +44,7 @@ interface FloatingQuickGenBarProps {
   onPushToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   lmStudioOnline?: boolean;
   pillTypeSettings?: PillTypeSettings;
+  isInspectorOpen?: boolean;
 }
 
 /**
@@ -63,6 +64,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   onPushToast,
   lmStudioOnline = true,
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
+  isInspectorOpen = false,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMobile, setIsMobile] = useState<boolean>(() =>
@@ -90,6 +92,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     onPushToast,
     onClearPrefill,
     inputRef,
+    isInspectorOpen,
   });
 
   const mentions = useQuickGenMentions({
@@ -130,15 +133,106 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     wasMobileRef.current = isMobile;
   }, [isMobile]);
 
-  // Prevent background page/gallery scroll on mobile while full-screen Quick Gen is open
+  const wasInspectorOpenRef = useRef(isInspectorOpen);
+  useEffect(() => {
+    if (!wasInspectorOpenRef.current && isInspectorOpen && !prefillPayload) {
+      submitState.setIsMinimized(true);
+      mentions.setMentionOpen(false);
+      submitState.setShowSettingsMenu(false);
+    }
+    wasInspectorOpenRef.current = isInspectorOpen;
+  }, [isInspectorOpen, prefillPayload]);
+
+  // Lock background document scroll and track visualViewport on mobile while Quick Gen is open
   useEffect(() => {
     if (!isMobile || submitState.isMinimized) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
+
+    const scrollY = window.scrollY;
+    const htmlStyle = document.documentElement.style;
+    const bodyStyle = document.body.style;
+
+    const prevHtmlOverflow = htmlStyle.overflow;
+    const prevBodyOverflow = bodyStyle.overflow;
+    const prevBodyPosition = bodyStyle.position;
+    const prevBodyTop = bodyStyle.top;
+    const prevBodyLeft = bodyStyle.left;
+    const prevBodyRight = bodyStyle.right;
+    const prevBodyWidth = bodyStyle.width;
+
+    htmlStyle.overflow = 'hidden';
+    bodyStyle.overflow = 'hidden';
+    bodyStyle.position = 'fixed';
+    bodyStyle.top = `-${scrollY}px`;
+    bodyStyle.left = '0';
+    bodyStyle.right = '0';
+    bodyStyle.width = '100%';
+
+    const syncVisualViewport = () => {
+      const vv = window.visualViewport;
+      if (!vv) {
+        htmlStyle.setProperty('--quickgen-vv-top', '0px');
+        htmlStyle.setProperty('--quickgen-vv-height', `${window.innerHeight}px`);
+        return;
+      }
+      htmlStyle.setProperty('--quickgen-vv-top', `${Math.max(0, Math.round(vv.offsetTop))}px`);
+      htmlStyle.setProperty('--quickgen-vv-height', `${Math.round(vv.height)}px`);
+    };
+
+    syncVisualViewport();
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', syncVisualViewport);
+    vv?.addEventListener('scroll', syncVisualViewport);
+    window.addEventListener('resize', syncVisualViewport);
+
     return () => {
-      document.body.style.overflow = prevOverflow;
+      vv?.removeEventListener('resize', syncVisualViewport);
+      vv?.removeEventListener('scroll', syncVisualViewport);
+      window.removeEventListener('resize', syncVisualViewport);
+      htmlStyle.removeProperty('--quickgen-vv-top');
+      htmlStyle.removeProperty('--quickgen-vv-height');
+      htmlStyle.overflow = prevHtmlOverflow;
+      bodyStyle.overflow = prevBodyOverflow;
+      bodyStyle.position = prevBodyPosition;
+      bodyStyle.top = prevBodyTop;
+      bodyStyle.left = prevBodyLeft;
+      bodyStyle.right = prevBodyRight;
+      bodyStyle.width = prevBodyWidth;
+      window.scrollTo(0, scrollY);
     };
   }, [isMobile, submitState.isMinimized]);
+
+  // Close popovers / Quick Gen on Escape without dismissing the underlying Image Inspector
+  useEffect(() => {
+    if (submitState.isMinimized) return;
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const target = e.target as HTMLElement | null;
+      const insideQuickGen = Boolean(target?.closest('[data-quickgen-root="true"]'));
+      if (!insideQuickGen && !(isMobile && !submitState.isMinimized)) return;
+
+      if (mentions.mentionOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        mentions.setMentionOpen(false);
+      } else if (submitState.showSettingsMenu) {
+        e.preventDefault();
+        e.stopPropagation();
+        submitState.setShowSettingsMenu(false);
+      } else if (isMobile || isInspectorOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        submitState.setIsMinimized(true);
+      }
+    };
+    window.addEventListener('keydown', handleEsc, true);
+    return () => window.removeEventListener('keydown', handleEsc, true);
+  }, [
+    isInspectorOpen,
+    isMobile,
+    mentions.mentionOpen,
+    submitState.isMinimized,
+    submitState.showSettingsMenu,
+  ]);
 
   // Close popovers when clicking outside
   useEffect(() => {
@@ -183,7 +277,10 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     return (
       <div
         ref={containerRef}
-        className="fixed bottom-0 left-0 right-0 z-40 w-full max-w-[100vw] md:bottom-5 md:left-1/2 md:-translate-x-1/2 md:w-[94vw] md:max-w-2xl pointer-events-none"
+        data-quickgen-root="true"
+        className={`fixed left-0 right-0 w-full max-w-[100vw] md:left-1/2 md:-translate-x-1/2 md:w-[94vw] md:max-w-2xl pointer-events-none ${
+          isInspectorOpen ? 'bottom-11 md:bottom-11 z-[60]' : 'bottom-0 md:bottom-5 z-40'
+        }`}
       >
         <div className="flex justify-center px-2">
           <button
@@ -216,10 +313,14 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   return (
     <div
       ref={containerRef}
+      data-quickgen-root="true"
+      data-quickgen-modal={isMobile ? 'true' : undefined}
       role={isMobile ? 'dialog' : undefined}
       aria-modal={isMobile ? true : undefined}
       aria-label={isMobile ? 'Quick Generation' : undefined}
-      className="fixed inset-0 z-50 w-full h-[100dvh] max-w-[100vw] flex flex-col bg-zinc-950 overscroll-contain md:inset-auto md:bottom-5 md:left-1/2 md:-translate-x-1/2 md:w-[94vw] md:max-w-2xl md:h-auto md:block md:bg-transparent md:z-40"
+      className={`fixed left-0 right-0 top-[var(--quickgen-vv-top,0px)] h-[var(--quickgen-vv-height,100dvh)] w-full max-w-[100vw] flex flex-col bg-zinc-950 overscroll-none md:inset-auto md:left-1/2 md:-translate-x-1/2 md:w-[94vw] md:max-w-2xl md:h-auto md:block md:bg-transparent md:overscroll-contain ${
+        isInspectorOpen ? 'z-[60] md:bottom-14 md:z-[60]' : 'z-50 md:bottom-5 md:z-40'
+      }`}
     >
       {/* Desktop Minimize Toggle Tab */}
       <div className="hidden md:flex justify-center -mb-px px-2">
@@ -323,7 +424,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             await submitState.handleInterrogateImageFile(droppedFile);
           }
         }}
-        className={`w-full max-w-full overflow-hidden bg-zinc-900/98 backdrop-blur-2xl px-3.5 sm:px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3 border-t md:border md:rounded-3xl border-zinc-800/90 shadow-2xl transition-all duration-300 ${
+        className={`w-full max-w-full overflow-hidden bg-zinc-900/98 backdrop-blur-2xl px-3.5 sm:px-4 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3 border-t md:border md:rounded-3xl border-zinc-800/90 shadow-2xl md:transition-all md:duration-300 ${
           cardShouldFillMobile
             ? 'flex-1 min-h-0 flex flex-col justify-between md:block'
             : 'shrink-0'
@@ -459,13 +560,13 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                   ? 'What do you want to create? (Type @ for character/LoRA/model, or drop/paste an image)'
                   : 'What do you want to create? (Type @ to mention a character, LoRA, or model)'
               }
-              className={`w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-sm resize-none focus:outline-none leading-relaxed transition-[height,min-height] duration-200 overflow-y-auto overscroll-contain ${
+              className={`w-full bg-transparent text-zinc-100 placeholder-zinc-500 text-base md:text-sm resize-none focus:outline-none leading-relaxed md:transition-[height,min-height] md:duration-200 overflow-y-auto overscroll-contain ${
                 submitState.agentEnabled
                   ? 'min-h-[2.75rem] max-h-24'
                   : cardShouldFillMobile
-                  ? 'h-full min-h-[6rem] md:h-auto md:min-h-[1.5rem] md:max-h-48'
+                  ? 'h-full min-h-[4rem] md:h-auto md:min-h-[1.5rem] md:max-h-48'
                   : isPromptExpanded
-                  ? 'min-h-[5.5rem] max-h-36 sm:max-h-48'
+                  ? 'min-h-[3rem] max-h-24 md:min-h-[5.5rem] md:max-h-48'
                   : 'min-h-[1.5rem] max-h-24'
               }`}
             />

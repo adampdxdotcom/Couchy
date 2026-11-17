@@ -59,7 +59,7 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             placeholder="Search characters, nicknames, or trigger words..."
-            className="w-full pl-8 pr-3 py-1.5 bg-zinc-900 border border-indigo-500/60 rounded-full text-zinc-100 placeholder-zinc-500 focus:outline-none"
+            className="w-full pl-8 pr-3 py-1.5 bg-zinc-900 border border-indigo-500/60 rounded-full text-base md:text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none"
           />
         </div>
         <button
@@ -120,9 +120,9 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
             : 'No matching characters, @mentioned LoRAs, or Base Models found.'}
         </div>
       ) : (
-        <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-cols-12 md:max-h-[380px] overflow-hidden">
+        <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-cols-12 md:max-h-[380px] overflow-y-auto overscroll-contain md:overflow-hidden">
           {/* Matches List (Below preview on mobile, Left Column on desktop) */}
-          <div className="order-2 md:order-1 md:col-span-6 flex-1 min-h-0 p-2.5 overflow-y-auto overscroll-contain touch-pan-y md:max-h-[360px] space-y-1 md:border-r border-zinc-800/70">
+          <div className="order-2 md:order-1 md:col-span-6 flex-1 min-h-[120px] md:min-h-0 p-2.5 overflow-y-auto overscroll-contain touch-pan-y md:max-h-[360px] space-y-1 md:border-r border-zinc-800/70">
             {entries.map((entry, idx) => {
               const isSelected = idx === activeIndex;
               return (
@@ -208,18 +208,18 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
           {/* Large Preview & "Add to prompt" Action (Top on mobile, Right Column on desktop) */}
           {highlightedEntry && (
             <div className="order-1 md:order-2 md:col-span-6 p-3 md:p-3.5 flex flex-col justify-between bg-zinc-950/60 border-b md:border-b-0 border-zinc-800/70 shrink-0">
-              <div className="relative rounded-2xl bg-zinc-900 border border-zinc-800/80 overflow-hidden h-36 md:h-56 flex items-center justify-center">
+              <div className="relative rounded-2xl bg-zinc-900 border border-zinc-800/80 overflow-hidden h-28 md:h-56 flex items-center justify-center">
                 {highlightedEntry.type === 'lora' ? (() => {
                   const previewLoraStyle = resolveLoraCategoryStyle(
                     highlightedEntry.loraItem?.loraCategory,
                     pillTypeSettings
                   );
                   return (
-                    <div className="flex flex-col items-center gap-2.5 p-4 text-center">
-                      <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center shadow-inner ${previewLoraStyle.iconBg}`}>
-                        <Layers className="w-6 h-6" />
+                    <div className="flex flex-col items-center gap-1 md:gap-2.5 p-2.5 md:p-4 text-center">
+                      <div className={`w-8 h-8 md:w-12 md:h-12 rounded-xl md:rounded-2xl border flex items-center justify-center shadow-inner ${previewLoraStyle.iconBg}`}>
+                        <Layers className="w-4 h-4 md:w-6 md:h-6" />
                       </div>
-                      <div className="text-sm font-semibold text-zinc-100">
+                      <div className="text-xs md:text-sm font-semibold text-zinc-100 line-clamp-1">
                         {getCleanLoraLabel(highlightedEntry.loraItem || { name: highlightedEntry.title })}
                       </div>
                       <div className="text-[11px] text-zinc-400 flex items-center gap-2">
@@ -239,17 +239,17 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                       className="w-full h-full object-cover"
                     />
                   ) : (
-                    <div className="flex flex-col items-center gap-2.5 p-4 text-center">
-                      <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center shadow-inner ${baseModelStyle.iconBg}`}>
-                        <Cpu className="w-6 h-6" />
+                    <div className="flex flex-col items-center gap-1 md:gap-2.5 p-2.5 md:p-4 text-center">
+                      <div className={`w-8 h-8 md:w-12 md:h-12 rounded-xl md:rounded-2xl border flex items-center justify-center shadow-inner ${baseModelStyle.iconBg}`}>
+                        <Cpu className="w-4 h-4 md:w-6 md:h-6" />
                       </div>
-                      <div className="text-sm font-semibold text-zinc-100">
+                      <div className="text-xs md:text-sm font-semibold text-zinc-100 line-clamp-1">
                         {getCleanModelMentionLabel(
                           highlightedEntry.modelItem || { name: highlightedEntry.title }
                         )}
                       </div>
                       {highlightedEntry.modelItem?.llmDescription && (
-                        <p className="text-[11px] text-zinc-400 line-clamp-3 max-w-xs">
+                        <p className="text-[11px] text-zinc-400 line-clamp-1 md:line-clamp-3 max-w-xs">
                           {highlightedEntry.modelItem.llmDescription}
                         </p>
                       )}

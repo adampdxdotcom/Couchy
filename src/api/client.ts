@@ -547,6 +547,7 @@ export const api = {
   updateLmStudioConfig: (payload: {
     baseUrl?: string;
     selectedModel?: string;
+    followLoadedModel?: boolean;
     systemPrompt?: string;
     conversationSystemPrompt?: string;
     batchExpansionPrompt?: string;

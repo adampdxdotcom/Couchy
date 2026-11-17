@@ -212,7 +212,7 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
             onChange={(e) => setDraftValue(e.target.value)}
             onBlur={() => commitEdit(onCommit)}
             onKeyDown={(e) => handleEditKeyDown(e, currentStrength, onCommit)}
-            className={`w-12 rounded px-1 text-[11px] font-mono tabular-nums text-center focus:outline-none ring-1 ${styleSet.strengthInput}`}
+            className={`w-14 md:w-12 rounded px-1 text-base md:text-[11px] font-mono tabular-nums text-center focus:outline-none ring-1 ${styleSet.strengthInput}`}
           />
           <span>x</span>
         </span>

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, Copy } from 'lucide-react';
+import { Check, Copy, Sparkles } from 'lucide-react';
 import type { ImageRecord } from '../../shared/types.ts';
 import { copyTextToClipboard, getModelAvailabilityInfo } from '../../shared/utils.ts';
 
@@ -8,6 +8,7 @@ interface InspectorPromptAndParamsSectionProps {
   editablePositivePrompt: string;
   onChangeEditablePositivePrompt: (value: string) => void;
   onFilterByLora: (loraFilename: string) => void;
+  onReusePrompt?: (image: ImageRecord) => void;
   onClose: () => void;
 }
 
@@ -22,6 +23,7 @@ export const InspectorPromptAndParamsSection: React.FC<
   editablePositivePrompt,
   onChangeEditablePositivePrompt,
   onFilterByLora,
+  onReusePrompt,
   onClose,
 }) => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -71,6 +73,22 @@ export const InspectorPromptAndParamsSection: React.FC<
                     <Copy className="w-3.5 h-3.5" />
                   )}
                   <span>{copiedField === 'pos' ? 'Copied' : 'Copy'}</span>
+                </button>
+              )}
+              {onReusePrompt && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onReusePrompt({
+                      ...activeImage,
+                      positivePrompt: editablePositivePrompt,
+                    })
+                  }
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/40 text-indigo-300 hover:text-indigo-200 font-medium cursor-pointer transition-colors"
+                  title="Load this prompt, character, base model, and LoRAs into the Quick Gen Box"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  <span>Quick Gen</span>
                 </button>
               )}
             </div>

@@ -627,8 +627,8 @@ export default function App() {
         timestamp: Date.now(),
       });
 
-      setInspectedImageId(null);
       if (activeTab === 'generation') {
+        setInspectedImageId(null);
         setActiveTab('gallery');
       }
       pushToast(
@@ -1040,23 +1040,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Floating Quick Generation Bar (Visible across all tabs when enabled) */}
-      {showQuickGenBar && (
-        <FloatingQuickGenBar
-          characters={characters}
-          loras={visibleLoras}
-          models={models}
-          allImages={allImages}
-          workflows={workflows}
-          prefillPayload={quickGenPrefill}
-          onClearPrefill={handleClearQuickGenPrefill}
-          onRefreshAll={refreshAll}
-          onPushToast={pushToast}
-          lmStudioOnline={lmStudioStatus.online}
-          pillTypeSettings={pillTypeSettings}
-        />
-      )}
-
       {/* Full-Resolution Lightbox & Inspector Drawer */}
       {inspectedImage && (
         <ImageInspectorDrawer
@@ -1099,6 +1082,24 @@ export default function App() {
             });
             setActiveTab('gallery');
           }}
+        />
+      )}
+
+      {/* Floating Quick Generation Bar (Visible across all tabs and over Image Inspector) */}
+      {showQuickGenBar && (
+        <FloatingQuickGenBar
+          characters={characters}
+          loras={visibleLoras}
+          models={models}
+          allImages={allImages}
+          workflows={workflows}
+          prefillPayload={quickGenPrefill}
+          onClearPrefill={handleClearQuickGenPrefill}
+          onRefreshAll={refreshAll}
+          onPushToast={pushToast}
+          lmStudioOnline={lmStudioStatus.online}
+          pillTypeSettings={pillTypeSettings}
+          isInspectorOpen={Boolean(inspectedImage)}
         />
       )}
     </div>

@@ -19,6 +19,8 @@ interface LmStudioTemplatesSectionProps {
   setLmBaseUrl: (val: string) => void;
   lmSelectedModel: string;
   setLmSelectedModel: (val: string) => void;
+  lmFollowLoadedModel: boolean;
+  onToggleFollowLoadedModel: (next: boolean, overrideSelectedModel?: string) => Promise<void>;
   isTestingLm: boolean;
   onTestLmStudio: () => Promise<void>;
   conversationSystemPrompt: string;
@@ -38,6 +40,8 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
   setLmBaseUrl,
   lmSelectedModel,
   setLmSelectedModel,
+  lmFollowLoadedModel,
+  onToggleFollowLoadedModel,
   isTestingLm,
   onTestLmStudio,
   conversationSystemPrompt,
@@ -135,19 +139,63 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
           </div>
         </div>
 
-        <div>
-          <label className="block text-zinc-400 mb-1.5">Default Local LLM Model</label>
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="block text-zinc-400">
+              {lmFollowLoadedModel ? 'Active Local LLM Model' : 'Pinned Local LLM Model'}
+            </label>
+            <div className="inline-flex items-center p-0.5 bg-zinc-950 border border-zinc-800 rounded-lg text-[11px]">
+              <button
+                type="button"
+                onClick={() => void onToggleFollowLoadedModel(true)}
+                className={`px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${
+                  lmFollowLoadedModel
+                    ? 'bg-indigo-600/25 text-indigo-300 border border-indigo-500/40'
+                    : 'text-zinc-400 hover:text-zinc-200 border border-transparent'
+                }`}
+                title="Automatically follow whichever chat or vision model is currently loaded on your LLM server (LM Studio, Ollama, etc.)"
+              >
+                Auto-follow loaded
+              </button>
+              <button
+                type="button"
+                onClick={() => void onToggleFollowLoadedModel(false)}
+                className={`px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${
+                  !lmFollowLoadedModel
+                    ? 'bg-zinc-800 text-zinc-100 border border-zinc-700'
+                    : 'text-zinc-400 hover:text-zinc-200 border border-transparent'
+                }`}
+                title="Stay pinned to your manually chosen model ID (useful for on-demand servers like Ollama)"
+              >
+                Pin manually
+              </button>
+            </div>
+          </div>
+
           {lmStatus && lmStatus.availableModels.length > 0 ? (
             <select
               value={lmSelectedModel}
-              onChange={(e) => setLmSelectedModel(e.target.value)}
+              onChange={(e) => {
+                const nextVal = e.target.value;
+                setLmSelectedModel(nextVal);
+                if (
+                  lmFollowLoadedModel &&
+                  lmStatus.loadedModels.length > 0 &&
+                  !lmStatus.loadedModels.includes(nextVal)
+                ) {
+                  void onToggleFollowLoadedModel(false, nextVal);
+                }
+              }}
               className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
             >
-              {lmStatus.availableModels.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
+              {lmStatus.availableModels.map((m) => {
+                const isLoaded = lmStatus.loadedModels.includes(m);
+                return (
+                  <option key={m} value={m}>
+                    {isLoaded ? `${m} (loaded)` : m}
+                  </option>
+                );
+              })}
             </select>
           ) : (
             <input
@@ -158,6 +206,23 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
               className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-zinc-100"
             />
           )}
+
+          <p className="text-[11px] text-zinc-500">
+            {!lmStatus?.online ? (
+              'Connect your Local LLM server to detect loaded models.'
+            ) : lmStatus.loadedModels.length > 0 ? (
+              <span className="text-emerald-400/90">
+                Loaded on server: <span className="font-mono">{lmStatus.loadedModels.join(', ')}</span>
+                {lmFollowLoadedModel ? ' · Auto-sync active' : ' · Pinned'}
+              </span>
+            ) : lmStatus.detectedProvider === 'lmstudio' ? (
+              'No model loaded in LM Studio yet — load any model in LM Studio and Couchy will follow it automatically.'
+            ) : lmStatus.detectedProvider === 'ollama' ? (
+              'No model currently in VRAM — Couchy will send the fallback model so Ollama loads it on demand.'
+            ) : (
+              'Using fallback selection from /v1/models.'
+            )}
+          </p>
         </div>
       </div>
 

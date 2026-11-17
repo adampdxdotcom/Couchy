@@ -379,8 +379,11 @@ export function useInspectorState({
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (
-        target &&
-        (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable)
+        (target &&
+          (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) ||
+            target.isContentEditable ||
+            Boolean(target.closest('[data-quickgen-root="true"]')))) ||
+        Boolean(document.querySelector('[data-quickgen-modal="true"]'))
       ) {
         return;
       }

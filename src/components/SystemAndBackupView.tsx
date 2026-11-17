@@ -133,6 +133,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   const [lmStatus, setLmStatus] = useState<LmStudioStatus | null>(null);
   const [lmBaseUrl, setLmBaseUrl] = useState('http://localhost:1234/v1');
   const [lmSelectedModel, setLmSelectedModel] = useState('');
+  const [lmFollowLoadedModel, setLmFollowLoadedModel] = useState(true);
   const [conversationSystemPrompt, setConversationSystemPrompt] = useState('');
   const [batchExpansionPrompt, setBatchExpansionPrompt] = useState('');
   const [isTestingLm, setIsTestingLm] = useState(false);
@@ -154,6 +155,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       setLmStatus(lmRes);
       setLmBaseUrl(lmRes.baseUrl || 'http://localhost:1234/v1');
       setLmSelectedModel(lmRes.selectedModel || lmRes.availableModels[0] || '');
+      setLmFollowLoadedModel(lmRes.followLoadedModel ?? true);
       setConversationSystemPrompt(lmRes.conversationSystemPrompt || '');
       setBatchExpansionPrompt(lmRes.batchExpansionPrompt || '');
     } catch (err: any) {
@@ -165,22 +167,56 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
     loadSystemDetails();
   }, []);
 
+  const handleToggleFollowLoadedModel = async (
+    nextFollow: boolean,
+    overrideSelectedModel?: string
+  ) => {
+    const modelToPersist =
+      overrideSelectedModel !== undefined ? overrideSelectedModel.trim() : lmSelectedModel.trim();
+    setLmFollowLoadedModel(nextFollow);
+    if (overrideSelectedModel !== undefined) {
+      setLmSelectedModel(overrideSelectedModel);
+    }
+    try {
+      const updated = await api.updateLmStudioConfig({
+        baseUrl: lmBaseUrl.trim() || undefined,
+        selectedModel: modelToPersist || undefined,
+        followLoadedModel: nextFollow,
+      });
+      setLmStatus(updated);
+      setLmSelectedModel(updated.selectedModel || '');
+      setLmFollowLoadedModel(updated.followLoadedModel ?? nextFollow);
+      setGuidingFeedback(
+        nextFollow
+          ? updated.loadedModels.length > 0
+            ? `Auto-following loaded model: ${updated.selectedModel}`
+            : 'Auto-follow enabled — Couchy will automatically use whichever model you load on the server.'
+          : `Model pinned to ${updated.selectedModel || 'manual selection'}.`
+      );
+      setTimeout(() => setGuidingFeedback(null), 4000);
+    } catch (err: any) {
+      setGuidingFeedback(`Failed to update model follow mode: ${err.message}`);
+    }
+  };
+
   const handleTestLmStudio = async () => {
     setIsTestingLm(true);
     try {
       const updated = await api.updateLmStudioConfig({
         baseUrl: lmBaseUrl.trim(),
         selectedModel: lmSelectedModel.trim(),
+        followLoadedModel: lmFollowLoadedModel,
       });
+      setLmStatus(updated);
       setLmBaseUrl(updated.baseUrl);
       setLmSelectedModel(updated.selectedModel);
-
-      const status = await api.getLmStudioStatus(updated.baseUrl);
-      setLmStatus(status);
+      setLmFollowLoadedModel(updated.followLoadedModel ?? lmFollowLoadedModel);
       setGuidingFeedback(
-        status.online
-          ? `Local LLM is online. Found ${status.availableModels.length} loaded model(s).`
-          : `Local LLM offline: ${status.error || 'Connection refused at ' + updated.baseUrl}`
+        updated.online
+          ? updated.loadedModels.length > 0
+            ? `Local LLM online · Active: ${updated.selectedModel} (Loaded: ${updated.loadedModels.join(', ')})`
+            : `Local LLM online · Active: ${updated.selectedModel} (${updated.availableModels.length} available on server)`
+          : `Local LLM offline: ${updated.error || 'Connection refused at ' + updated.baseUrl}`
       );
       setTimeout(() => setGuidingFeedback(null), 4000);
     } catch (err: any) {
@@ -489,6 +525,8 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
           setLmBaseUrl={setLmBaseUrl}
           lmSelectedModel={lmSelectedModel}
           setLmSelectedModel={setLmSelectedModel}
+          lmFollowLoadedModel={lmFollowLoadedModel}
+          onToggleFollowLoadedModel={handleToggleFollowLoadedModel}
           isTestingLm={isTestingLm}
           onTestLmStudio={handleTestLmStudio}
           conversationSystemPrompt={conversationSystemPrompt}
