@@ -731,6 +731,45 @@ export function runMigrations(): void {
           ON character_face_embeddings(character_id, source_kind);
       `,
     },
+    {
+      version: 26,
+      name: 'pin_existing_character_portraits',
+      sql: `
+        UPDATE characters
+        SET portrait_image_id = (
+              SELECT i.id
+              FROM image_characters ic
+              JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+              LEFT JOIN ratings r ON r.content_hash = i.content_hash
+              WHERE ic.character_id = characters.id
+                AND ic.status = 'confirmed'
+                AND COALESCE(i.is_uploaded_reference, 0) = 0
+              ORDER BY COALESCE(r.rating, 0) DESC, i.file_mtime DESC, i.id DESC
+              LIMIT 1
+            ),
+            portrait_content_hash = (
+              SELECT i.content_hash
+              FROM image_characters ic
+              JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+              LEFT JOIN ratings r ON r.content_hash = i.content_hash
+              WHERE ic.character_id = characters.id
+                AND ic.status = 'confirmed'
+                AND COALESCE(i.is_uploaded_reference, 0) = 0
+              ORDER BY COALESCE(r.rating, 0) DESC, i.file_mtime DESC, i.id DESC
+              LIMIT 1
+            )
+        WHERE portrait_image_id IS NULL
+          AND portrait_content_hash IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM image_characters ic
+            JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+            WHERE ic.character_id = characters.id
+              AND ic.status = 'confirmed'
+              AND COALESCE(i.is_uploaded_reference, 0) = 0
+          );
+      `,
+    },
   ];
 
   const insertMigration = db.prepare('INSERT INTO schema_migrations (version, name) VALUES (?, ?)');

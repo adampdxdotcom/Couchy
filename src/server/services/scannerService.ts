@@ -7,7 +7,10 @@ import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import { logger } from '../logger.ts';
 import { parseImageMetadata, parseImageMetadataFromChunks } from './pngMetadataParser.ts';
-import { runAssistedCharacterIdentificationForImage } from './characterService.ts';
+import {
+  ensureCharacterPortraitIfUnset,
+  runAssistedCharacterIdentificationForImage,
+} from './characterService.ts';
 import { notifyImageIndexed } from './comfyuiLiveMonitor.ts';
 import { attachGenerationItemOutputToSeries } from './seriesService.ts';
 import { startVisualTaggerQueue } from './visualTaggerService.ts';
@@ -590,6 +593,7 @@ export async function indexSingleImageFile(
             appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
             updated_at = datetime('now')`
         ).run(existingByPath.id, existingByPath.content_hash, characterId, appearanceLabel);
+        ensureCharacterPortraitIfUnset(characterId, existingByPath.id, existingByPath.content_hash);
       }
 
       return { outcome: 'unchanged', imageId: existingByPath.id, contentHash: existingByPath.content_hash };
@@ -836,6 +840,7 @@ export async function indexSingleImageFile(
             appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
             updated_at = datetime('now')`
         ).run(imageId, contentHash, effectiveCharacterId, appearanceLabel);
+        ensureCharacterPortraitIfUnset(effectiveCharacterId, imageId, contentHash);
       }
 
       return matchedGenItemId;
@@ -1199,6 +1204,7 @@ export function copyImageMetadataToDerivedImage(
             ch.match_reason || 'Inherited from upscaled source image',
             ch.appearance_label || 'Default'
           );
+          ensureCharacterPortraitIfUnset(ch.character_id, derivedImageId, derivedImg.content_hash);
         }
       }
     });

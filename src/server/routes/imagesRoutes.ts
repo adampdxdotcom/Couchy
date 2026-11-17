@@ -14,6 +14,7 @@ import {
   enrichSingleImageWithSeries,
   setExclusiveSeriesFavorite,
 } from '../services/seriesService.ts';
+import { ensureCharacterPortraitIfUnset } from '../services/characterService.ts';
 import { ensureWebpThumbnail, resolveImageDiskPath } from '../services/scannerService.ts';
 import { submitImageUpscale } from '../services/comfyuiService.ts';
 import type { GalleryFilterState } from '../../shared/types.ts';
@@ -338,6 +339,7 @@ imagesRouter.post('/bulk', (req, res) => {
                appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
                updated_at = datetime('now')`
           ).run(img.id, img.content_hash, Number(addCharacterId), appearanceLabel || null);
+          ensureCharacterPortraitIfUnset(Number(addCharacterId), img.id, img.content_hash);
         }
       }
     });

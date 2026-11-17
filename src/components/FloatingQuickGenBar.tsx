@@ -537,7 +537,8 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                 submitState.toggleModelMatch();
               }}
               aria-pressed={submitState.modelMatchEnabled}
-              className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full text-xs font-medium transition-colors shrink-0 ${
+              aria-label="Toggle automatic face recognition and character attachment"
+              className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors shrink-0 ${
                 !lmStudioOnline
                   ? 'opacity-40 cursor-not-allowed bg-zinc-800/50 text-zinc-500 border border-transparent'
                   : submitState.modelMatchEnabled
@@ -546,13 +547,11 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               }`}
               title={
                 lmStudioOnline
-                  ? 'Model Match: if no character is selected when you paste/upload an image, scan faces and auto-attach the closest matching character'
-                  : 'Local LLM is offline — connect a Local LLM to use Model Match'
+                  ? 'Automatic character recognition: if no character is selected when you paste or upload an image, scan faces and auto-attach the closest matching character'
+                  : 'Local LLM is offline — connect a Local LLM to use automatic face recognition'
               }
             >
-              <ScanFace className="w-3.5 h-3.5 shrink-0" />
-              <span className="hidden sm:inline">Model Match</span>
-              <span className="sm:hidden">Match</span>
+              <ScanFace className="w-4 h-4 shrink-0" />
             </button>
 
             <button

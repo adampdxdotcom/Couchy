@@ -66,7 +66,7 @@ export function resolveCharacterPortraitId(row: {
     }
   }
 
-  // Fallback to highest-rated or latest confirmed appearance only when no portrait was explicitly chosen
+  // Fallback to highest-rated or earliest confirmed appearance only when no portrait was explicitly chosen
   if (!portraitId && !hasExplicitPortrait) {
     const fallbackImg = db
       .prepare(
@@ -75,8 +75,10 @@ export function resolveCharacterPortraitId(row: {
         FROM image_characters ic
         JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
         LEFT JOIN ratings r ON r.content_hash = i.content_hash
-        WHERE ic.character_id = ? AND ic.status = 'confirmed'
-        ORDER BY COALESCE(r.rating, 0) DESC, i.file_mtime DESC
+        WHERE ic.character_id = ?
+          AND ic.status = 'confirmed'
+          AND COALESCE(i.is_uploaded_reference, 0) = 0
+        ORDER BY COALESCE(r.rating, 0) DESC, i.file_mtime ASC, i.id ASC
         LIMIT 1
       `
       )
@@ -85,6 +87,38 @@ export function resolveCharacterPortraitId(row: {
   }
 
   return portraitId;
+}
+
+/**
+ * Locks the given non-reference image as the character's portrait if the character
+ * does not yet have an explicitly saved portrait (`portrait_image_id` or `portrait_content_hash`).
+ */
+export function ensureCharacterPortraitIfUnset(
+  characterId: number,
+  imageId: number,
+  contentHash?: string | null
+): boolean {
+  if (!characterId || !imageId) return false;
+  const img = db
+    .prepare(
+      'SELECT content_hash, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ?'
+    )
+    .get(imageId) as { content_hash: string; is_uploaded_reference: number } | undefined;
+  if (!img || img.is_uploaded_reference) return false;
+
+  const resolvedHash = contentHash || img.content_hash;
+  const info = db
+    .prepare(
+      `UPDATE characters
+       SET portrait_image_id = ?,
+           portrait_content_hash = ?,
+           updated_at = datetime('now')
+       WHERE id = ?
+         AND portrait_image_id IS NULL
+         AND portrait_content_hash IS NULL`
+    )
+    .run(imageId, resolvedHash, characterId);
+  return info.changes > 0;
 }
 
 export function getCharacterPortraitMetadataMap(): Map<

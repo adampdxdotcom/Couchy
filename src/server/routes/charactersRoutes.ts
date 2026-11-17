@@ -5,6 +5,7 @@ import sharp from 'sharp';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import {
+  ensureCharacterPortraitIfUnset,
   getCharacterProfileById,
   listCharacterProfiles,
   mergeCharacters,
@@ -166,6 +167,16 @@ const updateCharacterHandler = (req: any, res: any) => {
       } else {
         const normalized = normalizePortraitCrop(portraitCrop);
         nextPortraitCropJson = normalized ? JSON.stringify(normalized) : null;
+      }
+      if (!portraitId && !portraitHash) {
+        const fallbackId = resolveCharacterPortraitId(existing);
+        if (fallbackId) {
+          const fallbackImg = db
+            .prepare('SELECT content_hash FROM images WHERE id = ?')
+            .get(fallbackId) as { content_hash: string } | undefined;
+          portraitId = fallbackId;
+          portraitHash = fallbackImg?.content_hash || null;
+        }
       }
     } else if (portraitChanged) {
       // Reset framing automatically when assigning a different portrait image
@@ -499,6 +510,9 @@ charactersRouter.post('/associations/status', (req, res) => {
         status,
         appearanceLabel || null
       );
+      if (status === 'confirmed') {
+        ensureCharacterPortraitIfUnset(Number(characterId), img.id, img.content_hash);
+      }
     }
 
     res.json({ ok: true });
@@ -544,6 +558,9 @@ charactersRouter.post('/associations/bulk-status', (req, res) => {
           delStmt.run(img.content_hash, charIdNum);
         } else {
           upsertStmt.run(img.id, img.content_hash, charIdNum, status, appearanceLabel || null);
+          if (status === 'confirmed') {
+            ensureCharacterPortraitIfUnset(charIdNum, img.id, img.content_hash);
+          }
         }
         updatedCount++;
       }
