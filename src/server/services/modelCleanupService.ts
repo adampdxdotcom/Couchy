@@ -6,6 +6,12 @@ import { appConfig } from '../config.ts';
 import { logger } from '../logger.ts';
 import { MODEL_EXTS, pathExistsAsync, walkDirectoryFilesAsync } from './fsWalkService.ts';
 import { invalidateInstalledModelsCache } from './civitai/civitaiModelEnrichmentService.ts';
+import {
+  getBoolSetting,
+  getNumberSetting,
+  getSettingsMap,
+  setSettings,
+} from './settingsService.ts';
 import { invalidateStorageUsageStatsCache } from './storageStatsService.ts';
 import type { ModelCleanupCandidate, ModelCleanupStatus } from '../../shared/types.ts';
 
@@ -54,19 +60,15 @@ function computeFileSha256Stream(filePath: string): Promise<string> {
 }
 
 export function getModelCleanupSettings(): { enabled: boolean; retentionHours: number } {
-  const enabledRow = db
-    .prepare("SELECT value FROM app_settings WHERE key = 'auto_clean_copied_models'")
-    .get() as { value: string } | undefined;
-  const hoursRow = db
-    .prepare("SELECT value FROM app_settings WHERE key = 'auto_clean_copied_models_hours'")
-    .get() as { value: string } | undefined;
-
-  const enabled = enabledRow ? enabledRow.value === '1' : false;
-  const parsedHours = hoursRow ? Number(hoursRow.value) : DEFAULT_RETENTION_HOURS;
+  const map = getSettingsMap(['auto_clean_copied_models', 'auto_clean_copied_models_hours']);
+  const enabled = getBoolSetting('auto_clean_copied_models', false, map);
+  const parsedHours = getNumberSetting(
+    'auto_clean_copied_models_hours',
+    DEFAULT_RETENTION_HOURS,
+    map
+  );
   const retentionHours =
-    Number.isFinite(parsedHours) && parsedHours >= 0
-      ? Math.min(8760, Math.round(parsedHours))
-      : DEFAULT_RETENTION_HOURS;
+    parsedHours >= 0 ? Math.min(8760, Math.round(parsedHours)) : DEFAULT_RETENTION_HOURS;
 
   return { enabled, retentionHours };
 }
@@ -75,23 +77,17 @@ export function updateModelCleanupSettings(params: {
   enabled?: boolean;
   retentionHours?: number;
 }): { enabled: boolean; retentionHours: number } {
+  const updates: [string, string][] = [];
   if (params.enabled !== undefined) {
-    db.prepare(
-      `INSERT INTO app_settings (key, value, updated_at)
-       VALUES ('auto_clean_copied_models', ?, datetime('now'))
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
-    ).run(params.enabled ? '1' : '0');
+    updates.push(['auto_clean_copied_models', params.enabled ? '1' : '0']);
   }
   if (params.retentionHours !== undefined) {
     const clamped = Number.isFinite(Number(params.retentionHours))
       ? Math.max(0, Math.min(8760, Math.round(Number(params.retentionHours))))
       : DEFAULT_RETENTION_HOURS;
-    db.prepare(
-      `INSERT INTO app_settings (key, value, updated_at)
-       VALUES ('auto_clean_copied_models_hours', ?, datetime('now'))
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
-    ).run(String(clamped));
+    updates.push(['auto_clean_copied_models_hours', String(clamped)]);
   }
+  setSettings(updates);
   invalidateStorageUsageStatsCache();
   return getModelCleanupSettings();
 }

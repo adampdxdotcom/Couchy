@@ -14,6 +14,7 @@ import {
 import { notifyImageIndexed } from './comfyuiLiveMonitor.ts';
 import { pathExistsAsync, walkDirectoryFilesAsync } from './fsWalkService.ts';
 import { attachGenerationItemOutputToSeries } from './seriesService.ts';
+import { getBoolSetting, setBoolSetting } from './settingsService.ts';
 import { invalidateStorageUsageStatsCache } from './storageStatsService.ts';
 import { startVisualTaggerQueue } from './visualTaggerService.ts';
 import type { DependencyStatus } from '../../shared/types.ts';
@@ -34,13 +35,8 @@ let fsWatcher: FSWatcher | null = null;
  * prompt was previously unextracted (e.g. Krea2_turbo PrimitiveStringMultiline #30_19).
  */
 export function backfillMissingImagePrompts(force = false): number {
-  if (!force) {
-    const alreadyDone = db
-      .prepare("SELECT value FROM app_settings WHERE key = 'prompt_backfill_v1_done'")
-      .get() as { value: string } | undefined;
-    if (alreadyDone?.value === '1') {
-      return 0;
-    }
+  if (!force && getBoolSetting('prompt_backfill_v1_done', false)) {
+    return 0;
   }
   const rows = db
     .prepare(
@@ -62,11 +58,7 @@ export function backfillMissingImagePrompts(force = false): number {
   }[];
 
   if (rows.length === 0) {
-    db.prepare(
-      `INSERT INTO app_settings (key, value, updated_at)
-       VALUES ('prompt_backfill_v1_done', '1', datetime('now'))
-       ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = datetime('now')`
-    ).run();
+    setBoolSetting('prompt_backfill_v1_done', true);
     return 0;
   }
 
@@ -114,11 +106,7 @@ export function backfillMissingImagePrompts(force = false): number {
     }
   }
 
-  db.prepare(
-    `INSERT INTO app_settings (key, value, updated_at)
-     VALUES ('prompt_backfill_v1_done', '1', datetime('now'))
-     ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = datetime('now')`
-  ).run();
+  setBoolSetting('prompt_backfill_v1_done', true);
 
   return updatedCount;
 }
@@ -336,10 +324,7 @@ export async function runBackgroundThumbnailMigration(): Promise<void> {
   isThumbnailMigrationRunning = true;
 
   try {
-    const migrationSetting = db
-      .prepare("SELECT value FROM app_settings WHERE key = 'thumb_migration_384_v1'")
-      .get() as { value: string } | undefined;
-    const forceRebuildAll = migrationSetting?.value !== '1';
+    const forceRebuildAll = !getBoolSetting('thumb_migration_384_v1', false);
 
     const rows = db
       .prepare(
@@ -379,11 +364,7 @@ export async function runBackgroundThumbnailMigration(): Promise<void> {
     }
 
     if (forceRebuildAll) {
-      db.prepare(
-        `INSERT INTO app_settings (key, value, updated_at)
-         VALUES ('thumb_migration_384_v1', '1', datetime('now'))
-         ON CONFLICT(key) DO UPDATE SET value = '1', updated_at = datetime('now')`
-      ).run();
+      setBoolSetting('thumb_migration_384_v1', true);
     }
   } catch (err) {
     console.error('Background thumbnail migration error:', err);

@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
 import { appConfig } from '../../config.ts';
-import { db } from '../../db.ts';
 import {
   buildCivitaiSearchResultCard,
   extractCivitaiVersions,
@@ -25,6 +24,7 @@ import {
   getVisibleInstalledModelBuckets,
   normalizeModelStem,
 } from './civitaiModelEnrichmentService.ts';
+import { getBoolSetting } from '../settingsService.ts';
 import { invalidateStorageUsageStatsCache } from '../storageStatsService.ts';
 import { resolveClosestAspectRatio } from '../../../shared/utils.ts';
 import type { CivitaiImageImportResult, ExternalModelSearchResult } from '../../../shared/types.ts';
@@ -270,10 +270,7 @@ export async function fetchCivitaiImageMetadata(
 }
 
 function isSaveCivitaiImportImagesEnabled(): boolean {
-  const row = db
-    .prepare("SELECT value FROM app_settings WHERE key = 'save_civitai_import_images'")
-    .get() as { value: string } | undefined;
-  return row ? row.value === '1' : true;
+  return getBoolSetting('save_civitai_import_images', true);
 }
 
 /**

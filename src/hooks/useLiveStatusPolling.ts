@@ -1,0 +1,277 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { api } from '../api/client.ts';
+import type { QuickGenPrefill } from '../components/FloatingQuickGenBar.tsx';
+import type {
+  AppToastMessage,
+  CharacterProfile,
+  ComfyUiLiveStatus,
+  ImageRecord,
+} from '../shared/types.ts';
+
+interface UseLiveStatusPollingParams {
+  allImages: ImageRecord[];
+  characters: CharacterProfile[];
+  pushToast: (text: string, type?: AppToastMessage['type']) => void;
+  onRefreshWorkspace: () => Promise<void>;
+  setQuickGenPrefill: React.Dispatch<React.SetStateAction<QuickGenPrefill | null>>;
+}
+
+/**
+ * Polls ComfyUI live queue progress and Local LLM health, filters indexed ghost cards,
+ * restores failed Conversation turns into Quick Gen, and syncs the browser tab title.
+ */
+export function useLiveStatusPolling({
+  allImages,
+  characters,
+  pushToast,
+  onRefreshWorkspace,
+  setQuickGenPrefill,
+}: UseLiveStatusPollingParams) {
+  const [comfyStatus, setComfyStatus] = useState<ComfyUiLiveStatus>({
+    online: false,
+    runningCount: 0,
+    queuedCount: 0,
+    progressPercent: null,
+    step: null,
+    maxSteps: null,
+    currentNode: null,
+  });
+  const [lmStudioStatus, setLmStudioStatus] = useState<{
+    online: boolean;
+    selectedModel: string;
+    baseUrl: string;
+  }>({
+    online: false,
+    selectedModel: '',
+    baseUrl: '',
+  });
+  const [hasUnseenCompletion, setHasUnseenCompletion] = useState<boolean>(false);
+
+  const prevLmStudioOnlineRef = useRef<boolean | null>(null);
+  const prevBusyRef = useRef<boolean>(false);
+  const lastIndexedAtRef = useRef<number>(0);
+  const allImageIdsRef = useRef<Set<number>>(new Set());
+  const allImagesRef = useRef<ImageRecord[]>([]);
+  const charactersRef = useRef<CharacterProfile[]>([]);
+  const lastSeenErrorIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    allImagesRef.current = allImages;
+    const ids = new Set<number>();
+    for (const img of allImages) {
+      ids.add(img.id);
+      if (img.seriesItems) {
+        for (const si of img.seriesItems) {
+          ids.add(si.imageId);
+        }
+      }
+    }
+    allImageIdsRef.current = ids;
+  }, [allImages]);
+
+  useEffect(() => {
+    charactersRef.current = characters;
+  }, [characters]);
+
+  const refreshComfyStatus = useCallback(() => {
+    api.getComfyUiLiveStatus().then(setComfyStatus).catch(() => {});
+  }, []);
+
+  // Poll ComfyUI live queue & job progress
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      try {
+        const status = await api.getComfyUiLiveStatus();
+        if (cancelled) return;
+        setComfyStatus(status);
+
+        // Surface ComfyUI execution failures and auto-restore failed Conversation turns
+        if (status.lastError && status.lastError.id !== lastSeenErrorIdRef.current) {
+          lastSeenErrorIdRef.current = status.lastError.id;
+          const rec = status.lastError.recovery;
+          if (rec && rec.chatMessages && rec.chatMessages.length > 0) {
+            const matchedChar = rec.characterId
+              ? charactersRef.current.find((c) => c.id === rec.characterId) || null
+              : null;
+            const sourceImg = rec.branchFromImageId
+              ? allImagesRef.current.find((img) => img.id === rec.branchFromImageId) || null
+              : null;
+            const latestExcludedMsg = [...rec.chatMessages]
+              .reverse()
+              .find((m) => Array.isArray(m.excludedLoras) && m.excludedLoras.length > 0);
+
+            setQuickGenPrefill({
+              prompt: '',
+              character: matchedChar,
+              checkpointName: sourceImg?.checkpointName || null,
+              loras: sourceImg?.loras || [],
+              excludedLoras: latestExcludedMsg?.excludedLoras || [],
+              aspectRatio: rec.aspectRatio,
+              megapixels: rec.megapixels,
+              batchCount: 1,
+              conversationMode: true,
+              chatMessages: rec.chatMessages,
+              seriesId: rec.seriesId,
+              branchFromImageId: rec.branchFromImageId,
+              timestamp: Date.now(),
+            });
+            pushToast(
+              `ComfyUI error (${status.lastError.message}) — Conversation restored in Quick Gen`,
+              'error'
+            );
+          } else {
+            pushToast(`ComfyUI generation failed: ${status.lastError.message}`, 'error');
+          }
+          onRefreshWorkspace();
+        }
+
+        const hasUnindexedGhost = (status.ghostItems || []).some(
+          (g) =>
+            g.state === 'indexing' &&
+            (!g.outputImageId || !allImageIdsRef.current.has(g.outputImageId))
+        );
+
+        // Silently refresh gallery as soon as any newly generated image is indexed
+        if (
+          (status.lastIndexedAt && status.lastIndexedAt > lastIndexedAtRef.current) ||
+          hasUnindexedGhost
+        ) {
+          if (status.lastIndexedAt) {
+            lastIndexedAtRef.current = status.lastIndexedAt;
+          }
+          onRefreshWorkspace();
+        }
+
+        const isBusy =
+          status.runningCount > 0 ||
+          status.queuedCount > 0 ||
+          (status.ghostItems && status.ghostItems.length > 0);
+        if (status.runningCount > 0 || status.queuedCount > 0) {
+          setHasUnseenCompletion(false);
+        } else if (prevBusyRef.current && status.runningCount === 0 && status.queuedCount === 0) {
+          if (document.hidden || !document.hasFocus()) {
+            setHasUnseenCompletion(true);
+          }
+          onRefreshWorkspace();
+        }
+        prevBusyRef.current = status.runningCount > 0 || status.queuedCount > 0;
+
+        timer = setTimeout(poll, isBusy ? 1000 : 3500);
+      } catch {
+        if (!cancelled) {
+          timer = setTimeout(poll, 5000);
+        }
+      }
+    };
+
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [pushToast, onRefreshWorkspace, setQuickGenPrefill]);
+
+  // Clear "Couchy (Done)" immediately when the user focuses or makes the tab visible
+  useEffect(() => {
+    const clearIfVisible = () => {
+      if (!document.hidden) {
+        setHasUnseenCompletion(false);
+      }
+    };
+    window.addEventListener('focus', clearIfVisible);
+    document.addEventListener('visibilitychange', clearIfVisible);
+    return () => {
+      window.removeEventListener('focus', clearIfVisible);
+      document.removeEventListener('visibilitychange', clearIfVisible);
+    };
+  }, []);
+
+  // Synchronize browser tab title with live generation progress and unseen completion state
+  useEffect(() => {
+    const isBusy = comfyStatus.runningCount > 0 || comfyStatus.queuedCount > 0;
+    if (isBusy) {
+      const total =
+        comfyStatus.totalRunJobs ?? comfyStatus.runningCount + comfyStatus.queuedCount;
+      const current = comfyStatus.currentJobIndex ?? 1;
+      const pct = comfyStatus.progressPercent ?? 0;
+      document.title = `Couchy (${current} of ${total} - ${pct}%)`;
+    } else if (hasUnseenCompletion) {
+      document.title = 'Couchy (Done)';
+    } else {
+      document.title = 'Couchy';
+    }
+  }, [comfyStatus, hasUnseenCompletion]);
+
+  // Poll LM Studio connection every 15s; alert on state transitions after initial check
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const pollLmStudio = async () => {
+      try {
+        const res = await api.getLmStudioStatus();
+        if (cancelled) return;
+
+        setLmStudioStatus({
+          online: Boolean(res.online),
+          selectedModel: res.selectedModel || '',
+          baseUrl: res.baseUrl || '',
+        });
+
+        const prev = prevLmStudioOnlineRef.current;
+        if (prev !== null) {
+          if (prev === true && !res.online) {
+            pushToast('Local LLM Offline', 'warning');
+          } else if (prev === false && res.online) {
+            pushToast('Local LLM Reconnected', 'success');
+          }
+        }
+        prevLmStudioOnlineRef.current = Boolean(res.online);
+      } catch {
+        if (cancelled) return;
+        const prev = prevLmStudioOnlineRef.current;
+        if (prev !== null && prev === true) {
+          pushToast('Local LLM Offline', 'warning');
+        }
+        prevLmStudioOnlineRef.current = false;
+        setLmStudioStatus((prevStatus) => ({ ...prevStatus, online: false }));
+      } finally {
+        if (!cancelled) {
+          timer = setTimeout(pollLmStudio, 15000);
+        }
+      }
+    };
+
+    pollLmStudio();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [pushToast]);
+
+  // Filter out ghost cards once their indexed image (or stacked iteration) exists in allImages
+  const activeGhostItems = useMemo(() => {
+    const raw = comfyStatus.ghostItems || [];
+    if (raw.length === 0) return [];
+    const knownIds = new Set<number>();
+    for (const img of allImages) {
+      knownIds.add(img.id);
+      if (img.seriesItems) {
+        for (const si of img.seriesItems) {
+          knownIds.add(si.imageId);
+        }
+      }
+    }
+    return raw.filter((g) => !g.outputImageId || !knownIds.has(g.outputImageId));
+  }, [comfyStatus.ghostItems, allImages]);
+
+  return {
+    comfyStatus,
+    lmStudioStatus,
+    activeGhostItems,
+    refreshComfyStatus,
+  };
+}

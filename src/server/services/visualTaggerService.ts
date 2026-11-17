@@ -6,6 +6,14 @@ import * as ort from 'onnxruntime-node';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import { resolveImageDiskPath } from './scannerService.ts';
+import {
+  getBoolSetting,
+  getNumberSetting,
+  getSetting,
+  getSettingsMap,
+  setBoolSetting,
+  setSetting,
+} from './settingsService.ts';
 import type { VisualTagItem, VisualTaggerStatus } from '../../shared/types.ts';
 
 const HF_MODEL_URL =
@@ -66,41 +74,24 @@ export function isTaggerModelDownloaded(): boolean {
 }
 
 /**
- * Reads or initializes visual tagger settings from app_settings.
+ * Reads visual tagger settings from `app_settings` in one query.
  */
 export function getTaggerSettings(): {
   enabled: boolean;
   threshold: number;
   device: 'cpu' | 'gpu';
 } {
-  const rows = db
-    .prepare(
-      "SELECT key, value FROM app_settings WHERE key IN ('visual_tagger_enabled', 'visual_tagger_threshold', 'visual_tagger_device')"
-    )
-    .all() as { key: string; value: string }[];
-
-  const map = new Map(rows.map((r) => [r.key, r.value]));
-  const enabled = map.get('visual_tagger_enabled') === 'true';
-  const rawThreshold = parseFloat(map.get('visual_tagger_threshold') || '0.35');
-  const threshold = Number.isNaN(rawThreshold)
-    ? 0.35
-    : Math.max(0.1, Math.min(0.95, rawThreshold));
-  const device = map.get('visual_tagger_device') === 'gpu' ? 'gpu' : 'cpu';
+  const map = getSettingsMap([
+    'visual_tagger_enabled',
+    'visual_tagger_threshold',
+    'visual_tagger_device',
+  ]);
+  const enabled = getBoolSetting('visual_tagger_enabled', false, map);
+  const rawThreshold = getNumberSetting('visual_tagger_threshold', 0.35, map);
+  const threshold = Math.max(0.1, Math.min(0.95, rawThreshold));
+  const device = getSetting('visual_tagger_device', 'cpu', map) === 'gpu' ? 'gpu' : 'cpu';
 
   return { enabled, threshold, device };
-}
-
-/**
- * Persists a single setting in app_settings.
- */
-function setAppSetting(key: string, value: string): void {
-  db.prepare(
-    `
-    INSERT INTO app_settings (key, value, updated_at)
-    VALUES (?, ?, datetime('now'))
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
-  `
-  ).run(key, value);
 }
 
 /**
@@ -589,7 +580,7 @@ export function updateVisualTaggerConfig(params: {
   device?: 'cpu' | 'gpu';
 }): VisualTaggerStatus {
   if (params.enabled !== undefined) {
-    setAppSetting('visual_tagger_enabled', params.enabled ? 'true' : 'false');
+    setBoolSetting('visual_tagger_enabled', Boolean(params.enabled), 'true_false');
     if (params.enabled) {
       isPaused = false;
       setTimeout(() => {
@@ -602,11 +593,11 @@ export function updateVisualTaggerConfig(params: {
 
   if (params.threshold !== undefined && !Number.isNaN(Number(params.threshold))) {
     const clamped = Math.max(0.1, Math.min(0.95, Number(params.threshold)));
-    setAppSetting('visual_tagger_threshold', String(clamped));
+    setSetting('visual_tagger_threshold', String(clamped));
   }
 
   if (params.device === 'cpu' || params.device === 'gpu') {
-    setAppSetting('visual_tagger_device', params.device);
+    setSetting('visual_tagger_device', params.device);
     ortSession = null; // Reset session so next inference picks up new device preference
   }
 

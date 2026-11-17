@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { appConfig } from '../../config.ts';
-import { db } from '../../db.ts';
+import { getBoolSetting } from '../settingsService.ts';
 import { invalidateStorageUsageStatsCache } from '../storageStatsService.ts';
 import {
   detectExposureCuesWithWd14,
@@ -25,10 +25,7 @@ import {
 } from './llmPromptUtils.ts';
 
 function archiveUploadedPromptImage1Mp(imageBuffer: Buffer, mimeHeader: string): string | null {
-  const saveUploadedRow = db
-    .prepare("SELECT value FROM app_settings WHERE key = 'save_uploaded_prompt_images'")
-    .get() as { value: string } | undefined;
-  if (saveUploadedRow?.value !== '1') return null;
+  if (!getBoolSetting('save_uploaded_prompt_images', false)) return null;
 
   try {
     fs.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });

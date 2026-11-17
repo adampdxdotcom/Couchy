@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../../api/client.ts';
 import type {
   CharacterProfile,
   GenerationLoraSelection,
@@ -8,16 +7,11 @@ import type {
   QuickGenChatMessage,
   WorkflowLibraryItem,
 } from '../../shared/types.ts';
-import { resolveClosestAspectRatio, resolveDefaultWorkflow } from '../../shared/utils.ts';
-import {
-  MAX_SYSTEM_LORAS,
-  downscaleImageFileTo1Mp,
-  getCleanLoraLabel,
-  isCharacterLora,
-  normalizeLoraKey,
-  snapToHalfMp,
-  type QuickGenPrefill,
-} from './quickGenUtils.ts';
+import { resolveDefaultWorkflow } from '../../shared/utils.ts';
+import { snapToHalfMp, type QuickGenPrefill } from './quickGenUtils.ts';
+import { useQuickGenAttachments } from './useQuickGenAttachments.ts';
+import { useQuickGenMediaImport } from './useQuickGenMediaImport.ts';
+import { useQuickGenAgentAndBatch } from './useQuickGenAgentAndBatch.ts';
 
 interface UseQuickGenSubmitParams {
   loras: LoraExplorerItem[];
@@ -33,8 +27,8 @@ interface UseQuickGenSubmitParams {
 }
 
 /**
- * Manages Quick Gen form state, workflow default syncing, reuse prefill hydration,
- * image interrogation, attachment removal, Agent Conversation turns, and batch submission.
+ * Orchestrates Quick Gen dock state, workflow default syncing, attachment/prefill hooks,
+ * image interrogation/Civitai import, and Agent conversation + ComfyUI batch submission.
  */
 export function useQuickGenSubmit({
   loras,
@@ -55,8 +49,6 @@ export function useQuickGenSubmit({
   const [branchFromImageId, setBranchFromImageId] = useState<number | null>(null);
   const [stackSourceLabel, setStackSourceLabel] = useState<string | null>(null);
   const [inspirationFilename, setInspirationFilename] = useState<string | null>(null);
-  const [isChatting, setIsChatting] = useState(false);
-  const [expandingMessageId, setExpandingMessageId] = useState<string | null>(null);
 
   const [aspectRatio, setAspectRatio] = useState('2:3 (Portrait Photo)');
   const [megapixels, setMegapixels] = useState<number>(3.0);
@@ -73,34 +65,7 @@ export function useQuickGenSubmit({
   );
   const [showSettingsMenu, setShowSettingsMenu] = useState(false);
   const [isPromptFocused, setIsPromptFocused] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isInterrogating, setIsInterrogating] = useState(false);
-  const [isImportingCivitai, setIsImportingCivitai] = useState(false);
-  const [modelMatchEnabled, setModelMatchEnabled] = useState<boolean>(() => {
-    try {
-      return (
-        typeof window !== 'undefined' &&
-        localStorage.getItem('couchy_quickgen_model_match') === '1'
-      );
-    } catch {
-      return false;
-    }
-  });
-  const [isMatchingFace, setIsMatchingFace] = useState(false);
 
-  const toggleModelMatch = () => {
-    setModelMatchEnabled((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem('couchy_quickgen_model_match', next ? '1' : '0');
-      } catch {
-        // ignore storage errors
-      }
-      return next;
-    });
-  };
-
-  const lastAppliedTimestampRef = useRef<number | null>(null);
   const highlightTimerRef = useRef<number | null>(null);
   const focusTimerRef = useRef<number | null>(null);
 
@@ -110,13 +75,6 @@ export function useQuickGenSubmit({
       if (focusTimerRef.current !== null) window.clearTimeout(focusTimerRef.current);
     };
   }, []);
-
-  // Auto-disable Agent (Conversation) mode if Local LLM goes offline
-  useEffect(() => {
-    if (!lmStudioOnline && agentEnabled) {
-      setAgentEnabled(false);
-    }
-  }, [lmStudioOnline, agentEnabled]);
 
   const pulseHighlight = (durationMs = 1400) => {
     if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
@@ -136,14 +94,11 @@ export function useQuickGenSubmit({
     }, delayMs);
   };
 
-  // Resolve primary system workflow & defaults
   const resolvedWorkflow = useMemo(() => resolveDefaultWorkflow(workflows), [workflows]);
-
   const workflowDefaultMp = useMemo(
     () => snapToHalfMp(resolvedWorkflow?.defaultMegapixels, 3.0),
     [resolvedWorkflow?.defaultMegapixels]
   );
-
   const workflowDefaultAr = useMemo(
     () => resolvedWorkflow?.defaultAspectRatio || '2:3 (Portrait Photo)',
     [resolvedWorkflow?.defaultAspectRatio]
@@ -157,301 +112,6 @@ export function useQuickGenSubmit({
     setAspectRatio(workflowDefaultAr);
   }, [resolvedWorkflow?.id, workflowDefaultAr]);
 
-  // Build active LoRAs and combined comma-separated trigger word from character + attached LoRAs
-  const resolveActiveLoraStack = () => {
-    const activeCharLoraRecords = attachedCharacter
-      ? attachedCharacter.loras.filter((l) => !removedLoraKeys.has(normalizeLoraKey(l.loraName)))
-      : [];
-
-    const charLoras: GenerationLoraSelection[] = activeCharLoraRecords.map((l) => {
-      const matchingAttached = attachedLoras.find(
-        (al) => normalizeLoraKey(al.loraName) === normalizeLoraKey(l.loraName)
-      );
-      const resolvedModelStrength = matchingAttached
-        ? matchingAttached.modelStrength
-        : characterLoraStrength;
-      const resolvedClipStrength = matchingAttached
-        ? matchingAttached.clipStrength
-        : characterLoraStrength;
-      return {
-        loraName: l.loraName,
-        modelStrength: resolvedModelStrength,
-        clipStrength: resolvedClipStrength,
-        triggerWord: l.triggerWord || '',
-        appearanceLabel: l.appearanceLabel || '',
-      };
-    });
-
-    const selectedLoras: GenerationLoraSelection[] = [...charLoras];
-    for (const al of attachedLoras) {
-      const alKey = normalizeLoraKey(al.loraName);
-      if (removedLoraKeys.has(alKey)) continue;
-      if (!selectedLoras.some((sl) => normalizeLoraKey(sl.loraName) === alKey)) {
-        const matchedExplorer = loras.find(
-          (l) => normalizeLoraKey(l.filename) === alKey || normalizeLoraKey(l.name) === alKey
-        );
-        selectedLoras.push({
-          ...al,
-          triggerWord: al.triggerWord?.trim() || matchedExplorer?.triggerWord?.trim() || '',
-        });
-      }
-    }
-
-    // Join unique trigger tokens (character trigger words first, then active pilled LoRAs) comma-separated
-    const triggerTokens: string[] = [];
-    const seenTokens = new Set<string>();
-    const appendTriggerTokens = (raw?: string | null) => {
-      if (!raw) return;
-      for (const part of raw.split(',')) {
-        const trimmed = part.trim();
-        const lower = trimmed.toLowerCase();
-        if (trimmed && !seenTokens.has(lower)) {
-          seenTokens.add(lower);
-          triggerTokens.push(trimmed);
-        }
-      }
-    };
-
-    for (const cl of activeCharLoraRecords) {
-      appendTriggerTokens(cl.triggerWord);
-    }
-    for (const sl of selectedLoras) {
-      appendTriggerTokens(sl.triggerWord);
-    }
-
-    const triggerWord = triggerTokens.join(', ');
-
-    return { selectedLoras, triggerWord };
-  };
-
-  // Handle incoming reuse / prefill requests once per unique timestamp
-  useEffect(() => {
-    if (!prefillPayload || lastAppliedTimestampRef.current === prefillPayload.timestamp) return;
-    lastAppliedTimestampRef.current = prefillPayload.timestamp;
-
-    setIsMinimized(false);
-    setInspirationFilename(null);
-    setAttachedPreset(null);
-    setRemovedLoraKeys(
-      new Set((prefillPayload.excludedLoras || []).map((k) => normalizeLoraKey(k)).filter(Boolean))
-    );
-
-    if (prefillPayload.prompt !== undefined) setPrompt(prefillPayload.prompt);
-    if (prefillPayload.character !== undefined) setAttachedCharacter(prefillPayload.character);
-    setAttachedCheckpoint(
-      prefillPayload.checkpointName ? String(prefillPayload.checkpointName).trim() || null : null
-    );
-
-    const excludedKeySet = new Set(
-      (prefillPayload.excludedLoras || []).map((k) => normalizeLoraKey(k)).filter(Boolean)
-    );
-
-    if (prefillPayload.loras !== undefined) {
-      const reusedSelections: GenerationLoraSelection[] = [];
-      const seenLoraNames = new Set<string>();
-      const prefillCharLoraKeys = new Set(
-        (prefillPayload.character?.loras || []).map((cl) => normalizeLoraKey(cl.loraName))
-      );
-
-      for (const imgLora of prefillPayload.loras) {
-        const rawKey = normalizeLoraKey(imgLora.loraName);
-        if (!rawKey || seenLoraNames.has(rawKey)) continue;
-        seenLoraNames.add(rawKey);
-
-        const cleanBase = imgLora.loraName.replace(/\.(safetensors|pt|ckpt)$/i, '').toLowerCase();
-        const matchedExplorerLora = loras.find(
-          (l) =>
-            l.filename.toLowerCase() === imgLora.loraName.toLowerCase() ||
-            l.name.toLowerCase() === cleanBase
-        );
-
-        const prefillExtra = imgLora as {
-          triggerWord?: string;
-          nickname?: string;
-          showPill?: boolean;
-          isCharacterPill?: boolean;
-          portraitThumbnailUrl?: string | null;
-          portraitCrop?: CharacterProfile['portraitCrop'];
-        };
-
-        const belongsToAttachedChar = prefillCharLoraKeys.has(rawKey);
-
-        reusedSelections.push({
-          loraName: matchedExplorerLora?.filename || imgLora.loraName,
-          modelStrength: Number(
-            imgLora.modelStrength ?? matchedExplorerLora?.defaultModelStrength ?? 1.0
-          ),
-          clipStrength: Number(
-            imgLora.clipStrength ?? matchedExplorerLora?.defaultClipStrength ?? 1.0
-          ),
-          triggerWord: prefillExtra.triggerWord || matchedExplorerLora?.triggerWord || '',
-          nickname:
-            prefillExtra.nickname ||
-            getCleanLoraLabel(matchedExplorerLora || { loraName: imgLora.loraName }),
-          showPill: belongsToAttachedChar
-            ? false
-            : prefillExtra.showPill !== undefined
-            ? Boolean(prefillExtra.showPill)
-            : Boolean(matchedExplorerLora?.mentionEnabled),
-          isCharacterPill: prefillExtra.isCharacterPill,
-          portraitThumbnailUrl: prefillExtra.portraitThumbnailUrl,
-          portraitCrop: prefillExtra.portraitCrop,
-        });
-      }
-      setAttachedLoras(reusedSelections);
-
-      if (prefillPayload.character) {
-        const charLoraKeys = new Set(
-          prefillPayload.character.loras
-            .map((cl) => normalizeLoraKey(cl.loraName))
-            .filter((k) => !excludedKeySet.has(k))
-        );
-        const matchedCharReused = reusedSelections.find((rs) =>
-          charLoraKeys.has(normalizeLoraKey(rs.loraName))
-        );
-        setCharacterLoraStrength(matchedCharReused ? matchedCharReused.modelStrength : 1.0);
-      } else if (prefillPayload.character === null) {
-        setCharacterLoraStrength(1.0);
-      }
-    } else {
-      setAttachedLoras([]);
-      if (prefillPayload.character !== undefined) {
-        setCharacterLoraStrength(1.0);
-      }
-    }
-
-    if (prefillPayload.aspectRatio) setAspectRatio(prefillPayload.aspectRatio);
-    if (prefillPayload.megapixels !== undefined) {
-      setMegapixels(snapToHalfMp(prefillPayload.megapixels, workflowDefaultMp));
-    }
-    if (prefillPayload.batchCount !== undefined) setBatchCount(prefillPayload.batchCount);
-
-    if (prefillPayload.conversationMode) {
-      setAgentEnabled(true);
-      setBatchCount(1);
-      setChatMessages(prefillPayload.chatMessages || []);
-      setActiveSeriesId(prefillPayload.seriesId ?? null);
-      setBranchFromImageId(prefillPayload.branchFromImageId ?? null);
-      setStackSourceLabel(prefillPayload.stackSourceLabel ?? null);
-    } else {
-      setAgentEnabled(false);
-      setChatMessages([]);
-      setActiveSeriesId(prefillPayload.seriesId ?? null);
-      setBranchFromImageId(prefillPayload.branchFromImageId ?? null);
-      setStackSourceLabel(prefillPayload.stackSourceLabel ?? null);
-    }
-
-    onClearPrefill?.();
-    focusInputAtEnd(60, true);
-    pulseHighlight(1400);
-  }, [prefillPayload, loras, workflowDefaultMp, onClearPrefill]);
-
-  const handleInterrogateImageFile = async (file: File) => {
-    if (!lmStudioOnline) {
-      onPushToast('Local LLM is offline — start your Local LLM server to interrogate images.', 'warning');
-      return;
-    }
-    if (!file.type.startsWith('image/')) {
-      onPushToast('Please select or drop a valid image file.', 'warning');
-      return;
-    }
-    if (isInterrogating) return;
-
-    setIsInterrogating(true);
-    setIsMinimized(false);
-    setInspirationFilename(null);
-    try {
-      const { dataUrl, width, height } = await downscaleImageFileTo1Mp(file);
-      const matchedRatio = resolveClosestAspectRatio(width, height);
-      setAspectRatio(matchedRatio);
-
-      // When Model Match mode is on and no subject is attached yet, scan faces and attach closest match first
-      let effectiveCharacter = attachedCharacter;
-      let matchedFaceInfo: { name: string; similarity: number } | null = null;
-
-      if (modelMatchEnabled && !effectiveCharacter) {
-        setIsMatchingFace(true);
-        try {
-          const matchRes = await api.matchCharacterFace({ imageBase64DataUrl: dataUrl });
-          if (matchRes.matched && matchRes.character) {
-            effectiveCharacter = matchRes.character;
-            const matchedCharKeys = new Set(
-              matchRes.character.loras.map((cl) => normalizeLoraKey(cl.loraName))
-            );
-            const preExistingCharLora = attachedLoras.find((al) =>
-              matchedCharKeys.has(normalizeLoraKey(al.loraName))
-            );
-            setAttachedCharacter(matchRes.character);
-            setCharacterLoraStrength(preExistingCharLora ? preExistingCharLora.modelStrength : 1.0);
-            setAttachedLoras((prev) =>
-              prev.map((al) =>
-                matchedCharKeys.has(normalizeLoraKey(al.loraName))
-                  ? { ...al, showPill: false }
-                  : al
-              )
-            );
-            setRemovedLoraKeys((prev) => {
-              const next = new Set(prev);
-              for (const cl of matchRes.character!.loras) {
-                next.delete(normalizeLoraKey(cl.loraName));
-              }
-              return next;
-            });
-            matchedFaceInfo = {
-              name: matchRes.character.name,
-              similarity: matchRes.similarity ?? 0,
-            };
-          } else if (matchRes.indexedCharactersCount === 0) {
-            onPushToast('Model Match: No character portraits indexed yet.', 'info');
-          } else if (matchRes.facesDetected === 0) {
-            onPushToast('Model Match: No face detected in uploaded image.', 'info');
-          } else if (matchRes.bestCandidate) {
-            onPushToast(
-              `Model Match: No close match (closest: ${matchRes.bestCandidate.characterName} at ${Math.round(
-                matchRes.bestCandidate.similarity * 100
-              )}%).`,
-              'info'
-            );
-          }
-        } catch (matchErr: any) {
-          onPushToast(
-            `Model Match skipped (${matchErr?.message || 'face scan unavailable'}).`,
-            'warning'
-          );
-        } finally {
-          setIsMatchingFace(false);
-        }
-      }
-
-      const existingHint = prompt.trim();
-      const res = await api.interrogateImage({
-        imageBase64DataUrl: dataUrl,
-        characterName: effectiveCharacter?.name,
-        userHint: existingHint || undefined,
-      });
-
-      if (res.savedFilename) {
-        setInspirationFilename(res.savedFilename);
-      }
-
-      if (res.prompt) {
-        setPrompt(res.prompt);
-        pulseHighlight(1200);
-        const modeLabel = res.pipelineUsed === 'vision' ? 'Vision Model' : 'WD14 + LLM';
-        const prefix = matchedFaceInfo
-          ? `Matched ${matchedFaceInfo.name} (${Math.round(matchedFaceInfo.similarity * 100)}%) · `
-          : '';
-        onPushToast(`${prefix}Interrogated image via ${modeLabel} (${matchedRatio})`, 'success');
-        focusInputAtEnd(50, false);
-      }
-    } catch (err: any) {
-      onPushToast(err?.message || 'Failed to interrogate uploaded image.', 'error');
-    } finally {
-      setIsMatchingFace(false);
-      setIsInterrogating(false);
-    }
-  };
-
   const isQuickGenEmpty =
     prompt.trim().length === 0 &&
     !attachedCharacter &&
@@ -462,708 +122,132 @@ export function useQuickGenSubmit({
     !inspirationFilename &&
     chatMessages.length === 0;
 
-  /**
-   * Imports prompt, aspect ratio, 1MP inspiration image, and locally available Base Model / LoRAs
-   * from a Civitai image URL. Only runs when Quick Gen is empty; unavailable items fail gracefully.
-   */
-  const handleImportCivitaiUrl = async (rawUrl: string) => {
-    if (isImportingCivitai || isInterrogating) return;
-    if (!isQuickGenEmpty) {
-      onPushToast('Clear Quick Gen first to import a Civitai image URL.', 'info');
-      return;
-    }
-
-    setIsImportingCivitai(true);
-    setIsMinimized(false);
-    setInspirationFilename(null);
-    try {
-      const res = await api.importCivitaiImageUrl(rawUrl);
-      const hasAnyPayload =
-        Boolean(res.prompt) ||
-        Boolean(res.checkpointName) ||
-        res.loras.length > 0 ||
-        Boolean(res.inspirationFilename);
-
-      if (!hasAnyPayload) {
-        onPushToast(
-          'No usable prompt metadata or installed models were found for that Civitai URL.',
-          'warning'
-        );
-        return;
-      }
-
-      if (res.inspirationFilename) setInspirationFilename(res.inspirationFilename);
-      if (res.prompt) setPrompt(res.prompt);
-      if (res.aspectRatio) setAspectRatio(res.aspectRatio);
-      if (res.checkpointName) setAttachedCheckpoint(res.checkpointName);
-
-      if (res.loras.length > 0) {
-        const mappedLoras: GenerationLoraSelection[] = res.loras
-          .slice(0, MAX_SYSTEM_LORAS)
-          .map((item) => {
-            const key = normalizeLoraKey(item.loraName);
-            const matchedExplorer = loras.find(
-              (l) => normalizeLoraKey(l.filename) === key || normalizeLoraKey(l.name) === key
-            );
-            return {
-              loraName: matchedExplorer?.filename || item.loraName,
-              modelStrength: item.modelStrength,
-              clipStrength: item.clipStrength,
-              triggerWord: item.triggerWord || matchedExplorer?.triggerWord || '',
-              nickname:
-                item.nickname ||
-                getCleanLoraLabel(matchedExplorer || { loraName: item.loraName }),
-              showPill: true,
-            };
-          });
-        setAttachedLoras(mappedLoras);
-        setRemovedLoraKeys(new Set());
-      }
-
-      pulseHighlight(1400);
-      focusInputAtEnd(60, true);
-
-      const importedParts: string[] = [];
-      if (res.inspirationFilename) importedParts.push('1MP photo');
-      if (res.prompt) importedParts.push('prompt');
-      if (res.checkpointName) importedParts.push('base model');
-      if (res.loras.length > 0) {
-        importedParts.push(`${res.loras.length} LoRA${res.loras.length === 1 ? '' : 's'}`);
-      }
-      if (res.aspectRatio) importedParts.push(res.aspectRatio.split(' ')[0]);
-
-      const skippedCount = res.skippedLoras.length + (res.skippedCheckpoint ? 1 : 0);
-      const omittedParts: string[] = [];
-      if (!res.prompt) omittedParts.push('prompt unavailable');
-      if (skippedCount > 0) {
-        omittedParts.push(`${skippedCount} unavailable model${skippedCount === 1 ? '' : 's'} omitted`);
-      }
-
-      const suffix = omittedParts.length > 0 ? ` (${omittedParts.join('; ')})` : '';
-      onPushToast(`Imported Civitai ${importedParts.join(' · ')}${suffix}`, 'success');
-    } catch (err: any) {
-      onPushToast(err?.message || 'Failed to read Civitai image URL.', 'warning');
-    } finally {
-      setIsImportingCivitai(false);
-    }
-  };
-
-  const handleRemoveCheckpoint = () => {
-    setAttachedCheckpoint(null);
-  };
-
-  /**
-   * Applies a saved LoRA Preset (used by @mention and Local LLM Agent picks), loading its
-   * Base Model (or system workflow default when null) and preset default LoRA strengths as editable pills.
-   */
-  const applyPreset = (
-    preset: LoraPreset,
-    options?: { respectRemovedKeys?: boolean; silent?: boolean }
-  ) => {
-    const respectRemoved = Boolean(options?.respectRemovedKeys);
-    const charLoraKeys = new Set(
-      attachedCharacter
-        ? attachedCharacter.loras.map((cl) => normalizeLoraKey(cl.loraName))
-        : []
-    );
-    const activeCharLoraCount = attachedCharacter
-      ? attachedCharacter.loras.filter((cl) => !removedLoraKeys.has(normalizeLoraKey(cl.loraName)))
-          .length
-      : 0;
-
-    const prevPresetKeys = new Set(
-      (attachedPreset?.items || []).map((it) => normalizeLoraKey(it.loraName))
-    );
-
-    if (!respectRemoved) {
-      setRemovedLoraKeys((prev) => {
-        const next = new Set(prev);
-        for (const item of preset.items) {
-          next.delete(normalizeLoraKey(item.loraName));
-        }
-        return next;
-      });
-    }
-
-    setAttachedCheckpoint(preset.checkpointName || null);
-
-    let truncatedCount = 0;
-    setAttachedLoras((prev) => {
-      // Keep character LoRAs + any user-attached LoRAs that did not come solely from the previous preset
-      const baseList = prev.filter((al) => {
-        const k = normalizeLoraKey(al.loraName);
-        if (charLoraKeys.has(k)) return true;
-        return !prevPresetKeys.has(k);
-      });
-
-      const nextList = [...baseList];
-      const countActiveNonChar = () =>
-        nextList.filter((al) => !charLoraKeys.has(normalizeLoraKey(al.loraName))).length;
-
-      for (const item of preset.items) {
-        const itemKey = normalizeLoraKey(item.loraName);
-        if (respectRemoved && removedLoraKeys.has(itemKey)) continue;
-
-        const matchedExplorer = loras.find(
-          (l) => normalizeLoraKey(l.filename) === itemKey || normalizeLoraKey(l.name) === itemKey
-        );
-        const belongsToChar = charLoraKeys.has(itemKey);
-        const resolvedLabel = getCleanLoraLabel(
-          matchedExplorer || { name: item.displayName, loraName: item.loraName }
-        );
-        const resolvedTrigger =
-          matchedExplorer?.triggerWord || item.triggerWord || '';
-
-        const existingIdx = nextList.findIndex(
-          (al) => normalizeLoraKey(al.loraName) === itemKey
-        );
-
-        if (existingIdx >= 0) {
-          nextList[existingIdx] = {
-            ...nextList[existingIdx],
-            loraName: matchedExplorer?.filename || item.loraName,
-            modelStrength: item.modelStrength,
-            clipStrength: item.clipStrength,
-            triggerWord: resolvedTrigger || nextList[existingIdx].triggerWord || '',
-            nickname: resolvedLabel,
-            showPill: belongsToChar ? false : true,
-          };
-          if (belongsToChar) {
-            setCharacterLoraStrength(item.modelStrength);
-          }
-          continue;
-        }
-
-        if (!belongsToChar && activeCharLoraCount + countActiveNonChar() >= MAX_SYSTEM_LORAS) {
-          truncatedCount += 1;
-          continue;
-        }
-
-        nextList.push({
-          loraName: matchedExplorer?.filename || item.loraName,
-          modelStrength: item.modelStrength,
-          clipStrength: item.clipStrength,
-          triggerWord: resolvedTrigger,
-          nickname: resolvedLabel,
-          showPill: !belongsToChar,
-        });
-      }
-
-      return nextList;
-    });
-
-    setAttachedPreset(preset);
-    if (truncatedCount > 0 && !options?.silent) {
-      onPushToast(
-        `Applied "${preset.name}" (${truncatedCount} LoRA skipped due to ${MAX_SYSTEM_LORAS}-LoRA limit)`,
-        'warning'
-      );
-    }
-  };
-
-  /** Detaches the active Preset pill and clears LoRAs/checkpoint introduced solely by that preset. */
-  const handleRemovePreset = () => {
-    const presetToRemove = attachedPreset;
-    setAttachedPreset(null);
-    if (!presetToRemove) return;
-
-    if (
-      presetToRemove.checkpointName &&
-      attachedCheckpoint &&
-      normalizeLoraKey(presetToRemove.checkpointName) === normalizeLoraKey(attachedCheckpoint)
-    ) {
-      setAttachedCheckpoint(null);
-    }
-
-    const presetKeys = new Set(presetToRemove.items.map((it) => normalizeLoraKey(it.loraName)));
-    const charKeys = new Set(
-      attachedCharacter
-        ? attachedCharacter.loras.map((cl) => normalizeLoraKey(cl.loraName))
-        : []
-    );
-
-    setAttachedLoras((prev) =>
-      prev.filter((al) => {
-        const k = normalizeLoraKey(al.loraName);
-        if (charKeys.has(k)) return true;
-        return !presetKeys.has(k);
-      })
-    );
-  };
-
-  /** Detaches any pre-linked source stack so the next generation outputs a standalone image. */
-  const handleRemoveStackTarget = () => {
+  const resetQuickGenState = (options?: {
+    minimizeIfNeeded?: boolean;
+    clearInputValue?: boolean;
+    onAfterReset?: () => void;
+  }) => {
+    setPrompt('');
+    setChatMessages([]);
     setActiveSeriesId(null);
     setBranchFromImageId(null);
     setStackSourceLabel(null);
-  };
-
-  const handleRemoveCharacter = () => {
-    const charToRemove = attachedCharacter;
-    setAttachedCharacter(null);
-    setCharacterLoraStrength(1.0);
-    if (!charToRemove) return;
-
-    const removedKeys = new Set(charToRemove.loras.map((cl) => normalizeLoraKey(cl.loraName)));
-    setRemovedLoraKeys((prev) => {
-      const next = new Set(prev);
-      removedKeys.forEach((k) => next.add(k));
-      return next;
-    });
-    setAttachedLoras((prev) =>
-      prev.filter(
-        (al) =>
-          !removedKeys.has(normalizeLoraKey(al.loraName)) &&
-          !isCharacterLora(al.loraName, charToRemove, loras) &&
-          al.showPill !== false
-      )
-    );
-  };
-
-  const handleRemoveLora = (loraName: string) => {
-    const keyToRemove = normalizeLoraKey(loraName);
-    const nextRemoved = new Set(removedLoraKeys);
-    nextRemoved.add(keyToRemove);
-    setRemovedLoraKeys(nextRemoved);
-
-    setAttachedLoras((prev) => {
-      const remaining = prev.filter((l) => normalizeLoraKey(l.loraName) !== keyToRemove);
-      if (!attachedCharacter && !remaining.some((l) => l.showPill !== false)) {
-        return [];
-      }
-      return remaining;
-    });
-
-    if (agentEnabled) {
-      const nextExcludedArray = Array.from(nextRemoved);
-      setChatMessages((prev) => {
-        if (prev.length === 0) return prev;
-        const lastAssistantIdx = [...prev].reverse().findIndex((m) => m.role === 'assistant');
-        if (lastAssistantIdx < 0) return prev;
-        const actualIdx = prev.length - 1 - lastAssistantIdx;
-        return prev.map((m, idx) =>
-          idx === actualIdx ? { ...m, excludedLoras: nextExcludedArray } : m
-        );
-      });
-    }
-  };
-
-  /** Updates a session-only LoRA's model/CLIP strength (-10.0 to +10.0) without mutating global defaults. */
-  const handleUpdateLoraStrength = (loraName: string, nextStrength: number) => {
-    if (!Number.isFinite(nextStrength)) return;
-    const clamped = Math.max(-10.0, Math.min(10.0, Math.round(nextStrength * 100) / 100));
-    const targetKey = normalizeLoraKey(loraName);
-
-    if (
-      attachedCharacter &&
-      attachedCharacter.loras.some((cl) => normalizeLoraKey(cl.loraName) === targetKey)
-    ) {
-      setCharacterLoraStrength(clamped);
-    }
-
-    setAttachedLoras((prev) =>
-      prev.map((al) =>
-        normalizeLoraKey(al.loraName) === targetKey
-          ? { ...al, modelStrength: clamped, clipStrength: clamped }
-          : al
-      )
-    );
-  };
-
-  /** Updates the attached base character LoRA's session strength (-10.0 to +10.0). */
-  const handleUpdateCharacterStrength = (nextStrength: number) => {
-    if (!Number.isFinite(nextStrength) || !attachedCharacter) return;
-    const clamped = Math.max(-10.0, Math.min(10.0, Math.round(nextStrength * 100) / 100));
-    setCharacterLoraStrength(clamped);
-
-    const charKeys = new Set(attachedCharacter.loras.map((cl) => normalizeLoraKey(cl.loraName)));
-    setAttachedLoras((prev) => {
-      if (!prev.some((al) => charKeys.has(normalizeLoraKey(al.loraName)))) return prev;
-      return prev.map((al) =>
-        charKeys.has(normalizeLoraKey(al.loraName))
-          ? { ...al, modelStrength: clamped, clipStrength: clamped }
-          : al
-      );
-    });
-  };
-
-  /** Sends a conversational turn to Local LLM when Agent mode is active. */
-  const handleSendChatTurn = async () => {
-    const cleanInput = prompt.trim();
-    if (!cleanInput || isChatting || isSubmitting) return;
-
-    const userMsg: QuickGenChatMessage = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: cleanInput,
-    };
-    const nextHistory = [...chatMessages, userMsg];
-    setChatMessages(nextHistory);
-    setPrompt('');
-    setIsChatting(true);
-
-    try {
-      const { selectedLoras } = resolveActiveLoraStack();
-      const currentRemovedKeys = Array.from(removedLoraKeys);
-      const res = await api.chatQuickGenPrompt({
-        messages: nextHistory.map((m) => ({
-          role: m.role,
-          content: m.content,
-          proposedPrompt: m.proposedPrompt ?? undefined,
-          proposalKind: m.proposalKind,
-        })),
-        characterName: attachedCharacter?.name || undefined,
-        characterDescription: attachedCharacter?.description || undefined,
-        characterPhysicalDescription: attachedCharacter?.physicalDescription || undefined,
-        loraNames: selectedLoras.map((l) => l.loraName),
-        excludedLoras: currentRemovedKeys,
-        activePresetName: attachedPreset?.name || undefined,
-        batchCount,
-      });
-
-      let appliedAgentPreset: LoraPreset | null = null;
-      if (res.selectedPreset?.id) {
-        const matchedPreset = presets.find((p) => p.id === res.selectedPreset!.id) || null;
-        if (matchedPreset) {
-          appliedAgentPreset = matchedPreset;
-          applyPreset(matchedPreset, { respectRemovedKeys: true, silent: true });
-        }
-      }
-
-      const resolvedPickedLoras: LoraExplorerItem[] = [];
-      if (Array.isArray(res.selectedLoras) && res.selectedLoras.length > 0) {
-        const seenKeys = new Set<string>();
-        for (const pickedName of res.selectedLoras) {
-          if (resolvedPickedLoras.length >= 3) break;
-          const pickedKey = normalizeLoraKey(pickedName);
-          if (!pickedKey || seenKeys.has(pickedKey) || removedLoraKeys.has(pickedKey)) continue;
-          const matched = loras.find(
-            (l) =>
-              normalizeLoraKey(l.filename) === pickedKey || normalizeLoraKey(l.name) === pickedKey
-          );
-          if (!matched) continue;
-          // Character LoRAs stay locked to Characters
-          if (
-            matched.loraCategory === 'character' ||
-            matched.characters.length > 0 ||
-            isCharacterLora(matched.filename, attachedCharacter, loras)
-          ) {
-            continue;
-          }
-          seenKeys.add(pickedKey);
-          resolvedPickedLoras.push(matched);
-        }
-      }
-
-      if (resolvedPickedLoras.length > 0) {
-        setAttachedLoras((prev) => {
-          const next = [...prev];
-          for (const matched of resolvedPickedLoras) {
-            const matchedKey = normalizeLoraKey(matched.filename);
-            if (removedLoraKeys.has(matchedKey)) continue;
-            const existingIdx = next.findIndex((al) => normalizeLoraKey(al.loraName) === matchedKey);
-            const cleanLabel = getCleanLoraLabel(matched);
-            if (existingIdx >= 0) {
-              next[existingIdx] = {
-                ...next[existingIdx],
-                nickname: cleanLabel,
-                triggerWord: matched.triggerWord || next[existingIdx].triggerWord || '',
-                showPill: true,
-              };
-            } else if (next.length < MAX_SYSTEM_LORAS) {
-              next.push({
-                loraName: matched.filename,
-                modelStrength: matched.defaultModelStrength ?? 1.0,
-                clipStrength: matched.defaultClipStrength ?? 1.0,
-                triggerWord: matched.triggerWord || '',
-                nickname: cleanLabel,
-                showPill: true,
-              });
-            }
-          }
-          return next;
-        });
-      }
-
-      const pickedLoraHistory = Array.from(
-        new Set([
-          ...(appliedAgentPreset ? appliedAgentPreset.items.map((it) => it.loraName) : []),
-          ...resolvedPickedLoras.map((l) => l.filename),
-        ])
-      );
-
-      const assistantMsg: QuickGenChatMessage = {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        content: res.reply,
-        proposedPrompt: res.proposedPrompt,
-        proposalKind: res.proposalKind,
-        selectedLoras: pickedLoraHistory.length > 0 ? pickedLoraHistory : undefined,
-        excludedLoras: currentRemovedKeys.length > 0 ? currentRemovedKeys : undefined,
-      };
-      setChatMessages((prev) => [...prev, assistantMsg]);
-      focusInputAtEnd(30, false);
-    } catch (err: any) {
-      onPushToast(err?.message || 'Failed to converse with Local LLM.', 'error');
-    } finally {
-      setIsChatting(false);
-    }
-  };
-
-  /** Dispatches a generation batch to ComfyUI and resets the Quick Gen dock back to defaults. */
-  const dispatchBatchToComfy = async (
-    rawPromptText: string,
-    expandWithAgentSet: boolean,
-    onAfterReset?: () => void,
-    preExpandedPrompts?: string[]
-  ) => {
-    const cleanPrompt = rawPromptText.trim();
-    const cleanedPreExpanded = (preExpandedPrompts || []).map((p) => p.trim()).filter(Boolean);
-    if ((!cleanPrompt && cleanedPreExpanded.length === 0) || isSubmitting) return;
-
-    if (!resolvedWorkflow) {
-      onPushToast('System workflow is not loaded yet.', 'error');
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const { selectedLoras, triggerWord } = resolveActiveLoraStack();
-
-      let promptsToRun: string[] = [];
-      if (cleanedPreExpanded.length > 0) {
-        promptsToRun = cleanedPreExpanded;
-      } else if (expandWithAgentSet) {
-        const agentRes = await api.generateSetPromptsWithAgent({
-          characterName: attachedCharacter?.name || '',
-          characterDescription: attachedCharacter?.description || '',
-          characterPhysicalDescription: attachedCharacter?.physicalDescription || '',
-          loraNames: selectedLoras.map((l) => l.loraName),
-          theme: cleanPrompt,
-          count: batchCount,
-          basePromptTemplate: '{theme}',
-        });
-        promptsToRun =
-          agentRes.prompts && agentRes.prompts.length > 0
-            ? agentRes.prompts
-            : Array.from({ length: batchCount }, () => cleanPrompt);
-      } else {
-        promptsToRun = Array.from({ length: batchCount }, () => cleanPrompt);
-      }
-
-      const currentExcludedLoras = Array.from(removedLoraKeys);
-      let snapshotForBatch: QuickGenChatMessage[] | undefined;
-      if (chatMessages.length > 0) {
-        snapshotForBatch = chatMessages.map((m, idx) => {
-          const isLastAssistant =
-            m.role === 'assistant' &&
-            !chatMessages.slice(idx + 1).some((later) => later.role === 'assistant');
-          if (isLastAssistant) {
-            return {
-              ...m,
-              excludedLoras: currentExcludedLoras.length > 0 ? currentExcludedLoras : undefined,
-            };
-          }
-          return m;
-        });
-      }
-
-      const isMultiShotSet = expandWithAgentSet || cleanedPreExpanded.length > 1;
-      const res = await api.submitGenerationBatch({
-        characterId: attachedCharacter?.id || null,
-        workflowId: resolvedWorkflow.id,
-        mode: isMultiShotSet ? 'theme_set' : 'single',
-        themeTitle: (cleanPrompt || promptsToRun[0] || '').slice(0, 80),
-        aspectRatio,
-        megapixels,
-        prompts: promptsToRun,
-        triggerWord,
-        negativePrompt: '',
-        loras: selectedLoras,
-        checkpointName: attachedCheckpoint || undefined,
-        seriesId: isMultiShotSet ? null : activeSeriesId,
-        branchFromImageId: isMultiShotSet ? null : branchFromImageId,
-        inspirationFilename: !activeSeriesId && !branchFromImageId ? inspirationFilename : null,
-        chatSnapshot: snapshotForBatch,
-      });
-
-      const submittedCount = res.batch.items.filter((i) => i.status === 'submitted').length;
-      const failedCount = res.batch.items.filter((i) => i.status === 'failed').length;
-
-      if (failedCount > 0 && submittedCount === 0) {
-        onPushToast(
-          `Batch #${res.batch.id} failed (${res.batch.items[0]?.errorMessage || 'ComfyUI offline'})`,
-          'warning'
-        );
-      } else {
-        const attachedCharKeys = new Set(
-          (attachedCharacter?.loras || []).map((cl) => normalizeLoraKey(cl.loraName))
-        );
-        const extraLoraCount = selectedLoras.filter(
-          (sl) => !attachedCharKeys.has(normalizeLoraKey(sl.loraName))
-        ).length;
-        const loraCountNotice = extraLoraCount > 0 ? ` + ${extraLoraCount} LoRA(s)` : '';
-        onPushToast(
-          `Queued Batch #${res.batch.id} (${submittedCount}/${res.batch.totalCount} sent${
-            attachedCharacter ? ` · ${attachedCharacter.name}` : ''
-          }${loraCountNotice})`,
-          'success'
-        );
-      }
-
-      // Reset Quick Gen box & conversation back to default state
-      setPrompt('');
-      setChatMessages([]);
-      setExpandingMessageId(null);
-      setActiveSeriesId(null);
-      setBranchFromImageId(null);
-      setStackSourceLabel(null);
-      setInspirationFilename(null);
-      setAgentEnabled(false);
-      setAttachedCharacter(null);
-      setCharacterLoraStrength(1.0);
-      setAttachedPreset(null);
-      setAttachedCheckpoint(null);
-      setAttachedLoras([]);
-      setRemovedLoraKeys(new Set());
-      setAspectRatio(workflowDefaultAr);
-      setMegapixels(workflowDefaultMp);
-      setBatchCount(1);
-      setShowSettingsMenu(false);
-      setIsPromptFocused(false);
-      if (isInspectorOpen || (typeof window !== 'undefined' && window.innerWidth < 768)) {
-        setIsMinimized(true);
-      }
-      onAfterReset?.();
-      inputRef.current?.blur();
-      await onRefreshAll();
-    } catch (err: any) {
-      onPushToast(err?.message || 'Failed to submit quick generation.', 'error');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  /** Expands an approved Set Concept / Prompt into N editable shot prompts for preview. */
-  const handlePreviewExpandConcept = async (messageId: string, conceptText: string) => {
-    const cleanConcept = conceptText.trim();
-    if (!cleanConcept || expandingMessageId || isSubmitting || isChatting) return;
-    setExpandingMessageId(messageId);
-    try {
-      const { selectedLoras } = resolveActiveLoraStack();
-      const agentRes = await api.generateSetPromptsWithAgent({
-        characterName: attachedCharacter?.name || '',
-        characterDescription: attachedCharacter?.description || '',
-        characterPhysicalDescription: attachedCharacter?.physicalDescription || '',
-        loraNames: selectedLoras.map((l) => l.loraName),
-        theme: cleanConcept,
-        count: batchCount,
-        basePromptTemplate: '{theme}',
-      });
-      const expanded =
-        agentRes.prompts && agentRes.prompts.length > 0
-          ? agentRes.prompts
-          : Array.from({ length: batchCount }, () => cleanConcept);
-      setChatMessages((prev) =>
-        prev.map((m) => (m.id === messageId ? { ...m, expandedPrompts: expanded } : m))
-      );
-      if (!agentRes.usedLmStudio) {
-        onPushToast(
-          agentRes.warning || 'Local LLM unavailable for expansion; loaded fallback shot variations.',
-          'warning'
-        );
-      }
-    } catch (err: any) {
-      onPushToast(err?.message || 'Failed to expand concept into shots.', 'error');
-    } finally {
-      setExpandingMessageId(null);
-    }
-  };
-
-  /** Manually edits a proposed prompt or concept inside Agent conversation before submitting. */
-  const handleUpdateProposedPrompt = (messageId: string, nextValue: string) => {
-    setChatMessages((prev) =>
-      prev.map((m) => (m.id === messageId ? { ...m, proposedPrompt: nextValue } : m))
-    );
-  };
-
-  /** Manually edits one shot prompt inside an expanded set preview. */
-  const handleUpdateExpandedPrompt = (messageId: string, shotIndex: number, nextValue: string) => {
-    setChatMessages((prev) =>
-      prev.map((m) => {
-        if (m.id !== messageId || !Array.isArray(m.expandedPrompts)) return m;
-        const nextList = [...m.expandedPrompts];
-        nextList[shotIndex] = nextValue;
-        return { ...m, expandedPrompts: nextList };
-      })
-    );
-  };
-
-  /** Closes the inline shot preview so the user can edit or re-expand the concept. */
-  const handleCloseExpandedPreview = (messageId: string) => {
-    setChatMessages((prev) =>
-      prev.map((m) => (m.id === messageId ? { ...m, expandedPrompts: undefined } : m))
-    );
-  };
-
-  /** Submits manually reviewed/edited shot prompts straight to ComfyUI. */
-  const handleSubmitExpandedPrompts = async (
-    promptsToSubmit: string[],
-    conceptTheme: string,
-    onAfterReset?: () => void
-  ) => {
-    const cleanPrompts = promptsToSubmit.map((p) => p.trim()).filter(Boolean);
-    if (cleanPrompts.length === 0) {
-      onPushToast('Add at least one non-empty shot prompt before submitting.', 'warning');
-      return;
-    }
-    await dispatchBatchToComfy(conceptTheme, true, onAfterReset, cleanPrompts);
-  };
-
-  /** Completely clears the Quick Gen box (prompt, character, LoRAs, conversation, and settings). */
-  const handleClearBox = (onAfterReset?: () => void) => {
-    setPrompt('');
+    setInspirationFilename(null);
+    setAgentEnabled(false);
     setAttachedCharacter(null);
     setCharacterLoraStrength(1.0);
     setAttachedPreset(null);
     setAttachedCheckpoint(null);
     setAttachedLoras([]);
     setRemovedLoraKeys(new Set());
-    setChatMessages([]);
-    setExpandingMessageId(null);
-    setActiveSeriesId(null);
-    setBranchFromImageId(null);
-    setStackSourceLabel(null);
-    setInspirationFilename(null);
-    setAgentEnabled(false);
     setAspectRatio(workflowDefaultAr);
     setMegapixels(workflowDefaultMp);
     setBatchCount(1);
     setShowSettingsMenu(false);
     setIsPromptFocused(false);
-    onClearPrefill?.();
-    onAfterReset?.();
+    if (
+      options?.minimizeIfNeeded &&
+      (isInspectorOpen || (typeof window !== 'undefined' && window.innerWidth < 768))
+    ) {
+      setIsMinimized(true);
+    }
+    options?.onAfterReset?.();
     if (inputRef.current) {
-      inputRef.current.value = '';
+      if (options?.clearInputValue) inputRef.current.value = '';
       inputRef.current.blur();
     }
   };
 
-  /** Primary Enter / Arrow button handler: sends a chat turn when Agent is active, otherwise dispatches direct batch. */
-  const handleSubmit = async (onAfterReset?: () => void) => {
-    if (agentEnabled) {
-      await handleSendChatTurn();
-      return;
-    }
-    await dispatchBatchToComfy(prompt, false, onAfterReset);
-  };
+  const attachments = useQuickGenAttachments({
+    loras,
+    prefillPayload,
+    workflowDefaultMp,
+    onClearPrefill,
+    onPushToast,
+    focusInputAtEnd,
+    pulseHighlight,
+    setPrompt,
+    agentEnabled,
+    setAgentEnabled,
+    setChatMessages,
+    setActiveSeriesId,
+    setBranchFromImageId,
+    setStackSourceLabel,
+    setInspirationFilename,
+    setAspectRatio,
+    setMegapixels,
+    setBatchCount,
+    setIsMinimized,
+    attachedCharacter,
+    setAttachedCharacter,
+    characterLoraStrength,
+    setCharacterLoraStrength,
+    attachedPreset,
+    setAttachedPreset,
+    attachedCheckpoint,
+    setAttachedCheckpoint,
+    attachedLoras,
+    setAttachedLoras,
+    removedLoraKeys,
+    setRemovedLoraKeys,
+  });
 
-  /** Submits a proposed prompt/concept from Agent mode (blind-expanding if batchCount > 1) and resets Quick Gen. */
-  const handleSubmitProposedPrompt = async (
-    proposedPromptText: string,
-    onAfterReset?: () => void
-  ) => {
-    await dispatchBatchToComfy(proposedPromptText, batchCount > 1, onAfterReset);
+  const mediaImport = useQuickGenMediaImport({
+    loras,
+    lmStudioOnline,
+    isQuickGenEmpty,
+    prompt,
+    attachedCharacter,
+    attachedLoras,
+    onPushToast,
+    focusInputAtEnd,
+    pulseHighlight,
+    setPrompt,
+    setIsMinimized,
+    setInspirationFilename,
+    setAspectRatio,
+    setAttachedCharacter,
+    setCharacterLoraStrength,
+    setAttachedCheckpoint,
+    setAttachedLoras,
+    setRemovedLoraKeys,
+  });
+
+  const agentAndBatch = useQuickGenAgentAndBatch({
+    prompt,
+    setPrompt,
+    lmStudioOnline,
+    agentEnabled,
+    setAgentEnabled,
+    chatMessages,
+    setChatMessages,
+    attachedCharacter,
+    attachedPreset,
+    attachedCheckpoint,
+    setAttachedLoras,
+    removedLoraKeys,
+    loras,
+    presets,
+    resolvedWorkflow,
+    aspectRatio,
+    megapixels,
+    batchCount,
+    activeSeriesId,
+    branchFromImageId,
+    inspirationFilename,
+    resolveActiveLoraStack: attachments.resolveActiveLoraStack,
+    applyPreset: attachments.applyPreset,
+    resetQuickGenState,
+    focusInputAtEnd,
+    onRefreshAll,
+    onPushToast,
+  });
+
+  /** Completely clears the Quick Gen box (prompt, character, LoRAs, conversation, and settings). */
+  const handleClearBox = (onAfterReset?: () => void) => {
+    agentAndBatch.setExpandingMessageId(null);
+    onClearPrefill?.();
+    resetQuickGenState({ clearInputValue: true, onAfterReset });
   };
 
   return {
@@ -1178,8 +262,8 @@ export function useQuickGenSubmit({
     branchFromImageId,
     setBranchFromImageId,
     stackSourceLabel,
-    isChatting,
-    expandingMessageId,
+    isChatting: agentAndBatch.isChatting,
+    expandingMessageId: agentAndBatch.expandingMessageId,
     aspectRatio,
     setAspectRatio,
     megapixels,
@@ -1205,32 +289,32 @@ export function useQuickGenSubmit({
     setShowSettingsMenu,
     isPromptFocused,
     setIsPromptFocused,
-    isSubmitting,
-    isInterrogating,
-    isImportingCivitai,
+    isSubmitting: agentAndBatch.isSubmitting,
+    isInterrogating: mediaImport.isInterrogating,
+    isImportingCivitai: mediaImport.isImportingCivitai,
     isQuickGenEmpty,
     hasInspirationImage: Boolean(inspirationFilename),
-    modelMatchEnabled,
-    isMatchingFace,
-    toggleModelMatch,
+    modelMatchEnabled: mediaImport.modelMatchEnabled,
+    isMatchingFace: mediaImport.isMatchingFace,
+    toggleModelMatch: mediaImport.toggleModelMatch,
     workflowDefaultMp,
-    handleInterrogateImageFile,
-    handleImportCivitaiUrl,
-    applyPreset,
-    handleRemoveCharacter,
-    handleRemovePreset,
-    handleRemoveCheckpoint,
-    handleRemoveStackTarget,
-    handleRemoveLora,
-    handleUpdateLoraStrength,
-    handleUpdateCharacterStrength,
+    handleInterrogateImageFile: mediaImport.handleInterrogateImageFile,
+    handleImportCivitaiUrl: mediaImport.handleImportCivitaiUrl,
+    applyPreset: attachments.applyPreset,
+    handleRemoveCharacter: attachments.handleRemoveCharacter,
+    handleRemovePreset: attachments.handleRemovePreset,
+    handleRemoveCheckpoint: attachments.handleRemoveCheckpoint,
+    handleRemoveStackTarget: attachments.handleRemoveStackTarget,
+    handleRemoveLora: attachments.handleRemoveLora,
+    handleUpdateLoraStrength: attachments.handleUpdateLoraStrength,
+    handleUpdateCharacterStrength: attachments.handleUpdateCharacterStrength,
     handleClearBox,
-    handleSubmit,
-    handleUpdateProposedPrompt,
-    handleSubmitProposedPrompt,
-    handlePreviewExpandConcept,
-    handleUpdateExpandedPrompt,
-    handleCloseExpandedPreview,
-    handleSubmitExpandedPrompts,
+    handleSubmit: agentAndBatch.handleSubmit,
+    handleUpdateProposedPrompt: agentAndBatch.handleUpdateProposedPrompt,
+    handleSubmitProposedPrompt: agentAndBatch.handleSubmitProposedPrompt,
+    handlePreviewExpandConcept: agentAndBatch.handlePreviewExpandConcept,
+    handleUpdateExpandedPrompt: agentAndBatch.handleUpdateExpandedPrompt,
+    handleCloseExpandedPreview: agentAndBatch.handleCloseExpandedPreview,
+    handleSubmitExpandedPrompts: agentAndBatch.handleSubmitExpandedPrompts,
   };
 }
