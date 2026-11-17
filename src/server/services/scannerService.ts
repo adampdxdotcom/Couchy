@@ -12,7 +12,9 @@ import {
   runAssistedCharacterIdentificationForImage,
 } from './characterService.ts';
 import { notifyImageIndexed } from './comfyuiLiveMonitor.ts';
+import { pathExistsAsync, walkDirectoryFilesAsync } from './fsWalkService.ts';
 import { attachGenerationItemOutputToSeries } from './seriesService.ts';
+import { invalidateStorageUsageStatsCache } from './storageStatsService.ts';
 import { startVisualTaggerQueue } from './visualTaggerService.ts';
 import type { DependencyStatus } from '../../shared/types.ts';
 
@@ -162,11 +164,13 @@ export async function ensureWebpThumbnail(
     }
     const format = (metadata.format || path.extname(sourceFile).slice(1)).toUpperCase();
 
-    if (forceOverwrite || !fs.existsSync(thumbFile)) {
+    const thumbExisted = await pathExistsAsync(thumbFile);
+    if (forceOverwrite || !thumbExisted) {
       await sharp(sourceFile)
         .resize({ width: 384, height: 384, fit: 'inside', withoutEnlargement: true })
         .webp({ quality: 80 })
         .toFile(thumbFile);
+      invalidateStorageUsageStatsCache();
     }
     return { thumbPath: thumbFile, width, height, format };
   } catch {
@@ -202,12 +206,12 @@ export async function indexUploadedInspirationImage(
 
   const fullPath = path.resolve(appConfig.uploadedImagesDir, safeName);
   const uploadedRoot = path.resolve(appConfig.uploadedImagesDir);
-  if (!fullPath.startsWith(uploadedRoot + path.sep) || !fs.existsSync(fullPath)) {
+  if (!fullPath.startsWith(uploadedRoot + path.sep)) {
     return null;
   }
 
-  const stat = fs.statSync(fullPath);
-  if (!stat.isFile() || stat.size <= 0) return null;
+  const stat = await fs.promises.stat(fullPath).catch(() => null);
+  if (!stat || !stat.isFile() || stat.size <= 0) return null;
 
   const relativePath = `__uploaded__/${safeName}`;
   const existing = db
@@ -260,6 +264,7 @@ export async function indexUploadedInspirationImage(
     return id;
   })();
 
+  invalidateStorageUsageStatsCache();
   return imageId;
 }
 
@@ -292,6 +297,7 @@ function deleteCorruptImageRecord(imageId: number): void {
       }
     });
     tx();
+    invalidateStorageUsageStatsCache();
   } catch (err) {
     console.warn(`Failed to clean up corrupt image record #${imageId}:`, err);
   }
@@ -524,7 +530,7 @@ export async function indexSingleImageFile(
   characterId?: number | null
 ): Promise<IndexSingleResult> {
   try {
-    const stat = fs.statSync(fullPath);
+    const stat = await fs.promises.stat(fullPath);
     if (!stat.isFile()) return { outcome: 'unchanged', imageId: null, contentHash: null };
 
     const ext = path.extname(fullPath).toLowerCase();
@@ -561,7 +567,7 @@ export async function indexSingleImageFile(
       existingByPath.is_missing === 0
     ) {
       const expectedThumb = path.join(appConfig.thumbnailPath, `${existingByPath.content_hash}.webp`);
-      if (!fs.existsSync(expectedThumb) || existingByPath.thumbnail_path !== expectedThumb) {
+      if (!(await pathExistsAsync(expectedThumb)) || existingByPath.thumbnail_path !== expectedThumb) {
         const { thumbPath } = await ensureWebpThumbnail(fullPath, existingByPath.content_hash);
         if (thumbPath) {
           db.prepare('UPDATE images SET thumbnail_path = ? WHERE id = ?').run(
@@ -862,29 +868,12 @@ export async function indexSingleImageFile(
       startVisualTaggerQueue().catch(() => {});
     });
 
+    invalidateStorageUsageStatsCache();
     return { outcome, imageId: imageId!, contentHash };
   } catch (err) {
     logger.error('Scanner', `Error indexing image file: ${fullPath}`, err);
     return { outcome: 'error', imageId: null, contentHash: null };
   }
-}
-
-/**
- * Recursively collects all supported image files in a directory.
- */
-function walkDirectoryRecursive(dir: string): string[] {
-  const results: string[] = [];
-  if (!fs.existsSync(dir)) return results;
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      results.push(...walkDirectoryRecursive(full));
-    } else if (entry.isFile() && SUPPORTED_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
-      results.push(full);
-    }
-  }
-  return results;
 }
 
 /**
@@ -902,7 +891,11 @@ export async function runDirectoryScan(
   }
 
   const rootDir = appConfig.comfyuiOutputDir;
-  const files = walkDirectoryRecursive(rootDir);
+  const walked = await walkDirectoryFilesAsync(rootDir, {
+    extensions: SUPPORTED_EXTENSIONS,
+    includeStat: false,
+  });
+  const files = walked.map((entry) => entry.fullPath);
 
   const info = db
     .prepare(
@@ -983,6 +976,7 @@ export async function runDirectoryScan(
           'Scanner',
           `Directory scan (${scanType}) completed: +${added} added, ~${modified} modified, -${deleted} missing`
         );
+        invalidateStorageUsageStatsCache();
         notifyImageIndexed();
       }
     } catch (err: any) {
@@ -1039,6 +1033,7 @@ export function startFilesystemWatcher(): void {
   fsWatcher.on('unlink', (filePath) => {
     const rel = path.relative(watchDir, filePath).replace(/\\/g, '/');
     db.prepare('UPDATE images SET is_missing = 1 WHERE relative_path = ?').run(rel);
+    invalidateStorageUsageStatsCache();
   });
 }
 

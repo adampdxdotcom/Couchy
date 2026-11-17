@@ -4,9 +4,11 @@ import crypto from 'crypto';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import { logger } from '../logger.ts';
+import { MODEL_EXTS, pathExistsAsync, walkDirectoryFilesAsync } from './fsWalkService.ts';
+import { invalidateInstalledModelsCache } from './civitai/civitaiModelEnrichmentService.ts';
+import { invalidateStorageUsageStatsCache } from './storageStatsService.ts';
 import type { ModelCleanupCandidate, ModelCleanupStatus } from '../../shared/types.ts';
 
-const MODEL_EXTS = new Set(['.safetensors', '.ckpt', '.pt', '.pth', '.bin', '.gguf', '.sft']);
 const COPY_STABILITY_MS = 60_000;
 const CLEANUP_TICK_MS = 15 * 60_000;
 const DEFAULT_RETENTION_HOURS = 24;
@@ -36,43 +38,6 @@ function hasDirectoryOverlap(dirA: string, dirB: string): boolean {
   const a = path.resolve(dirA);
   const b = path.resolve(dirB);
   return a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
-}
-
-function walkModelFiles(rootDir: string): DiskModelEntry[] {
-  const results: DiskModelEntry[] = [];
-  if (!rootDir || !fs.existsSync(rootDir)) return results;
-
-  const walk = (dir: string) => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        walk(fullPath);
-      } else if (entry.isFile() && MODEL_EXTS.has(path.extname(entry.name).toLowerCase())) {
-        try {
-          const stat = fs.statSync(fullPath);
-          if (stat.size > 0) {
-            results.push({
-              fullPath,
-              filename: entry.name,
-              size: stat.size,
-              mtimeMs: Math.round(stat.mtimeMs),
-            });
-          }
-        } catch {
-          // Ignore unreadable/vanished transient file
-        }
-      }
-    }
-  };
-
-  walk(rootDir);
-  return results;
 }
 
 /**
@@ -127,6 +92,7 @@ export function updateModelCleanupSettings(params: {
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
     ).run(String(clamped));
   }
+  invalidateStorageUsageStatsCache();
   return getModelCleanupSettings();
 }
 
@@ -231,8 +197,18 @@ export async function scanAndCleanCopiedDownloads(options?: {
   try {
     const nowIso = new Date().toISOString();
     const nowMs = Date.now();
-    const downloadFiles = walkModelFiles(appConfig.downloadsDir);
-    const comfyFiles = walkModelFiles(appConfig.comfyuiModelsDir);
+    const [downloadFiles, comfyFiles] = await Promise.all([
+      walkDirectoryFilesAsync(appConfig.downloadsDir, {
+        extensions: MODEL_EXTS,
+        includeStat: true,
+        minSizeBytes: 1,
+      }),
+      walkDirectoryFilesAsync(appConfig.comfyuiModelsDir, {
+        extensions: MODEL_EXTS,
+        includeStat: true,
+        minSizeBytes: 1,
+      }),
+    ]);
 
     const activeJobPaths = new Set(
       (
@@ -348,15 +324,20 @@ export async function scanAndCleanCopiedDownloads(options?: {
         if (isDue) {
           try {
             // Final pre-delete double check: paths stay within their own roots and sizes still match
+            const [dlExists, comfyStat] = await Promise.all([
+              pathExistsAsync(dl.fullPath),
+              fs.promises.stat(matchedComfy.fullPath).catch(() => null),
+            ]);
             if (
               isPathInsideDir(dl.fullPath, appConfig.downloadsDir) &&
               isPathInsideDir(matchedComfy.fullPath, appConfig.comfyuiModelsDir) &&
-              fs.existsSync(dl.fullPath) &&
-              fs.existsSync(matchedComfy.fullPath) &&
-              fs.statSync(matchedComfy.fullPath).size === dl.size &&
+              dlExists &&
+              comfyStat !== null &&
+              comfyStat.isFile() &&
+              comfyStat.size === dl.size &&
               !activeJobPaths.has(resolvedDl)
             ) {
-              fs.unlinkSync(dl.fullPath);
+              await fs.promises.unlink(dl.fullPath);
               db.prepare('DELETE FROM downloaded_model_copies WHERE download_path = ?').run(dl.fullPath);
               // Point inventory record to ComfyUI's read-only copy so metadata & installed state stay intact
               db.prepare(
@@ -368,6 +349,7 @@ export async function scanAndCleanCopiedDownloads(options?: {
                      last_seen_at = datetime('now')
                  WHERE LOWER(filename) = LOWER(?)`
               ).run(matchedComfy.fullPath, dl.filename, dl.filename);
+              invalidateInstalledModelsCache();
 
               deletedFiles.push(dl.filename);
               freedBytes += dl.size;
@@ -403,6 +385,7 @@ export async function scanAndCleanCopiedDownloads(options?: {
     logger.error('ModelCleanup', 'Model cleanup scan failed', err);
   } finally {
     isCleanupRunning = false;
+    invalidateStorageUsageStatsCache();
   }
 
   return { status: getModelCleanupStatus(), deletedFiles, freedBytes };

@@ -35,8 +35,10 @@ import {
   applyCivitaiEnrichmentToModel,
   cacheModelPreviewImages,
   fetchAndEnrichModelFromCivitai,
+  invalidateInstalledModelsCache,
 } from './civitai/civitaiModelEnrichmentService.ts';
 import { resolveCivitaiImageModelsForDownloader } from './civitai/civitaiImageShareService.ts';
+import { invalidateStorageUsageStatsCache } from './storageStatsService.ts';
 import {
   classifyLoraFromMetadata,
   classifySafetensorsHeaderOnDisk,
@@ -645,7 +647,8 @@ export async function executeDownloadJob(
               `/api/v1/model-versions/${encodeURIComponent(String(versionId))}`,
               getCivitaiHeaders(),
               preferredDomain,
-              6000
+              6000,
+              { bypassCache: true }
             );
             if (verRes?.data) {
               const ea = extractCivitaiEarlyAccessInfo(verRes.data);
@@ -795,6 +798,8 @@ export async function executeDownloadJob(
       params.hfRepoId || null,
       downloadedDirectlyIntoComfy ? null : params.destinationPath
     );
+    invalidateInstalledModelsCache();
+    invalidateStorageUsageStatsCache();
 
     const savedRow = db
       .prepare('SELECT id FROM models WHERE LOWER(filename) = LOWER(?)')

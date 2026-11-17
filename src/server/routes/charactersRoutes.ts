@@ -15,6 +15,7 @@ import {
 import { analyzeCharacterPortraitPhysicalTraits } from '../services/llm/llmImageAnalysisService.ts';
 import { matchFaceToCharacter } from '../services/faceRecognitionService.ts';
 import { resolveImageDiskPath } from '../services/scannerService.ts';
+import { invalidateInstalledModelsCache } from '../services/civitai/civitaiModelEnrichmentService.ts';
 import { normalizePortraitCrop } from '../../shared/utils.ts';
 
 export const charactersRouter = Router();
@@ -395,12 +396,13 @@ charactersRouter.post('/:id/loras', (req, res) => {
 
     // Auto-classify as 'character' in LoRA Explorer only if not yet classified
     if (modelRow) {
-      db.prepare(
+      const upd = db.prepare(
         `UPDATE models
          SET lora_category = 'character'
          WHERE id = ?
            AND COALESCE(NULLIF(TRIM(lora_category), ''), 'unclassified') = 'unclassified'`
       ).run(modelRow.id);
+      if (upd.changes > 0) invalidateInstalledModelsCache();
     } else {
       const insertModel = db
         .prepare(
@@ -409,6 +411,7 @@ charactersRouter.post('/:id/loras', (req, res) => {
         )
         .run(cleanName.replace(/\.(safetensors|pt|ckpt)$/i, ''), cleanName);
       resolvedModelId = Number(insertModel.lastInsertRowid);
+      invalidateInstalledModelsCache();
     }
 
     db.prepare(

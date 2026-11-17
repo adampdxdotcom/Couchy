@@ -22,9 +22,10 @@ import {
 import {
   annotateInstalledSearchResults,
   findInstalledModelMatch,
-  loadInstalledModelsForMatching,
+  getVisibleInstalledModelBuckets,
   normalizeModelStem,
 } from './civitaiModelEnrichmentService.ts';
+import { invalidateStorageUsageStatsCache } from '../storageStatsService.ts';
 import { resolveClosestAspectRatio } from '../../../shared/utils.ts';
 import type { CivitaiImageImportResult, ExternalModelSearchResult } from '../../../shared/types.ts';
 
@@ -342,6 +343,7 @@ async function fetchAndSaveCivitaiInspirationImage(
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `civitai-1mp-${timestamp}-${hashPrefix}.jpg`;
     fs.writeFileSync(path.join(appConfig.uploadedImagesDir, filename), outBuf);
+    invalidateStorageUsageStatsCache();
 
     return {
       filename,
@@ -390,11 +392,7 @@ export async function importCivitaiImageForQuickGen(
       : null);
 
   const baseCandidate = baseCandidates[0] || null;
-  const installedRows = loadInstalledModelsForMatching({ excludeHidden: true });
-  const installedLoras = installedRows.filter((r) => r.model_type === 'lora');
-  const installedBases = installedRows.filter(
-    (r) => r.model_type === 'diffusion' || r.model_type === 'checkpoint'
-  );
+  const { loras: installedLoras, bases: installedBases } = getVisibleInstalledModelBuckets();
 
   let checkpointName: string | null = null;
   let skippedCheckpoint: string | null = null;

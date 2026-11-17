@@ -229,6 +229,7 @@ export function applyCivitaiEnrichmentToModel(
     modelId
   );
 
+  invalidateInstalledModelsCache();
   return { filledTriggerWord, filledDefaultStrength };
 }
 
@@ -285,6 +286,7 @@ export async function fetchAndEnrichModelFromCivitai(
         autov2,
         row.id
       );
+      invalidateInstalledModelsCache();
     } catch {
       // continue to fallback IDs if local file hash fails
     }
@@ -483,6 +485,7 @@ export async function healExistingCivitaiLinks(): Promise<{
                  civitai_url = ?
              WHERE id = ?`
           ).run(String(mId), vId ? String(vId) : null, nextUrl, row.id);
+          invalidateInstalledModelsCache();
           healed++;
         }
       }
@@ -517,23 +520,127 @@ function normalizeModelAlnum(raw: string): string {
   return normalizeModelStem(raw).replace(/[^a-z0-9]/g, '');
 }
 
+export interface IndexedInstalledModel extends InstalledModelRecord {
+  stemFilename: string;
+  stemName: string;
+  stemNickname: string | null;
+  alnumFilename: string;
+  alnumName: string;
+}
+
+interface InstalledModelsIndex {
+  allRows: IndexedInstalledModel[];
+  visibleRows: IndexedInstalledModel[];
+  visibleLoras: IndexedInstalledModel[];
+  visibleBases: IndexedInstalledModel[];
+  bySha256: Map<string, IndexedInstalledModel>;
+  byAutoV2: Map<string, IndexedInstalledModel>;
+  byVersionId: Map<string, IndexedInstalledModel>;
+  byFilename: Map<string, IndexedInstalledModel>;
+}
+
+let cachedInstalledModelsIndex: InstalledModelsIndex | null = null;
+
 /**
- * Loads installed `models` rows once for shared matching across Downloader and Civitai Image Import.
+ * Invalidates the cached in-memory index of installed `models` rows.
+ * Must be called after any sync, download, visibility toggle, hash update, or cleanup on `models`.
+ */
+export function invalidateInstalledModelsCache(): void {
+  cachedInstalledModelsIndex = null;
+}
+
+function getInstalledModelsIndex(): InstalledModelsIndex {
+  if (cachedInstalledModelsIndex) {
+    return cachedInstalledModelsIndex;
+  }
+
+  const rawRows = db
+    .prepare(
+      `SELECT id, name, filename, model_type, lora_category, sha256_hash, autov2_hash, civitai_version_id,
+              default_model_strength, default_clip_strength, trigger_word, nickname, is_hidden
+       FROM models
+       WHERE is_installed = 1`
+    )
+    .all() as Array<InstalledModelRecord & { is_hidden: number }>;
+
+  const allRows: IndexedInstalledModel[] = [];
+  const visibleRows: IndexedInstalledModel[] = [];
+  const visibleLoras: IndexedInstalledModel[] = [];
+  const visibleBases: IndexedInstalledModel[] = [];
+  const bySha256 = new Map<string, IndexedInstalledModel>();
+  const byAutoV2 = new Map<string, IndexedInstalledModel>();
+  const byVersionId = new Map<string, IndexedInstalledModel>();
+  const byFilename = new Map<string, IndexedInstalledModel>();
+
+  for (const r of rawRows) {
+    const indexed: IndexedInstalledModel = {
+      id: r.id,
+      name: r.name,
+      filename: r.filename,
+      model_type: r.model_type,
+      lora_category: r.lora_category,
+      sha256_hash: r.sha256_hash,
+      autov2_hash: r.autov2_hash,
+      civitai_version_id: r.civitai_version_id,
+      default_model_strength: r.default_model_strength,
+      default_clip_strength: r.default_clip_strength,
+      trigger_word: r.trigger_word,
+      nickname: r.nickname,
+      stemFilename: normalizeModelStem(r.filename),
+      stemName: normalizeModelStem(r.name),
+      stemNickname: r.nickname ? normalizeModelStem(r.nickname) : null,
+      alnumFilename: normalizeModelAlnum(r.filename),
+      alnumName: normalizeModelAlnum(r.name),
+    };
+
+    allRows.push(indexed);
+    if (indexed.sha256_hash) bySha256.set(indexed.sha256_hash.trim().toUpperCase(), indexed);
+    if (indexed.autov2_hash) byAutoV2.set(indexed.autov2_hash.trim().toUpperCase(), indexed);
+    if (indexed.civitai_version_id) byVersionId.set(String(indexed.civitai_version_id).trim(), indexed);
+    if (indexed.filename) byFilename.set(path.basename(indexed.filename).trim().toLowerCase(), indexed);
+
+    if (!r.is_hidden) {
+      visibleRows.push(indexed);
+      if (indexed.model_type === 'lora') {
+        visibleLoras.push(indexed);
+      } else if (indexed.model_type === 'diffusion' || indexed.model_type === 'checkpoint') {
+        visibleBases.push(indexed);
+      }
+    }
+  }
+
+  cachedInstalledModelsIndex = {
+    allRows,
+    visibleRows,
+    visibleLoras,
+    visibleBases,
+    bySha256,
+    byAutoV2,
+    byVersionId,
+    byFilename,
+  };
+  return cachedInstalledModelsIndex;
+}
+
+/**
+ * Returns cached installed `models` rows for Downloader annotations or Quick Gen URL imports.
  */
 export function loadInstalledModelsForMatching(options?: {
   excludeHidden?: boolean;
-}): InstalledModelRecord[] {
-  const whereClause = options?.excludeHidden
-    ? 'WHERE is_installed = 1 AND is_hidden = 0'
-    : 'WHERE is_installed = 1';
-  return db
-    .prepare(
-      `SELECT id, name, filename, model_type, lora_category, sha256_hash, autov2_hash, civitai_version_id,
-              default_model_strength, default_clip_strength, trigger_word, nickname
-       FROM models
-       ${whereClause}`
-    )
-    .all() as InstalledModelRecord[];
+}): IndexedInstalledModel[] {
+  const index = getInstalledModelsIndex();
+  return options?.excludeHidden ? index.visibleRows : index.allRows;
+}
+
+/**
+ * Returns pre-partitioned visible LoRA and Base Model buckets from the cached index.
+ */
+export function getVisibleInstalledModelBuckets(): {
+  loras: IndexedInstalledModel[];
+  bases: IndexedInstalledModel[];
+} {
+  const index = getInstalledModelsIndex();
+  return { loras: index.visibleLoras, bases: index.visibleBases };
 }
 
 /**
@@ -565,19 +672,26 @@ export function findInstalledModelMatch<T extends InstalledModelRecord>(
   const candAlnum = normalizeModelAlnum(candidate.name);
   if (!candStem && !candAlnum) return null;
 
-  const exactStem = installedRows.find(
-    (r) =>
-      normalizeModelStem(r.filename) === candStem ||
-      normalizeModelStem(r.name) === candStem ||
-      (r.nickname && normalizeModelStem(r.nickname) === candStem)
-  );
+  const exactStem = installedRows.find((r) => {
+    const idx = r as unknown as Partial<IndexedInstalledModel>;
+    const fStem = idx.stemFilename ?? normalizeModelStem(r.filename);
+    const nStem = idx.stemName ?? normalizeModelStem(r.name);
+    const nickStem =
+      idx.stemNickname !== undefined
+        ? idx.stemNickname
+        : r.nickname
+        ? normalizeModelStem(r.nickname)
+        : null;
+    return fStem === candStem || nStem === candStem || nickStem === candStem;
+  });
   if (exactStem) return exactStem;
 
   if (candAlnum.length >= 4) {
     return (
       installedRows.find((r) => {
-        const fAlnum = normalizeModelAlnum(r.filename);
-        const nAlnum = normalizeModelAlnum(r.name);
+        const idx = r as unknown as Partial<IndexedInstalledModel>;
+        const fAlnum = idx.alnumFilename ?? normalizeModelAlnum(r.filename);
+        const nAlnum = idx.alnumName ?? normalizeModelAlnum(r.name);
         return fAlnum === candAlnum || nAlnum === candAlnum;
       }) || null
     );
@@ -588,27 +702,15 @@ export function findInstalledModelMatch<T extends InstalledModelRecord>(
 
 /**
  * Annotates search results (and each nested version option) with local installation matches
- * checked against SHA-256 hash, Civitai version ID, and filename.
+ * checked against SHA-256 hash, Civitai version ID, and filename using the cached model index.
  */
 export function annotateInstalledSearchResults(
   items: ExternalModelSearchResult[]
 ): ExternalModelSearchResult[] {
   if (!items || items.length === 0) return items;
 
-  const installedRows = loadInstalledModelsForMatching();
-  if (installedRows.length === 0) return items;
-
-  const bySha256 = new Map<string, InstalledModelRecord>();
-  const byAutoV2 = new Map<string, InstalledModelRecord>();
-  const byVersionId = new Map<string, InstalledModelRecord>();
-  const byFilename = new Map<string, InstalledModelRecord>();
-
-  for (const row of installedRows) {
-    if (row.sha256_hash) bySha256.set(row.sha256_hash.trim().toUpperCase(), row);
-    if (row.autov2_hash) byAutoV2.set(row.autov2_hash.trim().toUpperCase(), row);
-    if (row.civitai_version_id) byVersionId.set(String(row.civitai_version_id).trim(), row);
-    if (row.filename) byFilename.set(path.basename(row.filename).trim().toLowerCase(), row);
-  }
+  const { allRows, bySha256, byAutoV2, byVersionId, byFilename } = getInstalledModelsIndex();
+  if (allRows.length === 0) return items;
 
   const resolveMatch = (entry: {
     sha256Hash?: string | null;

@@ -1,6 +1,7 @@
 import { db } from '../db.ts';
 import type { CharacterProfile, LoraCategory, PortraitCrop } from '../../shared/types.ts';
 import { normalizePortraitCrop } from '../../shared/utils.ts';
+import { invalidateInstalledModelsCache } from './civitai/civitaiModelEnrichmentService.ts';
 
 /**
  * First-Class Character Organization & Assisted Character Identification Service.
@@ -756,4 +757,5 @@ export function updateLoraCategory(loraName: string, category: LoraCategory, not
        lora_category = excluded.lora_category,
        user_notes = COALESCE(excluded.user_notes, models.user_notes)`
   ).run(loraName.replace(/\.(safetensors|pt|ckpt)$/i, ''), loraName, category, notes ?? null);
+  invalidateInstalledModelsCache();
 }

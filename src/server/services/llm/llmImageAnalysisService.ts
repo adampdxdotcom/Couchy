@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { appConfig } from '../../config.ts';
 import { db } from '../../db.ts';
+import { invalidateStorageUsageStatsCache } from '../storageStatsService.ts';
 import {
   detectExposureCuesWithWd14,
   interrogateImageBufferWithWd14,
@@ -37,6 +38,7 @@ function archiveUploadedPromptImage1Mp(imageBuffer: Buffer, mimeHeader: string):
     const ext = mimeLower.includes('png') ? 'png' : mimeLower.includes('webp') ? 'webp' : 'jpg';
     const generatedName = `prompt-1mp-${timestamp}-${hashPrefix}.${ext}`;
     fs.writeFileSync(path.join(appConfig.uploadedImagesDir, generatedName), imageBuffer);
+    invalidateStorageUsageStatsCache();
     return generatedName;
   } catch (err) {
     console.error('Failed to save 1MP uploaded prompt image:', err);

@@ -1,68 +1,38 @@
-import fs from 'fs';
-import path from 'path';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
+import { walkDirectoryFilesAsync } from './fsWalkService.ts';
 import { getModelCleanupStatus } from './modelCleanupService.ts';
 import type { StorageCategoryStat, StorageUsageStatsResponse } from '../../shared/types.ts';
 
-const STAT_CONCURRENCY = 24;
+const STORAGE_STATS_TTL_MS = 45_000;
+
+let cachedStorageStats: { value: StorageUsageStatsResponse; expiresAt: number } | null = null;
+let inFlightStorageStats: Promise<StorageUsageStatsResponse> | null = null;
+let storageStatsGeneration = 0;
 
 /**
- * Recursively sums file counts and byte sizes in a local directory via async fs.promises.
- * Missing or unreadable paths safely return 0.
+ * Clears the cached `/api/stats/storage` snapshot so the next request recomputes fresh usage.
+ */
+export function invalidateStorageUsageStatsCache(): void {
+  storageStatsGeneration += 1;
+  cachedStorageStats = null;
+  inFlightStorageStats = null;
+}
+
+/**
+ * Recursively sums non-hidden file counts and byte sizes via shared async directory walker.
  */
 async function measureDirectoryBytes(rootDir: string): Promise<StorageCategoryStat> {
   if (!rootDir) return { count: 0, sizeBytes: 0 };
-
-  const filePaths: string[] = [];
-  const walk = async (dir: string): Promise<void> => {
-    let entries: fs.Dirent[];
-    try {
-      entries = await fs.promises.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    const subdirs: Promise<void>[] = [];
-    for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue;
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        subdirs.push(walk(fullPath));
-      } else if (entry.isFile()) {
-        filePaths.push(fullPath);
-      }
-    }
-    if (subdirs.length > 0) {
-      await Promise.all(subdirs);
-    }
-  };
-
-  await walk(rootDir);
-
-  let count = 0;
+  const files = await walkDirectoryFilesAsync(rootDir, {
+    skipHidden: true,
+    includeStat: true,
+  });
   let sizeBytes = 0;
-  for (let i = 0; i < filePaths.length; i += STAT_CONCURRENCY) {
-    const batch = filePaths.slice(i, i + STAT_CONCURRENCY);
-    const results = await Promise.all(
-      batch.map(async (fp) => {
-        try {
-          const stat = await fs.promises.stat(fp);
-          return stat.isFile() ? stat.size : null;
-        } catch {
-          return null;
-        }
-      })
-    );
-    for (const sz of results) {
-      if (sz !== null) {
-        count += 1;
-        sizeBytes += sz;
-      }
-    }
+  for (const file of files) {
+    sizeBytes += file.size;
   }
-
-  return { count, sizeBytes };
+  return { count: files.length, sizeBytes };
 }
 
 function queryModelCategoryStat(modelTypes: string[]): StorageCategoryStat {
@@ -87,12 +57,7 @@ function queryModelCategoryStat(modelTypes: string[]): StorageCategoryStat {
   };
 }
 
-/**
- * Computes ComfyUI storage stats (using cached fs.stat sizes in SQLite for photos, LoRAs,
- * and UNET/Checkpoint base models) alongside local storage stats (live disk walks for
- * imported reference images & thumbnails, plus pending duplicate-cleanup model queue).
- */
-export async function getStorageUsageStats(): Promise<StorageUsageStatsResponse> {
+async function computeStorageUsageStats(): Promise<StorageUsageStatsResponse> {
   const loras = queryModelCategoryStat(['lora']);
   // Restrict base models strictly to UNET ('diffusion') and Checkpoint ('checkpoint')
   const baseModels = queryModelCategoryStat(['diffusion', 'checkpoint']);
@@ -146,4 +111,43 @@ export async function getStorageUsageStats(): Promise<StorageUsageStatsResponse>
     totalTrackedBytes: comfyTotalBytes + localTotalBytes,
     generatedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Computes ComfyUI storage stats alongside local storage stats, using a 45s TTL cache
+ * and in-flight coalescing to keep repeated dashboard/API reads instantaneous.
+ */
+export async function getStorageUsageStats(options?: {
+  bypassCache?: boolean;
+}): Promise<StorageUsageStatsResponse> {
+  const now = Date.now();
+  if (!options?.bypassCache && cachedStorageStats && cachedStorageStats.expiresAt > now) {
+    return cachedStorageStats.value;
+  }
+
+  if (!options?.bypassCache && inFlightStorageStats) {
+    return inFlightStorageStats;
+  }
+
+  const startGeneration = storageStatsGeneration;
+  const promise = computeStorageUsageStats()
+    .then((result) => {
+      if (startGeneration === storageStatsGeneration) {
+        cachedStorageStats = {
+          value: result,
+          expiresAt: Date.now() + STORAGE_STATS_TTL_MS,
+        };
+      }
+      return result;
+    })
+    .finally(() => {
+      if (inFlightStorageStats === promise) {
+        inFlightStorageStats = null;
+      }
+    });
+
+  if (!options?.bypassCache) {
+    inFlightStorageStats = promise;
+  }
+  return promise;
 }

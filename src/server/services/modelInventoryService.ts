@@ -3,24 +3,17 @@ import path from 'path';
 import crypto from 'crypto';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
+import {
+  MODEL_DIR_TYPE_MAP,
+  MODEL_EXTS,
+  pathExistsAsync,
+  walkDirectoryFilesAsync,
+} from './fsWalkService.ts';
 import { recomputeImageDependencyStatus } from './scannerService.ts';
 import { parsePreviewImagesJson } from './civitai/civitaiHttpAndParse.ts';
+import { invalidateInstalledModelsCache } from './civitai/civitaiModelEnrichmentService.ts';
+import { invalidateStorageUsageStatsCache } from './storageStatsService.ts';
 import type { ModelInventoryItem, ModelType } from '../../shared/types.ts';
-
-const MODEL_DIR_TYPE_MAP: Record<string, ModelType> = {
-  checkpoints: 'checkpoint',
-  loras: 'lora',
-  vae: 'vae',
-  controlnet: 'controlnet',
-  upscale_models: 'upscaler',
-  embeddings: 'embedding',
-  clip: 'clip',
-  text_encoders: 'clip',
-  unet: 'diffusion',
-  diffusion_models: 'diffusion',
-};
-
-const MODEL_EXTS = new Set(['.safetensors', '.ckpt', '.pt', '.pth', '.bin', '.gguf', '.sft']);
 
 export interface LoraMentionConfigInput {
   loraName: string;
@@ -33,19 +26,21 @@ export interface LoraMentionConfigInput {
 }
 
 /**
- * Computes SHA-256 and AutoV2 (first 10 chars) for smaller model files (<= 350MB) synchronously.
+ * Computes SHA-256 and AutoV2 (first 10 chars) for smaller model files (<= 350MB) asynchronously.
  */
-function computeModelHashesIfFeasible(filePath: string, size: number): {
+async function computeModelHashesIfFeasible(
+  filePath: string,
+  size: number
+): Promise<{
   sha256: string | null;
   autov2: string | null;
-} {
+}> {
   if (size > 350 * 1024 * 1024) {
     return { sha256: null, autov2: null };
   }
   try {
-    const hash = crypto.createHash('sha256');
-    hash.update(fs.readFileSync(filePath));
-    const hex = hash.digest('hex');
+    const data = await fs.promises.readFile(filePath);
+    const hex = crypto.createHash('sha256').update(data).digest('hex');
     return { sha256: hex, autov2: hex.slice(0, 10) };
   } catch {
     return { sha256: null, autov2: null };
@@ -67,59 +62,39 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
     size: number;
   }
 
-  const walkModelRoot = (
+  const walkModelRoot = async (
     rootDir: string,
     defaultType: ModelType,
     includeSubfolderRelPath: boolean
-  ): Map<string, ScannedDiskFile> => {
+  ): Promise<Map<string, ScannedDiskFile>> => {
     const found = new Map<string, ScannedDiskFile>();
-    if (!rootDir || !fs.existsSync(rootDir)) return found;
+    if (!rootDir) return found;
 
-    const walk = (dir: string, currentType: ModelType, categoryRoot: string | null) => {
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          const dirLower = entry.name.toLowerCase();
-          const mappedType = MODEL_DIR_TYPE_MAP[dirLower];
-          const nextType = mappedType || currentType;
-          const nextCategoryRoot = mappedType ? full : categoryRoot;
-          walk(full, nextType, nextCategoryRoot);
-        } else if (entry.isFile() && MODEL_EXTS.has(path.extname(entry.name).toLowerCase())) {
-          try {
-            const stat = fs.statSync(full);
-            if (stat.size <= 0) continue;
-            const rel =
-              includeSubfolderRelPath && categoryRoot
-                ? path.relative(categoryRoot, full).replace(/\\/g, '/')
-                : entry.name;
-            const key = entry.name.toLowerCase();
-            if (!found.has(key)) {
-              found.set(key, {
-                fullPath: full,
-                filename: entry.name,
-                relativeToCategory: rel || entry.name,
-                modelType: currentType,
-                size: stat.size,
-              });
-            }
-          } catch {
-            // Ignore transient/unreadable files
-          }
-        }
-      }
-    };
+    const entries = await walkDirectoryFilesAsync(rootDir, {
+      extensions: MODEL_EXTS,
+      includeStat: true,
+      minSizeBytes: 1,
+      initialModelType: defaultType,
+      modelTypeByDirName: MODEL_DIR_TYPE_MAP,
+    });
 
-    walk(rootDir, defaultType, null);
+    for (const entry of entries) {
+      const key = entry.filename.toLowerCase();
+      if (!found.has(key)) {
+        found.set(key, {
+          fullPath: entry.fullPath,
+          filename: entry.filename,
+          relativeToCategory: includeSubfolderRelPath
+            ? entry.relativeToCategory || entry.filename
+            : entry.filename,
+          modelType: entry.modelType,
+          size: entry.size,
+        });
+      }
+    }
     return found;
   };
 
-  const comfyModelsDirExists = Boolean(appConfig.comfyuiModelsDir && fs.existsSync(appConfig.comfyuiModelsDir));
   const downloadsDirResolved = path.resolve(appConfig.downloadsDir || '');
   const comfyDirResolved = path.resolve(appConfig.comfyuiModelsDir || '');
   const dirsOverlap =
@@ -127,10 +102,15 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
     (downloadsDirResolved === comfyDirResolved ||
       downloadsDirResolved.startsWith(comfyDirResolved + path.sep));
 
-  const comfyDiskMap = walkModelRoot(appConfig.comfyuiModelsDir, 'other', true);
-  const downloadsDiskMap = dirsOverlap
-    ? new Map<string, ScannedDiskFile>()
-    : walkModelRoot(appConfig.downloadsDir, 'lora', false);
+  const [comfyModelsDirExists, downloadsDirExists, comfyDiskMap, downloadsDiskMap] =
+    await Promise.all([
+      pathExistsAsync(appConfig.comfyuiModelsDir),
+      pathExistsAsync(appConfig.downloadsDir),
+      walkModelRoot(appConfig.comfyuiModelsDir, 'other', true),
+      dirsOverlap
+        ? Promise.resolve(new Map<string, ScannedDiskFile>())
+        : walkModelRoot(appConfig.downloadsDir, 'lora', false),
+    ]);
 
   // Query live ComfyUI /object_info when reachable — authoritative runtime list
   let comfyApiOnline = false;
@@ -222,7 +202,7 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
     let sha256: string | null = existing?.sha256_hash || null;
     let autov2: string | null = existing?.autov2_hash || null;
     if (primaryDisk && (!sha256 || existing?.file_size !== primaryDisk.size)) {
-      const computed = computeModelHashesIfFeasible(primaryDisk.fullPath, primaryDisk.size);
+      const computed = await computeModelHashesIfFeasible(primaryDisk.fullPath, primaryDisk.size);
       sha256 = computed.sha256;
       autov2 = computed.autov2;
     }
@@ -278,7 +258,7 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
         ).run(dlEntry?.fullPath || null, key);
       }
     }
-  } else if (fs.existsSync(appConfig.downloadsDir)) {
+  } else if (downloadsDirExists) {
     // Still keep download_file_path accurate when ComfyUI folders are unreachable
     for (const key of existingByFilename.keys()) {
       const dlEntry = downloadsDiskMap.get(key) || null;
@@ -295,6 +275,8 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
     recomputeImageDependencyStatus(row.id);
   }
 
+  invalidateInstalledModelsCache();
+  invalidateStorageUsageStatsCache();
   return listModelInventory();
 }
 
@@ -375,6 +357,7 @@ export function updateLoraVisibility(loraName: string, isHidden: boolean): void 
      ON CONFLICT(filename) DO UPDATE SET
        is_hidden = excluded.is_hidden`
   ).run(cleanName.replace(/\.(safetensors|pt|ckpt)$/i, ''), cleanName, hiddenFlag);
+  invalidateInstalledModelsCache();
 }
 
 /**
@@ -487,6 +470,7 @@ export function updateLoraMentionConfig(input: LoraMentionConfigInput): void {
       cleanLlmDescription
     );
   }
+  invalidateInstalledModelsCache();
 }
 
 /**
@@ -499,6 +483,7 @@ export function updateModelVisibility(modelId: number, isHidden: boolean): void 
   if (result.changes === 0) {
     throw new Error(`Model #${modelId} not found`);
   }
+  invalidateInstalledModelsCache();
 }
 
 /**
@@ -579,4 +564,5 @@ export function updateModelConfig(
          user_notes = ?
      WHERE id = ?`
   ).run(cleanNick, isMention, cleanDetails, cleanUserNotes, modelId);
+  invalidateInstalledModelsCache();
 }

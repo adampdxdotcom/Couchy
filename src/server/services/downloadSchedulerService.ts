@@ -81,7 +81,8 @@ async function refreshCivitaiScheduledMetadata(
       `/api/v1/model-versions/${encodeURIComponent(String(versionId))}`,
       getCivitaiHeaders(),
       preferredDomain,
-      9000
+      9000,
+      { bypassCache: true }
     );
     if (!verRes?.data) {
       return { rescheduledUntil: null, sourceUrl, expectedHash };
@@ -341,7 +342,8 @@ export async function rescheduleFailedDownload(
         `/api/v1/model-versions/${encodeURIComponent(String(versionId))}`,
         getCivitaiHeaders(),
         preferredDomain,
-        8000
+        8000,
+        { bypassCache: true }
       );
       if (verRes?.data) {
         const ea = extractCivitaiEarlyAccessInfo(verRes.data);

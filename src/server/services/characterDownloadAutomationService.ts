@@ -4,6 +4,7 @@ import { logger } from '../logger.ts';
 import { syncModelInventory } from './modelInventoryService.ts';
 import { runAssistedCharacterIdentificationForAll } from './characterService.ts';
 import { copyImageMetadataToDerivedImage } from './scannerService.ts';
+import { invalidateInstalledModelsCache } from './civitai/civitaiModelEnrichmentService.ts';
 import {
   COUCHY_COMFY_CLIENT_ID,
   invalidateComfyQueueCache,
@@ -84,6 +85,7 @@ function createOrLinkCharacterForDownloadedLora(params: {
            END
        WHERE id = ?`
     ).run(cleanTrigger, cleanTrigger, modelRow.id);
+    invalidateInstalledModelsCache();
   }
 
   db.prepare(
