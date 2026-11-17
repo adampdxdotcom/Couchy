@@ -23,7 +23,7 @@ import type {
   WorkflowLibraryItem,
 } from '../shared/types.ts';
 import { ASPECT_RATIO_PRESETS } from '../shared/utils.ts';
-import type { QuickGenPrefill } from './quickgen/quickGenUtils.ts';
+import { isCivitaiShareUrl, type QuickGenPrefill } from './quickgen/quickGenUtils.ts';
 import { QuickGenAttachmentsBar } from './quickgen/QuickGenAttachmentsBar.tsx';
 import { QuickGenConversationView } from './quickgen/QuickGenConversationView.tsx';
 import { QuickGenMentionPopover } from './quickgen/QuickGenMentionPopover.tsx';
@@ -462,9 +462,14 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             cardShouldFillMobile ? 'flex-1 min-h-0 flex flex-col md:block' : ''
           }
         >
-          {(submitState.isInterrogating || isDragOver) && (
+          {(submitState.isInterrogating || submitState.isImportingCivitai || isDragOver) && (
             <div className="mb-2 flex items-center gap-2 px-2.5 py-1 rounded-lg bg-indigo-950/70 border border-indigo-500/40 text-xs text-indigo-200 shrink-0">
-              {submitState.isInterrogating ? (
+              {submitState.isImportingCivitai ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />
+                  <span>Fetching prompt & installed models from Civitai URL...</span>
+                </>
+              ) : submitState.isInterrogating ? (
                 <>
                   <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin shrink-0" />
                   <span>
@@ -551,16 +556,22 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               onKeyDown={handleKeyDown}
               onPaste={async (e) => {
                 const items = e.clipboardData?.items;
-                if (!items) return;
-                for (const item of Array.from(items)) {
-                  if (item.type.startsWith('image/')) {
-                    const file = item.getAsFile();
-                    if (file) {
-                      e.preventDefault();
-                      await submitState.handleInterrogateImageFile(file);
-                      return;
+                if (items) {
+                  for (const item of Array.from(items)) {
+                    if (item.type.startsWith('image/')) {
+                      const file = item.getAsFile();
+                      if (file) {
+                        e.preventDefault();
+                        await submitState.handleInterrogateImageFile(file);
+                        return;
+                      }
                     }
                   }
+                }
+                const pastedText = e.clipboardData?.getData('text/plain')?.trim() || '';
+                if (isCivitaiShareUrl(pastedText)) {
+                  e.preventDefault();
+                  await submitState.handleImportCivitaiUrl(pastedText);
                 }
               }}
               placeholder={

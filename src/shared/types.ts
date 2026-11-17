@@ -890,6 +890,27 @@ export interface StorageUsageStatsResponse {
   generatedAt: string;
 }
 
+export interface CivitaiImageImportResult {
+  sourceUrl: string;
+  civitaiDomain: 'civitai.com' | 'civitai.red';
+  imageId: number;
+  prompt: string;
+  negativePrompt: string;
+  aspectRatio: string | null;
+  checkpointName: string | null;
+  loras: Array<{
+    loraName: string;
+    modelStrength: number;
+    clipStrength: number;
+    triggerWord?: string;
+    nickname?: string;
+  }>;
+  skippedLoras: string[];
+  skippedCheckpoint: string | null;
+  sourceBaseModel: string | null;
+  hasPromptMetadata: boolean;
+}
+
 export {
   ASPECT_RATIO_PRESETS,
   RESOLUTION_SELECTOR_OPTIONS,

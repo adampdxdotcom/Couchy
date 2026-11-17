@@ -248,6 +248,15 @@ export async function downscaleImageFileTo1Mp(file: File): Promise<{
 }
 
 /**
+ * Returns true when pasted text is a single Civitai `/images/:id` or `/posts/:id` share URL.
+ */
+export function isCivitaiShareUrl(rawText: string): boolean {
+  const trimmed = String(rawText || '').trim();
+  if (!trimmed || /\s/.test(trimmed)) return false;
+  return /^https?:\/\/(www\.)?civitai\.(com|red)\/(images|posts)\/\d+(?:[/?#].*)?$/i.test(trimmed);
+}
+
+/**
  * Builds categorized @mention candidates for Characters, confirmed reference images, and LoRAs.
  */
 export function buildMentionEntries(params: {

@@ -2,6 +2,7 @@ import type {
   AspectRatioPreset,
   CharacterDownloadAutomation,
   CharacterProfile,
+  CivitaiImageImportResult,
   ComfyUiLiveStatus,
   ExternalModelFileOption,
   ExternalModelSearchResult,
@@ -769,4 +770,10 @@ export const api = {
   },
 
   getStorageStats: () => requestJson<StorageUsageStatsResponse>('/api/stats/storage'),
+
+  importCivitaiImageUrl: (url: string) =>
+    requestJson<CivitaiImageImportResult>('/api/generation/civitai-image', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }),
 };

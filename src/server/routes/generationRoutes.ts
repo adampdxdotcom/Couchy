@@ -19,6 +19,7 @@ import {
   saveLmStudioGuidingTemplate,
   updateLmStudioSettings,
 } from '../services/lmStudioService.ts';
+import { importCivitaiImageForQuickGen } from '../services/civitaiImageImportService.ts';
 import {
   copyImageMetadataToDerivedImage,
   indexUploadedInspirationImage,
@@ -303,6 +304,23 @@ generationRouter.post('/interrogate-image', async (req, res) => {
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err?.message || 'Failed to interrogate image.' });
+  }
+});
+
+/**
+ * POST /api/generation/civitai-image
+ * Extracts prompt, aspect ratio, and matching installed LoRAs/Base Model from a Civitai share URL.
+ */
+generationRouter.post('/civitai-image', async (req, res) => {
+  try {
+    const rawUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    if (!rawUrl) {
+      return res.status(400).json({ error: 'Please provide a Civitai image URL.' });
+    }
+    const result = await importCivitaiImageForQuickGen(rawUrl);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to read Civitai image metadata.' });
   }
 });
 
