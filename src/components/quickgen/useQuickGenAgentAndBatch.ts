@@ -8,6 +8,7 @@ import type {
   QuickGenChatMessage,
   WorkflowLibraryItem,
 } from '../../shared/types.ts';
+import { ASPECT_RATIO_PRESETS } from '../../shared/utils.ts';
 import {
   MAX_SYSTEM_LORAS,
   getCleanLoraLabel,
@@ -89,6 +90,7 @@ export function useQuickGenAgentAndBatch({
   const [isChatting, setIsChatting] = useState(false);
   const [expandingMessageId, setExpandingMessageId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isRollingRandom, setIsRollingRandom] = useState(false);
 
   // Auto-disable Agent (Conversation) mode if Local LLM goes offline
   useEffect(() => {
@@ -416,12 +418,51 @@ export function useQuickGenAgentAndBatch({
     await dispatchBatchToComfy(proposedPromptText, batchCount > 1, onAfterReset, undefined, messageId);
   };
 
+  /** Runs a popularity-weighted Random Roll and dispatches immediately without modifying the draft. */
+  const handleRandomRoll = async () => {
+    if (isRollingRandom || isSubmitting || isChatting) return;
+    setIsRollingRandom(true);
+    try {
+      const res = await api.triggerRandomRoll();
+      const submittedCount = res.batch.items.filter((i) => i.status === 'submitted').length;
+      const failedCount = res.batch.items.filter((i) => i.status === 'failed').length;
+      const shortAr =
+        ASPECT_RATIO_PRESETS.find((p) => p.value === res.rollSummary.aspectRatio)?.short ||
+        res.rollSummary.aspectRatio.split(' ')[0] ||
+        '2:3';
+
+      if (failedCount > 0 && submittedCount === 0) {
+        onPushToast(
+          `Random Roll #${res.batch.id} failed (${res.batch.items[0]?.errorMessage || 'ComfyUI offline'})`,
+          'warning'
+        );
+      } else {
+        const extraLoraText =
+          res.rollSummary.loraNames.length > 0
+            ? ` · ${res.rollSummary.loraNames.length} LoRA(s)`
+            : '';
+        onPushToast(
+          `Random Roll #${res.batch.id}: ${res.rollSummary.characterName} · ${shortAr}${extraLoraText}`,
+          'success'
+        );
+      }
+
+      await onRefreshAll();
+    } catch (err: any) {
+      onPushToast(err?.message || 'Failed to execute Random Roll.', 'error');
+    } finally {
+      setIsRollingRandom(false);
+    }
+  };
+
   return {
     isChatting,
     expandingMessageId,
     setExpandingMessageId,
     isSubmitting,
+    isRollingRandom,
     handleSubmit,
+    handleRandomRoll,
     handleUpdateProposedPrompt,
     handleSubmitProposedPrompt,
     handlePreviewExpandConcept,

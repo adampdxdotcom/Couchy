@@ -697,6 +697,22 @@ export const api = {
       { method: 'POST', body: JSON.stringify(payload) }
     ),
 
+  triggerRandomRoll: () =>
+    requestJson<{
+      batch: GenerationBatchRecord;
+      batches: GenerationBatchRecord[];
+      rollSummary: {
+        characterId: number;
+        characterName: string;
+        checkpointName: string | null;
+        loraNames: string[];
+        tags: string[];
+        aspectRatio: string;
+        usedLmStudio: boolean;
+        prompt: string;
+      };
+    }>('/api/generation/random-roll', { method: 'POST' }),
+
   // Visual Keyword Tagger (WD14 ONNX)
   getVisualTaggerStatus: () => requestJson<VisualTaggerStatus>('/api/tagger/status'),
 

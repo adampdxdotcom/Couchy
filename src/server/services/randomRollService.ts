@@ -1,0 +1,584 @@
+import { db } from '../db.ts';
+import { logger } from '../logger.ts';
+import {
+  type GenerationBatchRecord,
+  type GenerationLoraSelection,
+} from '../../shared/types.ts';
+import { resolveClosestAspectRatio } from '../../shared/utils.ts';
+import { dispatchGenerationBatch } from './generationDispatchService.ts';
+import {
+  checkLmStudioStatus,
+  getLmStudioSettings,
+  postChatCompletion,
+} from './llm/llmClientService.ts';
+import {
+  buildLlmCharacterAndLoraContext,
+  normalizeLoraMatchKey,
+  sanitizeAgentPrompt,
+} from './llm/llmPromptUtils.ts';
+import { getWorkflowDefaults } from './workflowCompilerService.ts';
+
+export interface WeightedCandidate<T> {
+  item: T;
+  weight: number;
+  cooldownKey?: string;
+}
+
+export interface RandomRollSummary {
+  characterId: number;
+  characterName: string;
+  checkpointName: string | null;
+  loraNames: string[];
+  tags: string[];
+  aspectRatio: string;
+  usedLmStudio: boolean;
+  prompt: string;
+}
+
+const recentCharacterIds: number[] = [];
+const recentLoraKeys: string[] = [];
+
+function recordRecentRoll(charId: number, styleLoras: string[]): void {
+  recentCharacterIds.unshift(charId);
+  if (recentCharacterIds.length > 4) recentCharacterIds.length = 4;
+  for (const l of styleLoras) {
+    const key = normalizeLoraMatchKey(l);
+    if (!key) continue;
+    recentLoraKeys.unshift(key);
+  }
+  if (recentLoraKeys.length > 6) recentLoraKeys.length = 6;
+}
+
+/**
+ * Computes smoothed sublinear popularity weight so popular items are favored
+ * without starving rarer characters, models, or tags.
+ */
+export function computeSublinearPopularityWeight(
+  usageCount: number,
+  favoriteCount = 0,
+  isRecentlyUsed = false
+): number {
+  const base = 1 + Math.sqrt(Math.max(0, usageCount));
+  const favBoost = favoriteCount > 0 ? 1 + Math.min(0.6, Math.sqrt(favoriteCount) * 0.15) : 1;
+  const cooldownPenalty = isRecentlyUsed ? 0.15 : 1;
+  return Math.max(0.05, base * favBoost * cooldownPenalty);
+}
+
+/**
+ * Picks one item randomly proportional to non-negative weights.
+ */
+export function pickWeightedItem<T>(candidates: WeightedCandidate<T>[]): T | null {
+  if (candidates.length === 0) return null;
+  const total = candidates.reduce((acc, c) => acc + Math.max(0.01, c.weight), 0);
+  let target = Math.random() * total;
+  for (const c of candidates) {
+    target -= Math.max(0.01, c.weight);
+    if (target <= 0) return c.item;
+  }
+  return candidates[candidates.length - 1].item;
+}
+
+function normalizeBaseModelGroup(raw: string | null | undefined): string {
+  const s = (raw || '').trim().toLowerCase();
+  if (!s) return '';
+  if (s.includes('flux')) return 'flux';
+  if (s.includes('pony')) return 'pony';
+  if (s.includes('illustrious') || s.includes('noob')) return 'illustrious';
+  if (s.includes('sdxl')) return 'sdxl';
+  if (s.includes('sd 1.5') || s.includes('sd15') || s.includes('1.5')) return 'sd15';
+  return s;
+}
+
+function selectRolledCharacter() {
+  const rows = db
+    .prepare(
+      `SELECT
+         c.id,
+         c.name,
+         c.description,
+         c.physical_description,
+         COUNT(DISTINCT CASE WHEN i.id IS NOT NULL THEN ic.image_content_hash END) AS usage_count,
+         COUNT(DISTINCT CASE WHEN i.id IS NOT NULL AND COALESCE(r.is_favorite, 0) = 1 THEN ic.image_content_hash END) AS fav_count
+       FROM characters c
+       LEFT JOIN image_characters ic ON ic.character_id = c.id AND ic.status = 'confirmed'
+       LEFT JOIN images i ON i.content_hash = ic.image_content_hash
+         AND i.is_missing = 0
+         AND COALESCE(i.is_uploaded_reference, 0) = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL
+       GROUP BY c.id`
+    )
+    .all() as Array<{
+    id: number;
+    name: string;
+    description: string;
+    physical_description: string;
+    usage_count: number;
+    fav_count: number;
+  }>;
+
+  if (rows.length === 0) {
+    throw new Error('Add at least one character to use Random Roll.');
+  }
+
+  const picked = pickWeightedItem(
+    rows.map((row) => ({
+      item: row,
+      weight: computeSublinearPopularityWeight(
+        Number(row.usage_count || 0),
+        Number(row.fav_count || 0),
+        rows.length > 1 && recentCharacterIds.includes(row.id)
+      ),
+    }))
+  )!;
+
+  // Prefer an installed character LoRA attached to this character
+  const charLoras = db
+    .prepare(
+      `SELECT
+         cl.lora_name,
+         cl.trigger_word,
+         COALESCE(m.is_installed, 0) AS is_installed,
+         m.base_model,
+         COALESCE(m.default_model_strength, 1.0) AS default_model_strength,
+         COALESCE(m.default_clip_strength, 1.0) AS default_clip_strength
+       FROM character_loras cl
+       LEFT JOIN models m ON LOWER(m.filename) = LOWER(cl.lora_name)
+       WHERE cl.character_id = ?
+       ORDER BY COALESCE(m.is_installed, 0) DESC, cl.id ASC`
+    )
+    .all(picked.id) as Array<{
+    lora_name: string;
+    trigger_word: string;
+    is_installed: number;
+    base_model: string | null;
+    default_model_strength: number;
+    default_clip_strength: number;
+  }>;
+
+  const installedCharLora = charLoras.find((l) => Boolean(l.is_installed)) || null;
+  return { character: picked, charLora: installedCharLora };
+}
+
+function selectRolledCheckpoint(preferredBaseGroup: string, fallbackCheckpoint: string | null): {
+  filename: string | null;
+  baseGroup: string;
+} {
+  const rows = db
+    .prepare(
+      `SELECT
+         m.filename,
+         m.base_model,
+         COUNT(DISTINCT i.id) AS usage_count,
+         COUNT(DISTINCT CASE WHEN COALESCE(r.is_favorite, 0) = 1 THEN i.id END) AS fav_count
+       FROM models m
+       LEFT JOIN image_metadata im ON LOWER(im.checkpoint_name) = LOWER(m.filename)
+       LEFT JOIN images i ON i.id = im.image_id AND i.is_missing = 0 AND COALESCE(i.is_uploaded_reference, 0) = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE m.model_type IN ('checkpoint', 'diffusion')
+         AND COALESCE(m.is_installed, 0) = 1
+         AND COALESCE(m.is_hidden, 0) = 0
+         AND (COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL)
+       GROUP BY m.id`
+    )
+    .all() as Array<{
+    filename: string;
+    base_model: string | null;
+    usage_count: number;
+    fav_count: number;
+  }>;
+
+  if (rows.length === 0) {
+    return { filename: fallbackCheckpoint, baseGroup: preferredBaseGroup };
+  }
+
+  const compatible = preferredBaseGroup
+    ? rows.filter((r) => {
+        const g = normalizeBaseModelGroup(r.base_model);
+        return !g || g === preferredBaseGroup;
+      })
+    : rows;
+  const pool = compatible.length > 0 ? compatible : rows;
+
+  const picked = pickWeightedItem(
+    pool.map((r) => ({
+      item: r,
+      weight: computeSublinearPopularityWeight(Number(r.usage_count || 0), Number(r.fav_count || 0)),
+    }))
+  );
+
+  return {
+    filename: picked?.filename || fallbackCheckpoint,
+    baseGroup: normalizeBaseModelGroup(picked?.base_model) || preferredBaseGroup,
+  };
+}
+
+function selectRolledStyleLoras(baseGroup: string): Array<{
+  filename: string;
+  triggerWord: string;
+  modelStrength: number;
+  clipStrength: number;
+}> {
+  const roll = Math.random();
+  const targetCount = roll < 0.4 ? 0 : roll < 0.85 ? 1 : 2;
+  if (targetCount === 0) return [];
+
+  const rows = db
+    .prepare(
+      `SELECT
+         m.filename,
+         m.base_model,
+         COALESCE(m.trigger_word, '') AS trigger_word,
+         COALESCE(m.default_model_strength, 1.0) AS default_model_strength,
+         COALESCE(m.default_clip_strength, 1.0) AS default_clip_strength,
+         COUNT(DISTINCT i.id) AS usage_count,
+         COUNT(DISTINCT CASE WHEN COALESCE(r.is_favorite, 0) = 1 THEN i.id END) AS fav_count
+       FROM models m
+       LEFT JOIN image_loras il ON LOWER(il.lora_name) = LOWER(m.filename)
+       LEFT JOIN images i ON i.id = il.image_id AND i.is_missing = 0 AND COALESCE(i.is_uploaded_reference, 0) = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE m.model_type = 'lora'
+         AND COALESCE(m.is_installed, 0) = 1
+         AND COALESCE(m.is_hidden, 0) = 0
+         AND LOWER(COALESCE(m.lora_category, 'unclassified')) != 'character'
+         AND NOT EXISTS (
+           SELECT 1 FROM character_loras cl WHERE LOWER(cl.lora_name) = LOWER(m.filename)
+         )
+         AND (COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL)
+       GROUP BY m.id`
+    )
+    .all() as Array<{
+    filename: string;
+    base_model: string | null;
+    trigger_word: string;
+    default_model_strength: number;
+    default_clip_strength: number;
+    usage_count: number;
+    fav_count: number;
+  }>;
+
+  const compatible = baseGroup
+    ? rows.filter((r) => {
+        const g = normalizeBaseModelGroup(r.base_model);
+        return !g || g === baseGroup;
+      })
+    : rows;
+  const pool = [...(compatible.length > 0 ? compatible : rows)];
+  const selected: Array<{
+    filename: string;
+    triggerWord: string;
+    modelStrength: number;
+    clipStrength: number;
+  }> = [];
+
+  while (selected.length < targetCount && pool.length > 0) {
+    const picked = pickWeightedItem(
+      pool.map((r) => ({
+        item: r,
+        weight: computeSublinearPopularityWeight(
+          Number(r.usage_count || 0),
+          Number(r.fav_count || 0),
+          pool.length > 2 && recentLoraKeys.includes(normalizeLoraMatchKey(r.filename))
+        ),
+      }))
+    );
+    if (!picked) break;
+    selected.push({
+      filename: picked.filename,
+      triggerWord: picked.trigger_word || '',
+      modelStrength: Number(picked.default_model_strength ?? 1.0),
+      clipStrength: Number(picked.default_clip_strength ?? 1.0),
+    });
+    const idx = pool.findIndex((p) => p.filename === picked.filename);
+    if (idx >= 0) pool.splice(idx, 1);
+  }
+
+  return selected;
+}
+
+function selectRolledTags(desiredCount = 5): string[] {
+  const userTagRows = db
+    .prepare(
+      `SELECT t.name AS tag, COUNT(*) AS usage_count
+       FROM image_tags it
+       JOIN tags t ON t.id = it.tag_id
+       JOIN images i ON i.content_hash = it.image_content_hash AND i.is_missing = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE COALESCE(r.is_rejected, 0) = 0
+       GROUP BY t.id
+       ORDER BY usage_count DESC
+       LIMIT 60`
+    )
+    .all() as Array<{ tag: string; usage_count: number }>;
+
+  const visualTagRows = db
+    .prepare(
+      `SELECT ivt.tag AS tag, COUNT(*) AS usage_count
+       FROM image_visual_tags ivt
+       JOIN images i ON i.content_hash = ivt.image_content_hash AND i.is_missing = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE COALESCE(r.is_rejected, 0) = 0
+         AND LENGTH(TRIM(ivt.tag)) >= 3
+       GROUP BY LOWER(ivt.tag)
+       ORDER BY usage_count DESC
+       LIMIT 80`
+    )
+    .all() as Array<{ tag: string; usage_count: number }>;
+
+  const genericTags = new Set(['1girl', '1boy', 'solo', 'looking at viewer', 'simple background']);
+  const tagMap = new Map<string, { label: string; count: number }>();
+
+  for (const row of [...userTagRows, ...visualTagRows]) {
+    const clean = row.tag.trim();
+    const key = clean.toLowerCase();
+    if (!clean || genericTags.has(key)) continue;
+    const prev = tagMap.get(key);
+    tagMap.set(key, {
+      label: prev?.label || clean,
+      count: (prev?.count || 0) + Number(row.usage_count || 0),
+    });
+  }
+
+  const pool = Array.from(tagMap.values());
+  const chosen: string[] = [];
+  while (chosen.length < desiredCount && pool.length > 0) {
+    const picked = pickWeightedItem(
+      pool.map((t) => ({
+        item: t,
+        weight: computeSublinearPopularityWeight(t.count),
+      }))
+    );
+    if (!picked) break;
+    chosen.push(picked.label);
+    const idx = pool.findIndex((p) => p.label.toLowerCase() === picked.label.toLowerCase());
+    if (idx >= 0) pool.splice(idx, 1);
+  }
+
+  return chosen;
+}
+
+function selectRolledAspectRatio(fallbackRatio: string | null): string {
+  const rows = db
+    .prepare(
+      `SELECT i.width, i.height, COALESCE(r.is_favorite, 0) AS is_fav
+       FROM images i
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE i.is_missing = 0
+         AND COALESCE(i.is_uploaded_reference, 0) = 0
+         AND COALESCE(r.is_rejected, 0) = 0
+         AND i.width > 0
+         AND i.height > 0`
+    )
+    .all() as Array<{ width: number; height: number; is_fav: number }>;
+
+  if (rows.length === 0) {
+    return fallbackRatio || '2:3 (Portrait Photo)';
+  }
+
+  const ratioCounts = new Map<string, { usage: number; fav: number }>();
+  for (const row of rows) {
+    const preset = resolveClosestAspectRatio(row.width, row.height);
+    const cur = ratioCounts.get(preset) || { usage: 0, fav: 0 };
+    cur.usage += 1;
+    if (row.is_fav) cur.fav += 1;
+    ratioCounts.set(preset, cur);
+  }
+
+  return (
+    pickWeightedItem(
+      Array.from(ratioCounts.entries()).map(([ratio, stats]) => ({
+        item: ratio,
+        weight: computeSublinearPopularityWeight(stats.usage, stats.fav),
+      }))
+    ) ||
+    fallbackRatio ||
+    '2:3 (Portrait Photo)'
+  );
+}
+
+function buildOfflineRandomPrompt(characterName: string, tags: string[]): string {
+  const framings = [
+    'medium three-quarter portrait, candid natural posture, 85mm lens, shallow depth of field',
+    'intimate close-up portrait, sharp catchlights in eyes, soft rim light, film grain',
+    'editorial full-body shot, atmospheric depth, architectural perspective, 35mm lens',
+    'over-the-shoulder candid composition, golden natural illumination, rich ambient detail',
+  ];
+  const lightings = [
+    'soft golden hour sunlight, warm shadows',
+    'moody overcast daylight, crisp editorial contrast',
+    'warm indoor practical lighting, subtle ambient glow',
+    'dramatic side window light, natural skin texture',
+  ];
+  const framing = framings[Math.floor(Math.random() * framings.length)];
+  const lighting = lightings[Math.floor(Math.random() * lightings.length)];
+  const sceneCue = tags.length > 0 ? tags.join(', ') : 'relaxed outdoor lifestyle scene';
+  return sanitizeAgentPrompt(
+    `the subject in a spontaneous scene featuring ${sceneCue}, ${framing}, ${lighting}`,
+    characterName
+  );
+}
+
+async function composeRandomRollPrompt(params: {
+  characterName: string;
+  characterDescription: string;
+  characterPhysicalDescription: string;
+  loraNames: string[];
+  tags: string[];
+}): Promise<{ prompt: string; usedLmStudio: boolean }> {
+  try {
+    const status = await checkLmStudioStatus();
+    if (!status.online) {
+      return { prompt: buildOfflineRandomPrompt(params.characterName, params.tags), usedLmStudio: false };
+    }
+
+    const settings = getLmStudioSettings();
+    const baseUrl = settings.baseUrl.replace(/\/+$/, '');
+    const modelToUse = status.selectedModel || settings.selectedModel || 'local-model';
+
+    const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
+      characterName: params.characterName,
+      characterDescription: params.characterDescription,
+      characterPhysicalDescription: params.characterPhysicalDescription,
+      loraNames: params.loraNames,
+    });
+
+    const tagHint =
+      params.tags.length > 0
+        ? `Incorporate natural scene, wardrobe, pose, or lighting inspiration from these popular motifs where cohesive: ${params.tags.join(', ')}.`
+        : 'Invent a vivid, grounded photographic setting, natural wardrobe, and expressive lighting.';
+
+    const systemPrompt = [
+      settings.conversationSystemPrompt,
+      characterBlock,
+      attachedLoraBlock,
+      'RANDOM ROLL TASK: Output ONE original, ready-to-generate photography prompt wrapped inside <proposed_prompt>...</proposed_prompt>. Never include character names or LoRA filenames.',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    const res = await postChatCompletion({
+      baseUrl,
+      model: modelToUse,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content: `Create a single fresh, spontaneous scene prompt for the subject. ${tagHint} Return ONLY <proposed_prompt>...</proposed_prompt>.`,
+        },
+      ],
+      temperature: 0.9,
+      maxTokens: 500,
+      timeoutMs: 35_000,
+    });
+
+    const match = res.content.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
+    const raw = (match?.[1] || res.content).replace(/^["']|["']$/g, '').trim();
+    const sanitized = sanitizeAgentPrompt(raw, params.characterName);
+    if (sanitized.length >= 15) {
+      return { prompt: sanitized, usedLmStudio: true };
+    }
+  } catch (err) {
+    logger.warn('LocalLLM', 'Random Roll LLM prompt synthesis failed, using offline fallback', err);
+  }
+
+  return { prompt: buildOfflineRandomPrompt(params.characterName, params.tags), usedLmStudio: false };
+}
+
+/**
+ * Picks a popularity-weighted character, compatible base model, optional style LoRAs,
+ * popular tags, and aspect ratio, generates a hidden prompt, and immediately submits
+ * at the default workflow's default resolution and steps.
+ */
+export async function executeRandomRoll(): Promise<{
+  batch: GenerationBatchRecord;
+  batches: GenerationBatchRecord[];
+  rollSummary: RandomRollSummary;
+}> {
+  const defaultWf = db
+    .prepare(
+      'SELECT id FROM workflows ORDER BY is_default DESC, is_saved_library DESC, id ASC LIMIT 1'
+    )
+    .get() as { id: number } | undefined;
+  if (!defaultWf) {
+    throw new Error('No default ComfyUI workflow configured.');
+  }
+
+  const wfDefaults = getWorkflowDefaults(defaultWf.id);
+  const { character, charLora } = selectRolledCharacter();
+  const charBaseGroup = normalizeBaseModelGroup(charLora?.base_model);
+  const rolledCkpt = selectRolledCheckpoint(charBaseGroup, wfDefaults.defaultCheckpoint ?? null);
+  const styleLoras = selectRolledStyleLoras(rolledCkpt.baseGroup);
+  const tags = selectRolledTags(5);
+  const aspectRatio = selectRolledAspectRatio(wfDefaults.defaultAspectRatio ?? null);
+
+  recordRecentRoll(
+    character.id,
+    styleLoras.map((l) => l.filename)
+  );
+
+  const loras: GenerationLoraSelection[] = [];
+  if (charLora) {
+    loras.push({
+      loraName: charLora.lora_name,
+      modelStrength: Number(charLora.default_model_strength ?? 1.0),
+      clipStrength: Number(charLora.default_clip_strength ?? 1.0),
+      triggerWord: charLora.trigger_word || '',
+    });
+  }
+  for (const sl of styleLoras) {
+    loras.push({
+      loraName: sl.filename,
+      modelStrength: sl.modelStrength,
+      clipStrength: sl.clipStrength,
+      triggerWord: sl.triggerWord,
+    });
+  }
+
+  const triggerWord = Array.from(
+    new Set(
+      [charLora?.trigger_word, ...styleLoras.map((sl) => sl.triggerWord)]
+        .map((t) => (t || '').trim())
+        .filter(Boolean)
+    )
+  ).join(', ');
+
+  const { prompt, usedLmStudio } = await composeRandomRollPrompt({
+    characterName: character.name,
+    characterDescription: character.description || '',
+    characterPhysicalDescription: character.physical_description || '',
+    loraNames: loras.map((l) => l.loraName),
+    tags,
+  });
+
+  // Omit megapixels and steps so dispatch uses the default workflow's native resolution & steps
+  const { batch, batches } = await dispatchGenerationBatch({
+    characterId: character.id,
+    workflowId: defaultWf.id,
+    mode: 'single',
+    themeTitle: 'Random Roll',
+    aspectRatio,
+    prompts: [prompt],
+    triggerWord,
+    negativePrompt: '',
+    loras,
+    checkpointName: rolledCkpt.filename,
+  });
+
+  const rollSummary: RandomRollSummary = {
+    characterId: character.id,
+    characterName: character.name,
+    checkpointName: rolledCkpt.filename,
+    loraNames: loras.map((l) => l.loraName),
+    tags,
+    aspectRatio,
+    usedLmStudio,
+    prompt,
+  };
+
+  logger.info(
+    'ComfyUI',
+    `Random Roll queued batch #${batch.id}: char=${character.name} ckpt=${rolledCkpt.filename || 'default'} loras=${loras.length} ar=${aspectRatio} llm=${usedLmStudio}`
+  );
+
+  return { batch, batches, rollSummary };
+}

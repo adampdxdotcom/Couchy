@@ -1,14 +1,5 @@
 import { Router } from 'express';
 import { db } from '../db.ts';
-import { appConfig } from '../config.ts';
-import { logger } from '../logger.ts';
-import {
-  compileUpscaleWorkflow,
-  compileWorkflowForGeneration,
-  computeDimensionsFromMegapixels,
-  findInlineUpscaleNodes,
-  getWorkflowDefaults,
-} from '../services/workflowCompilerService.ts';
 import {
   checkLmStudioStatus,
   deleteLmStudioGuidingTemplate,
@@ -23,26 +14,11 @@ import {
 } from '../services/llm/llmAgentService.ts';
 import { importCivitaiImageForQuickGen } from '../services/civitai/civitaiImageShareService.ts';
 import {
-  copyImageMetadataToDerivedImage,
-  indexUploadedInspirationImage,
-} from '../services/scannerService.ts';
-import {
-  COUCHY_COMFY_CLIENT_ID,
-  invalidateComfyQueueCache,
-  notifyImageIndexed,
-  recordComfyExecutionError,
-} from '../services/comfyuiLiveMonitor.ts';
-import { pollComfyPromptCompletion } from '../services/comfyuiService.ts';
-import {
-  attachGenerationItemOutputToSeries,
-  preserveFailedGenerationConversation,
-} from '../services/seriesService.ts';
-import {
-  normalizeResolutionSelectorRatio,
-  type GenerationBatchRecord,
-  type GenerationLoraSelection,
-  type PromptTemplate,
-} from '../../shared/types.ts';
+  dispatchGenerationBatch,
+  listGenerationBatches,
+} from '../services/generationDispatchService.ts';
+import { executeRandomRoll } from '../services/randomRollService.ts';
+import { type PromptTemplate } from '../../shared/types.ts';
 
 export const generationRouter = Router();
 
@@ -327,67 +303,6 @@ generationRouter.post('/civitai-image', async (req, res) => {
 });
 
 /**
- * Helper to fetch recent generation batches with items.
- */
-function listGenerationBatches(limit = 20): GenerationBatchRecord[] {
-  const batchRows = db
-    .prepare(
-      `SELECT gb.*, c.name as character_name, w.name as workflow_name
-       FROM generation_batches gb
-       LEFT JOIN characters c ON c.id = gb.character_id
-       LEFT JOIN workflows w ON w.id = gb.workflow_id
-       ORDER BY gb.id DESC
-       LIMIT ?`
-    )
-    .all(limit) as any[];
-
-  const itemStmt = db.prepare(
-    `SELECT gi.*, i.id as resolved_image_id
-     FROM generation_items gi
-     LEFT JOIN images i ON i.id = gi.output_image_id
-     WHERE gi.batch_id = ?
-     ORDER BY gi.item_index ASC`
-  );
-
-  return batchRows.map((b) => {
-    const items = (itemStmt.all(b.id) as any[]).map((it) => ({
-      id: it.id,
-      batchId: it.batch_id,
-      itemIndex: it.item_index,
-      prompt: it.prompt,
-      negativePrompt: it.negative_prompt || '',
-      seed: it.seed,
-      comfyuiPromptId: it.comfyui_prompt_id,
-      status: it.status,
-      errorMessage: it.error_message,
-      outputImageId: it.resolved_image_id || null,
-      outputThumbnailUrl: it.resolved_image_id
-        ? `/api/images/${it.resolved_image_id}/thumbnail`
-        : null,
-      createdAt: it.created_at,
-      completedAt: it.completed_at,
-    }));
-
-    return {
-      id: b.id,
-      characterId: b.character_id,
-      characterName: b.character_name || null,
-      workflowId: b.workflow_id,
-      workflowName: b.workflow_name || null,
-      themeTitle: b.theme_title || null,
-      mode: b.mode,
-      totalCount: b.total_count,
-      aspectRatio: b.aspect_ratio || '2:3 (Portrait Photo)',
-      megapixels: Number(b.megapixels ?? 1.0),
-      width: b.width,
-      height: b.height,
-      createdAt: b.created_at,
-      items,
-    };
-  });
-}
-
-/**
  * GET /api/generation/batches
  */
 generationRouter.get('/batches', (_req, res) => {
@@ -395,352 +310,58 @@ generationRouter.get('/batches', (_req, res) => {
 });
 
 /**
- * Tracks a submitted generation item via the unified ComfyUI poller, chaining
- * `upscale_workflow.json` only if a legacy workflow without inline upscale ran >3MP.
- */
-function trackGenerationItem(
-  itemId: number,
-  promptId: string,
-  characterId: number | null,
-  fallbackUpscaleMp?: number,
-  baseImageId?: number | null
-): void {
-  pollComfyPromptCompletion({
-    promptId,
-    characterId,
-    onSuccess: async ({ firstImageId, firstOutputSpec }) => {
-      if (fallbackUpscaleMp && fallbackUpscaleMp > 3.0 && firstOutputSpec) {
-        try {
-          const upscalePayload = compileUpscaleWorkflow({
-            imageFilename: firstOutputSpec.filename,
-            subfolder: firstOutputSpec.subfolder,
-            targetMegapixels: fallbackUpscaleMp,
-          });
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 8000);
-          const upRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            body: JSON.stringify({
-              prompt: upscalePayload,
-              client_id: COUCHY_COMFY_CLIENT_ID,
-            }),
-          });
-          clearTimeout(timer);
-
-          if (upRes.ok) {
-            const upData = (await upRes.json()) as { prompt_id?: string };
-            if (upData.prompt_id) {
-              db.prepare(
-                `UPDATE generation_items
-                 SET comfyui_prompt_id = ?, output_image_id = COALESCE(?, output_image_id)
-                 WHERE id = ?`
-              ).run(upData.prompt_id, firstImageId, itemId);
-              invalidateComfyQueueCache();
-              trackGenerationItem(itemId, upData.prompt_id, characterId, undefined, firstImageId);
-              return;
-            }
-          }
-        } catch (upErr) {
-          console.warn('Automatic upscale pass failed, falling back to 3MP base image:', upErr);
-        }
-      }
-
-      if (baseImageId && firstImageId && baseImageId !== firstImageId) {
-        copyImageMetadataToDerivedImage(baseImageId, firstImageId);
-      }
-
-      const resolvedOutputImageId = firstImageId ?? baseImageId ?? null;
-      db.prepare(
-        `UPDATE generation_items
-         SET status = 'completed', output_image_id = COALESCE(?, output_image_id), completed_at = datetime('now')
-         WHERE id = ?`
-      ).run(resolvedOutputImageId, itemId);
-
-      if (resolvedOutputImageId) {
-        try {
-          attachGenerationItemOutputToSeries(itemId, resolvedOutputImageId);
-        } catch (seriesErr) {
-          logger.warn('ComfyUI', `Failed to attach generated image #${resolvedOutputImageId} to series`, seriesErr);
-        }
-      }
-      logger.info('ComfyUI', `Completed generation item #${itemId} (${promptId}) -> image #${resolvedOutputImageId ?? 'none'}`);
-    },
-    onError: (errMsg) => {
-      db.prepare(
-        `UPDATE generation_items
-         SET status = 'failed', error_message = ?, completed_at = datetime('now')
-         WHERE id = ?`
-      ).run(errMsg, itemId);
-      const recovery = preserveFailedGenerationConversation(itemId);
-      recordComfyExecutionError({
-        promptId,
-        message: errMsg,
-        recovery,
-      });
-      notifyImageIndexed();
-    },
-  });
-}
-
-/**
  * POST /api/generation/submit-batch
  * Compiles and dispatches all requested image generations at once to ComfyUI.
  */
 generationRouter.post('/submit-batch', async (req, res) => {
   try {
-    const {
-      characterId,
-      workflowId,
-      mode,
-      themeTitle,
-      aspectRatio,
-      megapixels,
-      steps,
-      prompts,
-      triggerWord,
-      negativePrompt,
-      loras,
-      checkpointName,
-      baseSeed,
-      seriesId,
-      branchFromImageId,
-      inspirationFilename,
-      chatSnapshot,
-    } = req.body || {};
-
-    if (!workflowId) {
+    const body = req.body || {};
+    if (!body.workflowId) {
       return res.status(400).json({ error: 'Please select a ComfyUI workflow.' });
     }
-    const promptList: string[] = Array.isArray(prompts)
-      ? prompts.map((p) => String(p).trim()).filter(Boolean)
+    const promptList: string[] = Array.isArray(body.prompts)
+      ? body.prompts.map((p: unknown) => String(p).trim()).filter(Boolean)
       : [];
     if (promptList.length === 0) {
       return res.status(400).json({ error: 'At least one positive prompt is required.' });
     }
 
-    // Read System Workflow defaults (megapixels, aspect ratio, diffusion model)
-    let wfDefaultMp: number | null = null;
-    let wfDefaultAr: string | null = null;
-    let wfDefaultCkpt: string | null = null;
-    try {
-      const wfDefaults = getWorkflowDefaults(Number(workflowId));
-      wfDefaultMp = wfDefaults.defaultMegapixels ?? null;
-      wfDefaultAr = wfDefaults.defaultAspectRatio ?? null;
-      wfDefaultCkpt = wfDefaults.defaultCheckpoint ?? null;
-    } catch {
-      // Fallback if defaults lookup fails
-    }
-
-    const resolvedAr = normalizeResolutionSelectorRatio(aspectRatio || wfDefaultAr || undefined);
-    const explicitMp =
-      megapixels !== undefined && megapixels !== null && Number(megapixels) > 0
-        ? Number(megapixels)
-        : null;
-    const resolvedMp = Math.max(
-      0.5,
-      Math.min(10.0, explicitMp ?? wfDefaultMp ?? 3.0)
-    );
-    const resolvedSteps =
-      steps !== undefined && steps !== null && Number.isFinite(Number(steps)) && Number(steps) > 0
-        ? Math.max(1, Math.min(100, Math.round(Number(steps))))
-        : undefined;
-    const { width: computedWidth, height: computedHeight } = computeDimensionsFromMegapixels(
-      resolvedAr,
-      resolvedMp
-    );
-    const loraSelections: GenerationLoraSelection[] = Array.isArray(loras) ? loras : [];
-    const activeLoraNames = loraSelections
-      .map((l) => (l.loraName || '').trim())
-      .filter(Boolean);
-    const activeLorasCount = activeLoraNames.length;
-    const serializedLoraNames = activeLoraNames.length > 0 ? JSON.stringify(activeLoraNames) : null;
-
-    // Resolve checkpoint name from request or mapped workflow checkpoint node
-    const resolvedCheckpointName: string | null = checkpointName
-      ? String(checkpointName).trim()
-      : wfDefaultCkpt;
-
-    const serializedChatSnapshot =
-      Array.isArray(chatSnapshot) && chatSnapshot.length > 0
-        ? JSON.stringify(chatSnapshot)
-        : null;
-
-    // Auto-create a shared stack series when a multi-image batch (>1 shot) or an uploaded
-    // prompt inspiration image starts a fresh generation without continuing/branching an existing series.
-    let effectiveSeriesId = seriesId ? Number(seriesId) : null;
-    let inspirationImageId: number | null = null;
-    if (!effectiveSeriesId && !branchFromImageId && typeof inspirationFilename === 'string' && inspirationFilename.trim()) {
-      inspirationImageId = await indexUploadedInspirationImage(
-        inspirationFilename.trim(),
-        promptList[0]
-      );
-    }
-
-    if (!effectiveSeriesId && !branchFromImageId && (promptList.length > 1 || inspirationImageId)) {
-      const seriesKind = promptList.length > 1 ? 'multi_shot' : 'iterative';
-      const createdSeries = db
-        .prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (NULL, ?)`)
-        .run(seriesKind);
-      effectiveSeriesId = Number(createdSeries.lastInsertRowid);
-
-      if (inspirationImageId) {
-        const inspSeedSnapshot =
-          serializedChatSnapshot ||
-          JSON.stringify([
-            {
-              id: `insp-${inspirationImageId}`,
-              role: 'assistant',
-              content: 'Uploaded inspiration image:',
-              proposedPrompt: promptList[0],
-            },
-          ]);
-        db.prepare(
-          `INSERT OR REPLACE INTO image_series_items (series_id, image_id, step_order, chat_snapshot_json)
-           VALUES (?, ?, 0, ?)`
-        ).run(effectiveSeriesId, inspirationImageId, inspSeedSnapshot);
-      }
-    }
-
-    // 1. Create batch and items in SQLite
-    const batchInfo = db
-      .prepare(
-        `INSERT INTO generation_batches
-          (character_id, workflow_id, theme_title, mode, total_count, aspect_ratio, megapixels, width, height, checkpoint_name, lora_count, lora_names_json, series_id, branch_from_image_id, inspiration_image_id, chat_snapshot_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        characterId ? Number(characterId) : null,
-        Number(workflowId),
-        themeTitle ? String(themeTitle).trim() : null,
-        mode === 'theme_set' ? 'theme_set' : 'single',
-        promptList.length,
-        resolvedAr,
-        resolvedMp,
-        computedWidth,
-        computedHeight,
-        resolvedCheckpointName,
-        activeLorasCount,
-        serializedLoraNames,
-        effectiveSeriesId,
-        branchFromImageId ? Number(branchFromImageId) : null,
-        inspirationImageId,
-        serializedChatSnapshot
-      );
-    const batchId = Number(batchInfo.lastInsertRowid);
-
-    const insertItem = db.prepare(
-      `INSERT INTO generation_items
-        (batch_id, item_index, prompt, negative_prompt, seed, status)
-       VALUES (?, ?, ?, ?, ?, 'pending')`
-    );
-
-    const createdItems: { itemId: number; index: number; prompt: string; seed: string }[] = [];
-    const hasFixedBaseSeed = Boolean(baseSeed && Number(baseSeed) > 0);
-    const startingSeed = hasFixedBaseSeed
-      ? Math.floor(Number(baseSeed))
-      : Math.floor(Math.random() * 1e15) + 1;
-
-    for (let i = 0; i < promptList.length; i++) {
-      // Generate an independent random 64-bit integer (1..10^15) per shot unless a fixed baseSeed was given
-      const itemSeed = hasFixedBaseSeed
-        ? String(startingSeed + i)
-        : String(Math.floor(Math.random() * 1e15) + 1);
-      const info = insertItem.run(
-        batchId,
-        i + 1,
-        promptList[i],
-        (negativePrompt || '').trim(),
-        itemSeed
-      );
-      createdItems.push({
-        itemId: Number(info.lastInsertRowid),
-        index: i + 1,
-        prompt: promptList[i],
-        seed: itemSeed,
-      });
-    }
-
-    // 2. Dispatch items sequentially to ComfyUI /prompt so ComfyUI queues them in exact shot order
-    for (const item of createdItems) {
-      try {
-        const apiPayload = compileWorkflowForGeneration({
-          workflowId: Number(workflowId),
-          positivePrompt: item.prompt,
-          triggerWord: triggerWord !== undefined ? String(triggerWord) : undefined,
-          negativePrompt: (negativePrompt || '').trim(),
-          seed: item.seed,
-          aspectRatio: resolvedAr,
-          megapixels: resolvedMp,
-          steps: resolvedSteps,
-          width: computedWidth,
-          height: computedHeight,
-          loras: loraSelections,
-          checkpointName: checkpointName || undefined,
-        });
-        const hasInlineUpscale = Boolean(findInlineUpscaleNodes(apiPayload));
-
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 8000);
-        const comfyRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({
-            prompt: apiPayload,
-            client_id: COUCHY_COMFY_CLIENT_ID,
-          }),
-        });
-        clearTimeout(timer);
-
-        if (!comfyRes.ok) {
-          const errText = await comfyRes.text();
-          throw new Error(`ComfyUI HTTP ${comfyRes.status}: ${errText}`);
-        }
-
-        const data = (await comfyRes.json()) as { prompt_id?: string };
-        const promptId = data.prompt_id || `prompt-${Date.now()}-${item.itemId}`;
-
-        db.prepare(
-          `UPDATE generation_items
-           SET comfyui_prompt_id = ?, status = 'submitted'
-           WHERE id = ?`
-        ).run(promptId, item.itemId);
-
-        // Primary workflow handles >3MP inline via Switch #51; only fall back to two-pass upscale if absent
-        trackGenerationItem(
-          item.itemId,
-          promptId,
-          characterId ? Number(characterId) : null,
-          resolvedMp > 3.0 && !hasInlineUpscale ? resolvedMp : undefined
-        );
-        logger.info(
-          'ComfyUI',
-          `Submitted batch #${batchId} item #${item.itemId} (${promptId}) [${computedWidth}x${computedHeight}]`
-        );
-      } catch (err: any) {
-        const errMsg = err?.message || 'Failed to submit to ComfyUI';
-        logger.error('ComfyUI', `Failed to submit batch #${batchId} item #${item.itemId}`, errMsg);
-        db.prepare(
-          `UPDATE generation_items
-           SET status = 'failed', error_message = ?, completed_at = datetime('now')
-           WHERE id = ?`
-        ).run(errMsg, item.itemId);
-        preserveFailedGenerationConversation(item.itemId);
-      }
-    }
-
-    invalidateComfyQueueCache();
-
-    const batches = listGenerationBatches(25);
-    const createdBatch = batches.find((b) => b.id === batchId) || batches[0];
-
-    res.json({
-      batch: createdBatch,
-      batches,
+    const result = await dispatchGenerationBatch({
+      characterId: body.characterId,
+      workflowId: Number(body.workflowId),
+      mode: body.mode,
+      themeTitle: body.themeTitle,
+      aspectRatio: body.aspectRatio,
+      megapixels: body.megapixels,
+      steps: body.steps,
+      prompts: promptList,
+      triggerWord: body.triggerWord,
+      negativePrompt: body.negativePrompt,
+      loras: body.loras,
+      checkpointName: body.checkpointName,
+      baseSeed: body.baseSeed,
+      seriesId: body.seriesId,
+      branchFromImageId: body.branchFromImageId,
+      inspirationFilename: body.inspirationFilename,
+      chatSnapshot: body.chatSnapshot,
     });
+
+    res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/generation/random-roll
+ * Rolls weighted-random character, compatible base model, optional style LoRAs,
+ * popular tags, and aspect ratio, generates a hidden prompt, and dispatches immediately.
+ */
+generationRouter.post('/random-roll', async (_req, res) => {
+  try {
+    const result = await executeRandomRoll();
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to roll random generation.' });
   }
 });
