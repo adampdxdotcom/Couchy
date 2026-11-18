@@ -106,8 +106,8 @@ export function parseIdsFromCivitaiUrl(urlStr?: string | null): {
       : host.endsWith('civitai.com')
       ? 'civitai.com'
       : null;
-    const mMatch = u.pathname.match(/\/models\/(\d+)/i);
     const dlMatch = u.pathname.match(/\/api\/download\/models\/(\d+)/i);
+    const mMatch = dlMatch ? null : u.pathname.match(/^\/models\/(\d+)/i);
     const verParam = u.searchParams.get('modelVersionId');
     return {
       modelId: mMatch ? mMatch[1] : null,

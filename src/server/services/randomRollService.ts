@@ -100,7 +100,7 @@ export function pickWeightedItem<T>(candidates: WeightedCandidate<T>[]): T | nul
   return candidates[candidates.length - 1].item;
 }
 
-function normalizeBaseModelGroup(raw: string | null | undefined): string {
+export function normalizeBaseModelGroup(raw: string | null | undefined): string {
   const s = (raw || '').trim().toLowerCase();
   if (!s) return '';
   if (s.includes('krea') || s.includes('flux')) return 'flux';
@@ -111,7 +111,7 @@ function normalizeBaseModelGroup(raw: string | null | undefined): string {
   return s;
 }
 
-function selectRolledCharacter() {
+export function selectRolledCharacter() {
   const rows = db
     .prepare(
       `SELECT
@@ -189,7 +189,7 @@ function selectRolledCharacter() {
   return { character: picked, charLora: installedCharLora };
 }
 
-interface BaseModelCandidate {
+export interface BaseModelCandidate {
   filename: string;
   name: string;
   nickname: string | null;
@@ -211,7 +211,7 @@ function getBaseModelHandle(candidate: BaseModelCandidate): string {
  * Returns mention-enabled, installed, non-hidden base models that have a populated
  * Model Details & Strengths description, filtered to match the active architecture group.
  */
-function getEligibleDescribedCheckpoints(preferredBaseGroup: string): BaseModelCandidate[] {
+export function getEligibleDescribedCheckpoints(preferredBaseGroup: string): BaseModelCandidate[] {
   const rows = db
     .prepare(
       `SELECT
@@ -276,7 +276,7 @@ function pickWeightedCheckpointFallback(
   return picked?.filename || fallbackCheckpoint;
 }
 
-function selectRolledStyleLoras(baseGroup: string): Array<{
+export function selectRolledStyleLoras(baseGroup: string): Array<{
   filename: string;
   baseModel: string | null;
   triggerWord: string;
@@ -365,7 +365,7 @@ function selectRolledStyleLoras(baseGroup: string): Array<{
   return selected;
 }
 
-function isIdentityOrDemographicTag(tag: string): boolean {
+export function isIdentityOrDemographicTag(tag: string): boolean {
   const clean = tag.trim();
   if (!clean) return true;
   if (filterCharacterIdentityTags([clean]).length === 0) return true;
@@ -381,7 +381,7 @@ function isIdentityOrDemographicTag(tag: string): boolean {
   );
 }
 
-function selectRolledTags(desiredCount = 5): string[] {
+export function selectRolledTags(desiredCount = 5): string[] {
   const userTagRows = db
     .prepare(
       `SELECT t.name AS tag, COUNT(*) AS usage_count
@@ -503,7 +503,7 @@ function buildOfflineRandomPrompt(characterName: string, tags: string[]): string
   );
 }
 
-function resolveSelectedBaseCandidate(
+export function resolveSelectedBaseCandidate(
   llmContent: string,
   candidates: BaseModelCandidate[]
 ): BaseModelCandidate | null {
@@ -529,6 +529,18 @@ function resolveSelectedBaseCandidate(
       );
     }) || null
   );
+}
+
+export function extractPromptFromRandomRollResponse(
+  llmContent: string,
+  characterName: string
+): string {
+  const withoutBaseTag = llmContent
+    .replace(/<selected_base>[\s\S]*?(?:<\/selected_base>|(?=<proposed_prompt>)|\r?\n|$)/gi, '')
+    .trim();
+  const match = withoutBaseTag.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
+  const raw = (match?.[1] || withoutBaseTag).replace(/^["']|["']$/g, '').trim();
+  return sanitizeAgentPrompt(raw, characterName);
 }
 
 function buildShuffledBaseContext(candidates: BaseModelCandidate[]): {
@@ -673,12 +685,7 @@ async function composeRandomRollPrompt(params: {
       : params.baseCandidates[0] || null;
     const resolvedCheckpoint = chosenBase?.filename || params.fallbackCheckpoint;
 
-    const withoutBaseTag = res.content
-      .replace(/<selected_base>[\s\S]*?(?:<\/selected_base>|(?=<proposed_prompt>)|\r?\n|$)/gi, '')
-      .trim();
-    const match = withoutBaseTag.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
-    const raw = (match?.[1] || withoutBaseTag).replace(/^["']|["']$/g, '').trim();
-    const sanitized = sanitizeAgentPrompt(raw, params.characterName);
+    const sanitized = extractPromptFromRandomRollResponse(res.content, params.characterName);
     if (sanitized.length >= 15) {
       return {
         prompt: sanitized,
