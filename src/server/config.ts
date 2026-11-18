@@ -63,10 +63,10 @@ function resolveListenPort(): number {
     if (Number.isFinite(cliPort) && cliPort > 0) return cliPort;
   }
   const envPort = Number(process.env.PORT || 0);
-  const nginxPort = Number(process.env.NGINX_PORT || 8080);
+  const explicitNginxPort = process.env.NGINX_PORT ? Number(process.env.NGINX_PORT) : null;
   const defaultAppPort = Number(process.env.DEFAULT_APP_PORT || 3000);
-  // Avoid binding to the reverse-proxy nginx port when PORT=8080 is inherited from the container env
-  if (envPort > 0 && envPort !== nginxPort) {
+  // Avoid binding to the reverse-proxy nginx port only when NGINX_PORT is explicitly present and collides with PORT
+  if (envPort > 0 && (explicitNginxPort === null || envPort !== explicitNginxPort)) {
     return envPort;
   }
   return Number.isFinite(defaultAppPort) && defaultAppPort > 0 ? defaultAppPort : 3000;
