@@ -164,7 +164,20 @@ export function useGalleryImageActions({
       const isFromMultiShot = img.seriesKind === 'multi_shot';
       let initialChatMessages: QuickGenChatMessage[] = [];
       if (!isFromMultiShot && img.chatSnapshot && img.chatSnapshot.length > 0) {
-        initialChatMessages = img.chatSnapshot;
+        const hasSubmittedFlag = img.chatSnapshot.some((m) => m.submitted);
+        if (hasSubmittedFlag) {
+          initialChatMessages = img.chatSnapshot;
+        } else {
+          // Legacy snapshots without `submitted`: mark the latest assistant proposal as submitted
+          const lastProposalRevIdx = [...img.chatSnapshot]
+            .reverse()
+            .findIndex((m) => m.role === 'assistant' && Boolean(m.proposedPrompt?.trim()));
+          const targetIdx =
+            lastProposalRevIdx >= 0 ? img.chatSnapshot.length - 1 - lastProposalRevIdx : -1;
+          initialChatMessages = img.chatSnapshot.map((m, idx) =>
+            idx === targetIdx ? { ...m, submitted: true } : m
+          );
+        }
       } else {
         const promptText = (img.positivePrompt || '').trim();
         if (promptText) {
@@ -176,6 +189,7 @@ export function useGalleryImageActions({
                 ? 'Loaded this shot from the photo set. How would you like to iterate on it?'
                 : 'Loaded prompt from this image. How would you like to iterate on it?',
               proposedPrompt: promptText,
+              submitted: true,
             },
           ];
         }

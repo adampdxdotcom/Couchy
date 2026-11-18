@@ -19,11 +19,11 @@ interface QuickGenConversationViewProps {
   isSubmitting: boolean;
   batchCount: number;
   onUpdateProposedPrompt: (messageId: string, value: string) => void;
-  onSubmitPrompt: (promptText: string) => void;
+  onSubmitPrompt: (messageId: string, promptText: string) => void;
   onPreviewExpand: (messageId: string, conceptText: string) => void;
   onUpdateExpandedShot: (messageId: string, shotIndex: number, value: string) => void;
   onCloseExpandedPreview: (messageId: string) => void;
-  onSubmitExpandedShots: (prompts: string[], conceptTheme: string) => void;
+  onSubmitExpandedShots: (messageId: string, prompts: string[], conceptTheme: string) => void;
   onClearChat: () => void;
 }
 
@@ -113,6 +113,7 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
             const isExpandingThis = expandingMessageId === msg.id;
             const hasPreview = Array.isArray(msg.expandedPrompts) && msg.expandedPrompts.length > 0;
             const isConceptCard = msg.proposalKind === 'concept' || batchCount > 1;
+            const hasBeenSubmitted = Boolean(msg.submitted);
 
             return (
               <div
@@ -248,19 +249,26 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
                               type="button"
                               disabled={isSubmitting || isChatting || Boolean(expandingMessageId)}
                               onClick={() =>
-                                onSubmitExpandedShots(msg.expandedPrompts!, msg.proposedPrompt!)
+                                onSubmitExpandedShots(msg.id, msg.expandedPrompts!, msg.proposedPrompt!)
                               }
                               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-xs transition-colors cursor-pointer shadow-sm"
-                              title={`Queue all ${msg.expandedPrompts!.length} reviewed prompts to ComfyUI`}
+                              title={
+                                hasBeenSubmitted
+                                  ? `Re-submit all ${msg.expandedPrompts!.length} reviewed prompts to ComfyUI`
+                                  : `Queue all ${msg.expandedPrompts!.length} reviewed prompts to ComfyUI`
+                              }
                             >
                               {isSubmitting ? (
                                 <>
                                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                  <span>Submitting...</span>
+                                  <span>{hasBeenSubmitted ? 'Re-submitting...' : 'Submitting...'}</span>
                                 </>
                               ) : (
                                 <>
-                                  <span>Submit {msg.expandedPrompts!.length} Shots</span>
+                                  <span>
+                                    {hasBeenSubmitted ? 'Re-submit' : 'Submit'}{' '}
+                                    {msg.expandedPrompts!.length} Shots
+                                  </span>
                                   <ArrowRight className="w-3.5 h-3.5" />
                                 </>
                               )}
@@ -307,11 +315,15 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
                               Boolean(expandingMessageId) ||
                               !msg.proposedPrompt.trim()
                             }
-                            onClick={() => onSubmitPrompt(msg.proposedPrompt!)}
+                            onClick={() => onSubmitPrompt(msg.id, msg.proposedPrompt!)}
                             className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-xs transition-colors cursor-pointer shadow-sm"
                             title={
                               batchCount > 1
-                                ? `Expand this concept into ${batchCount} shot prompts and queue directly to ComfyUI`
+                                ? hasBeenSubmitted
+                                  ? `Re-expand this concept into ${batchCount} shot prompts and queue again to ComfyUI`
+                                  : `Expand this concept into ${batchCount} shot prompts and queue directly to ComfyUI`
+                                : hasBeenSubmitted
+                                ? 'Re-submit this prompt to ComfyUI and reset Quick Gen'
                                 : 'Submit this prompt to ComfyUI and reset Quick Gen'
                             }
                           >
@@ -319,14 +331,24 @@ export const QuickGenConversationView: React.FC<QuickGenConversationViewProps> =
                               <>
                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                 <span>
-                                  {batchCount > 1 ? 'Expanding & Submitting...' : 'Submitting...'}
+                                  {batchCount > 1
+                                    ? hasBeenSubmitted
+                                      ? 'Expanding & Re-submitting...'
+                                      : 'Expanding & Submitting...'
+                                    : hasBeenSubmitted
+                                    ? 'Re-submitting...'
+                                    : 'Submitting...'}
                                 </span>
                               </>
                             ) : (
                               <>
                                 <span>
                                   {batchCount > 1
-                                    ? `Expand & Submit (x${batchCount})`
+                                    ? hasBeenSubmitted
+                                      ? `Expand & Re-submit (x${batchCount})`
+                                      : `Expand & Submit (x${batchCount})`
+                                    : hasBeenSubmitted
+                                    ? 'Re-submit'
                                     : 'Submit'}
                                 </span>
                                 <ArrowRight className="w-3.5 h-3.5" />

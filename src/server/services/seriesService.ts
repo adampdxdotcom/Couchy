@@ -32,6 +32,7 @@ export function parseChatSnapshot(raw: string | null | undefined): QuickGenChatM
         excludedLoras: Array.isArray(m.excludedLoras)
           ? m.excludedLoras.map(String).filter(Boolean)
           : undefined,
+        ...(m.submitted === true ? { submitted: true } : {}),
       }));
   } catch {
     return [];
@@ -54,6 +55,7 @@ function buildSeedSnapshotFromImage(imageId: number): string | null {
       role: 'assistant',
       content: 'Starting prompt from original image:',
       proposedPrompt: prompt,
+      submitted: true,
     },
   ];
   return JSON.stringify(seedMessages);

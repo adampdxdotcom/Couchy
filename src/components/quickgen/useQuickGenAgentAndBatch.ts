@@ -219,7 +219,8 @@ export function useQuickGenAgentAndBatch({
     rawPromptText: string,
     expandWithAgentSet: boolean,
     onAfterReset?: () => void,
-    preExpandedPrompts?: string[]
+    preExpandedPrompts?: string[],
+    sourceMessageId?: string
   ) => {
     const cleanPrompt = rawPromptText.trim();
     const cleanedPreExpanded = (preExpandedPrompts || []).map((p) => p.trim()).filter(Boolean);
@@ -255,9 +256,18 @@ export function useQuickGenAgentAndBatch({
         promptsToRun = Array.from({ length: batchCount }, () => cleanPrompt);
       }
 
+      const markedChatMessages =
+        sourceMessageId && chatMessages.length > 0
+          ? chatMessages.map((m) => (m.id === sourceMessageId ? { ...m, submitted: true } : m))
+          : chatMessages;
+
+      if (sourceMessageId && markedChatMessages !== chatMessages) {
+        setChatMessages(markedChatMessages);
+      }
+
       const snapshotForBatch =
-        chatMessages.length > 0
-          ? patchLastAssistantExclusions(chatMessages, Array.from(removedLoraKeys))
+        markedChatMessages.length > 0
+          ? patchLastAssistantExclusions(markedChatMessages, Array.from(removedLoraKeys))
           : undefined;
 
       const isMultiShotSet = expandWithAgentSet || cleanedPreExpanded.length > 1;
@@ -372,6 +382,7 @@ export function useQuickGenAgentAndBatch({
   };
 
   const handleSubmitExpandedPrompts = async (
+    messageId: string,
     promptsToSubmit: string[],
     conceptTheme: string,
     onAfterReset?: () => void
@@ -381,7 +392,7 @@ export function useQuickGenAgentAndBatch({
       onPushToast('Add at least one non-empty shot prompt before submitting.', 'warning');
       return;
     }
-    await dispatchBatchToComfy(conceptTheme, true, onAfterReset, cleanPrompts);
+    await dispatchBatchToComfy(conceptTheme, true, onAfterReset, cleanPrompts, messageId);
   };
 
   const handleSubmit = async (onAfterReset?: () => void) => {
@@ -393,10 +404,11 @@ export function useQuickGenAgentAndBatch({
   };
 
   const handleSubmitProposedPrompt = async (
+    messageId: string,
     proposedPromptText: string,
     onAfterReset?: () => void
   ) => {
-    await dispatchBatchToComfy(proposedPromptText, batchCount > 1, onAfterReset);
+    await dispatchBatchToComfy(proposedPromptText, batchCount > 1, onAfterReset, undefined, messageId);
   };
 
   return {

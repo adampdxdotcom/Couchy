@@ -52,12 +52,24 @@ export interface AppConfig {
 }
 
 function resolveListenPort(): number {
+  const eqArg = process.argv.find((arg) => arg.startsWith('--port='));
+  if (eqArg) {
+    const cliPort = Number(eqArg.slice('--port='.length));
+    if (Number.isFinite(cliPort) && cliPort > 0) return cliPort;
+  }
   const portFlagIdx = process.argv.indexOf('--port');
   if (portFlagIdx !== -1 && process.argv[portFlagIdx + 1]) {
     const cliPort = Number(process.argv[portFlagIdx + 1]);
     if (Number.isFinite(cliPort) && cliPort > 0) return cliPort;
   }
-  return Number(process.env.PORT || 3000);
+  const envPort = Number(process.env.PORT || 0);
+  const nginxPort = Number(process.env.NGINX_PORT || 8080);
+  const defaultAppPort = Number(process.env.DEFAULT_APP_PORT || 3000);
+  // Avoid binding to the reverse-proxy nginx port when PORT=8080 is inherited from the container env
+  if (envPort > 0 && envPort !== nginxPort) {
+    return envPort;
+  }
+  return Number.isFinite(defaultAppPort) && defaultAppPort > 0 ? defaultAppPort : 3000;
 }
 
 export const appConfig: AppConfig = {

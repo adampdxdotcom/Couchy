@@ -646,6 +646,7 @@ export interface QuickGenChatMessage {
   expandedPrompts?: string[];
   selectedLoras?: string[];
   excludedLoras?: string[];
+  submitted?: boolean;
 }
 
 export interface LmStudioStatus {

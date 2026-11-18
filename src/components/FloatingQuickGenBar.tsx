@@ -518,14 +518,19 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               isSubmitting={submitState.isSubmitting}
               batchCount={submitState.batchCount}
               onUpdateProposedPrompt={submitState.handleUpdateProposedPrompt}
-              onSubmitPrompt={(proposedPrompt) =>
-                submitState.handleSubmitProposedPrompt(proposedPrompt, mentions.resetMentions)
+              onSubmitPrompt={(messageId, proposedPrompt) =>
+                submitState.handleSubmitProposedPrompt(
+                  messageId,
+                  proposedPrompt,
+                  mentions.resetMentions
+                )
               }
               onPreviewExpand={submitState.handlePreviewExpandConcept}
               onUpdateExpandedShot={submitState.handleUpdateExpandedPrompt}
               onCloseExpandedPreview={submitState.handleCloseExpandedPreview}
-              onSubmitExpandedShots={(prompts, conceptTheme) =>
+              onSubmitExpandedShots={(messageId, prompts, conceptTheme) =>
                 submitState.handleSubmitExpandedPrompts(
+                  messageId,
                   prompts,
                   conceptTheme,
                   mentions.resetMentions

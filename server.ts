@@ -3,104 +3,147 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { appConfig } from './src/server/config.ts';
 import { logger } from './src/server/logger.ts';
-import { runMigrations } from './src/server/db.ts';
-import {
-  backfillMissingImagePrompts,
-  runBackgroundThumbnailMigration,
-  runDirectoryScan,
-  startFilesystemWatcher,
-} from './src/server/services/scannerService.ts';
-import { syncModelInventory } from './src/server/services/modelInventoryService.ts';
-import { imagesRouter } from './src/server/routes/imagesRoutes.ts';
-import { charactersRouter } from './src/server/routes/charactersRoutes.ts';
-import { modelsAndWorkflowsRouter } from './src/server/routes/modelsAndWorkflowsRoutes.ts';
-import { systemRouter } from './src/server/routes/systemRoutes.ts';
-import { generationRouter } from './src/server/routes/generationRoutes.ts';
-import { presetsRouter } from './src/server/routes/presetsRoutes.ts';
-import {
-  getTaggerSettings,
-  isTaggerModelDownloaded,
-  startVisualTaggerQueue,
-} from './src/server/services/visualTaggerService.ts';
-import { startDownloadScheduler } from './src/server/services/downloadSchedulerService.ts';
-import {
-  scanAndCleanCopiedDownloads,
-  startModelCleanupScheduler,
-} from './src/server/services/modelCleanupService.ts';
-import { startLoraHeadshotWatcher } from './src/server/services/characterDownloadAutomationService.ts';
 
 async function startServer() {
-  // 1. Run SQLite schema migrations before serving API routes
-  runMigrations();
+  const outerApp = express();
+  const innerApp = express();
+  innerApp.use(express.json({ limit: '25mb' }));
 
-  const app = express();
-  app.use(express.json({ limit: '25mb' }));
-
-  // 2. Mount API routes
-  app.use('/api/images', imagesRouter);
-  app.use('/api/characters', charactersRouter);
-  app.use('/api/generation', generationRouter);
-  app.use('/api/presets', presetsRouter);
-  app.use('/api', modelsAndWorkflowsRouter);
-  app.use('/api', systemRouter);
-
-  // 3. Mount Vite in development or static dist in production
   const disableHmr = process.env.DISABLE_HMR === 'true';
   let viteServer: Awaited<ReturnType<typeof createViteServer>> | null = null;
-  if (process.env.NODE_ENV !== 'production') {
-    viteServer = await createViteServer({
-      server: {
-        middlewareMode: true,
-        ...(disableHmr ? { hmr: false, ws: false, watch: null } : {}),
-      },
-      appType: 'spa',
-    });
-    app.use(viteServer.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
+  let reconcileTimer: ReturnType<typeof setInterval> | null = null;
 
-  const httpServer = app.listen(appConfig.port, '0.0.0.0', () => {
-    logger.info('Server', `Couchy running on http://0.0.0.0:${appConfig.port}`);
+  // Prepare DB migrations, API routers, and Vite/static middleware while port binding proceeds immediately
+  const readyPromise = (async () => {
+    const [
+      { runMigrations },
+      { imagesRouter },
+      { charactersRouter },
+      { modelsAndWorkflowsRouter },
+      { systemRouter },
+      { generationRouter },
+      { presetsRouter },
+      viteInstance,
+    ] = await Promise.all([
+      import('./src/server/db.ts'),
+      import('./src/server/routes/imagesRoutes.ts'),
+      import('./src/server/routes/charactersRoutes.ts'),
+      import('./src/server/routes/modelsAndWorkflowsRoutes.ts'),
+      import('./src/server/routes/systemRoutes.ts'),
+      import('./src/server/routes/generationRoutes.ts'),
+      import('./src/server/routes/presetsRoutes.ts'),
+      process.env.NODE_ENV !== 'production'
+        ? createViteServer({
+            server: {
+              middlewareMode: true,
+              ...(disableHmr ? { hmr: false, ws: false, watch: null } : {}),
+            },
+            appType: 'spa',
+          })
+        : Promise.resolve(null),
+    ]);
+
+    runMigrations();
+
+    innerApp.use('/api/images', imagesRouter);
+    innerApp.use('/api/characters', charactersRouter);
+    innerApp.use('/api/generation', generationRouter);
+    innerApp.use('/api/presets', presetsRouter);
+    innerApp.use('/api', modelsAndWorkflowsRouter);
+    innerApp.use('/api', systemRouter);
+
+    if (viteInstance) {
+      viteServer = viteInstance;
+      innerApp.use(viteInstance.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), 'dist');
+      innerApp.use(express.static(distPath));
+      innerApp.get('*', (_req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    }
+  })();
+
+  // Queue incoming HTTP requests cleanly until routes and Vite middlewares finish mounting
+  outerApp.use(async (req, res, next) => {
+    try {
+      await readyPromise;
+      innerApp(req, res, next);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  const httpServer = outerApp.listen(appConfig.port, '0.0.0.0', () => {
+    logger.info('Server', `Couchy listening on http://0.0.0.0:${appConfig.port}`);
     logger.info('Server', `Watching ComfyUI Output Directory: ${appConfig.comfyuiOutputDir}`);
     logger.info('Server', `WebP Thumbnail Cache (384px long-side): ${appConfig.thumbnailPath}`);
     logger.info('Server', `Local Models Directory: ${appConfig.localModelsDir}`);
     logger.info('Server', `Rotating Log File: ${logger.logFilePath}`);
 
-    // Defer prompt backfill, filesystem watchers, and background scans until after port binding
-    setImmediate(async () => {
-      try {
-        backfillMissingImagePrompts(false);
-        startFilesystemWatcher();
-        startDownloadScheduler();
-        startLoraHeadshotWatcher();
-        startModelCleanupScheduler();
+    // Start background watchers and directory reconciliation only after core init completes
+    readyPromise
+      .then(async () => {
+        try {
+          const [
+            {
+              backfillMissingImagePrompts,
+              runBackgroundThumbnailMigration,
+              runDirectoryScan,
+              startFilesystemWatcher,
+            },
+            { syncModelInventory },
+            { getTaggerSettings, isTaggerModelDownloaded, startVisualTaggerQueue },
+            { startDownloadScheduler },
+            { scanAndCleanCopiedDownloads, startModelCleanupScheduler },
+            { startLoraHeadshotWatcher },
+          ] = await Promise.all([
+            import('./src/server/services/scannerService.ts'),
+            import('./src/server/services/modelInventoryService.ts'),
+            import('./src/server/services/visualTaggerService.ts'),
+            import('./src/server/services/downloadSchedulerService.ts'),
+            import('./src/server/services/modelCleanupService.ts'),
+            import('./src/server/services/characterDownloadAutomationService.ts'),
+          ]);
 
-        await runBackgroundThumbnailMigration();
-        await syncModelInventory();
-        await scanAndCleanCopiedDownloads().catch(() => {});
-        await runDirectoryScan('incremental');
-        // Only resume visual tagging if user previously enabled it AND model is already on disk
-        if (getTaggerSettings().enabled && isTaggerModelDownloaded()) {
-          startVisualTaggerQueue().catch(() => {});
+          backfillMissingImagePrompts(false);
+          startFilesystemWatcher();
+          startDownloadScheduler();
+          startLoraHeadshotWatcher();
+          startModelCleanupScheduler();
+
+          await runBackgroundThumbnailMigration();
+          await syncModelInventory();
+          await scanAndCleanCopiedDownloads().catch(() => {});
+          await runDirectoryScan('incremental');
+          if (getTaggerSettings().enabled && isTaggerModelDownloaded()) {
+            startVisualTaggerQueue().catch(() => {});
+          }
+
+          reconcileTimer = setInterval(() => {
+            runDirectoryScan('reconcile').catch(() => {});
+          }, 5 * 60 * 1000);
+        } catch (err) {
+          logger.error('Server', 'Background startup scan error', err);
         }
-      } catch (err) {
-        logger.error('Server', 'Background startup scan error', err);
-      }
-    });
+      })
+      .catch(() => {
+        // Core init errors are handled by the top-level readyPromise error handler below
+      });
   });
 
-  // Periodic reconciliation every 5 minutes
-  const reconcileTimer = setInterval(() => {
-    runDirectoryScan('reconcile').catch(() => {});
-  }, 5 * 60 * 1000);
+  readyPromise.catch((err) => {
+    logger.error('Server', 'Core initialization failed', err);
+    httpServer.close(() => process.exit(1));
+  });
+
+  httpServer.on('error', (err) => {
+    logger.error('Server', 'HTTP server listen error', err);
+    process.exit(1);
+  });
 
   const shutdown = async () => {
-    clearInterval(reconcileTimer);
+    if (reconcileTimer) clearInterval(reconcileTimer);
     httpServer.close();
     if (viteServer) {
       await viteServer.close().catch(() => {});
