@@ -695,6 +695,7 @@ export interface ComfyUiLiveStatus {
   currentJobIndex?: number | null;
   totalRunJobs?: number | null;
   lastIndexedAt?: number;
+  workspaceVersion?: number;
   ghostItems?: QueuedGhostCardItem[];
   lastError?: ComfyUiExecutionErrorNotice | null;
 }

@@ -220,7 +220,7 @@ The **Quick Gen Box** is a collapsible bottom bar accessible from **Gallery**, *
   - **Multi-Shot Set Mode (`x2`–`x8`)**: Given one theme, the **Agent** generates a **Set Concept** card outlining medium, wardrobe plan, lighting, and shot progression. Choose **`Preview Shots (xN)`** to inspect, hand-edit, or **Re-expand** individual shots before submitting, or **`Expand & Submit (xN)`** to queue the **Multi-Shot Set** directly. Batch count resets to `x1` after submission or when reopening from an image or stack.
 
 - **Settings & One-Click Reuse**:
-  - Click the settings pill (e.g., `2:3 · 3MP · x1`) to choose aspect ratio (`1:1`, `9:16`, `16:9`, `3:4`, `4:3`, `2:3`, `3:2`), batch count (`x1`–`x8`), and resolution (`0.5–10.0 MP`; targets above `3.0 MP` automatically trigger `4x` ESRGAN upscaling). Uses the attached character's preferred workflow or falls back to the system default.
+  - Click the settings pill (e.g., `2:3 · 3MP · x1`) to choose aspect ratio (`1:1`, `9:16`, `16:9`, `3:4`, `4:3`, `2:3`, `3:2`), resolution (`0.5–10.0 MP`; targets above `3.0 MP` automatically trigger `4x` ESRGAN upscaling), **Steps** (`4–12`, defaulting to the active workflow's `KSampler` step count and shown on the settings pill only when changed), and batch count (`x1`–`x8`). Uses the attached character's preferred workflow or falls back to the system default.
   - Click **Reuse Prompt** on any gallery card or inside the Inspector to restore its prompt, aspect ratio, character, and LoRAs directly into the **Quick Gen Box**.
 
 ---
@@ -368,7 +368,7 @@ If you edit prompts under **System &rarr; Agent**, keep these built-in contracts
 ### Technical Architecture
 
 Couchy runs as a single Node.js service (React + TypeScript + Tailwind CSS frontend; Express + TypeScript backend with **SQLite WAL** via `better-sqlite3`):
-- **ComfyUI Compilation & Poller**: Connects to ComfyUI REST + `/ws` to track progress and index completed PNGs. Compiles Krea 2 API graphs (`#49` resolution selector, `#50` Power Lora Loader, `#30_27` trigger concatenation, and inline `4x` ESRGAN `#51`–`#54` upscaling).
+- **ComfyUI Compilation & Poller**: Connects to ComfyUI REST + `/ws` to track progress and index completed PNGs. Compiles Krea 2 API graphs (`#49` resolution selector, `#50` Power Lora Loader, `#30_27` trigger concatenation, `#30_3` KSampler seed & Quick Gen steps override, and inline `4x` ESRGAN `#51`–`#54` upscaling).
 - **Local ONNX Pipelines (`onnxruntime-node`)**:
   - **Visual Keyword Tagger**: `wd-vit-tagger-v3` (`data/local_models/wd-vit-tagger-v3`, `0.22` general / `0.18` compound thresholds for text fallback; also serves as an uncensored nudity/exposure audit during Vision interrogation).
   - **Face Scan**: InsightFace **SCRFD (`det_10g.onnx`)** 5-point landmark alignment + **ArcFace (`w600k_r50.onnx`)** 512-D embeddings (`data/local_models/insightface-buffalo-l`, cached in `character_face_embeddings` with `0.38` default cosine threshold).

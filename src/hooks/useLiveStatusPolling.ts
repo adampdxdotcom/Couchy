@@ -49,7 +49,9 @@ export function useLiveStatusPolling({
 
   const prevLmStudioOnlineRef = useRef<boolean | null>(null);
   const prevBusyRef = useRef<boolean>(false);
-  const lastIndexedAtRef = useRef<number>(0);
+  const lastIndexedAtRef = useRef<number | null>(null);
+  const lastWorkspaceVersionRef = useRef<number | null>(null);
+  const lastWakeRefreshAtRef = useRef<number>(Date.now());
   const allImageIdsRef = useRef<Set<number>>(new Set());
   const allImagesRef = useRef<ImageRecord[]>([]);
   const charactersRef = useRef<CharacterProfile[]>([]);
@@ -125,6 +127,7 @@ export function useLiveStatusPolling({
           } else {
             pushToast(`ComfyUI generation failed: ${status.lastError.message}`, 'error');
           }
+          lastWakeRefreshAtRef.current = Date.now();
           onRefreshWorkspace();
         }
 
@@ -134,14 +137,26 @@ export function useLiveStatusPolling({
             (!g.outputImageId || !allImageIdsRef.current.has(g.outputImageId))
         );
 
-        // Silently refresh gallery as soon as any newly generated image is indexed
-        if (
-          (status.lastIndexedAt && status.lastIndexedAt > lastIndexedAtRef.current) ||
-          hasUnindexedGhost
-        ) {
-          if (status.lastIndexedAt) {
-            lastIndexedAtRef.current = status.lastIndexedAt;
-          }
+        const isInitialPoll = lastWorkspaceVersionRef.current === null && lastIndexedAtRef.current === null;
+        const versionChanged =
+          typeof status.workspaceVersion === 'number' &&
+          lastWorkspaceVersionRef.current !== null &&
+          status.workspaceVersion !== lastWorkspaceVersionRef.current;
+        const indexedChanged =
+          Boolean(status.lastIndexedAt) &&
+          lastIndexedAtRef.current !== null &&
+          status.lastIndexedAt! > lastIndexedAtRef.current;
+
+        if (typeof status.workspaceVersion === 'number') {
+          lastWorkspaceVersionRef.current = status.workspaceVersion;
+        }
+        if (status.lastIndexedAt) {
+          lastIndexedAtRef.current = status.lastIndexedAt;
+        }
+
+        // Silently refresh gallery when another device/tab mutates data or newly generated images are indexed
+        if ((!isInitialPoll && (versionChanged || indexedChanged)) || hasUnindexedGhost) {
+          lastWakeRefreshAtRef.current = Date.now();
           onRefreshWorkspace();
         }
 
@@ -155,6 +170,7 @@ export function useLiveStatusPolling({
           if (document.hidden || !document.hasFocus()) {
             setHasUnseenCompletion(true);
           }
+          lastWakeRefreshAtRef.current = Date.now();
           onRefreshWorkspace();
         }
         prevBusyRef.current = status.runningCount > 0 || status.queuedCount > 0;
@@ -174,20 +190,30 @@ export function useLiveStatusPolling({
     };
   }, [pushToast, onRefreshWorkspace, setQuickGenPrefill]);
 
-  // Clear "Couchy (Done)" immediately when the user focuses or makes the tab visible
+  // Clear "Couchy (Done)" and refresh stale workspace data when returning to a backgrounded tab or device
   useEffect(() => {
-    const clearIfVisible = () => {
-      if (!document.hidden) {
-        setHasUnseenCompletion(false);
+    const WAKE_REFRESH_COOLDOWN_MS = 5000;
+    const handleWakeOrFocus = () => {
+      if (document.hidden) return;
+      setHasUnseenCompletion(false);
+      const now = Date.now();
+      if (now - lastWakeRefreshAtRef.current < WAKE_REFRESH_COOLDOWN_MS) {
+        return;
       }
+      lastWakeRefreshAtRef.current = now;
+      refreshComfyStatus();
+      onRefreshWorkspace();
     };
-    window.addEventListener('focus', clearIfVisible);
-    document.addEventListener('visibilitychange', clearIfVisible);
+
+    window.addEventListener('focus', handleWakeOrFocus);
+    window.addEventListener('pageshow', handleWakeOrFocus);
+    document.addEventListener('visibilitychange', handleWakeOrFocus);
     return () => {
-      window.removeEventListener('focus', clearIfVisible);
-      document.removeEventListener('visibilitychange', clearIfVisible);
+      window.removeEventListener('focus', handleWakeOrFocus);
+      window.removeEventListener('pageshow', handleWakeOrFocus);
+      document.removeEventListener('visibilitychange', handleWakeOrFocus);
     };
-  }, []);
+  }, [onRefreshWorkspace, refreshComfyStatus]);
 
   // Synchronize browser tab title with live generation progress and unseen completion state
   useEffect(() => {

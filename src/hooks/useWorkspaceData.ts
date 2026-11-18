@@ -137,22 +137,27 @@ export function useWorkspaceData() {
     await Promise.allSettled([imagesPromise, metaPromise]);
   }, []);
 
-  const loadFilteredImages = useCallback(async () => {
-    if (isDefaultFilters(filters) && allImages.length > 0) {
-      setImages(allImages.filter((img) => !img.isRejected && !img.isArchived));
-      setIsLoadingImages(false);
-      return;
-    }
-    setIsLoadingImages(true);
-    try {
-      const res = await api.queryImages(filters);
-      setImages(res.items || []);
-    } catch (err) {
-      console.error('Failed to query filtered images:', err);
-    } finally {
-      setIsLoadingImages(false);
-    }
-  }, [filters, allImages]);
+  const loadFilteredImages = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (isDefaultFilters(filters) && allImages.length > 0) {
+        setImages(allImages.filter((img) => !img.isRejected && !img.isArchived));
+        setIsLoadingImages(false);
+        return;
+      }
+      if (!options?.silent) {
+        setIsLoadingImages(true);
+      }
+      try {
+        const res = await api.queryImages(filters);
+        setImages(res.items || []);
+      } catch (err) {
+        console.error('Failed to query filtered images:', err);
+      } finally {
+        setIsLoadingImages(false);
+      }
+    },
+    [filters, allImages]
+  );
 
   useEffect(() => {
     loadMetadataAndEntities();
@@ -160,7 +165,7 @@ export function useWorkspaceData() {
 
   useEffect(() => {
     if (!isDefaultFilters(filters)) {
-      loadFilteredImages();
+      loadFilteredImages({ silent: images.length > 0 });
     } else if (allImages.length > 0) {
       setImages(allImages.filter((img) => !img.isRejected && !img.isArchived));
     }
@@ -169,7 +174,7 @@ export function useWorkspaceData() {
   const refreshWorkspaceData = useCallback(async () => {
     await loadMetadataAndEntities();
     if (!isDefaultFilters(filters)) {
-      await loadFilteredImages();
+      await loadFilteredImages({ silent: true });
     }
   }, [loadMetadataAndEntities, loadFilteredImages, filters]);
 

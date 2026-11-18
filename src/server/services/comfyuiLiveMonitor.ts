@@ -51,6 +51,7 @@ interface LiveMonitorState {
   prevTotalRemaining: number;
   lastQueueFetchMs: number;
   lastIndexedAt: number;
+  workspaceVersion: number;
   lastError: ComfyUiExecutionErrorNotice | null;
 }
 
@@ -73,6 +74,7 @@ const state: LiveMonitorState = {
   prevTotalRemaining: 0,
   lastQueueFetchMs: 0,
   lastIndexedAt: Date.now(),
+  workspaceVersion: Date.now(),
   lastError: null,
 };
 
@@ -238,11 +240,20 @@ function syncRunJobCounts(totalRemaining: number): void {
 }
 
 /**
+ * Bumps the monotonic workspace mutation version so other open browser tabs/devices
+ * pick up curation edits (favorites, ratings, tags, characters, presets, etc.) on next poll.
+ */
+export function notifyWorkspaceDataChanged(): void {
+  state.workspaceVersion = Math.max(state.workspaceVersion + 1, Date.now());
+}
+
+/**
  * Signals that one or more newly generated images were indexed and committed to SQLite,
  * allowing connected frontends to refresh their gallery views silently.
  */
 export function notifyImageIndexed(): void {
   state.lastIndexedAt = Date.now();
+  notifyWorkspaceDataChanged();
 }
 
 function extractPromptId(entry: any): string | null {
@@ -1079,6 +1090,7 @@ export async function getComfyUiLiveStatus(): Promise<ComfyUiLiveStatus> {
     currentJobIndex,
     totalRunJobs,
     lastIndexedAt: state.lastIndexedAt,
+    workspaceVersion: state.workspaceVersion,
     ghostItems,
     lastError:
       state.lastError && now - state.lastError.timestamp < 30_000 ? state.lastError : null,

@@ -23,6 +23,7 @@ async function startServer() {
       { systemRouter },
       { generationRouter },
       { presetsRouter },
+      { notifyWorkspaceDataChanged },
       viteInstance,
     ] = await Promise.all([
       import('./src/server/db.ts'),
@@ -32,6 +33,7 @@ async function startServer() {
       import('./src/server/routes/systemRoutes.ts'),
       import('./src/server/routes/generationRoutes.ts'),
       import('./src/server/routes/presetsRoutes.ts'),
+      import('./src/server/services/comfyuiLiveMonitor.ts'),
       process.env.NODE_ENV !== 'production'
         ? createViteServer({
             server: {
@@ -44,6 +46,37 @@ async function startServer() {
     ]);
 
     runMigrations();
+
+    // Read-only POST endpoints that must not bump workspaceVersion (e.g. gallery queries)
+    const readOnlyApiPostPaths = new Set([
+      '/images/query',
+      '/images/export-zip',
+      '/comfyui/test',
+      '/reproduce/validate',
+      '/help/ask',
+      '/characters/match-face',
+      '/models/resolve-url',
+      '/generation/lmstudio/chat',
+      '/generation/lmstudio/generate-prompts',
+      '/generation/interrogate-image',
+      '/generation/civitai-image',
+    ]);
+
+    innerApp.use('/api', (req, res, next) => {
+      if (
+        (req.method === 'PUT' ||
+          req.method === 'PATCH' ||
+          req.method === 'DELETE' ||
+          (req.method === 'POST' && !readOnlyApiPostPaths.has(req.path)))
+      ) {
+        res.on('finish', () => {
+          if (res.statusCode >= 200 && res.statusCode < 400) {
+            notifyWorkspaceDataChanged();
+          }
+        });
+      }
+      next();
+    });
 
     innerApp.use('/api/images', imagesRouter);
     innerApp.use('/api/characters', charactersRouter);
