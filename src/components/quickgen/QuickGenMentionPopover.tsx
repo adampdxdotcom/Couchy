@@ -18,7 +18,14 @@ import {
 
 interface QuickGenMentionPopoverProps {
   entries: MentionEntry[];
-  counts: { all: number; characters: number; loras: number; models: number; presets: number };
+  counts: {
+    all: number;
+    characters: number;
+    photos: number;
+    loras: number;
+    models: number;
+    presets: number;
+  };
   activeTab: MentionTab;
   activeIndex: number;
   query: string;
@@ -74,12 +81,13 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
         </button>
       </div>
 
-      {/* Filter Tabs: All | Characters | Presets | LoRAs | Models */}
+      {/* Filter Tabs: All | Characters | Photos | Presets | LoRAs | Models */}
       <div className="px-3.5 sm:px-4 py-2 border-b border-zinc-800/80 bg-zinc-900/40 flex items-center gap-1.5 overflow-x-auto overscroll-x-contain shrink-0">
         {(
           [
             { id: 'all', label: 'All', count: counts.all },
             { id: 'characters', label: 'Characters', count: counts.characters },
+            { id: 'photos', label: 'Photos', count: counts.photos },
             { id: 'presets', label: 'Presets', count: counts.presets },
             { id: 'loras', label: 'LoRAs', count: counts.loras },
             { id: 'models', label: 'Models', count: counts.models },
@@ -122,9 +130,11 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
             ? 'No matching @mention Base Models found. Enable @mention on Base Models in the Models workspace!'
             : activeTab === 'loras'
             ? 'No matching @mention LoRAs found. Enable LoRAs and set nicknames in the LoRA Explorer!'
+            : activeTab === 'photos'
+            ? 'No matching confirmed character photos found. Confirm character matches in the Gallery to see photos here.'
             : activeTab === 'characters'
             ? 'No matching characters found. Create a character in the Characters tab to @mention them.'
-            : 'No matching characters, presets, @mentioned LoRAs, or Base Models found.'}
+            : 'No matching characters, photos, presets, @mentioned LoRAs, or Base Models found.'}
         </div>
       ) : (
         <div className="flex-1 min-h-0 flex flex-col md:grid md:grid-cols-12 md:max-h-[380px] overflow-y-auto overscroll-contain md:overflow-hidden">

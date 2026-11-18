@@ -40,7 +40,7 @@ export interface QuickGenPrefill {
   timestamp: number;
 }
 
-export type MentionTab = 'all' | 'characters' | 'loras' | 'models' | 'presets';
+export type MentionTab = 'all' | 'characters' | 'photos' | 'loras' | 'models' | 'presets';
 
 export interface MentionEntry {
   key: string;
@@ -272,6 +272,7 @@ export function buildMentionEntries(params: {
   mentionCounts: {
     all: number;
     characters: number;
+    photos: number;
     loras: number;
     models: number;
     presets: number;
@@ -431,8 +432,7 @@ export function buildMentionEntries(params: {
     }
   }
 
-  // Place Character, Preset, LoRA, and Base Model matches above matching image prompts
-  const charTabEntries = [...directCharEntries, ...imagePromptEntries];
+  // Place Character, Preset, LoRA, and Base Model matches above matching image prompts in All
   const allCombined = [
     ...directCharEntries,
     ...presetEntries,
@@ -442,7 +442,8 @@ export function buildMentionEntries(params: {
   ];
   const mentionCounts = {
     all: allCombined.length,
-    characters: charTabEntries.length,
+    characters: directCharEntries.length,
+    photos: imagePromptEntries.length,
     loras: loraEntries.length,
     models: modelEntries.length,
     presets: presetEntries.length,
@@ -450,7 +451,9 @@ export function buildMentionEntries(params: {
 
   const mentionEntries =
     tab === 'characters'
-      ? charTabEntries
+      ? directCharEntries
+      : tab === 'photos'
+      ? imagePromptEntries
       : tab === 'loras'
       ? loraEntries
       : tab === 'models'
