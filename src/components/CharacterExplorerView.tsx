@@ -43,6 +43,7 @@ interface CharacterExplorerViewProps {
   onOpenConversation?: (img: ImageRecord) => void;
   onQuickReject?: (id: number, nextRejected: boolean) => void;
   onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
+  onCancelGhost?: (ghost: QueuedGhostCardItem) => Promise<void> | void;
 }
 
 /**
@@ -69,6 +70,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   onOpenConversation,
   onQuickReject,
   onPushToast,
+  onCancelGhost,
 }) => {
   const [internalCharId, setInternalCharId] = useState<number | null>(null);
   const selectedCharId = controlledCharId !== undefined ? controlledCharId : internalCharId;
@@ -271,6 +273,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
           onReusePrompt={onReusePrompt}
           onOpenConversation={onOpenConversation}
           onQuickReject={onQuickReject}
+          onCancelGhost={onCancelGhost}
           emptyText="No confirmed images yet. Assign images from the gallery or confirm suggestions above."
         />
       </div>

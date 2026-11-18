@@ -210,6 +210,7 @@ export default function App() {
               setSystemSubTab('comfyui');
               setActiveTab('system');
             }}
+            onCancelGhost={livePolling.cancelGhostJob}
           />
         )}
 
@@ -263,6 +264,7 @@ export default function App() {
             onQuickFavorite={imageActions.handleQuickFavorite}
             onQuickReject={imageActions.handleQuickReject}
             onPushToast={toasts.pushToast}
+            onCancelGhost={livePolling.cancelGhostJob}
           />
         )}
 
@@ -335,6 +337,7 @@ export default function App() {
           models={workspace.models}
           presets={workspace.presets}
           ghostItems={livePolling.activeGhostItems}
+          onCancelGhost={livePolling.cancelGhostJob}
           onClose={() => setInspectedImageId(null)}
           onPrev={
             inspectedIdx > 0

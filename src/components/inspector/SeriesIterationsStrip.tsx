@@ -6,6 +6,7 @@ import type {
   ImageSeriesKind,
   QueuedGhostCardItem,
 } from '../../shared/types.ts';
+import { GhostCancelButton } from '../gallery/GhostCancelButton.tsx';
 
 interface SeriesIterationsStripProps {
   items: ImageSeriesItem[];
@@ -20,6 +21,7 @@ interface SeriesIterationsStripProps {
   onContinueConversation?: () => void;
   onOpenMiniGallery?: () => void;
   disableGalleryModal?: boolean;
+  onCancelGhost?: (ghost: QueuedGhostCardItem) => Promise<void> | void;
 }
 
 /**
@@ -37,6 +39,7 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
   onContinueConversation,
   onOpenMiniGallery,
   disableGalleryModal = false,
+  onCancelGhost,
 }) => {
   const hasPending = pendingGhosts.length > 0;
   if ((!items || items.length <= 1) && !hasPending) return null;
@@ -240,6 +243,11 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
               <span className="absolute bottom-0.5 left-0.5 px-1 py-0.2 rounded bg-black/75 text-[9px] font-mono font-semibold text-indigo-200 tabular-nums">
                 #{nextStepNum}
               </span>
+              <GhostCancelButton
+                ghost={ghost}
+                onCancelGhost={onCancelGhost}
+                variant="mini"
+              />
             </div>
           );
         })}

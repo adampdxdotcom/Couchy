@@ -10,6 +10,7 @@ import {
   findAttachedGhostsForImage,
   isGhostOutputInImages,
 } from '../../shared/utils.ts';
+import { GhostCancelButton } from '../gallery/GhostCancelButton.tsx';
 import { CharacterImageTile } from './CharacterImageTile.tsx';
 
 interface CharacterGallerySectionProps {
@@ -30,6 +31,7 @@ interface CharacterGallerySectionProps {
   isExpanded?: boolean;
   onToggleExpand?: () => void;
   totalPoolCount?: number;
+  onCancelGhost?: (ghost: QueuedGhostCardItem) => Promise<void> | void;
 }
 
 export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = ({
@@ -50,6 +52,7 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
   isExpanded = false,
   onToggleExpand,
   totalPoolCount,
+  onCancelGhost,
 }) => {
   const visibleGhostItems = ghostItems.filter((g) => !isGhostOutputInImages(g, images));
 
@@ -156,6 +159,11 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
                       )}
                     </div>
                   )}
+                  <GhostCancelButton
+                    ghost={ghost}
+                    onCancelGhost={onCancelGhost}
+                    variant="corner"
+                  />
                 </div>
                 <div className="p-2 text-xs flex items-center justify-between gap-1.5">
                   <span className="truncate text-zinc-300">{titleText}</span>
@@ -178,6 +186,7 @@ export const CharacterGallerySection: React.FC<CharacterGallerySectionProps> = (
               onReusePrompt={onReusePrompt}
               onOpenConversation={onOpenConversation}
               onQuickReject={onQuickReject}
+              onCancelGhost={onCancelGhost}
             />
           ))}
         </div>

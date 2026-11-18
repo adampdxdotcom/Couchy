@@ -47,6 +47,7 @@ interface ImageInspectorDrawerProps {
   onFilterByCharacter: (characterId: number) => void;
   visualTaggerEnabled?: boolean;
   onFilterByVisualKeyword?: (keyword: string) => void;
+  onCancelGhost?: (ghost: QueuedGhostCardItem) => Promise<void> | void;
 }
 
 /** Finds the lowest unused `userX` preset name (starting at user0, reusing gaps). */
@@ -95,6 +96,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   onFilterByCharacter,
   visualTaggerEnabled = false,
   onFilterByVisualKeyword,
+  onCancelGhost,
 }) => {
   const {
     isFullScreen,
@@ -472,6 +474,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                     : undefined
                 }
                 onOpenMiniGallery={() => setShowSeriesMiniGallery(true)}
+                onCancelGhost={onCancelGhost}
               />
 
               <InspectorPromptAndParamsSection
@@ -536,6 +539,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
           activeImageId={activeImage.id}
           seriesKind={activeImage.seriesKind}
           pendingGhosts={matchingPendingGhosts}
+          onCancelGhost={onCancelGhost}
           onClose={() => setShowSeriesMiniGallery(false)}
           onSelectIteration={(nextId) => setSelectedIterationId(nextId)}
           onToggleFavorite={async (targetId, nextFavorite) => {

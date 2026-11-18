@@ -506,6 +506,22 @@ export const api = {
 
   getComfyUiLiveStatus: () => requestJson<ComfyUiLiveStatus>('/api/comfyui/live-status'),
 
+  cancelComfyUiJob: (payload: {
+    itemId?: number | null;
+    batchId?: number | null;
+    comfyuiPromptId?: string | null;
+  }) =>
+    requestJson<{
+      ok: boolean;
+      kind: 'batch' | 'reproduction' | 'queue_item';
+      cancelledItems: number;
+      cancelledPrompts: string[];
+      interrupted: boolean;
+    }>('/api/comfyui/cancel', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   validateReproduction: (payload: { imageId?: number; workflowId?: number }) =>
     requestJson<ReproductionValidationResult>('/api/reproduce/validate', {
       method: 'POST',

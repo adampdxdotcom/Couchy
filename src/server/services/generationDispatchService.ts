@@ -4,6 +4,8 @@ import { logger } from '../logger.ts';
 import {
   COUCHY_COMFY_CLIENT_ID,
   invalidateComfyQueueCache,
+  isBatchCancelled,
+  markPromptsCancelled,
   notifyImageIndexed,
   recordComfyExecutionError,
 } from './comfyuiLiveMonitor.ts';
@@ -360,6 +362,9 @@ export async function dispatchGenerationBatch(
   }
 
   for (const item of createdItems) {
+    if (isBatchCancelled(batchId)) {
+      break;
+    }
     try {
       const apiPayload = compileWorkflowForGeneration({
         workflowId,
@@ -397,6 +402,22 @@ export async function dispatchGenerationBatch(
 
       const data = (await comfyRes.json()) as { prompt_id?: string };
       const promptId = data.prompt_id || `prompt-${Date.now()}-${item.itemId}`;
+
+      // If the user cancelled this batch while /prompt was in flight, immediately remove it
+      if (isBatchCancelled(batchId)) {
+        markPromptsCancelled([promptId], batchId);
+        fetch(`${appConfig.comfyuiUrl}/queue`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ delete: [promptId] }),
+        }).catch(() => {});
+        db.prepare(
+          `UPDATE generation_items
+           SET comfyui_prompt_id = ?, status = 'cancelled', error_message = 'Cancelled by user', completed_at = datetime('now')
+           WHERE id = ?`
+        ).run(promptId, item.itemId);
+        break;
+      }
 
       db.prepare(
         `UPDATE generation_items

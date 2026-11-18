@@ -135,6 +135,8 @@ export const BatchQueueHistory: React.FC<BatchQueueHistoryProps> = ({
                               className={`font-medium ${
                                 item.status === 'completed'
                                   ? 'text-emerald-400'
+                                  : item.status === 'cancelled'
+                                  ? 'text-zinc-400'
                                   : item.status === 'failed'
                                   ? 'text-red-400'
                                   : 'text-amber-400'
@@ -142,6 +144,8 @@ export const BatchQueueHistory: React.FC<BatchQueueHistoryProps> = ({
                             >
                               {item.status === 'completed'
                                 ? 'Completed'
+                                : item.status === 'cancelled'
+                                ? 'Cancelled'
                                 : item.status === 'failed'
                                 ? 'Failed'
                                 : 'Sent to ComfyUI'}

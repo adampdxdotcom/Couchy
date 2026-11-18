@@ -13,6 +13,7 @@ import type {
   ImageSeriesKind,
   QueuedGhostCardItem,
 } from '../../shared/types.ts';
+import { GhostCancelButton } from '../gallery/GhostCancelButton.tsx';
 
 interface SeriesMiniGalleryModalProps {
   items: ImageSeriesItem[];
@@ -24,6 +25,7 @@ interface SeriesMiniGalleryModalProps {
   onToggleFavorite: (imageId: number, nextFavorite: boolean) => Promise<void>;
   onRejectIteration: (imageId: number) => Promise<void>;
   onOpenConversationForStep?: (imageId: number) => Promise<void>;
+  onCancelGhost?: (ghost: QueuedGhostCardItem) => Promise<void> | void;
 }
 
 /**
@@ -40,6 +42,7 @@ export const SeriesMiniGalleryModal: React.FC<SeriesMiniGalleryModalProps> = ({
   onToggleFavorite,
   onRejectIteration,
   onOpenConversationForStep,
+  onCancelGhost,
 }) => {
   const [busyId, setBusyId] = useState<number | null>(null);
   const posterIndex = items.findIndex((it) => it.isFavorite);
@@ -303,6 +306,11 @@ export const SeriesMiniGalleryModal: React.FC<SeriesMiniGalleryModalProps> = ({
                         {ghost.width}×{ghost.height}
                       </span>
                     )}
+                    <GhostCancelButton
+                      ghost={ghost}
+                      onCancelGhost={onCancelGhost}
+                      variant="corner"
+                    />
                   </div>
 
                   <div className="px-2.5 py-2 border-t border-zinc-800/80 text-[11px] font-mono text-indigo-300/90 truncate">

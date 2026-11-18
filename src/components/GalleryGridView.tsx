@@ -45,6 +45,7 @@ import {
   isGhostOutputInImages,
 } from '../shared/utils.ts';
 import type { GalleryViewLayout } from './GalleryFilterBar.tsx';
+import { GhostCancelButton } from './gallery/GhostCancelButton.tsx';
 import { PendingGhostOverlay } from './gallery/PendingGhostOverlay.tsx';
 import { normalizeLoraKey, resolveBaseModelDisplayLabel } from './quickgen/quickGenUtils.ts';
 
@@ -101,6 +102,7 @@ interface GalleryGridViewProps {
   mountedOutputDir: string;
   onTriggerScan: () => void;
   onOpenSystemSettings: () => void;
+  onCancelGhost?: (ghost: QueuedGhostCardItem) => Promise<void> | void;
   isLoading?: boolean;
 }
 
@@ -171,6 +173,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   mountedOutputDir,
   onTriggerScan,
   onOpenSystemSettings,
+  onCancelGhost,
   isLoading = false,
 }) => {
   const neutralPillClass = 'bg-zinc-800/90 border-zinc-700/80 text-zinc-200';
@@ -597,6 +600,11 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                       )}
                     </div>
                   )}
+                  <GhostCancelButton
+                    ghost={ghost}
+                    onCancelGhost={onCancelGhost}
+                    variant="corner"
+                  />
                 </div>
 
                 {/* Card Footer matching standard gallery card layout */}
@@ -709,7 +717,11 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
 
                 {/* Translucent Pending / Progress Overlay when appending or upscaling this series */}
                 {attachedGhost && (
-                  <PendingGhostOverlay ghost={attachedGhost} compact={layout === 'compact'} />
+                  <PendingGhostOverlay
+                    ghost={attachedGhost}
+                    compact={layout === 'compact'}
+                    onCancelGhost={onCancelGhost}
+                  />
                 )}
 
                 {/* Top Overlay Controls (Select, Series Badge & Favorite) */}

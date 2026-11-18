@@ -6,6 +6,7 @@ import type {
   CharacterProfile,
   ComfyUiLiveStatus,
   ImageRecord,
+  QueuedGhostCardItem,
 } from '../shared/types.ts';
 
 interface UseLiveStatusPollingParams {
@@ -78,6 +79,44 @@ export function useLiveStatusPolling({
   const refreshComfyStatus = useCallback(() => {
     api.getComfyUiLiveStatus().then(setComfyStatus).catch(() => {});
   }, []);
+
+  /** Immediately cancels an active ghost job or multi-shot batch and removes it optimistically. */
+  const cancelGhostJob = useCallback(
+    async (
+      ghost: Pick<
+        QueuedGhostCardItem,
+        'itemId' | 'batchId' | 'comfyuiPromptId' | 'batchTotalCount'
+      >
+    ) => {
+      try {
+        await api.cancelComfyUiJob({
+          itemId: ghost.itemId,
+          batchId: ghost.batchId,
+          comfyuiPromptId: ghost.comfyuiPromptId,
+        });
+        setComfyStatus((prev) => ({
+          ...prev,
+          ghostItems: (prev.ghostItems || []).filter((g) => {
+            if (g.itemId === ghost.itemId) return false;
+            if (ghost.batchId > 0 && ghost.batchId < 1_000_000 && g.batchId === ghost.batchId) {
+              return false;
+            }
+            if (ghost.comfyuiPromptId && g.comfyuiPromptId === ghost.comfyuiPromptId) {
+              return false;
+            }
+            return true;
+          }),
+        }));
+        const isSeries = Number(ghost.batchTotalCount || 1) > 1;
+        pushToast(isSeries ? 'Cancelled active series batch' : 'Cancelled generation', 'info');
+        refreshComfyStatus();
+        await onRefreshWorkspace();
+      } catch (err: any) {
+        pushToast(err?.message || 'Failed to cancel generation.', 'error');
+      }
+    },
+    [pushToast, refreshComfyStatus, onRefreshWorkspace]
+  );
 
   // Poll ComfyUI live queue & job progress
   useEffect(() => {
@@ -299,5 +338,6 @@ export function useLiveStatusPolling({
     lmStudioStatus,
     activeGhostItems,
     refreshComfyStatus,
+    cancelGhostJob,
   };
 }

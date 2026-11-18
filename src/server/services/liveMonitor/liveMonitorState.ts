@@ -37,6 +37,8 @@ export interface LiveMonitorState {
   lastIndexedAt: number;
   workspaceVersion: number;
   lastError: ComfyUiExecutionErrorNotice | null;
+  cancelledPromptIds: Map<string, number>;
+  cancelledBatchIds: Map<number, number>;
 }
 
 export const liveMonitorState: LiveMonitorState = {
@@ -60,6 +62,8 @@ export const liveMonitorState: LiveMonitorState = {
   lastIndexedAt: Date.now(),
   workspaceVersion: Date.now(),
   lastError: null,
+  cancelledPromptIds: new Map<string, number>(),
+  cancelledBatchIds: new Map<number, number>(),
 };
 
 /**
@@ -72,6 +76,9 @@ export function recordComfyExecutionError(params: {
   recovery?: ComfyUiExecutionErrorNotice['recovery'];
 }): void {
   const { promptId, message, recovery = null } = params;
+  if (promptId && liveMonitorState.cancelledPromptIds.has(promptId)) {
+    return;
+  }
   if (promptId) {
     liveMonitorState.runningPromptIds.delete(promptId);
     liveMonitorState.pendingPromptIds.delete(promptId);
@@ -122,6 +129,43 @@ export function registerQueuedPromptSeriesTarget(
  */
 export function invalidateComfyQueueCache(): void {
   liveMonitorState.lastQueueFetchMs = 0;
+}
+
+/**
+ * Marks prompts (and an optional batch ID) as explicitly cancelled by the user so
+ * pollers stop quietly and ComfyUI interrupt events do not trigger error toasts.
+ */
+export function markPromptsCancelled(promptIds: string[], batchId?: number | null): void {
+  const now = Date.now();
+  if (typeof batchId === 'number' && batchId > 0) {
+    liveMonitorState.cancelledBatchIds.set(batchId, now);
+  }
+  for (const rawPid of promptIds) {
+    const pid = rawPid.trim();
+    if (!pid) continue;
+    liveMonitorState.cancelledPromptIds.set(pid, now);
+    liveMonitorState.runningPromptIds.delete(pid);
+    liveMonitorState.pendingPromptIds.delete(pid);
+    liveMonitorState.promptProgressMap.delete(pid);
+    liveMonitorState.finishedPromptIds.delete(pid);
+    liveMonitorState.queuePromptMetaMap.delete(pid);
+    liveMonitorState.queuePromptSeriesMap.delete(pid);
+    if (liveMonitorState.activePromptId === pid) {
+      liveMonitorState.activePromptId = null;
+      liveMonitorState.progressPercent = null;
+      liveMonitorState.step = null;
+      liveMonitorState.maxSteps = null;
+      liveMonitorState.currentNode = null;
+    }
+  }
+}
+
+export function isPromptCancelled(promptId: string | null | undefined): boolean {
+  return Boolean(promptId && liveMonitorState.cancelledPromptIds.has(promptId));
+}
+
+export function isBatchCancelled(batchId: number | null | undefined): boolean {
+  return Boolean(typeof batchId === 'number' && liveMonitorState.cancelledBatchIds.has(batchId));
 }
 
 /**
@@ -209,6 +253,16 @@ export function pruneStaleMonitorEntries(now: number): void {
   for (const [pid, reg] of liveMonitorState.queuePromptSeriesMap.entries()) {
     if (now - reg.registeredAtMs > 30 * 60_000) {
       liveMonitorState.queuePromptSeriesMap.delete(pid);
+    }
+  }
+  for (const [pid, ts] of liveMonitorState.cancelledPromptIds.entries()) {
+    if (now - ts > 5 * 60_000) {
+      liveMonitorState.cancelledPromptIds.delete(pid);
+    }
+  }
+  for (const [bid, ts] of liveMonitorState.cancelledBatchIds.entries()) {
+    if (now - ts > 5 * 60_000) {
+      liveMonitorState.cancelledBatchIds.delete(bid);
     }
   }
 }

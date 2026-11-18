@@ -5,7 +5,7 @@ import {
   testComfyUiConnection,
   validateWorkflowReproduction,
 } from '../services/comfyuiService.ts';
-import { getComfyUiLiveStatus } from '../services/comfyuiLiveMonitor.ts';
+import { cancelComfyUiJob, getComfyUiLiveStatus } from '../services/comfyuiLiveMonitor.ts';
 
 export const comfyuiRouter = Router();
 
@@ -19,6 +19,24 @@ comfyuiRouter.get('/comfyui/live-status', async (_req, res) => {
     res.json(status);
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to read ComfyUI live status' });
+  }
+});
+
+/**
+ * POST /api/comfyui/cancel
+ * Immediately cancels an active generation batch/series, reproduction job, or ComfyUI queue job.
+ */
+comfyuiRouter.post('/comfyui/cancel', async (req, res) => {
+  try {
+    const { itemId, batchId, comfyuiPromptId } = req.body || {};
+    const result = await cancelComfyUiJob({
+      itemId: itemId !== undefined && itemId !== null ? Number(itemId) : null,
+      batchId: batchId !== undefined && batchId !== null ? Number(batchId) : null,
+      comfyuiPromptId: typeof comfyuiPromptId === 'string' ? comfyuiPromptId : null,
+    });
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to cancel generation job' });
   }
 });
 

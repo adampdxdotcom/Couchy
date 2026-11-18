@@ -6,11 +6,16 @@
 export {
   COUCHY_COMFY_CLIENT_ID,
   invalidateComfyQueueCache,
+  isBatchCancelled,
+  isPromptCancelled,
+  markPromptsCancelled,
   notifyImageIndexed,
   notifyWorkspaceDataChanged,
   recordComfyExecutionError,
   registerQueuedPromptSeriesTarget,
 } from './liveMonitor/liveMonitorState.ts';
+
+export { cancelComfyUiJob } from './liveMonitor/jobCancelService.ts';
 
 export { extractMetadataFromPromptGraph } from './liveMonitor/promptGraphUtils.ts';
 

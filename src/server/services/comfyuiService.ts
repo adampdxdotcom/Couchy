@@ -11,6 +11,7 @@ import {
 import {
   COUCHY_COMFY_CLIENT_ID,
   invalidateComfyQueueCache,
+  isPromptCancelled,
   notifyImageIndexed,
   registerQueuedPromptSeriesTarget,
 } from './comfyuiLiveMonitor.ts';
@@ -74,6 +75,9 @@ export function pollComfyPromptCompletion(options: PollComfyPromptOptions): void
   } = options;
 
   const tick = (attempt: number) => {
+    if (isPromptCancelled(promptId)) {
+      return;
+    }
     if (attempt > maxAttempts) {
       Promise.resolve(onTimeout?.()).catch((err) => {
         console.warn(`ComfyUI poller timeout handler failed for ${promptId}:`, err);
@@ -82,12 +86,21 @@ export function pollComfyPromptCompletion(options: PollComfyPromptOptions): void
     }
 
     setTimeout(async () => {
+      if (isPromptCancelled(promptId)) {
+        return;
+      }
       try {
         const res = await fetch(`${appConfig.comfyuiUrl}/history/${promptId}`);
+        if (isPromptCancelled(promptId)) {
+          return;
+        }
         if (res.ok) {
           const hist = (await res.json()) as Record<string, any>;
           const entry = hist[promptId];
           if (entry) {
+            if (isPromptCancelled(promptId)) {
+              return;
+            }
             if (entry.status?.status_str === 'error') {
               const errMsg = formatComfyHistoryError(entry.status?.messages);
               await onError?.(errMsg);

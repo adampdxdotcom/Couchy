@@ -576,7 +576,7 @@ export interface GenerationItemRecord {
   negativePrompt: string;
   seed: string;
   comfyuiPromptId: string | null;
-  status: 'pending' | 'submitted' | 'completed' | 'failed';
+  status: 'pending' | 'submitted' | 'completed' | 'failed' | 'cancelled';
   errorMessage: string | null;
   outputImageId: number | null;
   outputThumbnailUrl?: string | null;

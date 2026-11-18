@@ -28,6 +28,7 @@ export interface CharacterImageTileProps {
   onReusePrompt?: (img: ImageRecord) => void;
   onOpenConversation?: (img: ImageRecord) => void;
   onQuickReject?: (id: number, nextRejected: boolean) => void;
+  onCancelGhost?: (ghost: QueuedGhostCardItem) => Promise<void> | void;
 }
 
 /**
@@ -46,6 +47,7 @@ export const CharacterImageTile: React.FC<CharacterImageTileProps> = ({
   onReusePrompt,
   onOpenConversation,
   onQuickReject,
+  onCancelGhost,
 }) => {
   const isPortrait =
     (activePortraitId !== null && activePortraitId === img.id) ||
@@ -70,7 +72,9 @@ export const CharacterImageTile: React.FC<CharacterImageTileProps> = ({
           className="absolute inset-0 w-full h-full object-cover group-hover:scale-[1.02] transition-transform duration-200"
         />
 
-        {attachedGhost && <PendingGhostOverlay ghost={attachedGhost} />}
+        {attachedGhost && (
+          <PendingGhostOverlay ghost={attachedGhost} onCancelGhost={onCancelGhost} />
+        )}
 
         {/* Top Overlay Controls (Portrait Badge, Series Badge & Favorite) */}
         <div

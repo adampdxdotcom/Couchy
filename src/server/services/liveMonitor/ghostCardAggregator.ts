@@ -1,6 +1,10 @@
 import { db } from '../../db.ts';
 import type { QueuedGhostCardItem } from '../../../shared/types.ts';
-import { liveMonitorState, resolvePromptProgressState } from './liveMonitorState.ts';
+import {
+  isBatchCancelled,
+  liveMonitorState,
+  resolvePromptProgressState,
+} from './liveMonitorState.ts';
 import { parseLoraNamesJson, toIsoUtc } from './promptGraphUtils.ts';
 import { resolveSeriesTargetForJob } from './seriesTargetResolver.ts';
 
@@ -101,27 +105,38 @@ function collectGenerationBatchGhosts(seenPromptIds: Set<string>): QueuedGhostCa
     else validRowsByBatch.set(bid, [r]);
   }
 
-  // Look up finished (completed/failed) counts per active batch for "X of N" progress
+  // Look up finished (completed/failed) and cancelled counts per active batch
   const finishedCountByBatch = new Map<number, number>();
+  const cancelledBatchSet = new Set<number>();
   if (validRowsByBatch.size > 0) {
     const batchIds = Array.from(validRowsByBatch.keys());
     const placeholders = batchIds.map(() => '?').join(',');
     const countRows = db
       .prepare(
-        `SELECT batch_id, COUNT(*) AS cnt
+        `SELECT
+           batch_id,
+           SUM(CASE WHEN status IN ('completed', 'failed') THEN 1 ELSE 0 END) AS cnt,
+           SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_cnt
          FROM generation_items
-         WHERE batch_id IN (${placeholders}) AND status IN ('completed', 'failed')
+         WHERE batch_id IN (${placeholders})
          GROUP BY batch_id`
       )
-      .all(...batchIds) as { batch_id: number; cnt: number }[];
+      .all(...batchIds) as { batch_id: number; cnt: number; cancelled_cnt: number }[];
     for (const cr of countRows) {
-      finishedCountByBatch.set(Number(cr.batch_id), Number(cr.cnt));
+      const bId = Number(cr.batch_id);
+      finishedCountByBatch.set(bId, Number(cr.cnt || 0));
+      if (Number(cr.cancelled_cnt || 0) > 0) {
+        cancelledBatchSet.add(bId);
+      }
     }
   }
 
   const items: QueuedGhostCardItem[] = [];
   for (const [bid, batchRows] of validRowsByBatch.entries()) {
     const activeRows = batchRows.filter((r) => r.status !== 'completed' && !r.output_image_id);
+    if (activeRows.length === 0 && (isBatchCancelled(bid) || cancelledBatchSet.has(bid))) {
+      continue;
+    }
     const chosen =
       activeRows.length > 0
         ? activeRows.find((r) => {

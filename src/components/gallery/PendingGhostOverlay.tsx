@@ -1,9 +1,11 @@
 import React from 'react';
 import type { QueuedGhostCardItem } from '../../shared/types.ts';
+import { GhostCancelButton } from './GhostCancelButton.tsx';
 
 interface PendingGhostOverlayProps {
   ghost: QueuedGhostCardItem;
   compact?: boolean;
+  onCancelGhost?: (ghost: QueuedGhostCardItem) => Promise<void> | void;
 }
 
 /**
@@ -13,6 +15,7 @@ interface PendingGhostOverlayProps {
 export const PendingGhostOverlay: React.FC<PendingGhostOverlayProps> = ({
   ghost,
   compact = false,
+  onCancelGhost,
 }) => {
   const isQueuedOnly = ghost.state === 'queued' || ghost.progressPercent === null;
   const displayPct = Math.min(100, Math.max(0, ghost.progressPercent ?? 0));
@@ -77,6 +80,8 @@ export const PendingGhostOverlay: React.FC<PendingGhostOverlayProps> = ({
           )}
         </div>
       )}
+
+      <GhostCancelButton ghost={ghost} onCancelGhost={onCancelGhost} variant="pill" />
     </div>
   );
 };
