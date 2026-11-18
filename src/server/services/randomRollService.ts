@@ -38,8 +38,13 @@ export interface RandomRollSummary {
 
 const recentCharacterIds: number[] = [];
 const recentLoraKeys: string[] = [];
+const recentCheckpointKeys: string[] = [];
 
-function recordRecentRoll(charId: number, styleLoras: string[]): void {
+function recordRecentRoll(
+  charId: number,
+  styleLoras: string[],
+  checkpointName?: string | null
+): void {
   recentCharacterIds.unshift(charId);
   if (recentCharacterIds.length > 4) recentCharacterIds.length = 4;
   for (const l of styleLoras) {
@@ -48,6 +53,22 @@ function recordRecentRoll(charId: number, styleLoras: string[]): void {
     recentLoraKeys.unshift(key);
   }
   if (recentLoraKeys.length > 6) recentLoraKeys.length = 6;
+
+  if (checkpointName) {
+    const ckptKey = normalizeLoraMatchKey(checkpointName);
+    if (ckptKey) {
+      recentCheckpointKeys.unshift(ckptKey);
+      if (recentCheckpointKeys.length > 2) recentCheckpointKeys.length = 2;
+    }
+  }
+}
+
+function getCheckpointCooldownTier(filename: string): 0 | 1 | 2 {
+  const key = normalizeLoraMatchKey(filename);
+  if (!key) return 0;
+  if (recentCheckpointKeys[0] === key) return 1;
+  if (recentCheckpointKeys[1] === key) return 2;
+  return 0;
 }
 
 /**
@@ -82,7 +103,7 @@ export function pickWeightedItem<T>(candidates: WeightedCandidate<T>[]): T | nul
 function normalizeBaseModelGroup(raw: string | null | undefined): string {
   const s = (raw || '').trim().toLowerCase();
   if (!s) return '';
-  if (s.includes('flux')) return 'flux';
+  if (s.includes('krea') || s.includes('flux')) return 'flux';
   if (s.includes('pony')) return 'pony';
   if (s.includes('illustrious') || s.includes('noob')) return 'illustrious';
   if (s.includes('sdxl')) return 'sdxl';
@@ -168,15 +189,37 @@ function selectRolledCharacter() {
   return { character: picked, charLora: installedCharLora };
 }
 
-function selectRolledCheckpoint(preferredBaseGroup: string, fallbackCheckpoint: string | null): {
-  filename: string | null;
-  baseGroup: string;
-} {
+interface BaseModelCandidate {
+  filename: string;
+  name: string;
+  nickname: string | null;
+  base_model: string | null;
+  llm_description: string;
+  usage_count: number;
+  fav_count: number;
+}
+
+function getBaseModelHandle(candidate: BaseModelCandidate): string {
+  return (
+    (candidate.nickname || '').trim().replace(/^@+/, '') ||
+    candidate.name.trim() ||
+    candidate.filename.replace(/\.(?:safetensors|ckpt|pt|bin|gguf|sft)$/i, '').trim()
+  );
+}
+
+/**
+ * Returns mention-enabled, installed, non-hidden base models that have a populated
+ * Model Details & Strengths description, filtered to match the active architecture group.
+ */
+function getEligibleDescribedCheckpoints(preferredBaseGroup: string): BaseModelCandidate[] {
   const rows = db
     .prepare(
       `SELECT
          m.filename,
+         m.name,
+         m.nickname,
          m.base_model,
+         TRIM(COALESCE(m.llm_description, '')) AS llm_description,
          COUNT(DISTINCT i.id) AS usage_count,
          COUNT(DISTINCT CASE WHEN COALESCE(r.is_favorite, 0) = 1 THEN i.id END) AS fav_count
        FROM models m
@@ -187,19 +230,13 @@ function selectRolledCheckpoint(preferredBaseGroup: string, fallbackCheckpoint: 
          AND COALESCE(m.is_installed, 0) = 1
          AND COALESCE(m.is_hidden, 0) = 0
          AND COALESCE(m.mention_enabled, 0) = 1
+         AND TRIM(COALESCE(m.llm_description, '')) != ''
          AND (COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL)
        GROUP BY m.id`
     )
-    .all() as Array<{
-    filename: string;
-    base_model: string | null;
-    usage_count: number;
-    fav_count: number;
-  }>;
+    .all() as BaseModelCandidate[];
 
-  if (rows.length === 0) {
-    return { filename: fallbackCheckpoint, baseGroup: preferredBaseGroup };
-  }
+  if (rows.length === 0) return [];
 
   const compatible = preferredBaseGroup
     ? rows.filter((r) => {
@@ -207,23 +244,41 @@ function selectRolledCheckpoint(preferredBaseGroup: string, fallbackCheckpoint: 
         return !g || g === preferredBaseGroup;
       })
     : rows;
-  const pool = compatible.length > 0 ? compatible : rows;
+
+  return compatible.length > 0 ? compatible : rows;
+}
+
+/**
+ * Picks a fallback checkpoint using popularity + favorites with a soft cooldown
+ * (down-weights recent picks instead of banning them so 2-3 model pools stay valid).
+ */
+function pickWeightedCheckpointFallback(
+  candidates: BaseModelCandidate[],
+  fallbackCheckpoint: string | null
+): string | null {
+  if (candidates.length === 0) return fallbackCheckpoint;
 
   const picked = pickWeightedItem(
-    pool.map((r) => ({
-      item: r,
-      weight: computeSublinearPopularityWeight(Number(r.usage_count || 0), Number(r.fav_count || 0)),
-    }))
+    candidates.map((r) => {
+      const baseWeight = computeSublinearPopularityWeight(
+        Number(r.usage_count || 0),
+        Number(r.fav_count || 0)
+      );
+      const tier = candidates.length > 1 ? getCheckpointCooldownTier(r.filename) : 0;
+      const softCooldown = tier === 1 ? 0.25 : tier === 2 ? 0.6 : 1;
+      return {
+        item: r,
+        weight: Math.max(0.05, baseWeight * softCooldown),
+      };
+    })
   );
 
-  return {
-    filename: picked?.filename || fallbackCheckpoint,
-    baseGroup: normalizeBaseModelGroup(picked?.base_model) || preferredBaseGroup,
-  };
+  return picked?.filename || fallbackCheckpoint;
 }
 
 function selectRolledStyleLoras(baseGroup: string): Array<{
   filename: string;
+  baseModel: string | null;
   triggerWord: string;
   modelStrength: number;
   clipStrength: number;
@@ -277,6 +332,7 @@ function selectRolledStyleLoras(baseGroup: string): Array<{
   const pool = [...(compatible.length > 0 ? compatible : rows)];
   const selected: Array<{
     filename: string;
+    baseModel: string | null;
     triggerWord: string;
     modelStrength: number;
     clipStrength: number;
@@ -296,6 +352,7 @@ function selectRolledStyleLoras(baseGroup: string): Array<{
     if (!picked) break;
     selected.push({
       filename: picked.filename,
+      baseModel: picked.base_model,
       triggerWord: picked.trigger_word || '',
       modelStrength: Number(picked.default_model_strength ?? 1.0),
       clipStrength: Number(picked.default_clip_strength ?? 1.0),
@@ -445,6 +502,78 @@ function buildOfflineRandomPrompt(characterName: string, tags: string[]): string
   );
 }
 
+function resolveSelectedBaseCandidate(
+  llmContent: string,
+  candidates: BaseModelCandidate[]
+): BaseModelCandidate | null {
+  const match = llmContent.match(
+    /<selected_base>([\s\S]*?)(?:<\/selected_base>|(?=<proposed_prompt>)|\r?\n|$)/i
+  );
+  if (!match || !match[1]) return null;
+  const rawToken = match[1].replace(/^["'\s]+|["'\s]+$/g, '');
+  const targetKey = normalizeLoraMatchKey(rawToken);
+  if (!targetKey) return null;
+
+  return (
+    candidates.find((c) => {
+      const handleKey = normalizeLoraMatchKey(getBaseModelHandle(c));
+      const nameKey = normalizeLoraMatchKey(c.name);
+      const fileKey = normalizeLoraMatchKey(c.filename);
+      const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : '';
+      return (
+        handleKey === targetKey ||
+        nameKey === targetKey ||
+        fileKey === targetKey ||
+        (Boolean(nickKey) && nickKey === targetKey)
+      );
+    }) || null
+  );
+}
+
+function buildShuffledBaseContext(candidates: BaseModelCandidate[]): {
+  block: string | null;
+  shouldSelectBase: boolean;
+} {
+  if (candidates.length === 0) {
+    return { block: null, shouldSelectBase: false };
+  }
+
+  if (candidates.length === 1) {
+    const only = candidates[0];
+    const desc = only.llm_description.replace(/\s+/g, ' ').trim().slice(0, 320);
+    return {
+      block: `Active Base Model (${getBaseModelHandle(only)}): ${desc}\n- Write the visual medium, lighting, and detail level to play to this base model's strengths.`,
+      shouldSelectBase: false,
+    };
+  }
+
+  // Shuffle order on each roll so position #1 doesn't bias the LLM
+  const shuffled = [...candidates];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+
+  const lines = shuffled.map((c) => {
+    const handle = getBaseModelHandle(c);
+    const desc = c.llm_description.replace(/\s+/g, ' ').trim().slice(0, 300);
+    const tier = getCheckpointCooldownTier(c.filename);
+    const cooldownNote =
+      tier === 1
+        ? ' [used last roll — pick only if clearly the best fit, otherwise prefer another fitting option for variety]'
+        : '';
+    return `- @${handle}: ${desc}${cooldownNote}`;
+  });
+
+  return {
+    block: [
+      'Available Base Models (choose ONE via <selected_base>"@handle"</selected_base> whose Model Details & Strengths best suit this Character, Attached LoRAs, and scene):',
+      ...lines,
+    ].join('\n'),
+    shouldSelectBase: true,
+  };
+}
+
 async function composeRandomRollPrompt(params: {
   characterName: string;
   characterDescription: string;
@@ -452,11 +581,17 @@ async function composeRandomRollPrompt(params: {
   loraNames: string[];
   hasStyleLoras: boolean;
   tags: string[];
-}): Promise<{ prompt: string; usedLmStudio: boolean }> {
+  baseCandidates: BaseModelCandidate[];
+  fallbackCheckpoint: string | null;
+}): Promise<{ prompt: string; checkpointName: string | null; usedLmStudio: boolean }> {
   try {
     const status = await checkLmStudioStatus();
     if (!status.online) {
-      return { prompt: buildOfflineRandomPrompt(params.characterName, params.tags), usedLmStudio: false };
+      return {
+        prompt: buildOfflineRandomPrompt(params.characterName, params.tags),
+        checkpointName: params.fallbackCheckpoint,
+        usedLmStudio: false,
+      };
     }
 
     const settings = getLmStudioSettings();
@@ -470,6 +605,10 @@ async function composeRandomRollPrompt(params: {
       loraNames: params.loraNames,
     });
 
+    const { block: baseModelBlock, shouldSelectBase } = buildShuffledBaseContext(
+      params.baseCandidates
+    );
+
     const tagHint =
       params.tags.length > 0
         ? `Optional setting, wardrobe, pose, or lighting motifs (use only what fits cleanly and discard anything conflicting): ${params.tags.join(', ')}.`
@@ -479,25 +618,39 @@ async function composeRandomRollPrompt(params: {
       ? '- Play to Attached LoRAs: Non-character LoRA(s) are active under Attached LoRAs. Actively design the visual aesthetic, lighting, wardrobe, pose, or setting to showcase their descriptions and categories, letting them take priority over generic motif tags.'
       : '- Focus on a fresh, coherent scene that complements the subject naturally.';
 
+    const baseDirective = shouldSelectBase
+      ? '- Base Model Choice (Last Step): Output <selected_base>"@handle"</selected_base> first using one exact @handle from Available Base Models that best matches the character, attached LoRAs, and intended scene mood, then tailor <proposed_prompt> to that chosen base model’s strengths. Never write base model names or @handles inside <proposed_prompt>.'
+      : params.baseCandidates.length === 1
+        ? '- Play to Active Base Model: Tailor lighting, photographic texture, and detail cues to complement the Active Base Model description without naming it in <proposed_prompt>.'
+        : null;
+
     const randomRollRules = [
       'RANDOM ROLL RULES:',
-      '- Output ONE original, ready-to-generate prompt wrapped inside <proposed_prompt>...</proposed_prompt>. Never include character names or model/LoRA filenames.',
+      '- Output ONE original, ready-to-generate prompt wrapped inside <proposed_prompt>...</proposed_prompt>. Never include character names, base model names, or model/LoRA filenames inside <proposed_prompt>.',
       '- Strict Identity Fidelity: Follow the Character Profile strictly for sex/gender pronouns and permanent physical traits. NEVER invent, guess, or insert a race, ethnicity, nationality, skin tone, hair color, eye color, or biological sex not explicitly supported by the Character Profile; leave unspecified identity traits unstated so the active character LoRA supplies them.',
       loraDirective,
-    ].join('\n');
+      baseDirective,
+    ]
+      .filter(Boolean)
+      .join('\n');
 
     const systemPrompt = [
       settings.conversationSystemPrompt,
       characterBlock,
       attachedLoraBlock,
+      baseModelBlock,
       randomRollRules,
     ]
       .filter(Boolean)
       .join('\n\n');
 
+    const responseFormatHint = shouldSelectBase
+      ? 'Return ONLY <selected_base>"@handle"</selected_base> and <proposed_prompt>...</proposed_prompt>.'
+      : 'Return ONLY <proposed_prompt>...</proposed_prompt>.';
+
     const userInstruction = params.hasStyleLoras
-      ? `Create a single fresh, spontaneous scene prompt for the subject that actively plays to the attached non-character LoRA(s). ${tagHint} Return ONLY <proposed_prompt>...</proposed_prompt>.`
-      : `Create a single fresh, spontaneous scene prompt for the subject. ${tagHint} Return ONLY <proposed_prompt>...</proposed_prompt>.`;
+      ? `Create a single fresh, spontaneous scene prompt for the subject that actively plays to the attached non-character LoRA(s). ${tagHint} ${responseFormatHint}`
+      : `Create a single fresh, spontaneous scene prompt for the subject. ${tagHint} ${responseFormatHint}`;
 
     const res = await postChatCompletion({
       baseUrl,
@@ -514,23 +667,39 @@ async function composeRandomRollPrompt(params: {
       timeoutMs: 35_000,
     });
 
-    const match = res.content.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
-    const raw = (match?.[1] || res.content).replace(/^["']|["']$/g, '').trim();
+    const chosenBase = shouldSelectBase
+      ? resolveSelectedBaseCandidate(res.content, params.baseCandidates)
+      : params.baseCandidates[0] || null;
+    const resolvedCheckpoint = chosenBase?.filename || params.fallbackCheckpoint;
+
+    const withoutBaseTag = res.content
+      .replace(/<selected_base>[\s\S]*?(?:<\/selected_base>|(?=<proposed_prompt>)|\r?\n|$)/gi, '')
+      .trim();
+    const match = withoutBaseTag.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
+    const raw = (match?.[1] || withoutBaseTag).replace(/^["']|["']$/g, '').trim();
     const sanitized = sanitizeAgentPrompt(raw, params.characterName);
     if (sanitized.length >= 15) {
-      return { prompt: sanitized, usedLmStudio: true };
+      return {
+        prompt: sanitized,
+        checkpointName: resolvedCheckpoint,
+        usedLmStudio: true,
+      };
     }
   } catch (err) {
     logger.warn('LocalLLM', 'Random Roll LLM prompt synthesis failed, using offline fallback', err);
   }
 
-  return { prompt: buildOfflineRandomPrompt(params.characterName, params.tags), usedLmStudio: false };
+  return {
+    prompt: buildOfflineRandomPrompt(params.characterName, params.tags),
+    checkpointName: params.fallbackCheckpoint,
+    usedLmStudio: false,
+  };
 }
 
 /**
- * Picks a popularity-weighted character, compatible base model, optional style LoRAs,
- * popular tags, and aspect ratio, generates a hidden prompt, and immediately submits
- * at the default workflow's default resolution and steps.
+ * Picks a popularity-weighted character, compatible style LoRAs, tags, and aspect ratio,
+ * then lets the Local LLM choose the best fitting described base model last and write a cohesive prompt
+ * before submitting immediately at the default workflow's native resolution and steps.
  */
 export async function executeRandomRoll(): Promise<{
   batch: GenerationBatchRecord;
@@ -549,14 +718,18 @@ export async function executeRandomRoll(): Promise<{
   const wfDefaults = getWorkflowDefaults(defaultWf.id);
   const { character, charLora } = selectRolledCharacter();
   const charBaseGroup = normalizeBaseModelGroup(charLora?.base_model);
-  const rolledCkpt = selectRolledCheckpoint(charBaseGroup, wfDefaults.defaultCheckpoint ?? null);
-  const styleLoras = selectRolledStyleLoras(rolledCkpt.baseGroup);
+  const styleLoras = selectRolledStyleLoras(charBaseGroup);
+  const effectiveBaseGroup =
+    charBaseGroup ||
+    styleLoras.map((sl) => normalizeBaseModelGroup(sl.baseModel)).find(Boolean) ||
+    '';
+
   const tags = selectRolledTags(5);
   const aspectRatio = selectRolledAspectRatio(wfDefaults.defaultAspectRatio ?? null);
-
-  recordRecentRoll(
-    character.id,
-    styleLoras.map((l) => l.filename)
+  const baseCandidates = getEligibleDescribedCheckpoints(effectiveBaseGroup);
+  const fallbackCheckpoint = pickWeightedCheckpointFallback(
+    baseCandidates,
+    wfDefaults.defaultCheckpoint ?? null
   );
 
   const loras: GenerationLoraSelection[] = [];
@@ -586,14 +759,22 @@ export async function executeRandomRoll(): Promise<{
     )
   ).join(', ');
 
-  const { prompt, usedLmStudio } = await composeRandomRollPrompt({
+  const { prompt, checkpointName, usedLmStudio } = await composeRandomRollPrompt({
     characterName: character.name,
     characterDescription: character.description || '',
     characterPhysicalDescription: character.physical_description || '',
     loraNames: loras.map((l) => l.loraName),
     hasStyleLoras: styleLoras.length > 0,
     tags,
+    baseCandidates,
+    fallbackCheckpoint,
   });
+
+  recordRecentRoll(
+    character.id,
+    styleLoras.map((l) => l.filename),
+    checkpointName
+  );
 
   // Omit megapixels and steps so dispatch uses the default workflow's native resolution & steps
   const { batch, batches } = await dispatchGenerationBatch({
@@ -606,13 +787,13 @@ export async function executeRandomRoll(): Promise<{
     triggerWord,
     negativePrompt: '',
     loras,
-    checkpointName: rolledCkpt.filename,
+    checkpointName,
   });
 
   const rollSummary: RandomRollSummary = {
     characterId: character.id,
     characterName: character.name,
-    checkpointName: rolledCkpt.filename,
+    checkpointName,
     loraNames: loras.map((l) => l.loraName),
     tags,
     aspectRatio,
@@ -622,7 +803,7 @@ export async function executeRandomRoll(): Promise<{
 
   logger.info(
     'ComfyUI',
-    `Random Roll queued batch #${batch.id}: char=${character.name} ckpt=${rolledCkpt.filename || 'default'} loras=${loras.length} ar=${aspectRatio} llm=${usedLmStudio}`
+    `Random Roll queued batch #${batch.id}: char=${character.name} ckpt=${checkpointName || 'default'} loras=${loras.length} ar=${aspectRatio} llm=${usedLmStudio}`
   );
 
   return { batch, batches, rollSummary };
