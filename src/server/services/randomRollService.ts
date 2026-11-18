@@ -13,6 +13,7 @@ import {
 } from './llm/llmClientService.ts';
 import {
   buildLlmCharacterAndLoraContext,
+  filterCharacterIdentityTags,
   normalizeLoraMatchKey,
   sanitizeAgentPrompt,
 } from './llm/llmPromptUtils.ts';
@@ -144,7 +145,7 @@ function selectRolledCharacter() {
     .prepare(
       `SELECT
          cl.lora_name,
-         cl.trigger_word,
+         COALESCE(NULLIF(TRIM(cl.trigger_word), ''), m.trigger_word, '') AS trigger_word,
          m.base_model,
          COALESCE(m.default_model_strength, 1.0) AS default_model_strength,
          COALESCE(m.default_clip_strength, 1.0) AS default_clip_strength
@@ -306,6 +307,22 @@ function selectRolledStyleLoras(baseGroup: string): Array<{
   return selected;
 }
 
+function isIdentityOrDemographicTag(tag: string): boolean {
+  const clean = tag.trim();
+  if (!clean) return true;
+  if (filterCharacterIdentityTags([clean]).length === 0) return true;
+  if (
+    /^(?:\d+\s*(?:girl|boy|female|male|other)s?|solo|multiple\s+(?:girls|boys|females|males)|woman|man|girl|boy|female|male|mature\s+(?:female|male)|female\s+focus|male\s+focus|looking\s+at\s+viewer|simple\s+background)$/i.test(
+      clean
+    )
+  ) {
+    return true;
+  }
+  return /\b(?:caucasian|white\s+skin|pale\s+skin|fair\s+skin|dark\s+skin|dark-skinned|tan\s+skin|olive\s+skin|ebony|asian|east\s+asian|japanese|korean|chinese|latina|latino|hispanic|african|indian|middle\s+eastern|arab|indigenous|biracial|mixed\s+race|hair|blonde|blond|brunette|redhead|eyes|heterochromia|freckles|skin|tanlines|breasts|bust|chest|hips|waist|thighs|curvy|petite|slender|voluptuous|muscular|athletic|chubby|plump)\b/i.test(
+    clean
+  );
+}
+
 function selectRolledTags(desiredCount = 5): string[] {
   const userTagRows = db
     .prepare(
@@ -335,13 +352,13 @@ function selectRolledTags(desiredCount = 5): string[] {
     )
     .all() as Array<{ tag: string; usage_count: number }>;
 
-  const genericTags = new Set(['1girl', '1boy', 'solo', 'looking at viewer', 'simple background']);
   const tagMap = new Map<string, { label: string; count: number }>();
 
   for (const row of [...userTagRows, ...visualTagRows]) {
     const clean = row.tag.trim();
     const key = clean.toLowerCase();
-    if (!clean || genericTags.has(key)) continue;
+    // Skip gender, race/ethnicity, hair/eye, and body tags so rolled motifs never override the subject
+    if (!clean || isIdentityOrDemographicTag(clean)) continue;
     const prev = tagMap.get(key);
     tagMap.set(key, {
       label: prev?.label || clean,
@@ -433,6 +450,7 @@ async function composeRandomRollPrompt(params: {
   characterDescription: string;
   characterPhysicalDescription: string;
   loraNames: string[];
+  hasStyleLoras: boolean;
   tags: string[];
 }): Promise<{ prompt: string; usedLmStudio: boolean }> {
   try {
@@ -454,17 +472,32 @@ async function composeRandomRollPrompt(params: {
 
     const tagHint =
       params.tags.length > 0
-        ? `Incorporate natural scene, wardrobe, pose, or lighting inspiration from these popular motifs where cohesive: ${params.tags.join(', ')}.`
-        : 'Invent a vivid, grounded photographic setting, natural wardrobe, and expressive lighting.';
+        ? `Optional setting, wardrobe, pose, or lighting motifs (use only what fits cleanly and discard anything conflicting): ${params.tags.join(', ')}.`
+        : 'Invent a vivid, grounded setting, natural wardrobe, and expressive lighting.';
+
+    const loraDirective = params.hasStyleLoras
+      ? '- Play to Attached LoRAs: Non-character LoRA(s) are active under Attached LoRAs. Actively design the visual aesthetic, lighting, wardrobe, pose, or setting to showcase their descriptions and categories, letting them take priority over generic motif tags.'
+      : '- Focus on a fresh, coherent scene that complements the subject naturally.';
+
+    const randomRollRules = [
+      'RANDOM ROLL RULES:',
+      '- Output ONE original, ready-to-generate prompt wrapped inside <proposed_prompt>...</proposed_prompt>. Never include character names or model/LoRA filenames.',
+      '- Strict Identity Fidelity: Follow the Character Profile strictly for sex/gender pronouns and permanent physical traits. NEVER invent, guess, or insert a race, ethnicity, nationality, skin tone, hair color, eye color, or biological sex not explicitly supported by the Character Profile; leave unspecified identity traits unstated so the active character LoRA supplies them.',
+      loraDirective,
+    ].join('\n');
 
     const systemPrompt = [
       settings.conversationSystemPrompt,
       characterBlock,
       attachedLoraBlock,
-      'RANDOM ROLL TASK: Output ONE original, ready-to-generate photography prompt wrapped inside <proposed_prompt>...</proposed_prompt>. Never include character names or LoRA filenames.',
+      randomRollRules,
     ]
       .filter(Boolean)
       .join('\n\n');
+
+    const userInstruction = params.hasStyleLoras
+      ? `Create a single fresh, spontaneous scene prompt for the subject that actively plays to the attached non-character LoRA(s). ${tagHint} Return ONLY <proposed_prompt>...</proposed_prompt>.`
+      : `Create a single fresh, spontaneous scene prompt for the subject. ${tagHint} Return ONLY <proposed_prompt>...</proposed_prompt>.`;
 
     const res = await postChatCompletion({
       baseUrl,
@@ -473,11 +506,11 @@ async function composeRandomRollPrompt(params: {
         { role: 'system', content: systemPrompt },
         {
           role: 'user',
-          content: `Create a single fresh, spontaneous scene prompt for the subject. ${tagHint} Return ONLY <proposed_prompt>...</proposed_prompt>.`,
+          content: userInstruction,
         },
       ],
-      temperature: 0.9,
-      maxTokens: 500,
+      temperature: 0.72,
+      maxTokens: 1200,
       timeoutMs: 35_000,
     });
 
@@ -547,7 +580,8 @@ export async function executeRandomRoll(): Promise<{
   const triggerWord = Array.from(
     new Set(
       [charLora?.trigger_word, ...styleLoras.map((sl) => sl.triggerWord)]
-        .map((t) => (t || '').trim())
+        .flatMap((t) => (t || '').split(','))
+        .map((t) => t.trim())
         .filter(Boolean)
     )
   ).join(', ');
@@ -557,6 +591,7 @@ export async function executeRandomRoll(): Promise<{
     characterDescription: character.description || '',
     characterPhysicalDescription: character.physical_description || '',
     loraNames: loras.map((l) => l.loraName),
+    hasStyleLoras: styleLoras.length > 0,
     tags,
   });
 
