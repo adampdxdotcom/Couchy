@@ -1,18 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api/client.ts';
 import { formatUnlockLocalTime, getSuggestedScheduledIso, toLocalDateTimeInputValue } from './earlyAccessUtils.ts';
-import { COMFY_SUBFOLDER_OPTIONS } from '../ModelDownloadConfirmModal.tsx';
-import { deriveDefaultCharacterAutomation } from './CharacterLoraDownloadOptions.tsx';
-import { DEFAULT_LORA_MENTION_AUTOMATION } from './LoraMentionDownloadOptions.tsx';
 import {
   applySelectedVersion,
   buildStartDownloadPayload,
+  COMFY_SUBFOLDER_OPTIONS,
   getDefaultSubfolderForItem,
   getDownloaderCardKey,
   isItemBatchEligible,
   type ActivePreviewDownloadEntry,
   type ResolvedPreviewEntry,
 } from './downloaderUtils.ts';
+import { deriveDefaultCharacterAutomation } from './CharacterLoraDownloadOptions.tsx';
+import { DEFAULT_LORA_MENTION_AUTOMATION } from './LoraMentionDownloadOptions.tsx';
 import type {
   CharacterDownloadAutomation,
   ComfyModelSubfolder,
@@ -55,7 +55,8 @@ export function useModelDownloaderActions({
   onPushToast,
 }: UseModelDownloaderActionsParams) {
   const [pendingDownload, setPendingDownload] = useState<ExternalModelSearchResult | null>(null);
-  const [selectedFile, setSelectedFile] = useState<ExternalModelFileOption | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<ExternalModelFileOption[]>([]);
+  const [fileSubfolders, setFileSubfolders] = useState<Record<string, ComfyModelSubfolder>>({});
   const [isLoadingRepoFiles, setIsLoadingRepoFiles] = useState(false);
   const [dlSubfolder, setDlSubfolder] = useState<ComfyModelSubfolder>('loras');
   const [pendingLoraCategory, setPendingLoraCategory] = useState<LoraCategory>('unclassified');
@@ -156,7 +157,13 @@ export function useModelDownloaderActions({
     item: ExternalModelSearchResult,
     targetFilename: string,
     targetSubfolder: string,
-    isScheduled = false
+    isScheduled = false,
+    meta?: {
+      removeCardFromSearch?: boolean;
+      selectedModelType?: ModelType;
+      selectedFileSize?: number | null;
+      selectedSha256?: string | null;
+    }
   ) => {
     const cardKey = getDownloaderCardKey(item);
     if (!isScheduled) {
@@ -167,18 +174,31 @@ export function useModelDownloaderActions({
           item,
           targetFilename,
           targetSubfolder,
+          selectedModelType: meta?.selectedModelType,
+          selectedFileSize: meta?.selectedFileSize,
+          selectedSha256: meta?.selectedSha256,
           startedAt: Date.now(),
         },
-        ...prev.filter((p) => p.cardKey !== cardKey && p.jobId !== jobId),
+        ...prev.filter((p) => p.jobId !== jobId),
       ]);
     }
-    setSearchResults((prev) => {
-      const remaining = prev.filter((r) => getDownloaderCardKey(r) !== cardKey);
-      if (remaining.length === 0) {
-        setExtQuery('');
-      }
-      return remaining;
-    });
+    if (meta?.removeCardFromSearch !== false) {
+      setSearchResults((prev) => {
+        const remaining = prev.filter((r) => getDownloaderCardKey(r) !== cardKey);
+        if (remaining.length === 0) {
+          setExtQuery('');
+        }
+        return remaining;
+      });
+    }
+  };
+
+  const buildInitialSubfolderMap = (files: ExternalModelFileOption[]) => {
+    const map: Record<string, ComfyModelSubfolder> = {};
+    for (const f of files) {
+      map[f.rfilename] = f.suggestedSubfolder;
+    }
+    return map;
   };
 
   const openDownloadModal = async (
@@ -187,14 +207,19 @@ export function useModelDownloaderActions({
     initialError: string | null = null,
     preferOverwrite = false
   ) => {
-    const initialFile = item.availableFiles?.[0] || null;
+    const isMultiFileHf =
+      item.provider === 'huggingface' &&
+      (item.totalRepoFilesCount || item.availableFiles?.length || 0) > 1;
+    const initialFile = !isMultiFileHf ? item.availableFiles?.[0] || null : null;
     const initialFolder = initialFile?.suggestedSubfolder || getDefaultSubfolderForItem(item);
     const shouldSchedule =
       preferSchedule !== undefined ? preferSchedule : Boolean(item.isEarlyAccessActive);
     const defaultIso = getSuggestedScheduledIso(item.earlyAccessEndsAt);
     const cardKey = getDownloaderCardKey(item);
+
     setPendingDownload(item);
-    setSelectedFile(initialFile);
+    setSelectedFiles(initialFile ? [initialFile] : []);
+    setFileSubfolders(buildInitialSubfolderMap(item.availableFiles || []));
     setDlSubfolder(initialFolder);
     setPendingLoraCategory(getEffectiveCardCategory(item, cardKey));
     setPendingCharacterAutomation(getEffectiveCharacterAutomation(item, cardKey));
@@ -211,20 +236,49 @@ export function useModelDownloaderActions({
       try {
         const repoTree = await api.listHuggingFaceRepoFiles(item.id);
         if (repoTree.files.length > 0) {
-          const matched =
-            repoTree.files.find((f) => f.filename === item.filename) || repoTree.files[0];
+          const installedMatches = repoTree.files.filter((f) => f.isInstalled);
+          const installedFilesCount = installedMatches.length;
+          const totalFilesCount = repoTree.files.length;
+          const firstInstalled = installedMatches[0] || null;
+          const isFullyInstalled = totalFilesCount > 0 && installedFilesCount === totalFilesCount;
+          const isPartiallyInstalled = installedFilesCount > 0 && !isFullyInstalled;
+
+          const repoPatch: Partial<ExternalModelSearchResult> = {
+            availableFiles: repoTree.files,
+            totalRepoFilesCount: totalFilesCount,
+            totalFilesCount,
+            installedFilesCount,
+            isInstalled: isFullyInstalled,
+            isPartiallyInstalled,
+            installedModelId: firstInstalled?.installedModelId ?? null,
+            installedFilename: firstInstalled?.installedFilename ?? null,
+            installedModelType: firstInstalled?.installedModelType ?? null,
+            installedMatchReason: firstInstalled?.installedMatchReason ?? null,
+          };
+
           setPendingDownload((prev) =>
-            prev && prev.id === item.id
-              ? {
-                  ...prev,
-                  availableFiles: repoTree.files,
-                  totalRepoFilesCount: repoTree.files.length,
-                }
-              : prev
+            prev && prev.id === item.id ? { ...prev, ...repoPatch } : prev
           );
-          setSelectedFile(matched);
-          setDlSubfolder(matched.suggestedSubfolder);
-          setCustomFilename(matched.filename);
+          setSearchResults((prev) =>
+            prev.map((r) => (r.provider === 'huggingface' && r.id === item.id ? { ...r, ...repoPatch } : r))
+          );
+          setFileSubfolders((prev) => ({
+            ...buildInitialSubfolderMap(repoTree.files),
+            ...prev,
+          }));
+
+          if (repoTree.files.length === 1) {
+            const onlyFile = repoTree.files[0];
+            setSelectedFiles([onlyFile]);
+            setDlSubfolder(onlyFile.suggestedSubfolder);
+            setCustomFilename(onlyFile.filename);
+          } else {
+            // Preserve any files the user already checked while loading; do not auto-pick a random file
+            setSelectedFiles((prev) => {
+              const prevSet = new Set(prev.map((f) => f.rfilename));
+              return repoTree.files.filter((f) => prevSet.has(f.rfilename));
+            });
+          }
         }
       } catch {
         // Keep existing sibling list if tree endpoint fails
@@ -234,11 +288,52 @@ export function useModelDownloaderActions({
     }
   };
 
-  const handleSelectFile = (file: ExternalModelFileOption) => {
-    setSelectedFile(file);
-    setDlSubfolder(file.suggestedSubfolder);
+  const syncSingleFileFields = (file: ExternalModelFileOption) => {
+    setDlSubfolder(fileSubfolders[file.rfilename] || file.suggestedSubfolder);
     setCustomFilename(file.filename);
+  };
+
+  const handleToggleFile = (file: ExternalModelFileOption) => {
     setDlError(null);
+    const availableCount = pendingDownload?.availableFiles?.length || 0;
+    if (availableCount <= 1) {
+      setSelectedFiles([file]);
+      syncSingleFileFields(file);
+      return;
+    }
+
+    setSelectedFiles((prev) => {
+      const exists = prev.some((f) => f.rfilename === file.rfilename);
+      const next = exists
+        ? prev.filter((f) => f.rfilename !== file.rfilename)
+        : [...prev, file];
+      if (next.length === 1) {
+        syncSingleFileFields(next[0]);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectMissingFiles = () => {
+    if (!pendingDownload?.availableFiles) return;
+    setDlError(null);
+    const missing = pendingDownload.availableFiles.filter((f) => !f.isInstalled);
+    setSelectedFiles(missing);
+    if (missing.length === 1) {
+      syncSingleFileFields(missing[0]);
+    }
+  };
+
+  const handleClearFileSelection = () => {
+    setDlError(null);
+    setSelectedFiles([]);
+  };
+
+  const handleChangeFileSubfolder = (rfilename: string, subfolder: ComfyModelSubfolder) => {
+    setFileSubfolders((prev) => ({ ...prev, [rfilename]: subfolder }));
+    if (selectedFiles.length === 1 && selectedFiles[0].rfilename === rfilename) {
+      setDlSubfolder(subfolder);
+    }
   };
 
   const handleDirectLoraDownload = async (
@@ -304,12 +399,6 @@ export function useModelDownloaderActions({
     setDlError(null);
     setIsSubmitting(true);
     try {
-      const folderMeta = COMFY_SUBFOLDER_OPTIONS.find((o) => o.value === dlSubfolder);
-      const effectiveType: ModelType =
-        folderMeta?.modelType || selectedFile?.modelType || pendingDownload.modelType;
-      const targetFilename =
-        customFilename.trim() || selectedFile?.filename || pendingDownload.filename;
-
       let scheduledForIso: string | null = null;
       if (scheduleDownload && scheduledForInput) {
         const parsedMs = new Date(scheduledForInput).getTime();
@@ -319,10 +408,95 @@ export function useModelDownloaderActions({
         scheduledForIso = new Date(parsedMs).toISOString();
       }
 
+      if (selectedFiles.length > 1) {
+        let startedCount = 0;
+        let scheduledCount = 0;
+        const failedFiles: ExternalModelFileOption[] = [];
+        const errors: string[] = [];
+
+        for (const file of selectedFiles) {
+          const targetFolder = fileSubfolders[file.rfilename] || file.suggestedSubfolder;
+          const folderMeta = COMFY_SUBFOLDER_OPTIONS.find((o) => o.value === targetFolder);
+          const effectiveType: ModelType = folderMeta?.modelType || file.modelType;
+          const isLora = effectiveType === 'lora' || targetFolder === 'loras';
+
+          try {
+            const res = await api.startModelDownload(
+              buildStartDownloadPayload({
+                item: pendingDownload,
+                selectedFile: file,
+                targetFilename: file.filename,
+                effectiveType,
+                subfolder: targetFolder,
+                allowOverwrite,
+                loraCategory: isLora ? pendingLoraCategory : null,
+                characterAutomation: null,
+                mentionAutomation: isLora ? pendingMentionAutomation : null,
+                scheduledFor: scheduledForIso,
+              })
+            );
+            if (res?.job?.id) {
+              const isScheduled = res.job.status === 'scheduled';
+              registerStartedDownload(
+                Number(res.job.id),
+                pendingDownload,
+                file.filename,
+                targetFolder,
+                isScheduled,
+                {
+                  removeCardFromSearch: false,
+                  selectedModelType: effectiveType,
+                  selectedFileSize: file.fileSize,
+                  selectedSha256: file.sha256Hash,
+                }
+              );
+              if (isScheduled) scheduledCount += 1;
+              else startedCount += 1;
+            }
+          } catch (err: any) {
+            failedFiles.push(file);
+            errors.push(`${file.filename}: ${err?.message || 'Download could not start'}`);
+          }
+        }
+
+        const totalStarted = startedCount + scheduledCount;
+        if (totalStarted > 0) {
+          const cardKey = getDownloaderCardKey(pendingDownload);
+          setSearchResults((prev) => {
+            const remaining = prev.filter((r) => getDownloaderCardKey(r) !== cardKey);
+            if (remaining.length === 0) setExtQuery('');
+            return remaining;
+          });
+          await onRefreshDownloads();
+        }
+
+        if (failedFiles.length === 0) {
+          onPushToast?.(
+            scheduledCount > 0
+              ? `Scheduled ${scheduledCount} file(s) from ${pendingDownload.name}`
+              : `Started downloading ${startedCount} file(s) from ${pendingDownload.name}`,
+            'success'
+          );
+          setPendingDownload(null);
+          setSelectedFiles([]);
+        } else {
+          setSelectedFiles(failedFiles);
+          setDlError(errors.join(' · '));
+        }
+        return;
+      }
+
+      const singleFile = selectedFiles[0] || null;
+      const folderMeta = COMFY_SUBFOLDER_OPTIONS.find((o) => o.value === dlSubfolder);
+      const effectiveType: ModelType =
+        folderMeta?.modelType || singleFile?.modelType || pendingDownload.modelType;
+      const targetFilename =
+        customFilename.trim() || singleFile?.filename || pendingDownload.filename;
+
       const res = await api.startModelDownload(
         buildStartDownloadPayload({
           item: pendingDownload,
-          selectedFile,
+          selectedFile: singleFile,
           targetFilename,
           effectiveType,
           subfolder: dlSubfolder,
@@ -331,7 +505,8 @@ export function useModelDownloaderActions({
           characterAutomation:
             effectiveType === 'lora' &&
             pendingLoraCategory === 'character' &&
-            !pendingDownload.isInstalled
+            !pendingDownload.isInstalled &&
+            !singleFile?.isInstalled
               ? pendingCharacterAutomation
               : null,
           mentionAutomation: effectiveType === 'lora' ? pendingMentionAutomation : null,
@@ -344,7 +519,12 @@ export function useModelDownloaderActions({
           pendingDownload,
           targetFilename,
           dlSubfolder,
-          res.job.status === 'scheduled'
+          res.job.status === 'scheduled',
+          {
+            selectedModelType: effectiveType,
+            selectedFileSize: singleFile?.fileSize ?? pendingDownload.fileSize,
+            selectedSha256: singleFile?.sha256Hash ?? pendingDownload.sha256Hash,
+          }
         );
       }
       if (res?.job?.status === 'scheduled') {
@@ -354,7 +534,7 @@ export function useModelDownloaderActions({
         );
       }
       setPendingDownload(null);
-      setSelectedFile(null);
+      setSelectedFiles([]);
       await onRefreshDownloads();
     } catch (err: any) {
       setDlError(err.message || 'Download could not start');
@@ -504,8 +684,21 @@ export function useModelDownloaderActions({
 
   const resolvedPreviews: ResolvedPreviewEntry[] = combinedPreviews.map(
     ({ cardKey, item: rawItem, activeEntry }) => {
-      const item = activeEntry
-        ? rawItem
+      const item: ExternalModelSearchResult = activeEntry
+        ? {
+            ...rawItem,
+            filename: activeEntry.targetFilename,
+            suggestedSubfolder: activeEntry.targetSubfolder as ComfyModelSubfolder,
+            modelType: activeEntry.selectedModelType || rawItem.modelType,
+            fileSize:
+              activeEntry.selectedFileSize !== undefined
+                ? activeEntry.selectedFileSize
+                : rawItem.fileSize,
+            sha256Hash:
+              activeEntry.selectedSha256 !== undefined
+                ? activeEntry.selectedSha256
+                : rawItem.sha256Hash,
+          }
         : applySelectedVersion(rawItem, selectedVersionByCard[cardKey]);
       const displayFilename = activeEntry?.targetFilename || item.filename;
       const matchingJob = activeEntry
@@ -570,8 +763,9 @@ export function useModelDownloaderActions({
     handleDismissSearchCard,
     pendingDownload,
     setPendingDownload,
-    selectedFile,
-    setSelectedFile,
+    selectedFiles,
+    setSelectedFiles,
+    fileSubfolders,
     isLoadingRepoFiles,
     dlSubfolder,
     setDlSubfolder,
@@ -591,7 +785,10 @@ export function useModelDownloaderActions({
     setScheduledForInput,
     dlError,
     isSubmitting,
-    handleSelectFile,
+    handleToggleFile,
+    handleSelectMissingFiles,
+    handleClearFileSelection,
+    handleChangeFileSubfolder,
     handleConfirmDownload,
   };
 }

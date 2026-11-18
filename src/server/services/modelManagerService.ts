@@ -341,7 +341,12 @@ export async function searchHuggingFaceModels(
             (typeFilter === 'checkpoint' && f.modelType === 'diffusion') ||
             (typeFilter === 'diffusion' && f.modelType === 'checkpoint')
         )
-      : availableFiles[0];
+      : availableFiles.find(
+          (f) =>
+            f.modelType === 'diffusion' ||
+            f.modelType === 'checkpoint' ||
+            f.modelType === 'lora'
+        ) || availableFiles[0];
 
     if (typeFilter && !matchingFile) continue;
     const primary = matchingFile || availableFiles[0];

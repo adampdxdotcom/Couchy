@@ -3,6 +3,7 @@ import path from 'path';
 import { db } from '../db.ts';
 import { parsePreviewImagesJson } from '../services/civitai/civitaiHttpAndParse.ts';
 import { listHuggingFaceRepoFiles } from '../services/huggingFaceMetadataService.ts';
+import { annotateInstalledFileOptions } from '../services/civitai/civitaiModelEnrichmentService.ts';
 import {
   resolveDirectModelUrl,
   searchCivitaiModels,
@@ -75,7 +76,10 @@ modelDownloadsRouter.get('/models/huggingface/files', async (req, res) => {
       return;
     }
     const data = await listHuggingFaceRepoFiles(repo);
-    res.json(data);
+    res.json({
+      ...data,
+      files: annotateInstalledFileOptions(data.files),
+    });
   } catch (err: any) {
     res.status(502).json({ error: err?.message || 'Failed to list Hugging Face repository files' });
   }

@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { Check, CheckCircle2, Clock, FileCode2, FolderGit2, Info, Loader2, Search } from 'lucide-react';
+import React from 'react';
+import { CheckCircle2, Clock, Info } from 'lucide-react';
 import { formatBytes } from '../shared/utils.ts';
 import {
   DEFAULT_PILL_TYPE_SETTINGS,
@@ -10,6 +10,8 @@ import {
   formatUnlockCountdown,
   formatUnlockLocalTime,
 } from './models/earlyAccessUtils.ts';
+import { COMFY_SUBFOLDER_OPTIONS } from './models/downloaderUtils.ts';
+import { RepoFilePickerList } from './models/RepoFilePickerList.tsx';
 import { CharacterLoraDownloadOptions } from './models/CharacterLoraDownloadOptions.tsx';
 import { LoraMentionDownloadOptions } from './models/LoraMentionDownloadOptions.tsx';
 import type {
@@ -19,63 +21,19 @@ import type {
   ExternalModelSearchResult,
   LoraCategory,
   LoraMentionAutomation,
-  ModelType,
   PillTypeSettings,
 } from '../shared/types.ts';
 
-export const COMFY_SUBFOLDER_OPTIONS: {
-  value: ComfyModelSubfolder;
-  label: string;
-  modelType: ModelType;
-}[] = [
-  { value: 'loras', label: '/downloads/loras — LoRA / LoCon / DoRA', modelType: 'lora' },
-  {
-    value: 'checkpoints',
-    label: '/downloads/checkpoints — All-in-One Checkpoints (UNET + CLIP + VAE)',
-    modelType: 'checkpoint',
-  },
-  {
-    value: 'diffusion_models',
-    label: '/downloads/diffusion_models — Standalone UNET / DiT / GGUF',
-    modelType: 'diffusion',
-  },
-  {
-    value: 'unet',
-    label: '/downloads/unet — Standalone UNET (Legacy ComfyUI alias)',
-    modelType: 'diffusion',
-  },
-  {
-    value: 'text_encoders',
-    label: '/downloads/text_encoders — CLIP / T5 / DualCLIP Text Encoders',
-    modelType: 'clip',
-  },
-  {
-    value: 'clip',
-    label: '/downloads/clip — CLIP Text Encoders (Legacy ComfyUI alias)',
-    modelType: 'clip',
-  },
-  { value: 'vae', label: '/downloads/vae — VAE Models', modelType: 'vae' },
-  {
-    value: 'controlnet',
-    label: '/downloads/controlnet — ControlNet / IP-Adapter',
-    modelType: 'controlnet',
-  },
-  {
-    value: 'upscale_models',
-    label: '/downloads/upscale_models — Upscalers (ESRGAN / SwinIR)',
-    modelType: 'upscaler',
-  },
-  {
-    value: 'embeddings',
-    label: '/downloads/embeddings — Textual Inversion Embeddings',
-    modelType: 'embedding',
-  },
-];
+export { COMFY_SUBFOLDER_OPTIONS };
 
 interface ModelDownloadConfirmModalProps {
   pendingDownload: ExternalModelSearchResult;
-  selectedFile: ExternalModelFileOption | null;
-  onSelectFile: (file: ExternalModelFileOption) => void;
+  selectedFiles: ExternalModelFileOption[];
+  fileSubfolders: Record<string, ComfyModelSubfolder>;
+  onToggleFile: (file: ExternalModelFileOption) => void;
+  onSelectMissingFiles: () => void;
+  onClearSelection: () => void;
+  onChangeFileSubfolder: (rfilename: string, subfolder: ComfyModelSubfolder) => void;
   isLoadingRepoFiles: boolean;
   dlSubfolder: ComfyModelSubfolder;
   setDlSubfolder: (folder: ComfyModelSubfolder) => void;
@@ -101,12 +59,16 @@ interface ModelDownloadConfirmModalProps {
 }
 
 /**
- * Confirmation modal and multi-file repository picker for Civitai, Hugging Face, and direct URL downloads.
+ * Confirmation modal and multi-select repository file picker for Civitai, Hugging Face, and direct downloads.
  */
 export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps> = ({
   pendingDownload,
-  selectedFile,
-  onSelectFile,
+  selectedFiles,
+  fileSubfolders,
+  onToggleFile,
+  onSelectMissingFiles,
+  onClearSelection,
+  onChangeFileSubfolder,
   isLoadingRepoFiles,
   dlSubfolder,
   setDlSubfolder,
@@ -130,22 +92,57 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
   onClose,
   onConfirm,
 }) => {
-  const [fileFilter, setFileFilter] = useState('');
   const categoryStyle = resolveLoraCategoryStyle(loraCategory, pillTypeSettings);
-
   const availableFiles = pendingDownload.availableFiles || [];
-  const filteredFiles = useMemo(() => {
-    if (!fileFilter.trim()) return availableFiles;
-    const q = fileFilter.toLowerCase();
-    return availableFiles.filter(
-      (f) =>
-        f.rfilename.toLowerCase().includes(q) ||
-        f.suggestedSubfolder.toLowerCase().includes(q)
-    );
-  }, [availableFiles, fileFilter]);
+  const showRepoPicker =
+    availableFiles.length > 1 ||
+    pendingDownload.provider === 'huggingface' ||
+    isLoadingRepoFiles;
 
-  const activeFileSize = selectedFile ? selectedFile.fileSize : pendingDownload.fileSize;
-  const activeHash = selectedFile ? selectedFile.sha256Hash : pendingDownload.sha256Hash;
+  const isMultiFileSelected = selectedFiles.length > 1;
+  const singleFile = selectedFiles.length === 1 ? selectedFiles[0] : null;
+  const requiresFilePick = showRepoPicker && availableFiles.length > 1 && selectedFiles.length === 0;
+
+  const activeFileSize = isMultiFileSelected
+    ? selectedFiles.reduce((sum, f) => sum + (f.fileSize || 0), 0)
+    : singleFile
+    ? singleFile.fileSize
+    : pendingDownload.fileSize;
+  const activeHash = singleFile
+    ? singleFile.sha256Hash
+    : !showRepoPicker
+    ? pendingDownload.sha256Hash
+    : null;
+
+  const selectedInstalledFiles = selectedFiles.filter((f) => f.isInstalled);
+  const showSingleInstalledBanner =
+    !isMultiFileSelected &&
+    ((singleFile && singleFile.isInstalled) ||
+      (!showRepoPicker && Boolean(pendingDownload.isInstalled)));
+  const showMultiInstalledBanner = isMultiFileSelected && selectedInstalledFiles.length > 0;
+  const hasLoraSelection = isMultiFileSelected
+    ? selectedFiles.some((f) => (fileSubfolders[f.rfilename] || f.suggestedSubfolder) === 'loras')
+    : dlSubfolder === 'loras';
+
+  const confirmDisabled =
+    isSubmitting ||
+    requiresFilePick ||
+    (!isMultiFileSelected && !customFilename.trim()) ||
+    (scheduleDownload && !scheduledForInput);
+
+  const confirmLabel = isSubmitting
+    ? scheduleDownload
+      ? 'Scheduling...'
+      : 'Starting...'
+    : requiresFilePick
+    ? 'Select File(s) to Download'
+    : isMultiFileSelected
+    ? scheduleDownload
+      ? `Confirm & Schedule (${selectedFiles.length} Files)`
+      : `Confirm & Download (${selectedFiles.length} Files)`
+    : scheduleDownload
+    ? 'Confirm & Schedule Download'
+    : 'Confirm & Start Download';
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
@@ -157,8 +154,9 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
               Confirm Server-Side Model Download
             </h3>
             <p className="text-zinc-400">
-              Select the weight file and target ComfyUI folder. Files stream to a temporary{' '}
-              <span className="font-mono text-zinc-300">.part</span> file and verify SHA-256 on completion.
+              Select weight file{availableFiles.length > 1 ? 's' : ''} and destination folders. Files
+              stream to a temporary <span className="font-mono text-zinc-300">.part</span> file and
+              verify SHA-256 on completion.
             </p>
           </div>
           <span className="px-2 py-1 rounded bg-zinc-950 border border-zinc-800 font-mono uppercase text-[10px] text-indigo-300 shrink-0">
@@ -168,95 +166,43 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
 
         {/* Scrollable Body */}
         <div className="p-6 overflow-y-auto space-y-4">
-          {/* Multi-file Repository / Version File Picker */}
-          {(availableFiles.length > 1 ||
-            pendingDownload.provider === 'huggingface' ||
-            isLoadingRepoFiles) && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <label className="font-medium text-zinc-200 flex items-center gap-1.5">
-                  <FolderGit2 className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>
-                    Select Weight File ({availableFiles.length}{' '}
-                    {availableFiles.length === 1 ? 'file' : 'files'})
-                  </span>
-                </label>
-                {isLoadingRepoFiles && (
-                  <span className="inline-flex items-center gap-1 text-[11px] text-indigo-300">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    <span>Loading repo tree &amp; LFS hashes...</span>
-                  </span>
-                )}
-              </div>
-
-              {availableFiles.length > 4 && (
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={fileFilter}
-                    onChange={(e) => setFileFilter(e.target.value)}
-                    placeholder="Filter files in repository (e.g. fp8, q8_0, t5xxl, vae)..."
-                    className="w-full pl-8 pr-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-                  />
-                </div>
-              )}
-
-              <div className="max-h-52 overflow-y-auto border border-zinc-800 rounded-lg divide-y divide-zinc-800/70 bg-zinc-950">
-                {filteredFiles.map((file) => {
-                  const isSelected =
-                    selectedFile?.rfilename === file.rfilename ||
-                    (!selectedFile && file.filename === pendingDownload.filename);
-                  return (
-                    <button
-                      key={file.rfilename}
-                      type="button"
-                      onClick={() => onSelectFile(file)}
-                      className={`w-full text-left px-3 py-2 flex items-center justify-between gap-3 transition-colors cursor-pointer ${
-                        isSelected
-                          ? 'bg-indigo-600/20 text-zinc-100'
-                          : 'hover:bg-zinc-900 text-zinc-300'
-                      }`}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 font-mono text-[11px] truncate">
-                          {isSelected ? (
-                            <Check className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                          ) : (
-                            <FileCode2 className="w-3.5 h-3.5 text-zinc-600 shrink-0" />
-                          )}
-                          <span className="truncate" title={file.rfilename}>
-                            {file.rfilename}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0 font-mono text-[10px]">
-                        <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-indigo-300">
-                          {file.suggestedSubfolder}
-                        </span>
-                        <span className="text-zinc-400 tabular-nums">
-                          {formatBytes(file.fileSize)}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
-                {filteredFiles.length === 0 && !isLoadingRepoFiles && (
-                  <div className="p-3 text-center text-zinc-500">
-                    No files match &ldquo;{fileFilter}&rdquo;.
-                  </div>
-                )}
-              </div>
-            </div>
+          {showRepoPicker && (
+            <RepoFilePickerList
+              availableFiles={availableFiles}
+              selectedFiles={selectedFiles}
+              fileSubfolders={fileSubfolders}
+              isLoadingRepoFiles={isLoadingRepoFiles}
+              onToggleFile={onToggleFile}
+              onSelectMissingFiles={onSelectMissingFiles}
+              onClearSelection={onClearSelection}
+              onChangeFileSubfolder={onChangeFileSubfolder}
+            />
           )}
 
-          {/* Selected File Summary */}
+          {/* Selection Summary */}
           <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3.5 space-y-1 font-mono">
             <div className="text-zinc-200 truncate">Model: {pendingDownload.name}</div>
-            <div className="text-zinc-400 truncate">
-              Source File: {selectedFile?.rfilename || pendingDownload.filename}
-            </div>
-            <div className="text-zinc-400">Size: {formatBytes(activeFileSize)}</div>
+            {isMultiFileSelected ? (
+              <>
+                <div className="text-indigo-300">
+                  Selected: {selectedFiles.length} files queued to their respective folders
+                </div>
+                <div className="text-zinc-400">
+                  Combined Size: {(activeFileSize ?? 0) > 0 ? formatBytes(activeFileSize) : 'Unknown'}
+                </div>
+              </>
+            ) : requiresFilePick ? (
+              <div className="text-amber-300">
+                Choose one or more files from the repository list above to download.
+              </div>
+            ) : (
+              <>
+                <div className="text-zinc-400 truncate">
+                  Source File: {singleFile?.rfilename || pendingDownload.filename}
+                </div>
+                <div className="text-zinc-400">Size: {formatBytes(activeFileSize)}</div>
+              </>
+            )}
             {pendingDownload.baseModel && (
               <div className="text-indigo-300">Base Model: {pendingDownload.baseModel}</div>
             )}
@@ -276,26 +222,47 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
             )}
           </div>
 
-          {/* Already Installed Locally Notice */}
-          {pendingDownload.isInstalled && (
+          {/* Installed File Notices */}
+          {(showSingleInstalledBanner || showMultiInstalledBanner) && (
             <div className="flex items-start gap-2.5 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/35 text-emerald-200 text-[11px]">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
               <div className="space-y-0.5">
-                <div className="font-medium text-emerald-100">
-                  Already Installed Locally
-                  {pendingDownload.installedFilename
-                    ? ` (${pendingDownload.installedFilename})`
-                    : ''}
-                </div>
-                <p className="text-emerald-200/80">
-                  Matched in your local model inventory
-                  {pendingDownload.installedMatchReason === 'hash'
-                    ? ' by SHA-256 hash'
-                    : pendingDownload.installedMatchReason === 'version_id'
-                    ? ' by Civitai version ID'
-                    : ' by filename'}
-                  . Enable overwrite below if you want to replace the existing file.
-                </p>
+                {showMultiInstalledBanner ? (
+                  <>
+                    <div className="font-medium text-emerald-100">
+                      {selectedInstalledFiles.length} Selected File
+                      {selectedInstalledFiles.length === 1 ? ' Is' : 's Are'} Already Installed
+                    </div>
+                    <p className="text-emerald-200/80">
+                      {selectedInstalledFiles
+                        .map((f) => f.installedFilename || f.filename)
+                        .join(', ')}
+                      . Uncheck them or enable overwrite below to replace existing files.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="font-medium text-emerald-100">
+                      Already Installed Locally (
+                      {singleFile?.installedFilename ||
+                        pendingDownload.installedFilename ||
+                        singleFile?.filename ||
+                        pendingDownload.filename}
+                      )
+                    </div>
+                    <p className="text-emerald-200/80">
+                      Matched in your local model inventory
+                      {(singleFile?.installedMatchReason || pendingDownload.installedMatchReason) ===
+                      'hash'
+                        ? ' by SHA-256 hash'
+                        : (singleFile?.installedMatchReason ||
+                            pendingDownload.installedMatchReason) === 'version_id'
+                        ? ' by Civitai version ID'
+                        : ' by filename'}
+                      . Enable overwrite below if you want to replace the existing file.
+                    </p>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -308,7 +275,7 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
             </div>
           )}
 
-          {/* Civitai Early Access Info & Delayed Schedule Option */}
+          {/* Civitai Early Access Info */}
           {pendingDownload.isEarlyAccessActive && (
             <div className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-500/10 border border-amber-500/35 text-amber-200 text-[11px]">
               <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
@@ -330,37 +297,39 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
             </div>
           )}
 
-          {/* Destination Subfolder & Filename */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-zinc-300 font-medium mb-1">
-                ComfyUI Destination Folder
-              </label>
-              <select
-                value={dlSubfolder}
-                onChange={(e) => setDlSubfolder(e.target.value as ComfyModelSubfolder)}
-                className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
-              >
-                {COMFY_SUBFOLDER_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+          {/* Single-File Destination Folder & Save As Filename */}
+          {!isMultiFileSelected && !requiresFilePick && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-zinc-300 font-medium mb-1">
+                  ComfyUI Destination Folder
+                </label>
+                <select
+                  value={dlSubfolder}
+                  onChange={(e) => setDlSubfolder(e.target.value as ComfyModelSubfolder)}
+                  className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
+                >
+                  {COMFY_SUBFOLDER_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <div>
-              <label className="block text-zinc-300 font-medium mb-1">Save As Filename</label>
-              <input
-                type="text"
-                value={customFilename}
-                onChange={(e) => setCustomFilename(e.target.value)}
-                className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-zinc-100"
-              />
+              <div>
+                <label className="block text-zinc-300 font-medium mb-1">Save As Filename</label>
+                <input
+                  type="text"
+                  value={customFilename}
+                  onChange={(e) => setCustomFilename(e.target.value)}
+                  className="w-full px-3 py-2 bg-zinc-950 border border-zinc-800 rounded-lg font-mono text-zinc-100"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
-          {dlSubfolder === 'loras' && (
+          {hasLoraSelection && (
             <div className="space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-950/70 border border-zinc-800 rounded-lg px-3.5 py-2.5">
                 <div className="flex items-center gap-2">
@@ -398,7 +367,8 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
                 />
               )}
 
-              {loraCategory === 'character' &&
+              {!isMultiFileSelected &&
+                loraCategory === 'character' &&
                 !pendingDownload.isInstalled &&
                 characterAutomation &&
                 setCharacterAutomation && (
@@ -463,7 +433,7 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
           </button>
           <button
             type="button"
-            disabled={isSubmitting || !customFilename.trim() || (scheduleDownload && !scheduledForInput)}
+            disabled={confirmDisabled}
             onClick={onConfirm}
             className={`px-4 py-2 disabled:opacity-50 text-white font-medium rounded-lg cursor-pointer ${
               scheduleDownload
@@ -471,13 +441,7 @@ export const ModelDownloadConfirmModal: React.FC<ModelDownloadConfirmModalProps>
                 : 'bg-indigo-600 hover:bg-indigo-500'
             }`}
           >
-            {isSubmitting
-              ? scheduleDownload
-                ? 'Scheduling...'
-                : 'Starting...'
-              : scheduleDownload
-              ? 'Confirm & Schedule Download'
-              : 'Confirm & Start Download'}
+            {confirmLabel}
           </button>
         </div>
       </div>

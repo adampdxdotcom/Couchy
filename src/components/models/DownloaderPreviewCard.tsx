@@ -112,7 +112,19 @@ export const DownloaderPreviewCard: React.FC<DownloaderPreviewCardProps> = ({
   const hasThumb = Boolean(currentThumbUrl && !brokenImages[thumbKey]);
 
   const fileCount = item.totalRepoFilesCount || item.availableFiles?.length || 1;
+  const isMultiFileHfRepo =
+    item.provider === 'huggingface' && fileCount > 1 && !activeEntry;
+  const distinctSubfolders = Array.from(
+    new Set((item.availableFiles || []).map((f) => f.suggestedSubfolder).filter(Boolean))
+  );
+  const distinctTypes = Array.from(
+    new Set((item.availableFiles || []).map((f) => f.modelType).filter(Boolean))
+  );
   const targetFolder = activeEntry?.targetSubfolder || getDefaultSubfolderForItem(item);
+  const folderBadgeLabel =
+    isMultiFileHfRepo && distinctSubfolders.length > 1
+      ? `/${distinctSubfolders.length} folders`
+      : `/${targetFolder}`;
   const displayFilename = activeEntry?.targetFilename || item.filename;
   const isCivitaiRed = Boolean(item.civitaiUrl?.includes('civitai.red'));
   const providerLabel =
@@ -124,7 +136,9 @@ export const DownloaderPreviewCard: React.FC<DownloaderPreviewCardProps> = ({
       ? 'Hugging Face'
       : 'Direct URL';
 
-  const isLoraCard = item.modelType === 'lora' || targetFolder === 'loras';
+  const isLoraCard =
+    (item.modelType === 'lora' || targetFolder === 'loras') &&
+    (!isMultiFileHfRepo || (item.availableFiles || []).every((f) => f.modelType === 'lora'));
   const catStyle = resolveLoraCategoryStyle(activeCategory, pillTypeSettings);
   const isAutoAssigned =
     !hasManualCategoryPick &&
@@ -134,7 +148,7 @@ export const DownloaderPreviewCard: React.FC<DownloaderPreviewCardProps> = ({
   const hasUnsavedInstalledChange =
     Boolean(item.isInstalled && item.installedFilename) &&
     activeCategory !== (item.installedLoraCategory || 'unclassified');
-  const showCharAutomation = !item.isInstalled && activeCategory === 'character';
+  const showCharAutomation = !item.isInstalled && !item.isPartiallyInstalled && activeCategory === 'character';
 
   return (
     <div
@@ -174,7 +188,7 @@ export const DownloaderPreviewCard: React.FC<DownloaderPreviewCardProps> = ({
               {providerLabel}
             </span>
             <span className="px-2 py-0.5 rounded bg-zinc-950/90 border border-zinc-700/80 font-mono text-[10px] text-emerald-300">
-              /{targetFolder}
+              {folderBadgeLabel}
             </span>
             {fileCount > 1 && (
               <span className="px-2 py-0.5 rounded bg-zinc-950/90 border border-zinc-700/80 font-mono text-[10px] text-zinc-300">
@@ -270,6 +284,22 @@ export const DownloaderPreviewCard: React.FC<DownloaderPreviewCardProps> = ({
                     <span>Installed</span>
                   </button>
                 )}
+                {!item.isInstalled && item.isPartiallyInstalled && (
+                  <button
+                    type="button"
+                    onClick={() => onInspectInstalled(item)}
+                    title={`Partially installed (${item.installedFilesCount ?? 1} of ${
+                      item.totalFilesCount ?? fileCount
+                    } files matched locally: ${item.installedFilename || 'see inventory'}). Click to inspect installed model.`}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-mono bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 rounded shrink-0 cursor-pointer transition-colors"
+                  >
+                    <CheckCircle2 className="w-3 h-3" />
+                    <span>
+                      Partially Installed ({item.installedFilesCount ?? 1}/
+                      {item.totalFilesCount ?? fileCount})
+                    </span>
+                  </button>
+                )}
                 {item.isEarlyAccessActive && (
                   <span
                     title={
@@ -341,27 +371,52 @@ export const DownloaderPreviewCard: React.FC<DownloaderPreviewCardProps> = ({
 
           {/* Technical Specs Row */}
           <div className="text-xs font-mono text-zinc-300 flex flex-wrap items-center gap-x-3 gap-y-1 bg-zinc-950/70 border border-zinc-800/80 rounded-lg px-3 py-2">
-            <span className="uppercase font-semibold text-indigo-300">{item.modelType}</span>
-            <span className="text-zinc-600">·</span>
-            <span className="text-zinc-200 break-all" title={displayFilename}>
-              {displayFilename}
-            </span>
-            <span className="text-zinc-600">·</span>
-            <span className="text-zinc-300 tabular-nums">{formatBytes(item.fileSize)}</span>
-            {item.recommendedWeight !== null && item.recommendedWeight !== undefined && (
+            {isMultiFileHfRepo ? (
               <>
+                <span className="uppercase font-semibold text-indigo-300">REPO</span>
                 <span className="text-zinc-600">·</span>
-                <span className="text-indigo-300">
-                  Rec. Weight: {item.recommendedWeight.toFixed(2)}x
-                </span>
+                <span className="text-zinc-200">{fileCount} weight files</span>
+                {distinctTypes.length > 0 && (
+                  <>
+                    <span className="text-zinc-600">·</span>
+                    <span className="text-zinc-300">{distinctTypes.join(', ')}</span>
+                  </>
+                )}
+                {item.isPartiallyInstalled && (
+                  <>
+                    <span className="text-zinc-600">·</span>
+                    <span className="text-amber-300">
+                      {item.installedFilesCount ?? 1}/{item.totalFilesCount ?? fileCount} installed (
+                      {item.installedFilename})
+                    </span>
+                  </>
+                )}
               </>
-            )}
-            {item.sha256Hash && (
+            ) : (
               <>
+                <span className="uppercase font-semibold text-indigo-300">{item.modelType}</span>
                 <span className="text-zinc-600">·</span>
-                <span className="text-emerald-400">
-                  SHA256: {item.sha256Hash.slice(0, 12)}…
+                <span className="text-zinc-200 break-all" title={displayFilename}>
+                  {displayFilename}
                 </span>
+                <span className="text-zinc-600">·</span>
+                <span className="text-zinc-300 tabular-nums">{formatBytes(item.fileSize)}</span>
+                {item.recommendedWeight !== null && item.recommendedWeight !== undefined && (
+                  <>
+                    <span className="text-zinc-600">·</span>
+                    <span className="text-indigo-300">
+                      Rec. Weight: {item.recommendedWeight.toFixed(2)}x
+                    </span>
+                  </>
+                )}
+                {item.sha256Hash && (
+                  <>
+                    <span className="text-zinc-600">·</span>
+                    <span className="text-emerald-400">
+                      SHA256: {item.sha256Hash.slice(0, 12)}…
+                    </span>
+                  </>
+                )}
               </>
             )}
           </div>

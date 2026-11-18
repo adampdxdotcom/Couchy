@@ -176,8 +176,12 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
       {actions.pendingDownload && (
         <ModelDownloadConfirmModal
           pendingDownload={actions.pendingDownload}
-          selectedFile={actions.selectedFile}
-          onSelectFile={actions.handleSelectFile}
+          selectedFiles={actions.selectedFiles}
+          fileSubfolders={actions.fileSubfolders}
+          onToggleFile={actions.handleToggleFile}
+          onSelectMissingFiles={actions.handleSelectMissingFiles}
+          onClearSelection={actions.handleClearFileSelection}
+          onChangeFileSubfolder={actions.handleChangeFileSubfolder}
           isLoadingRepoFiles={actions.isLoadingRepoFiles}
           dlSubfolder={actions.dlSubfolder}
           setDlSubfolder={actions.setDlSubfolder}
@@ -200,7 +204,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
           isSubmitting={actions.isSubmitting}
           onClose={() => {
             actions.setPendingDownload(null);
-            actions.setSelectedFile(null);
+            actions.setSelectedFiles([]);
           }}
           onConfirm={actions.handleConfirmDownload}
         />

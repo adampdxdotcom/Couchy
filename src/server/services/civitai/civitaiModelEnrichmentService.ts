@@ -700,8 +700,66 @@ export function findInstalledModelMatch<T extends InstalledModelRecord>(
   return null;
 }
 
+function matchSingleFileToIndex(
+  file: Pick<ExternalModelFileOption, 'sha256Hash' | 'filename'>,
+  index: ReturnType<typeof getInstalledModelsIndex>
+): ExternalModelInstalledInfo {
+  if (file.sha256Hash) {
+    const h = file.sha256Hash.trim().toUpperCase();
+    const m = index.bySha256.get(h) || index.byAutoV2.get(h.slice(0, 10));
+    if (m) {
+      return {
+        isInstalled: true,
+        installedModelId: m.id,
+        installedFilename: m.filename,
+        installedModelType: m.model_type as ModelType,
+        installedLoraCategory: (m.lora_category as LoraCategory) || 'unclassified',
+        installedMatchReason: 'hash',
+      };
+    }
+  }
+
+  if (file.filename) {
+    const m = index.byFilename.get(path.basename(file.filename).trim().toLowerCase());
+    if (m) {
+      return {
+        isInstalled: true,
+        installedModelId: m.id,
+        installedFilename: m.filename,
+        installedModelType: m.model_type as ModelType,
+        installedLoraCategory: (m.lora_category as LoraCategory) || 'unclassified',
+        installedMatchReason: 'filename',
+      };
+    }
+  }
+
+  return {
+    isInstalled: false,
+    installedModelId: null,
+    installedFilename: null,
+    installedModelType: null,
+    installedLoraCategory: null,
+    installedMatchReason: null,
+  };
+}
+
 /**
- * Annotates search results (and each nested version option) with local installation matches
+ * Annotates individual repository/version weight files with local installation match metadata.
+ */
+export function annotateInstalledFileOptions(
+  files: ExternalModelFileOption[]
+): ExternalModelFileOption[] {
+  if (!files || files.length === 0) return files;
+  const index = getInstalledModelsIndex();
+  if (index.allRows.length === 0) return files;
+  return files.map((file) => ({
+    ...file,
+    ...matchSingleFileToIndex(file, index),
+  }));
+}
+
+/**
+ * Annotates search results (and each nested version/file option) with local installation matches
  * checked against SHA-256 hash, Civitai version ID, and filename using the cached model index.
  */
 export function annotateInstalledSearchResults(
@@ -709,18 +767,47 @@ export function annotateInstalledSearchResults(
 ): ExternalModelSearchResult[] {
   if (!items || items.length === 0) return items;
 
-  const { allRows, bySha256, byAutoV2, byVersionId, byFilename } = getInstalledModelsIndex();
+  const index = getInstalledModelsIndex();
+  const { allRows, bySha256, byAutoV2, byVersionId, byFilename } = index;
   if (allRows.length === 0) return items;
 
   const resolveMatch = (entry: {
+    provider?: ExternalModelSearchResult['provider'];
     sha256Hash?: string | null;
     versionId?: string | null;
     filename?: string | null;
     availableFiles?: ExternalModelFileOption[];
-  }): ExternalModelInstalledInfo => {
+  }): ExternalModelInstalledInfo & { availableFiles?: ExternalModelFileOption[] } => {
+    const annotatedFiles = entry.availableFiles
+      ? entry.availableFiles.map((f) => ({ ...f, ...matchSingleFileToIndex(f, index) }))
+      : undefined;
+
+    // Multi-file Hugging Face repos are component bundles: track partial vs full installation per file
+    if (entry.provider === 'huggingface' && annotatedFiles && annotatedFiles.length > 1) {
+      const installedMatches = annotatedFiles.filter((f) => f.isInstalled);
+      const installedFilesCount = installedMatches.length;
+      const totalFilesCount = annotatedFiles.length;
+      const firstMatch = installedMatches[0] || null;
+      const isFullyInstalled = installedFilesCount === totalFilesCount;
+      const isPartiallyInstalled = installedFilesCount > 0 && !isFullyInstalled;
+
+      return {
+        isInstalled: isFullyInstalled,
+        isPartiallyInstalled,
+        installedFilesCount,
+        totalFilesCount,
+        installedModelId: firstMatch?.installedModelId ?? null,
+        installedFilename: firstMatch?.installedFilename ?? null,
+        installedModelType: firstMatch?.installedModelType ?? null,
+        installedLoraCategory: firstMatch?.installedLoraCategory ?? null,
+        installedMatchReason: firstMatch?.installedMatchReason ?? null,
+        availableFiles: annotatedFiles,
+      };
+    }
+
     const hashes = new Set<string>();
     if (entry.sha256Hash) hashes.add(entry.sha256Hash.trim().toUpperCase());
-    for (const f of entry.availableFiles || []) {
+    for (const f of annotatedFiles || []) {
       if (f.sha256Hash) hashes.add(f.sha256Hash.trim().toUpperCase());
     }
 
@@ -729,11 +816,13 @@ export function annotateInstalledSearchResults(
       if (m) {
         return {
           isInstalled: true,
+          isPartiallyInstalled: false,
           installedModelId: m.id,
           installedFilename: m.filename,
           installedModelType: m.model_type as ModelType,
           installedLoraCategory: (m.lora_category as LoraCategory) || 'unclassified',
           installedMatchReason: 'hash',
+          ...(annotatedFiles ? { availableFiles: annotatedFiles } : {}),
         };
       }
     }
@@ -743,11 +832,13 @@ export function annotateInstalledSearchResults(
       if (m) {
         return {
           isInstalled: true,
+          isPartiallyInstalled: false,
           installedModelId: m.id,
           installedFilename: m.filename,
           installedModelType: m.model_type as ModelType,
           installedLoraCategory: (m.lora_category as LoraCategory) || 'unclassified',
           installedMatchReason: 'version_id',
+          ...(annotatedFiles ? { availableFiles: annotatedFiles } : {}),
         };
       }
     }
@@ -757,22 +848,26 @@ export function annotateInstalledSearchResults(
       if (m) {
         return {
           isInstalled: true,
+          isPartiallyInstalled: false,
           installedModelId: m.id,
           installedFilename: m.filename,
           installedModelType: m.model_type as ModelType,
           installedLoraCategory: (m.lora_category as LoraCategory) || 'unclassified',
           installedMatchReason: 'filename',
+          ...(annotatedFiles ? { availableFiles: annotatedFiles } : {}),
         };
       }
     }
 
     return {
       isInstalled: false,
+      isPartiallyInstalled: false,
       installedModelId: null,
       installedFilename: null,
       installedModelType: null,
       installedLoraCategory: null,
       installedMatchReason: null,
+      ...(annotatedFiles ? { availableFiles: annotatedFiles } : {}),
     };
   };
 
@@ -780,6 +875,7 @@ export function annotateInstalledSearchResults(
     const annotatedVersions = item.availableVersions?.map((v) => ({
       ...v,
       ...resolveMatch({
+        provider: item.provider,
         sha256Hash: v.sha256Hash,
         versionId: v.versionId,
         filename: v.filename,

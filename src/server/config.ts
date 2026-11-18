@@ -51,8 +51,17 @@ export interface AppConfig {
   scheduledBackupHours: number;
 }
 
+function resolveListenPort(): number {
+  const portFlagIdx = process.argv.indexOf('--port');
+  if (portFlagIdx !== -1 && process.argv[portFlagIdx + 1]) {
+    const cliPort = Number(process.argv[portFlagIdx + 1]);
+    if (Number.isFinite(cliPort) && cliPort > 0) return cliPort;
+  }
+  return Number(process.env.PORT || 3000);
+}
+
 export const appConfig: AppConfig = {
-  port: Number(process.env.PORT || 3000),
+  port: resolveListenPort(),
   comfyuiUrl: (process.env.COMFYUI_URL || 'http://comfyui:8188').replace(/\/+$/, ''),
   lmStudioUrl: (
     process.env.LOCAL_LLM_URL ||

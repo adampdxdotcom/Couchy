@@ -252,7 +252,19 @@ export type ComfyModelSubfolder =
   | 'upscale_models'
   | 'embeddings';
 
-export interface ExternalModelFileOption {
+export interface ExternalModelInstalledInfo {
+  isInstalled?: boolean;
+  isPartiallyInstalled?: boolean;
+  installedFilesCount?: number;
+  totalFilesCount?: number;
+  installedModelId?: number | null;
+  installedFilename?: string | null;
+  installedModelType?: ModelType | null;
+  installedLoraCategory?: LoraCategory | null;
+  installedMatchReason?: 'hash' | 'version_id' | 'filename' | null;
+}
+
+export interface ExternalModelFileOption extends ExternalModelInstalledInfo {
   rfilename: string;
   filename: string;
   fileSize: number | null;
@@ -260,15 +272,6 @@ export interface ExternalModelFileOption {
   downloadUrl: string;
   modelType: ModelType;
   suggestedSubfolder: ComfyModelSubfolder;
-}
-
-export interface ExternalModelInstalledInfo {
-  isInstalled?: boolean;
-  installedModelId?: number | null;
-  installedFilename?: string | null;
-  installedModelType?: ModelType | null;
-  installedLoraCategory?: LoraCategory | null;
-  installedMatchReason?: 'hash' | 'version_id' | 'filename' | null;
 }
 
 export interface ExternalModelVersionOption extends ExternalModelInstalledInfo {

@@ -142,6 +142,37 @@ export const DownloaderCardActions: React.FC<DownloaderCardActionsProps> = ({
     );
   }
 
+  if (item.isPartiallyInstalled) {
+    const installedCount = item.installedFilesCount ?? 1;
+    const totalCount = item.totalFilesCount ?? fileCount;
+    const remainingCount = Math.max(0, totalCount - installedCount);
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => onOpenDownloadModal(item, false, null, false)}
+          className="flex-1 min-w-[200px] inline-flex items-center justify-center gap-2 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg transition-colors cursor-pointer"
+        >
+          <FolderGit2 className="w-4 h-4" />
+          <span>
+            Download More from Repo
+            {remainingCount > 0 ? ` (${remainingCount} remaining)` : ''}
+          </span>
+        </button>
+        {hasInspectHandler && item.installedFilename && (
+          <button
+            type="button"
+            onClick={() => onInspectInstalled(item)}
+            className="inline-flex items-center justify-center gap-1.5 py-2.5 px-4 bg-emerald-600/15 hover:bg-emerald-600/25 border border-emerald-500/40 text-emerald-200 font-medium rounded-lg transition-colors cursor-pointer shrink-0"
+          >
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+            <span>Inspect Installed ({item.installedFilename})</span>
+          </button>
+        )}
+      </div>
+    );
+  }
+
   if (item.isInstalled) {
     return (
       <div className="flex flex-wrap items-center gap-2">

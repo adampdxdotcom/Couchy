@@ -119,7 +119,7 @@ FRONTEND: MODELS, LORAS & DOWNLOADER (`src/components/models`, `src/components/*
 - `src/components/models/BaseModelExplorerGrid.tsx`, `BaseModelExplorerTable.tsx`, `ModelInventoryTab.tsx` — Local checkpoint/UNET inventory views and folder sync.
 - `src/components/models/PresetsManagerTab.tsx`, `PresetEditorPanel.tsx`, `PresetSelectableGrid.tsx` — Reusable multi-LoRA combo preset editor and selector grid.
 - `src/components/ModelDownloaderTab.tsx` — Slim coordinator composing `DownloaderSearchBar.tsx`, `DownloaderPreviewCard.tsx`, `DownloaderCardActions.tsx`, `DownloaderBatchBar.tsx`, `DownloadHistoryList.tsx`, `useModelDownloaderActions.ts`, `useModelDownloaderState.ts`, `downloaderUtils.ts`, `earlyAccessUtils.ts`.
-- `src/components/ModelDownloadConfirmModal.tsx`, `src/components/models/CharacterLoraDownloadOptions.tsx`, `src/components/models/LoraMentionDownloadOptions.tsx` — Download confirmation, file/version picker, and post-download LoRA/character automation options.
+- `src/components/ModelDownloadConfirmModal.tsx`, `src/components/models/RepoFilePickerList.tsx`, `src/components/models/CharacterLoraDownloadOptions.tsx`, `src/components/models/LoraMentionDownloadOptions.tsx` — Download confirmation, multi-select repo file/version picker, and post-download LoRA/character automation options.
 
 FRONTEND: CHARACTER (`src/components/character`)
 - `src/components/character/CharacterRosterView.tsx` & `CharacterCard.tsx` — Searchable/sortable character directory grid and portrait cards.

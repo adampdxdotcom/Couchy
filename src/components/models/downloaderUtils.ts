@@ -9,12 +9,64 @@ import type {
   ModelType,
 } from '../../shared/types.ts';
 
+export const COMFY_SUBFOLDER_OPTIONS: {
+  value: ComfyModelSubfolder;
+  label: string;
+  modelType: ModelType;
+}[] = [
+  { value: 'loras', label: '/downloads/loras — LoRA / LoCon / DoRA', modelType: 'lora' },
+  {
+    value: 'checkpoints',
+    label: '/downloads/checkpoints — All-in-One Checkpoints (UNET + CLIP + VAE)',
+    modelType: 'checkpoint',
+  },
+  {
+    value: 'diffusion_models',
+    label: '/downloads/diffusion_models — Standalone UNET / DiT / GGUF',
+    modelType: 'diffusion',
+  },
+  {
+    value: 'unet',
+    label: '/downloads/unet — Standalone UNET (Legacy ComfyUI alias)',
+    modelType: 'diffusion',
+  },
+  {
+    value: 'text_encoders',
+    label: '/downloads/text_encoders — CLIP / T5 / DualCLIP Text Encoders',
+    modelType: 'clip',
+  },
+  {
+    value: 'clip',
+    label: '/downloads/clip — CLIP Text Encoders (Legacy ComfyUI alias)',
+    modelType: 'clip',
+  },
+  { value: 'vae', label: '/downloads/vae — VAE Models', modelType: 'vae' },
+  {
+    value: 'controlnet',
+    label: '/downloads/controlnet — ControlNet / IP-Adapter',
+    modelType: 'controlnet',
+  },
+  {
+    value: 'upscale_models',
+    label: '/downloads/upscale_models — Upscalers (ESRGAN / SwinIR)',
+    modelType: 'upscaler',
+  },
+  {
+    value: 'embeddings',
+    label: '/downloads/embeddings — Textual Inversion Embeddings',
+    modelType: 'embedding',
+  },
+];
+
 export interface ActivePreviewDownloadEntry {
   jobId: number;
   cardKey: string;
   item: ExternalModelSearchResult;
   targetFilename: string;
   targetSubfolder: string;
+  selectedModelType?: ModelType;
+  selectedFileSize?: number | null;
+  selectedSha256?: string | null;
   startedAt: number;
 }
 
@@ -94,6 +146,9 @@ export function applySelectedVersion(
     availability: match.availability ?? null,
     earlyAccessConfig: match.earlyAccessConfig ?? null,
     isInstalled: Boolean(match.isInstalled),
+    isPartiallyInstalled: Boolean(match.isPartiallyInstalled),
+    installedFilesCount: match.installedFilesCount,
+    totalFilesCount: match.totalFilesCount,
     installedModelId: match.installedModelId ?? null,
     installedFilename: match.installedFilename ?? null,
     installedModelType: match.installedModelType ?? null,
@@ -111,6 +166,7 @@ export function isItemBatchEligible(item: ExternalModelSearchResult): boolean {
     hasDownloadUrl &&
     !isMultiFileHfRepo &&
     !item.isInstalled &&
+    !item.isPartiallyInstalled &&
     !item.isEarlyAccessActive
   );
 }
