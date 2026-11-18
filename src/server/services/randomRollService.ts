@@ -105,7 +105,14 @@ function selectRolledCharacter() {
          AND i.is_missing = 0
          AND COALESCE(i.is_uploaded_reference, 0) = 0
        LEFT JOIN ratings r ON r.content_hash = i.content_hash
-       WHERE COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL
+       WHERE (COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL)
+         AND EXISTS (
+           SELECT 1
+           FROM character_loras cl
+           JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
+           WHERE cl.character_id = c.id
+             AND COALESCE(m.is_installed, 0) = 1
+         )
        GROUP BY c.id`
     )
     .all() as Array<{
@@ -118,7 +125,7 @@ function selectRolledCharacter() {
   }>;
 
   if (rows.length === 0) {
-    throw new Error('Add at least one character to use Random Roll.');
+    throw new Error('No characters with an installed LoRA are available for Random Roll.');
   }
 
   const picked = pickWeightedItem(
@@ -132,31 +139,31 @@ function selectRolledCharacter() {
     }))
   )!;
 
-  // Prefer an installed character LoRA attached to this character
+  // Pick among installed character LoRAs attached to this character
   const charLoras = db
     .prepare(
       `SELECT
          cl.lora_name,
          cl.trigger_word,
-         COALESCE(m.is_installed, 0) AS is_installed,
          m.base_model,
          COALESCE(m.default_model_strength, 1.0) AS default_model_strength,
          COALESCE(m.default_clip_strength, 1.0) AS default_clip_strength
        FROM character_loras cl
-       LEFT JOIN models m ON LOWER(m.filename) = LOWER(cl.lora_name)
+       JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
        WHERE cl.character_id = ?
-       ORDER BY COALESCE(m.is_installed, 0) DESC, cl.id ASC`
+         AND COALESCE(m.is_installed, 0) = 1
+       GROUP BY cl.id`
     )
     .all(picked.id) as Array<{
     lora_name: string;
     trigger_word: string;
-    is_installed: number;
     base_model: string | null;
     default_model_strength: number;
     default_clip_strength: number;
   }>;
 
-  const installedCharLora = charLoras.find((l) => Boolean(l.is_installed)) || null;
+  const installedCharLora =
+    charLoras.length > 0 ? charLoras[Math.floor(Math.random() * charLoras.length)] : null;
   return { character: picked, charLora: installedCharLora };
 }
 
@@ -178,6 +185,7 @@ function selectRolledCheckpoint(preferredBaseGroup: string, fallbackCheckpoint: 
        WHERE m.model_type IN ('checkpoint', 'diffusion')
          AND COALESCE(m.is_installed, 0) = 1
          AND COALESCE(m.is_hidden, 0) = 0
+         AND COALESCE(m.mention_enabled, 0) = 1
          AND (COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL)
        GROUP BY m.id`
     )
@@ -240,9 +248,11 @@ function selectRolledStyleLoras(baseGroup: string): Array<{
        WHERE m.model_type = 'lora'
          AND COALESCE(m.is_installed, 0) = 1
          AND COALESCE(m.is_hidden, 0) = 0
+         AND COALESCE(m.mention_enabled, 0) = 1
          AND LOWER(COALESCE(m.lora_category, 'unclassified')) != 'character'
          AND NOT EXISTS (
-           SELECT 1 FROM character_loras cl WHERE LOWER(cl.lora_name) = LOWER(m.filename)
+           SELECT 1 FROM character_loras cl
+           WHERE cl.model_id = m.id OR LOWER(cl.lora_name) = LOWER(m.filename)
          )
          AND (COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL)
        GROUP BY m.id`
