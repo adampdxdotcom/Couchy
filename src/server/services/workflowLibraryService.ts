@@ -56,12 +56,14 @@ export function listWorkflowLibraryItems(): WorkflowLibraryItem[] {
   return rows.map((r) => {
     let defaultMegapixels: number | null = null;
     let defaultAspectRatio: string | null = null;
+    let defaultSteps: number | null = null;
     let defaultCheckpoint: string | null = null;
     if (r.has_api || r.has_visual) {
       try {
         const wfDefaults = getWorkflowDefaults(Number(r.id));
         defaultMegapixels = wfDefaults.defaultMegapixels ?? null;
         defaultAspectRatio = wfDefaults.defaultAspectRatio ?? null;
+        defaultSteps = wfDefaults.defaultSteps ?? null;
         defaultCheckpoint = wfDefaults.defaultCheckpoint ?? null;
       } catch {
         // ignore unparseable workflow defaults
@@ -80,6 +82,7 @@ export function listWorkflowLibraryItems(): WorkflowLibraryItem[] {
       characters: charsByWf.get(r.id) || [],
       defaultMegapixels,
       defaultAspectRatio,
+      defaultSteps,
       defaultCheckpoint,
       createdAt: r.created_at,
       updatedAt: r.updated_at,

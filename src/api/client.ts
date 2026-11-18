@@ -680,6 +680,7 @@ export const api = {
     themeTitle?: string;
     aspectRatio: string;
     megapixels?: number;
+    steps?: number;
     prompts: string[];
     triggerWord?: string;
     negativePrompt: string;

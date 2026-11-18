@@ -89,11 +89,17 @@ export function getWorkflowDefaults(workflowId: number): {
   defaultCheckpoint: string | null;
   defaultMegapixels: number | null;
   defaultAspectRatio: string | null;
+  defaultSteps: number | null;
 } {
   const wfRow = db.prepare('SELECT * FROM workflows WHERE id = ?').get(workflowId) as any;
   const apiGraph = getExecutableApiGraph(wfRow);
   if (!apiGraph) {
-    return { defaultCheckpoint: null, defaultMegapixels: null, defaultAspectRatio: null };
+    return {
+      defaultCheckpoint: null,
+      defaultMegapixels: null,
+      defaultAspectRatio: null,
+      defaultSteps: null,
+    };
   }
 
   let defaultCheckpoint: string | null = null;
@@ -131,7 +137,21 @@ export function getWorkflowDefaults(workflowId: number): {
     }
   }
 
-  return { defaultCheckpoint, defaultMegapixels, defaultAspectRatio };
+  let defaultSteps: number | null = null;
+  const samplerNode =
+    apiGraph['30_3']?.inputs
+      ? apiGraph['30_3']
+      : Object.values(apiGraph).find(
+          (n: any) => n && typeof n === 'object' && String(n.class_type || '').includes('KSampler')
+        );
+  if (samplerNode?.inputs) {
+    const rawSteps = Number(samplerNode.inputs.steps);
+    if (Number.isFinite(rawSteps) && rawSteps > 0) {
+      defaultSteps = Math.round(rawSteps);
+    }
+  }
+
+  return { defaultCheckpoint, defaultMegapixels, defaultAspectRatio, defaultSteps };
 }
 
 /**
@@ -234,6 +254,7 @@ export function compileWorkflowForGeneration(params: {
   seed: string | number;
   aspectRatio: string;
   megapixels: number;
+  steps?: number;
   width: number;
   height: number;
   loras: GenerationLoraSelection[];
@@ -284,6 +305,12 @@ export function compileWorkflowForGeneration(params: {
   if (samplerNode?.inputs) {
     const seedField = typeof samplerNode.inputs.noise_seed === 'number' ? 'noise_seed' : 'seed';
     samplerNode.inputs[seedField] = numericSeed;
+    if (params.steps !== undefined && params.steps !== null) {
+      const requestedSteps = Number(params.steps);
+      if (Number.isFinite(requestedSteps) && requestedSteps > 0) {
+        samplerNode.inputs.steps = Math.max(1, Math.min(100, Math.round(requestedSteps)));
+      }
+    }
   }
 
   // 4. Resolution Selector (#49 capped at 3.0 MP) & Inline Upscale Switch (#51/#52 for > 3.0 MP)

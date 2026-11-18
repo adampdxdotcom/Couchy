@@ -1,29 +1,41 @@
 import React from 'react';
 import { ASPECT_RATIO_PRESETS } from '../../shared/utils.ts';
-import { BATCH_COUNT_OPTIONS, snapToHalfMp } from './quickGenUtils.ts';
+import {
+  BATCH_COUNT_OPTIONS,
+  MAX_QUICK_GEN_STEPS,
+  MIN_QUICK_GEN_STEPS,
+  clampQuickGenSteps,
+  snapToHalfMp,
+} from './quickGenUtils.ts';
 
 interface QuickGenSettingsPopoverProps {
   aspectRatio: string;
   megapixels: number;
   workflowDefaultMp: number;
+  steps: number;
+  workflowDefaultSteps: number;
   batchCount: number;
   agentEnabled?: boolean;
   onChangeAspectRatio: (ratio: string) => void;
   onChangeMegapixels: (mp: number) => void;
+  onChangeSteps: (steps: number) => void;
   onChangeBatchCount: (count: number) => void;
 }
 
 /**
- * Popover controls for Aspect Ratio, Megapixels (with inline >3MP upscale indicator), and Batch Count.
+ * Popover controls for Aspect Ratio, Megapixels (with inline >3MP upscale indicator), Steps, and Batch Count.
  */
 export const QuickGenSettingsPopover: React.FC<QuickGenSettingsPopoverProps> = ({
   aspectRatio,
   megapixels,
   workflowDefaultMp,
+  steps,
+  workflowDefaultSteps,
   batchCount,
   agentEnabled = false,
   onChangeAspectRatio,
   onChangeMegapixels,
+  onChangeSteps,
   onChangeBatchCount,
 }) => {
   return (
@@ -88,6 +100,37 @@ export const QuickGenSettingsPopover: React.FC<QuickGenSettingsPopoverProps> = (
             Default: {workflowDefaultMp.toFixed(1)} MP
           </span>
           <span>10.0 MP</span>
+        </div>
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <span className="text-[11px] font-medium text-zinc-400">Steps</span>
+          <span className="font-mono font-semibold text-indigo-300 tabular-nums">
+            {steps} steps
+          </span>
+        </div>
+        <input
+          type="range"
+          min={MIN_QUICK_GEN_STEPS}
+          max={MAX_QUICK_GEN_STEPS}
+          step={1}
+          value={steps}
+          onChange={(e) =>
+            onChangeSteps(clampQuickGenSteps(parseInt(e.target.value, 10), workflowDefaultSteps))
+          }
+          className="w-full accent-indigo-500 cursor-pointer"
+        />
+        <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500 mt-0.5">
+          <span>{MIN_QUICK_GEN_STEPS}</span>
+          <span
+            className={
+              steps === workflowDefaultSteps ? 'text-indigo-400' : 'text-zinc-500'
+            }
+          >
+            Default: {workflowDefaultSteps}
+          </span>
+          <span>{MAX_QUICK_GEN_STEPS}</span>
         </div>
       </div>
 

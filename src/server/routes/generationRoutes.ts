@@ -497,6 +497,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
       themeTitle,
       aspectRatio,
       megapixels,
+      steps,
       prompts,
       triggerWord,
       negativePrompt,
@@ -541,6 +542,10 @@ generationRouter.post('/submit-batch', async (req, res) => {
       0.5,
       Math.min(10.0, explicitMp ?? wfDefaultMp ?? 3.0)
     );
+    const resolvedSteps =
+      steps !== undefined && steps !== null && Number.isFinite(Number(steps)) && Number(steps) > 0
+        ? Math.max(1, Math.min(100, Math.round(Number(steps))))
+        : undefined;
     const { width: computedWidth, height: computedHeight } = computeDimensionsFromMegapixels(
       resolvedAr,
       resolvedMp
@@ -668,6 +673,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
           seed: item.seed,
           aspectRatio: resolvedAr,
           megapixels: resolvedMp,
+          steps: resolvedSteps,
           width: computedWidth,
           height: computedHeight,
           loras: loraSelections,

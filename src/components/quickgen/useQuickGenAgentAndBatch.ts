@@ -34,6 +34,8 @@ interface UseQuickGenAgentAndBatchParams {
   resolvedWorkflow: WorkflowLibraryItem | null | undefined;
   aspectRatio: string;
   megapixels: number;
+  steps: number;
+  workflowDefaultSteps: number;
   batchCount: number;
   activeSeriesId: number | null;
   branchFromImageId: number | null;
@@ -71,6 +73,8 @@ export function useQuickGenAgentAndBatch({
   resolvedWorkflow,
   aspectRatio,
   megapixels,
+  steps,
+  workflowDefaultSteps,
   batchCount,
   activeSeriesId,
   branchFromImageId,
@@ -278,6 +282,7 @@ export function useQuickGenAgentAndBatch({
         themeTitle: (cleanPrompt || promptsToRun[0] || '').slice(0, 80),
         aspectRatio,
         megapixels,
+        steps: steps !== workflowDefaultSteps ? steps : undefined,
         prompts: promptsToRun,
         triggerWord,
         negativePrompt: '',

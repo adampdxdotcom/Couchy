@@ -400,10 +400,13 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
           aspectRatio={submitState.aspectRatio}
           megapixels={submitState.megapixels}
           workflowDefaultMp={submitState.workflowDefaultMp}
+          steps={submitState.steps}
+          workflowDefaultSteps={submitState.workflowDefaultSteps}
           batchCount={submitState.batchCount}
           agentEnabled={submitState.agentEnabled}
           onChangeAspectRatio={submitState.setAspectRatio}
           onChangeMegapixels={submitState.setMegapixels}
+          onChangeSteps={submitState.setSteps}
           onChangeBatchCount={submitState.setBatchCount}
         />
       )}
@@ -739,6 +742,11 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
               >
                 {formattedMpLabel}
               </span>
+              {submitState.steps !== submitState.workflowDefaultSteps && (
+                <span className="font-mono text-emerald-300 shrink-0 tabular-nums">
+                  {submitState.steps} steps
+                </span>
+              )}
               <span className="font-mono text-zinc-100 shrink-0">
                 x{submitState.batchCount}
               </span>

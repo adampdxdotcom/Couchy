@@ -192,6 +192,16 @@ export function snapToHalfMp(val: number | null | undefined, fallback = 3.0): nu
   return Math.max(0.5, Math.min(10.0, Math.round(n * 2) / 2));
 }
 
+export const MIN_QUICK_GEN_STEPS = 4;
+export const MAX_QUICK_GEN_STEPS = 12;
+
+/** Clamps any step count to the Quick Gen 4–12 integer range. */
+export function clampQuickGenSteps(val: number | null | undefined, fallback = 10): number {
+  const n = Number(val);
+  const resolved = Number.isFinite(n) && n > 0 ? Math.round(n) : Math.round(fallback);
+  return Math.max(MIN_QUICK_GEN_STEPS, Math.min(MAX_QUICK_GEN_STEPS, resolved));
+}
+
 /**
  * Downscales an uploaded/dropped image file in the browser so its pixel area is at most ~1MP,
  * preserving original aspect ratio and returning a compact JPEG data URL + original dimensions.

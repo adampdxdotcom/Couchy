@@ -8,7 +8,7 @@ import type {
   WorkflowLibraryItem,
 } from '../../shared/types.ts';
 import { resolveDefaultWorkflow } from '../../shared/utils.ts';
-import { snapToHalfMp, type QuickGenPrefill } from './quickGenUtils.ts';
+import { clampQuickGenSteps, snapToHalfMp, type QuickGenPrefill } from './quickGenUtils.ts';
 import { useQuickGenAttachments } from './useQuickGenAttachments.ts';
 import { useQuickGenMediaImport } from './useQuickGenMediaImport.ts';
 import { useQuickGenAgentAndBatch } from './useQuickGenAgentAndBatch.ts';
@@ -52,6 +52,7 @@ export function useQuickGenSubmit({
 
   const [aspectRatio, setAspectRatio] = useState('2:3 (Portrait Photo)');
   const [megapixels, setMegapixels] = useState<number>(3.0);
+  const [steps, setSteps] = useState<number>(10);
   const [batchCount, setBatchCount] = useState<number>(1);
   const [attachedCharacter, setAttachedCharacter] = useState<CharacterProfile | null>(null);
   const [characterLoraStrength, setCharacterLoraStrength] = useState<number>(1.0);
@@ -103,6 +104,10 @@ export function useQuickGenSubmit({
     () => resolvedWorkflow?.defaultAspectRatio || '2:3 (Portrait Photo)',
     [resolvedWorkflow?.defaultAspectRatio]
   );
+  const workflowDefaultSteps = useMemo(
+    () => clampQuickGenSteps(resolvedWorkflow?.defaultSteps, 10),
+    [resolvedWorkflow?.defaultSteps]
+  );
 
   useEffect(() => {
     setMegapixels(workflowDefaultMp);
@@ -111,6 +116,10 @@ export function useQuickGenSubmit({
   useEffect(() => {
     setAspectRatio(workflowDefaultAr);
   }, [resolvedWorkflow?.id, workflowDefaultAr]);
+
+  useEffect(() => {
+    setSteps(workflowDefaultSteps);
+  }, [resolvedWorkflow?.id, workflowDefaultSteps]);
 
   const isQuickGenEmpty =
     prompt.trim().length === 0 &&
@@ -142,6 +151,7 @@ export function useQuickGenSubmit({
     setRemovedLoraKeys(new Set());
     setAspectRatio(workflowDefaultAr);
     setMegapixels(workflowDefaultMp);
+    setSteps(workflowDefaultSteps);
     setBatchCount(1);
     setShowSettingsMenu(false);
     setIsPromptFocused(false);
@@ -231,6 +241,8 @@ export function useQuickGenSubmit({
     resolvedWorkflow,
     aspectRatio,
     megapixels,
+    steps,
+    workflowDefaultSteps,
     batchCount,
     activeSeriesId,
     branchFromImageId,
@@ -268,6 +280,8 @@ export function useQuickGenSubmit({
     setAspectRatio,
     megapixels,
     setMegapixels,
+    steps,
+    setSteps,
     batchCount,
     setBatchCount,
     attachedCharacter,
@@ -298,6 +312,7 @@ export function useQuickGenSubmit({
     isMatchingFace: mediaImport.isMatchingFace,
     toggleModelMatch: mediaImport.toggleModelMatch,
     workflowDefaultMp,
+    workflowDefaultSteps,
     handleInterrogateImageFile: mediaImport.handleInterrogateImageFile,
     handleImportCivitaiUrl: mediaImport.handleImportCivitaiUrl,
     applyPreset: attachments.applyPreset,

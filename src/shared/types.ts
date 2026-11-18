@@ -475,6 +475,7 @@ export interface WorkflowLibraryItem {
   characters: { id: number; name: string; roleLabel: string }[];
   defaultMegapixels?: number | null;
   defaultAspectRatio?: string | null;
+  defaultSteps?: number | null;
   defaultCheckpoint?: string | null;
   createdAt: string;
   updatedAt: string;
