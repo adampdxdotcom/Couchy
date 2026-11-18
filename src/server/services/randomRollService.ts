@@ -283,8 +283,9 @@ function selectRolledStyleLoras(baseGroup: string): Array<{
   modelStrength: number;
   clipStrength: number;
 }> {
+  // 10% 0 style LoRAs (char LoRA only), 45% 1 style LoRA (2 total), 45% 2 style LoRAs (3 total)
   const roll = Math.random();
-  const targetCount = roll < 0.4 ? 0 : roll < 0.85 ? 1 : 2;
+  const targetCount = roll < 0.1 ? 0 : roll < 0.55 ? 1 : 2;
   if (targetCount === 0) return [];
 
   const rows = db
