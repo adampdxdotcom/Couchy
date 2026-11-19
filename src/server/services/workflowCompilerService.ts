@@ -370,6 +370,163 @@ export function injectLorasIntoGraph(
   return modified;
 }
 
+export interface EditableGenerationParams {
+  checkpointName?: string | null;
+  vaeName?: string | null;
+  seed?: string | number | null;
+  steps?: number | null;
+  cfg?: number | null;
+  sampler?: string | null;
+  scheduler?: string | null;
+  denoise?: number | null;
+  batchSize?: number | null;
+}
+
+/**
+ * Injects edited generation parameters (Checkpoint, VAE, Seed, Steps, CFG,
+ * Sampler, Scheduler, Denoise, Batch Size) into a reproduced workflow graph.
+ */
+export function injectGenerationParamsIntoGraph(
+  graph: Record<string, any>,
+  params: EditableGenerationParams
+): boolean {
+  let modified = false;
+
+  const modelPathLookup = db.prepare(
+    `SELECT comfyui_path, filename FROM models
+     WHERE LOWER(filename) = LOWER(?) OR LOWER(comfyui_path) = LOWER(?)
+     LIMIT 1`
+  );
+
+  // 1. Checkpoint / UNET
+  if (typeof params.checkpointName === 'string' && params.checkpointName.trim()) {
+    const rawCkpt = params.checkpointName.trim();
+    const row = modelPathLookup.get(rawCkpt, rawCkpt) as
+      | { comfyui_path: string | null; filename: string | null }
+      | undefined;
+    const resolvedCkpt = row?.comfyui_path || row?.filename || rawCkpt;
+
+    const ckptNode =
+      graph['30_10']?.inputs
+        ? graph['30_10']
+        : Object.values(graph).find(
+            (n: any) =>
+              n &&
+              typeof n === 'object' &&
+              (String(n.class_type || '').includes('UNETLoader') ||
+                String(n.class_type || '').includes('CheckpointLoader'))
+          );
+    if (ckptNode?.inputs) {
+      const ckptField = 'unet_name' in ckptNode.inputs ? 'unet_name' : 'ckpt_name';
+      ckptNode.inputs[ckptField] = resolvedCkpt;
+      modified = true;
+    }
+  }
+
+  // 2. VAE
+  if (typeof params.vaeName === 'string' && params.vaeName.trim()) {
+    const rawVae = params.vaeName.trim();
+    if (rawVae.toLowerCase() !== 'baked / default') {
+      const row = modelPathLookup.get(rawVae, rawVae) as
+        | { comfyui_path: string | null; filename: string | null }
+        | undefined;
+      const resolvedVae = row?.comfyui_path || row?.filename || rawVae;
+
+      const vaeNode = Object.values(graph).find(
+        (n: any) =>
+          n &&
+          typeof n === 'object' &&
+          (String(n.class_type || '').includes('VAELoader') ||
+            (n.inputs && 'vae_name' in n.inputs))
+      ) as Record<string, any> | undefined;
+
+      if (vaeNode?.inputs && 'vae_name' in vaeNode.inputs) {
+        vaeNode.inputs.vae_name = resolvedVae;
+        modified = true;
+      }
+    }
+  }
+
+  // 3. KSampler parameters (Seed, Steps, CFG, Sampler, Scheduler, Denoise)
+  const samplerNode =
+    graph['30_3']?.inputs
+      ? graph['30_3']
+      : Object.values(graph).find(
+          (n: any) => n && typeof n === 'object' && String(n.class_type || '').includes('KSampler')
+        );
+
+  if (samplerNode?.inputs) {
+    const sInputs = samplerNode.inputs;
+
+    if (params.seed !== undefined && params.seed !== null && String(params.seed).trim() !== '') {
+      const parsedSeed = Number(String(params.seed).trim());
+      if (Number.isFinite(parsedSeed) && parsedSeed >= 0) {
+        const seedField = 'noise_seed' in sInputs ? 'noise_seed' : 'seed';
+        sInputs[seedField] = Math.floor(parsedSeed);
+        modified = true;
+      }
+    }
+
+    if (params.steps !== undefined && params.steps !== null) {
+      const parsedSteps = Number(params.steps);
+      if (Number.isFinite(parsedSteps) && parsedSteps > 0) {
+        sInputs.steps = Math.max(1, Math.min(200, Math.round(parsedSteps)));
+        modified = true;
+      }
+    }
+
+    if (params.cfg !== undefined && params.cfg !== null) {
+      const parsedCfg = Number(params.cfg);
+      if (Number.isFinite(parsedCfg) && parsedCfg >= 0) {
+        sInputs.cfg = Number(parsedCfg.toFixed(2));
+        modified = true;
+      }
+    }
+
+    if (typeof params.sampler === 'string' && params.sampler.trim()) {
+      if ('sampler_name' in sInputs) {
+        sInputs.sampler_name = params.sampler.trim();
+        modified = true;
+      } else if ('sampler' in sInputs) {
+        sInputs.sampler = params.sampler.trim();
+        modified = true;
+      }
+    }
+
+    if (typeof params.scheduler === 'string' && params.scheduler.trim()) {
+      if ('scheduler' in sInputs) {
+        sInputs.scheduler = params.scheduler.trim();
+        modified = true;
+      }
+    }
+
+    if (params.denoise !== undefined && params.denoise !== null) {
+      const parsedDenoise = Number(params.denoise);
+      if (Number.isFinite(parsedDenoise) && parsedDenoise >= 0) {
+        sInputs.denoise = Math.max(0, Math.min(1, Number(parsedDenoise.toFixed(3))));
+        modified = true;
+      }
+    }
+  }
+
+  // 4. Batch Size (EmptyLatentImage or ResolutionSelector)
+  if (params.batchSize !== undefined && params.batchSize !== null) {
+    const parsedBatch = Number(params.batchSize);
+    if (Number.isFinite(parsedBatch) && parsedBatch >= 1) {
+      const clampedBatch = Math.max(1, Math.min(16, Math.round(parsedBatch)));
+      for (const node of Object.values(graph)) {
+        if (!node || typeof node !== 'object' || !node.inputs) continue;
+        if ('batch_size' in node.inputs) {
+          node.inputs.batch_size = clampedBatch;
+          modified = true;
+        }
+      }
+    }
+  }
+
+  return modified;
+}
+
 /**
  * Deterministic compiler for the primary Krea2_turbo System Workflow (`primary_workflow.json`):
  * - Node #30_19: User Prompt value

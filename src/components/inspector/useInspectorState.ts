@@ -11,6 +11,32 @@ export interface InspectorDetailData {
   apiWorkflowJson: string | null;
 }
 
+export interface InspectorEditableGenParams {
+  checkpointName: string;
+  vaeName: string;
+  seed: string;
+  steps: string;
+  cfg: string;
+  sampler: string;
+  scheduler: string;
+  denoise: string;
+  batchSize: string;
+}
+
+export function buildEditableGenParamsFromImage(img: ImageRecord): InspectorEditableGenParams {
+  return {
+    checkpointName: img.checkpointName || '',
+    vaeName: img.vaeName || '',
+    seed: img.seed !== null && img.seed !== undefined ? String(img.seed) : '',
+    steps: img.steps !== null && img.steps !== undefined ? String(img.steps) : '',
+    cfg: img.cfg !== null && img.cfg !== undefined ? String(img.cfg) : '',
+    sampler: img.sampler || '',
+    scheduler: img.scheduler || '',
+    denoise: img.denoise !== null && img.denoise !== undefined ? String(img.denoise) : '1',
+    batchSize: img.batchSize !== null && img.batchSize !== undefined ? String(img.batchSize) : '1',
+  };
+}
+
 interface UseInspectorStateParams {
   image: ImageRecord;
   allImages: ImageRecord[];
@@ -69,6 +95,9 @@ export function useInspectorState({
   const [detailData, setDetailData] = useState<InspectorDetailData | null>(null);
   const [editablePositivePrompt, setEditablePositivePrompt] = useState(image.positivePrompt || '');
   const [editableLoras, setEditableLoras] = useState<ImageLoraRecord[]>(image.loras || []);
+  const [editableGenParams, setEditableGenParams] = useState<InspectorEditableGenParams>(() =>
+    buildEditableGenParamsFromImage(image)
+  );
   const [notes, setNotes] = useState(image.notes);
 
   const [isRunningWorkflow, setIsRunningWorkflow] = useState(false);
@@ -132,6 +161,7 @@ export function useInspectorState({
     setSlotASeriesContextId(image.seriesId ?? null);
     setEditablePositivePrompt(image.positivePrompt || '');
     setEditableLoras(image.loras || []);
+    setEditableGenParams(buildEditableGenParamsFromImage(image));
     setShowSeriesMiniGallery(false);
     setIsSplitMode(false);
     setCompareSelection(null);
@@ -155,6 +185,7 @@ export function useInspectorState({
           });
           setEditablePositivePrompt(res.image.positivePrompt || '');
           setEditableLoras(res.image.loras || []);
+          setEditableGenParams(buildEditableGenParamsFromImage(res.image));
           setNotes(res.image.notes || '');
           const imgMp =
             res.image.width > 0 && res.image.height > 0
@@ -515,6 +546,11 @@ export function useInspectorState({
     setReproStatusMsg(null);
     setReproStatusIsError(false);
     try {
+      const parsedSteps = Number(editableGenParams.steps);
+      const parsedCfg = Number(editableGenParams.cfg);
+      const parsedDenoise = Number(editableGenParams.denoise);
+      const parsedBatch = Number(editableGenParams.batchSize);
+
       const res = await api.submitReproduction({
         imageId: activeImage.id,
         workflowId: activeImage.workflowId ?? undefined,
@@ -524,6 +560,29 @@ export function useInspectorState({
           modelStrength: Number(l.modelStrength ?? 1.0),
           clipStrength: Number(l.clipStrength ?? l.modelStrength ?? 1.0),
         })),
+        generationParams: {
+          checkpointName: editableGenParams.checkpointName.trim() || null,
+          vaeName: editableGenParams.vaeName.trim() || null,
+          seed: editableGenParams.seed.trim() || null,
+          steps:
+            editableGenParams.steps.trim() !== '' && Number.isFinite(parsedSteps)
+              ? parsedSteps
+              : null,
+          cfg:
+            editableGenParams.cfg.trim() !== '' && Number.isFinite(parsedCfg)
+              ? parsedCfg
+              : null,
+          sampler: editableGenParams.sampler.trim() || null,
+          scheduler: editableGenParams.scheduler.trim() || null,
+          denoise:
+            editableGenParams.denoise.trim() !== '' && Number.isFinite(parsedDenoise)
+              ? parsedDenoise
+              : null,
+          batchSize:
+            editableGenParams.batchSize.trim() !== '' && Number.isFinite(parsedBatch)
+              ? parsedBatch
+              : null,
+        },
       });
       setReproStatusIsError(false);
       setReproStatusMsg(`Submitted to ComfyUI (Prompt ID: ${res.job.comfyui_prompt_id})`);
@@ -627,6 +686,8 @@ export function useInspectorState({
     setEditablePositivePrompt,
     editableLoras,
     setEditableLoras,
+    editableGenParams,
+    setEditableGenParams,
     notes,
     setNotes,
     isRunningWorkflow,

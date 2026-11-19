@@ -69,12 +69,14 @@ comfyuiRouter.post('/reproduce/validate', async (req, res) => {
  */
 comfyuiRouter.post('/reproduce/submit', async (req, res) => {
   try {
-    const { imageId, workflowId, positivePrompt, loras } = req.body || {};
+    const { imageId, workflowId, positivePrompt, loras, generationParams } = req.body || {};
     const job = await submitWorkflowReproduction({
       imageId: imageId ? Number(imageId) : undefined,
       workflowId: workflowId ? Number(workflowId) : undefined,
       positivePrompt: typeof positivePrompt === 'string' ? positivePrompt : undefined,
       loras: Array.isArray(loras) ? loras : undefined,
+      generationParams:
+        generationParams && typeof generationParams === 'object' ? generationParams : undefined,
     });
     res.json({ job });
   } catch (err: any) {

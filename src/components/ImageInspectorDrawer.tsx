@@ -124,6 +124,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     setEditablePositivePrompt,
     editableLoras,
     setEditableLoras,
+    editableGenParams,
+    setEditableGenParams,
     notes,
     setNotes,
     isRunningWorkflow,
@@ -495,7 +497,10 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 activeImage={activeImage}
                 editableLoras={editableLoras}
                 onChangeEditableLoras={setEditableLoras}
+                editableGenParams={editableGenParams}
+                onChangeEditableGenParams={setEditableGenParams}
                 loras={loras}
+                models={models}
                 pillTypeSettings={pillTypeSettings}
                 onFilterByLora={onFilterByLora}
                 onClose={onClose}

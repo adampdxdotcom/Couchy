@@ -17,8 +17,10 @@ import {
 } from './comfyuiLiveMonitor.ts';
 import {
   compileUpscaleWorkflow,
+  injectGenerationParamsIntoGraph,
   injectLorasIntoGraph,
   injectPositivePromptIntoGraph,
+  type EditableGenerationParams,
 } from './workflowCompilerService.ts';
 import { attachUpscaledImageToSeries } from './seriesService.ts';
 import type {
@@ -463,6 +465,7 @@ export async function submitWorkflowReproduction(params: {
   workflowId?: number;
   positivePrompt?: string;
   loras?: Array<{ loraName: string; modelStrength: number; clipStrength?: number }>;
+  generationParams?: EditableGenerationParams;
 }): Promise<any> {
   const validation = await validateWorkflowReproduction({
     imageId: params.imageId,
@@ -475,7 +478,7 @@ export async function submitWorkflowReproduction(params: {
     throw new Error('ComfyUI is offline. Verify connection settings before submitting.');
   }
 
-  // If the caller provided an edited LoRA list, ignore missing-model checks for removed LoRAs
+  // If the caller provided an edited LoRA list or overridden checkpoint/VAE, ignore missing-model checks for replaced models
   const activeEditedLoraKeys = Array.isArray(params.loras)
     ? new Set(
         params.loras
@@ -483,12 +486,20 @@ export async function submitWorkflowReproduction(params: {
           .filter(Boolean)
       )
     : null;
+  const hasCheckpointOverride = Boolean(params.generationParams?.checkpointName?.trim());
+  const hasVaeOverride = Boolean(params.generationParams?.vaeName?.trim());
 
   const missingDeps = validation.requiredModels
     .filter((m) => {
       if (m.status !== 'missing') return false;
       if (activeEditedLoraKeys && m.modelType === 'lora') {
         return activeEditedLoraKeys.has(m.name.trim().toLowerCase());
+      }
+      if (hasCheckpointOverride && (m.modelType === 'checkpoint' || m.modelType === 'diffusion')) {
+        return false;
+      }
+      if (hasVaeOverride && m.modelType === 'vae') {
+        return false;
       }
       return true;
     })
@@ -498,7 +509,7 @@ export async function submitWorkflowReproduction(params: {
     throw new Error(`Cannot run workflow with missing models: ${missingDeps.join(', ')}`);
   }
 
-  // Clone the API prompt payload and inject edited positivePrompt / loras if provided
+  // Clone the API prompt payload and inject edited positivePrompt / loras / generationParams if provided
   const promptPayload: Record<string, any> = JSON.parse(
     JSON.stringify(validation.apiPromptPayload)
   );
@@ -516,6 +527,10 @@ export async function submitWorkflowReproduction(params: {
 
   if (Array.isArray(params.loras)) {
     injectLorasIntoGraph(promptPayload, params.loras);
+  }
+
+  if (params.generationParams && typeof params.generationParams === 'object') {
+    injectGenerationParamsIntoGraph(promptPayload, params.generationParams);
   }
 
   const resolvedWorkflowId = validation.workflowId || params.workflowId || 0;

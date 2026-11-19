@@ -545,6 +545,17 @@ export const api = {
     workflowId?: number;
     positivePrompt?: string;
     loras?: Array<{ loraName: string; modelStrength: number; clipStrength?: number }>;
+    generationParams?: {
+      checkpointName?: string | null;
+      vaeName?: string | null;
+      seed?: string | number | null;
+      steps?: number | null;
+      cfg?: number | null;
+      sampler?: string | null;
+      scheduler?: string | null;
+      denoise?: number | null;
+      batchSize?: number | null;
+    };
   }) =>
     requestJson<{ job: ReproductionJobRecord }>('/api/reproduce/submit', {
       method: 'POST',

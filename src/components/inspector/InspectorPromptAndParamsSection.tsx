@@ -10,14 +10,59 @@ import type {
   ImageRecord,
   LoraCategory,
   LoraExplorerItem,
+  ModelInventoryItem,
   PillTypeSettings,
 } from '../../shared/types.ts';
 import { copyTextToClipboard, getModelAvailabilityInfo } from '../../shared/utils.ts';
-import { getCleanLoraLabel, MAX_SYSTEM_LORAS, normalizeLoraKey } from '../quickgen/quickGenUtils.ts';
+import {
+  getCleanLoraLabel,
+  getCleanModelLabel,
+  MAX_SYSTEM_LORAS,
+  normalizeLoraKey,
+} from '../quickgen/quickGenUtils.ts';
+import {
+  buildEditableGenParamsFromImage,
+  type InspectorEditableGenParams,
+} from './useInspectorState.ts';
 
 const MIN_STRENGTH = -10.0;
 const MAX_STRENGTH = 10.0;
 const STEP_STRENGTH = 0.05;
+
+const SAMPLER_OPTIONS = [
+  'euler',
+  'euler_ancestral',
+  'heun',
+  'dpm_2',
+  'dpm_2_ancestral',
+  'lms',
+  'dpm_fast',
+  'dpm_adaptive',
+  'dpmpp_2s_ancestral',
+  'dpmpp_sde',
+  'dpmpp_sde_gpu',
+  'dpmpp_2m',
+  'dpmpp_2m_sde',
+  'dpmpp_2m_sde_gpu',
+  'dpmpp_3m_sde',
+  'dpmpp_3m_sde_gpu',
+  'ddim',
+  'uni_pc',
+  'uni_pc_bh2',
+  'lcm',
+];
+
+const SCHEDULER_OPTIONS = [
+  'simple',
+  'normal',
+  'karras',
+  'exponential',
+  'sgm_uniform',
+  'ddim_uniform',
+  'beta',
+  'linear_quadratic',
+  'kl_optimal',
+];
 
 function clampStrength(value: number): number {
   return Math.max(MIN_STRENGTH, Math.min(MAX_STRENGTH, Math.round(value * 100) / 100));
@@ -65,6 +110,23 @@ function areLorasModified(current: ImageLoraRecord[], original: ImageLoraRecord[
     }
   }
   return false;
+}
+
+function areGenParamsModified(
+  current: InspectorEditableGenParams,
+  original: InspectorEditableGenParams
+): boolean {
+  return (
+    current.checkpointName.trim() !== original.checkpointName.trim() ||
+    current.vaeName.trim() !== original.vaeName.trim() ||
+    current.seed.trim() !== original.seed.trim() ||
+    current.steps.trim() !== original.steps.trim() ||
+    current.cfg.trim() !== original.cfg.trim() ||
+    current.sampler.trim() !== original.sampler.trim() ||
+    current.scheduler.trim() !== original.scheduler.trim() ||
+    current.denoise.trim() !== original.denoise.trim() ||
+    current.batchSize.trim() !== original.batchSize.trim()
+  );
 }
 
 interface InspectorPositivePromptSectionProps {
@@ -164,14 +226,17 @@ interface InspectorPromptAndParamsSectionProps {
   activeImage: ImageRecord;
   editableLoras: ImageLoraRecord[];
   onChangeEditableLoras: React.Dispatch<React.SetStateAction<ImageLoraRecord[]>>;
+  editableGenParams: InspectorEditableGenParams;
+  onChangeEditableGenParams: React.Dispatch<React.SetStateAction<InspectorEditableGenParams>>;
   loras?: LoraExplorerItem[];
+  models?: ModelInventoryItem[];
   pillTypeSettings?: PillTypeSettings;
   onFilterByLora: (loraFilename: string) => void;
   onClose: () => void;
 }
 
 /**
- * Extracted generation parameters and editable LoRA chain applied when Run Workflow is submitted.
+ * Editable generation parameters (2x3 grid) and editable LoRA chain applied when Run Workflow is submitted.
  */
 export const InspectorPromptAndParamsSection: React.FC<
   InspectorPromptAndParamsSectionProps
@@ -179,7 +244,10 @@ export const InspectorPromptAndParamsSection: React.FC<
   activeImage,
   editableLoras,
   onChangeEditableLoras,
+  editableGenParams,
+  onChangeEditableGenParams,
   loras = [],
+  models = [],
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   onFilterByLora,
   onClose,
@@ -235,6 +303,53 @@ export const InspectorPromptAndParamsSection: React.FC<
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, [showAddPicker]);
 
+  const checkpointOptions = useMemo(() => {
+    const installed = models.filter(
+      (m) => (m.modelType === 'checkpoint' || m.modelType === 'diffusion') && m.isInstalled
+    );
+    const list: Array<{ value: string; label: string }> = installed.map((m) => ({
+      value: m.filename,
+      label: getCleanModelLabel(m.name || m.filename),
+    }));
+    const current = editableGenParams.checkpointName.trim();
+    if (
+      current &&
+      !list.some((opt) => normalizeLoraKey(opt.value) === normalizeLoraKey(current))
+    ) {
+      list.unshift({
+        value: current,
+        label: getCleanModelLabel(current),
+      });
+    }
+    return list;
+  }, [models, editableGenParams.checkpointName]);
+
+  const samplerOptions = useMemo(() => {
+    const current = editableGenParams.sampler.trim();
+    if (current && !SAMPLER_OPTIONS.includes(current)) {
+      return [current, ...SAMPLER_OPTIONS];
+    }
+    return SAMPLER_OPTIONS;
+  }, [editableGenParams.sampler]);
+
+  const schedulerOptions = useMemo(() => {
+    const current = editableGenParams.scheduler.trim();
+    if (current && !SCHEDULER_OPTIONS.includes(current)) {
+      return [current, ...SCHEDULER_OPTIONS];
+    }
+    return SCHEDULER_OPTIONS;
+  }, [editableGenParams.scheduler]);
+
+  const originalGenParams = useMemo(
+    () => buildEditableGenParamsFromImage(activeImage),
+    [activeImage]
+  );
+
+  const isGenParamsModified = useMemo(
+    () => areGenParamsModified(editableGenParams, originalGenParams),
+    [editableGenParams, originalGenParams]
+  );
+
   const activeLoraKeySet = useMemo(
     () => new Set(editableLoras.map((l) => normalizeLoraKey(l.loraName))),
     [editableLoras]
@@ -255,7 +370,7 @@ export const InspectorPromptAndParamsSection: React.FC<
       .slice(0, 40);
   }, [loras, activeLoraKeySet, addSearchQuery]);
 
-  const isModified = useMemo(
+  const isLorasModified = useMemo(
     () => areLorasModified(editableLoras, activeImage.loras || []),
     [editableLoras, activeImage.loras]
   );
@@ -341,6 +456,10 @@ export const InspectorPromptAndParamsSection: React.FC<
     setEditingKey(null);
   };
 
+  const handleResetGenParams = () => {
+    onChangeEditableGenParams(buildEditableGenParamsFromImage(activeImage));
+  };
+
   const renderStrengthControl = (
     loraKey: string,
     currentStrength: number,
@@ -382,47 +501,240 @@ export const InspectorPromptAndParamsSection: React.FC<
 
   const atMaxLoras = editableLoras.length >= MAX_SYSTEM_LORAS;
 
+  // Match active checkpoint option value even if stored without path or with different casing
+  const selectedCheckpointValue = useMemo(() => {
+    const current = editableGenParams.checkpointName.trim();
+    if (!current) return '';
+    const match = checkpointOptions.find(
+      (opt) => normalizeLoraKey(opt.value) === normalizeLoraKey(current)
+    );
+    return match ? match.value : current;
+  }, [editableGenParams.checkpointName, checkpointOptions]);
+
   return (
     <>
-      {/* Generation Parameters & Checkpoint */}
+      {/* Editable Generation Parameters (2x3 Grid) */}
       <div className="space-y-2">
-        <h4 className="font-display font-semibold text-zinc-200 uppercase tracking-wider">
-          Generation Parameters
-        </h4>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <h4 className="font-display font-semibold text-zinc-200 uppercase tracking-wider">
+              Generation Parameters
+            </h4>
+            {isGenParamsModified && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-medium">
+                Edited
+              </span>
+            )}
+          </div>
+          {isGenParamsModified && (
+            <button
+              type="button"
+              onClick={handleResetGenParams}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-zinc-950 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-zinc-200 text-[11px] cursor-pointer transition-colors"
+              title="Reset Generation Parameters to original image metadata"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reset</span>
+            </button>
+          )}
+        </div>
+
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono tabular-nums">
-          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
-            <span className="block text-[10px] font-sans text-zinc-400">Checkpoint</span>
-            <span className="text-zinc-100 truncate block" title={activeImage.checkpointName || ''}>
-              {activeImage.checkpointName || '—'}
-            </span>
+          {/* 1. Checkpoint (Pull-down) */}
+          <div className="bg-zinc-950 border border-zinc-800 focus-within:border-indigo-500 rounded-lg p-2.5 transition-colors">
+            <label
+              htmlFor="inspector-param-checkpoint"
+              className="block text-[10px] font-sans text-zinc-400"
+            >
+              Checkpoint
+            </label>
+            <select
+              id="inspector-param-checkpoint"
+              value={selectedCheckpointValue}
+              onChange={(e) =>
+                onChangeEditableGenParams((prev) => ({
+                  ...prev,
+                  checkpointName: e.target.value,
+                }))
+              }
+              title={editableGenParams.checkpointName || 'Select Checkpoint'}
+              className="w-full bg-transparent text-zinc-100 truncate focus:outline-none cursor-pointer"
+            >
+              {checkpointOptions.length === 0 && <option value="">—</option>}
+              {checkpointOptions.map((opt) => (
+                <option key={opt.value} value={opt.value} className="bg-zinc-900 text-zinc-100">
+                  {opt.label}
+                </option>
+              ))}
+            </select>
           </div>
-          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
-            <span className="block text-[10px] font-sans text-zinc-400">VAE</span>
-            <span className="text-zinc-100 truncate block">
-              {activeImage.vaeName || 'Baked / Default'}
-            </span>
+
+          {/* 2. VAE */}
+          <div className="bg-zinc-950 border border-zinc-800 focus-within:border-indigo-500 rounded-lg p-2.5 transition-colors">
+            <label
+              htmlFor="inspector-param-vae"
+              className="block text-[10px] font-sans text-zinc-400"
+            >
+              VAE
+            </label>
+            <input
+              id="inspector-param-vae"
+              type="text"
+              value={editableGenParams.vaeName}
+              onChange={(e) =>
+                onChangeEditableGenParams((prev) => ({
+                  ...prev,
+                  vaeName: e.target.value,
+                }))
+              }
+              placeholder="Baked / Default"
+              title={editableGenParams.vaeName || 'Baked / Default'}
+              className="w-full bg-transparent text-zinc-100 placeholder:text-zinc-500 truncate focus:outline-none"
+            />
           </div>
-          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
-            <span className="block text-[10px] font-sans text-zinc-400">Seed</span>
-            <span className="text-zinc-100 truncate block">{activeImage.seed ?? '—'}</span>
+
+          {/* 3. Seed */}
+          <div className="bg-zinc-950 border border-zinc-800 focus-within:border-indigo-500 rounded-lg p-2.5 transition-colors">
+            <label
+              htmlFor="inspector-param-seed"
+              className="block text-[10px] font-sans text-zinc-400"
+            >
+              Seed
+            </label>
+            <input
+              id="inspector-param-seed"
+              type="text"
+              inputMode="numeric"
+              value={editableGenParams.seed}
+              onChange={(e) =>
+                onChangeEditableGenParams((prev) => ({
+                  ...prev,
+                  seed: e.target.value.replace(/[^\d]/g, ''),
+                }))
+              }
+              placeholder="Random"
+              title={editableGenParams.seed || 'Random seed'}
+              className="w-full bg-transparent text-zinc-100 placeholder:text-zinc-500 truncate focus:outline-none"
+            />
           </div>
-          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
+
+          {/* 4. Steps / CFG */}
+          <div className="bg-zinc-950 border border-zinc-800 focus-within:border-indigo-500 rounded-lg p-2.5 transition-colors">
             <span className="block text-[10px] font-sans text-zinc-400">Steps / CFG</span>
-            <span className="text-zinc-100">
-              {activeImage.steps ?? '—'} / {activeImage.cfg ?? '—'}
-            </span>
+            <div className="flex items-center gap-1 text-zinc-100">
+              <input
+                type="text"
+                inputMode="numeric"
+                aria-label="Steps"
+                value={editableGenParams.steps}
+                onChange={(e) =>
+                  onChangeEditableGenParams((prev) => ({
+                    ...prev,
+                    steps: e.target.value.replace(/[^\d]/g, ''),
+                  }))
+                }
+                placeholder="—"
+                className="w-9 bg-transparent text-zinc-100 focus:outline-none"
+              />
+              <span className="text-zinc-500">/</span>
+              <input
+                type="text"
+                inputMode="decimal"
+                aria-label="CFG"
+                value={editableGenParams.cfg}
+                onChange={(e) =>
+                  onChangeEditableGenParams((prev) => ({
+                    ...prev,
+                    cfg: e.target.value.replace(/[^\d.]/g, ''),
+                  }))
+                }
+                placeholder="—"
+                className="w-12 bg-transparent text-zinc-100 focus:outline-none"
+              />
+            </div>
           </div>
-          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
+
+          {/* 5. Sampler / Scheduler (Pull-downs) */}
+          <div className="bg-zinc-950 border border-zinc-800 focus-within:border-indigo-500 rounded-lg p-2.5 transition-colors">
             <span className="block text-[10px] font-sans text-zinc-400">Sampler / Scheduler</span>
-            <span className="text-zinc-100 truncate block">
-              {activeImage.sampler || '—'} · {activeImage.scheduler || '—'}
-            </span>
+            <div className="flex items-center gap-1 text-zinc-100 min-w-0">
+              <select
+                aria-label="Sampler"
+                value={editableGenParams.sampler}
+                onChange={(e) =>
+                  onChangeEditableGenParams((prev) => ({
+                    ...prev,
+                    sampler: e.target.value,
+                  }))
+                }
+                title={`Sampler: ${editableGenParams.sampler || '—'}`}
+                className="min-w-0 flex-1 bg-transparent text-zinc-100 truncate focus:outline-none cursor-pointer"
+              >
+                {!editableGenParams.sampler && <option value="">—</option>}
+                {samplerOptions.map((s) => (
+                  <option key={s} value={s} className="bg-zinc-900 text-zinc-100">
+                    {s}
+                  </option>
+                ))}
+              </select>
+              <span className="text-zinc-500 shrink-0">·</span>
+              <select
+                aria-label="Scheduler"
+                value={editableGenParams.scheduler}
+                onChange={(e) =>
+                  onChangeEditableGenParams((prev) => ({
+                    ...prev,
+                    scheduler: e.target.value,
+                  }))
+                }
+                title={`Scheduler: ${editableGenParams.scheduler || '—'}`}
+                className="min-w-0 flex-1 bg-transparent text-zinc-100 truncate focus:outline-none cursor-pointer"
+              >
+                {!editableGenParams.scheduler && <option value="">—</option>}
+                {schedulerOptions.map((sch) => (
+                  <option key={sch} value={sch} className="bg-zinc-900 text-zinc-100">
+                    {sch}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-2.5">
+
+          {/* 6. Denoise / Batch */}
+          <div className="bg-zinc-950 border border-zinc-800 focus-within:border-indigo-500 rounded-lg p-2.5 transition-colors">
             <span className="block text-[10px] font-sans text-zinc-400">Denoise / Batch</span>
-            <span className="text-zinc-100">
-              {activeImage.denoise ?? '1.0'} · Batch {activeImage.batchSize ?? 1}
-            </span>
+            <div className="flex items-center gap-1 text-zinc-100">
+              <input
+                type="text"
+                inputMode="decimal"
+                aria-label="Denoise"
+                value={editableGenParams.denoise}
+                onChange={(e) =>
+                  onChangeEditableGenParams((prev) => ({
+                    ...prev,
+                    denoise: e.target.value.replace(/[^\d.]/g, ''),
+                  }))
+                }
+                placeholder="1"
+                className="w-10 bg-transparent text-zinc-100 focus:outline-none"
+              />
+              <span className="text-zinc-500">·</span>
+              <span className="text-zinc-400 text-[11px]">Batch</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                aria-label="Batch Size"
+                value={editableGenParams.batchSize}
+                onChange={(e) =>
+                  onChangeEditableGenParams((prev) => ({
+                    ...prev,
+                    batchSize: e.target.value.replace(/[^\d]/g, ''),
+                  }))
+                }
+                placeholder="1"
+                className="w-7 bg-transparent text-zinc-100 focus:outline-none"
+              />
+            </div>
           </div>
         </div>
 
@@ -440,7 +752,7 @@ export const InspectorPromptAndParamsSection: React.FC<
             <h4 className="font-display font-semibold text-zinc-200 uppercase tracking-wider">
               Extracted LoRAs ({editableLoras.length})
             </h4>
-            {isModified && (
+            {isLorasModified && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-medium">
                 Edited
               </span>
@@ -448,7 +760,7 @@ export const InspectorPromptAndParamsSection: React.FC<
           </div>
 
           <div className="flex items-center gap-1.5">
-            {isModified && (
+            {isLorasModified && (
               <button
                 type="button"
                 onClick={handleResetLoras}
