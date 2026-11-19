@@ -44,8 +44,19 @@ async function drainRedownloadQueue(): Promise<void> {
   isProcessingRedownloadQueue = true;
   try {
     while (redownloadQueue.length > 0) {
+      // Shift from the front (which holds the highest jobId / top-of-list row)
       const next = redownloadQueue.shift();
       if (!next) break;
+
+      const claim = db
+        .prepare(
+          `UPDATE download_jobs
+           SET status = 'downloading', error_message = NULL
+           WHERE id = ? AND status IN ('queued', 'downloading')`
+        )
+        .run(next.jobId);
+      if (claim.changes === 0) continue;
+
       try {
         await executeDownloadJob(next.jobId, next.execParams);
       } catch (err) {
@@ -125,7 +136,9 @@ function resolveFallbackDownloadUrl(params: {
  */
 export function listMissingRedownloadCandidates(): MissingRedownloadCandidate[] {
   const activeDownloadingJobs = db
-    .prepare(`SELECT destination_path FROM download_jobs WHERE status = 'downloading'`)
+    .prepare(
+      `SELECT destination_path FROM download_jobs WHERE status IN ('downloading', 'queued')`
+    )
     .all() as Array<{ destination_path: string }>;
   const activeFilenames = new Set(
     activeDownloadingJobs
@@ -253,7 +266,9 @@ export function listMissingRedownloadCandidates(): MissingRedownloadCandidate[] 
   // 2. Inspect `download_jobs` that may not have a row in `models` yet
   for (const [key, job] of latestJobByFilename.entries()) {
     if (candidates.has(key) || activeFilenames.has(key)) continue;
-    if (job.status === 'scheduled' || job.status === 'downloading') continue;
+    if (job.status === 'scheduled' || job.status === 'downloading' || job.status === 'queued') {
+      continue;
+    }
 
     const destPath = String(job.destination_path || '');
     const safeFilename = path.basename(destPath);
@@ -325,10 +340,13 @@ export function listMissingRedownloadCandidates(): MissingRedownloadCandidate[] 
 }
 
 /**
- * Queues a single missing candidate into `download_jobs` and pushes it onto the sequential
- * background download worker so multiple redownloads stream cleanly one after another.
+ * Inserts a `queued` job into `download_jobs` and places it at the front of the sequential
+ * worker queue so the highest-ID job (visible at the very top of the UI list) downloads first.
  */
-function enqueueMissingCandidate(candidate: MissingRedownloadCandidate): any {
+function createQueuedRedownloadTask(candidate: MissingRedownloadCandidate): {
+  job: any;
+  task: QueuedRedownloadTask;
+} {
   const safeSubfolder = (candidate.subfolder ||
     MODEL_TYPE_TO_DEFAULT_SUBFOLDER[candidate.modelType] ||
     'loras') as ComfyModelSubfolder;
@@ -350,11 +368,20 @@ function enqueueMissingCandidate(candidate: MissingRedownloadCandidate): any {
     retryCount: 0,
   } satisfies ScheduledDownloadPayload);
 
+  // Remove any older duplicate queued/failed redownload rows for the exact same destination path
+  // so the download history list doesn't get flooded with 142 duplicate entries on retry
+  db.prepare(
+    `DELETE FROM download_jobs
+     WHERE LOWER(destination_path) = LOWER(?)
+       AND status IN ('queued', 'downloading')
+       AND bytes_downloaded = 0`
+  ).run(destinationPath);
+
   const info = db
     .prepare(
       `INSERT INTO download_jobs
         (provider, model_name, model_type, source_url, destination_path, expected_hash, status, scheduled_for, payload_json)
-       VALUES (?, ?, ?, ?, ?, ?, 'downloading', NULL, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, ?)`
     )
     .run(
       candidate.provider,
@@ -366,34 +393,102 @@ function enqueueMissingCandidate(candidate: MissingRedownloadCandidate): any {
       payloadJson
     );
   const jobId = Number(info.lastInsertRowid);
+  const job = db.prepare('SELECT * FROM download_jobs WHERE id = ?').get(jobId);
 
-  redownloadQueue.push({
-    jobId,
-    execParams: {
-      provider: candidate.provider,
-      modelName: candidate.modelName,
-      safeFilename: candidate.filename,
-      effectiveModelType,
-      destinationPath,
-      sourceUrl: candidate.sourceUrl,
-      expectedHash: candidate.expectedHash || null,
-      hfRepoId: candidate.hfRepoId || null,
-      civitaiMeta: candidate.civitaiMeta || null,
-      loraCategory: candidate.loraCategory || null,
-      characterAutomation: null,
-      mentionAutomation: null,
+  return {
+    job,
+    task: {
+      jobId,
+      execParams: {
+        provider: candidate.provider,
+        modelName: candidate.modelName,
+        safeFilename: candidate.filename,
+        effectiveModelType,
+        destinationPath,
+        sourceUrl: candidate.sourceUrl,
+        expectedHash: candidate.expectedHash || null,
+        hfRepoId: candidate.hfRepoId || null,
+        civitaiMeta: candidate.civitaiMeta || null,
+        loraCategory: candidate.loraCategory || null,
+        characterAutomation: null,
+        mentionAutomation: null,
+      },
     },
-  });
+  };
+}
 
-  setImmediate(() => {
-    drainRedownloadQueue().catch(() => {});
-  });
+/**
+ * Recovers any stuck `downloading` (0 bytes) or `queued` jobs that are not currently in the
+ * in-memory worker queue (e.g. if the user already clicked Redownload Missing before this update).
+ */
+function adoptStuckOrOrphanedJobs(): number {
+  const inMemoryIds = new Set(redownloadQueue.map((t) => t.jobId));
+  const stuckRows = db
+    .prepare(
+      `SELECT * FROM download_jobs
+       WHERE status IN ('queued', 'downloading')
+         AND provider IN ('civitai', 'huggingface')
+       ORDER BY id DESC`
+    )
+    .all() as any[];
 
-  return db.prepare('SELECT * FROM download_jobs WHERE id = ?').get(jobId);
+  let adoptedCount = 0;
+  for (const row of stuckRows) {
+    if (inMemoryIds.has(Number(row.id))) continue;
+    // If a job is actively streaming right now (bytes_downloaded > 0 while queue is running), leave it alone
+    if (isProcessingRedownloadQueue && row.status === 'downloading' && Number(row.bytes_downloaded) > 0) {
+      continue;
+    }
+
+    const destPath = String(row.destination_path || '');
+    const safeFilename = path.basename(destPath);
+    if (!safeFilename) continue;
+
+    if (fileExistsWithSize(destPath)) {
+      db.prepare(
+        `UPDATE download_jobs SET status = 'completed', completed_at = datetime('now') WHERE id = ?`
+      ).run(row.id);
+      continue;
+    }
+
+    let payload: Record<string, any> | null = null;
+    if (row.payload_json) {
+      try {
+        payload = JSON.parse(row.payload_json);
+      } catch {
+        payload = null;
+      }
+    }
+
+    db.prepare(`UPDATE download_jobs SET status = 'queued' WHERE id = ?`).run(row.id);
+
+    redownloadQueue.push({
+      jobId: Number(row.id),
+      execParams: {
+        provider: row.provider,
+        modelName: row.model_name || safeFilename,
+        safeFilename,
+        effectiveModelType: (row.model_type || 'lora') as ModelType,
+        destinationPath: destPath,
+        sourceUrl: String(row.source_url || ''),
+        expectedHash: row.expected_hash || null,
+        hfRepoId: payload?.hfRepoId || null,
+        civitaiMeta: payload?.civitaiMeta || null,
+        loraCategory: (payload?.loraCategory as LoraCategory) || null,
+        characterAutomation: null,
+        mentionAutomation: null,
+      },
+    });
+    adoptedCount += 1;
+  }
+
+  return adoptedCount;
 }
 
 /**
  * Queues redownloads for all missing Civitai and Hugging Face models (or a single job/model).
+ * Tasks are ordered newest-ID first so the user immediately sees the top item in the UI
+ * transition from `queued` -> `downloading` with live percentage progress.
  */
 export function startRedownloadMissingModels(options?: {
   onlyJobId?: number | null;
@@ -402,6 +497,9 @@ export function startRedownloadMissingModels(options?: {
   queuedCount: number;
   jobs: any[];
 } {
+  // First adopt any stuck 0% jobs already sitting in `download_jobs`
+  const adoptedCount = !options?.onlyJobId && !options?.onlyFilename ? adoptStuckOrOrphanedJobs() : 0;
+
   let candidates = listMissingRedownloadCandidates();
 
   if (options?.onlyJobId) {
@@ -419,14 +517,37 @@ export function startRedownloadMissingModels(options?: {
     candidates = candidates.filter((c) => c.key === targetKey);
   }
 
-  const jobs: any[] = [];
+  const createdJobs: any[] = [];
+  const createdTasks: QueuedRedownloadTask[] = [];
   for (const candidate of candidates) {
-    const job = enqueueMissingCandidate(candidate);
-    if (job) jobs.push(job);
+    const { job, task } = createQueuedRedownloadTask(candidate);
+    if (job) createdJobs.push(job);
+    createdTasks.push(task);
   }
 
+  // Reverse createdTasks so the highest jobId (top of `ORDER BY id DESC` in the UI) runs FIRST
+  createdTasks.reverse();
+  redownloadQueue.unshift(...createdTasks);
+
+  setImmediate(() => {
+    drainRedownloadQueue().catch(() => {});
+  });
+
   return {
-    queuedCount: jobs.length,
-    jobs,
+    queuedCount: createdJobs.length + adoptedCount,
+    jobs: createdJobs,
   };
+}
+
+/**
+ * Automatically resumes any orphaned `queued` or 0-byte `downloading` jobs on server boot or poll.
+ */
+export function ensureRedownloadQueueRunning(): void {
+  if (isProcessingRedownloadQueue) return;
+  const adopted = adoptStuckOrOrphanedJobs();
+  if (adopted > 0 || redownloadQueue.length > 0) {
+    setImmediate(() => {
+      drainRedownloadQueue().catch(() => {});
+    });
+  }
 }

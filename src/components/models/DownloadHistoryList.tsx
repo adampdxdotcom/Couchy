@@ -328,10 +328,19 @@ export const DownloadHistoryList: React.FC<DownloadHistoryListProps> = ({
                                 ? 'text-rose-400'
                                 : d.status === 'downloading'
                                 ? 'text-indigo-300'
+                                : d.status === 'queued'
+                                ? 'text-zinc-400'
                                 : 'text-zinc-300'
                             }`}
                           >
-                            {d.status} · {pct}%
+                            {d.status === 'queued'
+                              ? 'queued'
+                              : d.status === 'downloading' && d.total_bytes > 0
+                              ? `downloading · ${pct}% (${(
+                                  d.bytes_downloaded /
+                                  (1024 * 1024)
+                                ).toFixed(0)}/${(d.total_bytes / (1024 * 1024)).toFixed(0)} MB)`
+                              : `${d.status} · ${pct}%`}
                           </span>
                         </>
                       )}

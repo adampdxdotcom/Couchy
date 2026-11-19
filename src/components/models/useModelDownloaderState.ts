@@ -57,9 +57,10 @@ export function useModelDownloaderState(
     );
   }, [downloads, activePreviewDownloads]);
 
-  // Poll every 1.5s while any model download is actively streaming
+  // Poll every 1.5s while any model download is actively streaming or queued
   const hasActiveDownload =
-    downloads.some((d) => d.status === 'downloading') || activePreviewDownloads.length > 0;
+    downloads.some((d) => d.status === 'downloading' || d.status === 'queued') ||
+    activePreviewDownloads.length > 0;
   useEffect(() => {
     if (!hasActiveDownload) return;
     const timer = setInterval(async () => {
@@ -68,7 +69,7 @@ export function useModelDownloaderState(
         const next = res.items || [];
         setDownloads(next);
         setMissingDownloadsCount(Number(res.missingCount ?? 0));
-        if (!next.some((d: any) => d.status === 'downloading')) {
+        if (!next.some((d: any) => d.status === 'downloading' || d.status === 'queued')) {
           await onRefreshInventory();
         }
       } catch {

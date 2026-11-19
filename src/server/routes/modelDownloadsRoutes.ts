@@ -17,6 +17,7 @@ import {
   runScheduledDownloadNow,
 } from '../services/downloadSchedulerService.ts';
 import {
+  ensureRedownloadQueueRunning,
   listMissingRedownloadCandidates,
   startRedownloadMissingModels,
 } from '../services/modelRedownloadService.ts';
@@ -262,7 +263,21 @@ modelDownloadsRouter.post('/downloads/redownload-missing', (req, res) => {
  * Lists recent model downloads enriched with linked model record details and first Civitai preview URL.
  */
 modelDownloadsRouter.get('/downloads', (_req, res) => {
-  const jobs = db.prepare('SELECT * FROM download_jobs ORDER BY id DESC LIMIT 50').all() as any[];
+  ensureRedownloadQueueRunning();
+
+  const jobs = db
+    .prepare(
+      `SELECT * FROM download_jobs
+       ORDER BY
+         CASE status
+           WHEN 'downloading' THEN 0
+           WHEN 'queued' THEN 1
+           ELSE 2
+         END ASC,
+         id DESC
+       LIMIT 150`
+    )
+    .all() as any[];
   const modelRows = db
     .prepare(
       `SELECT id, filename, file_path, model_type, is_installed, download_file_path, preview_images_json
