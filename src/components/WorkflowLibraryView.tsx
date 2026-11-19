@@ -336,7 +336,7 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
     try {
       const res = await api.submitReproduction({ workflowId: wfId });
       onPushToast?.(
-        `Submitted to ComfyUI (Prompt ID: ${res.job?.comfyui_prompt_id || res.job?.promptId || 'queued'})`,
+        `Submitted to ComfyUI (Prompt ID: ${res.job?.comfyui_prompt_id || 'queued'})`,
         'success'
       );
       await loadJobs();

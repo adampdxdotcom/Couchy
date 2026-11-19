@@ -196,12 +196,15 @@ export function useQuickGenAgentAndBatch({
         });
       }
 
+      const preExistingLoraKeys = new Set(
+        selectedLoras.map((l) => normalizeLoraKey(l.loraName)).filter(Boolean)
+      );
       const pickedLoraHistory = Array.from(
         new Set([
           ...(appliedAgentPreset ? appliedAgentPreset.items.map((it) => it.loraName) : []),
           ...resolvedPickedLoras.map((l) => l.filename),
         ])
-      );
+      ).filter((name) => !preExistingLoraKeys.has(normalizeLoraKey(name)));
 
       const assistantMsg: QuickGenChatMessage = {
         id: `assistant-${Date.now()}`,

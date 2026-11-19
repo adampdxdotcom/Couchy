@@ -34,6 +34,17 @@ import type {
   VisualTaggerStatus,
   WorkflowLibraryItem,
 } from '../shared/types.ts';
+import type {
+  ComfyUiTestResponse,
+  DatabaseBackupEntry,
+  DownloadJobRecord,
+  HealthResponse,
+  ModelImpactReport,
+  ReproductionJobRecord,
+  ScanJobRecord,
+  UpdateConfigPayload,
+  WorkflowDetailRecord,
+} from '../shared/apiTypes.ts';
 
 /**
  * Typed API client for ComfyUI Gallery backend endpoints.
@@ -57,10 +68,13 @@ async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  getHealth: () => requestJson<any>('/api/health'),
+  getHealth: () => requestJson<HealthResponse>('/api/health'),
 
-  updateConfig: (payload: Record<string, any>) =>
-    requestJson<any>('/api/config', { method: 'PATCH', body: JSON.stringify(payload) }),
+  updateConfig: (payload: UpdateConfigPayload) =>
+    requestJson<{ ok: boolean; config: Record<string, unknown> }>('/api/config', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }),
 
   getModelCleanupStatus: () => requestJson<ModelCleanupStatus>('/api/models/cleanup'),
 
@@ -77,12 +91,13 @@ export const api = {
     ),
 
   triggerScan: (scanType: 'incremental' | 'full' | 'reconcile' | 'rebuild_metadata' = 'incremental') =>
-    requestJson<{ jobId: number; scan: any }>('/api/scans/trigger', {
+    requestJson<{ jobId: number; scan: ScanJobRecord | null }>('/api/scans/trigger', {
       method: 'POST',
       body: JSON.stringify({ scanType }),
     }),
 
-  getScans: () => requestJson<{ active: any; history: any[] }>('/api/scans'),
+  getScans: () =>
+    requestJson<{ active: ScanJobRecord | null; history: ScanJobRecord[] }>('/api/scans'),
 
   getOrganizationMeta: () =>
     requestJson<{
@@ -400,14 +415,7 @@ export const api = {
     }>('/api/models/civitai-heal', { method: 'POST' }),
 
   getModelImpact: (name: string) =>
-    requestJson<{
-      modelName: string;
-      dependentImageCount: number;
-      dependentWorkflowCount: number;
-      images: any[];
-      workflows: any[];
-      characters: any[];
-    }>(`/api/models/${encodeURIComponent(name)}/impact`),
+    requestJson<ModelImpactReport>(`/api/models/${encodeURIComponent(name)}/impact`),
 
   searchModels: (q: string, type = '') =>
     requestJson<{ items: ExternalModelSearchResult[]; notice?: string | null }>(
@@ -449,22 +457,22 @@ export const api = {
     allowOverwrite?: boolean;
     userConfirmed: boolean;
     hfRepoId?: string | null;
-    civitaiMeta?: Record<string, any> | null;
+    civitaiMeta?: Record<string, unknown> | null;
     loraCategory?: LoraCategory | null;
     characterAutomation?: CharacterDownloadAutomation | null;
     mentionAutomation?: LoraMentionAutomation | null;
     scheduledFor?: string | null;
   }) =>
-    requestJson<{ job: any }>('/api/downloads/start', {
+    requestJson<{ job: DownloadJobRecord }>('/api/downloads/start', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
   runScheduledDownloadNow: (id: number) =>
-    requestJson<{ job: any }>(`/api/downloads/${id}/run-now`, { method: 'POST' }),
+    requestJson<{ job: DownloadJobRecord }>(`/api/downloads/${id}/run-now`, { method: 'POST' }),
 
   rescheduleFailedDownload: (id: number, scheduledFor?: string | null) =>
-    requestJson<{ job: any }>(`/api/downloads/${id}/reschedule`, {
+    requestJson<{ job: DownloadJobRecord }>(`/api/downloads/${id}/reschedule`, {
       method: 'POST',
       body: JSON.stringify({ scheduledFor: scheduledFor || null }),
     }),
@@ -474,11 +482,12 @@ export const api = {
       method: 'DELETE',
     }),
 
-  listDownloads: () => requestJson<{ items: any[] }>('/api/downloads'),
+  listDownloads: () => requestJson<{ items: DownloadJobRecord[] }>('/api/downloads'),
 
   listWorkflows: () => requestJson<{ items: WorkflowLibraryItem[] }>('/api/workflows'),
 
-  getWorkflow: (id: number) => requestJson<{ workflow: any }>(`/api/workflows/${id}`),
+  getWorkflow: (id: number) =>
+    requestJson<{ workflow: WorkflowDetailRecord }>(`/api/workflows/${id}`),
 
   saveWorkflow: (payload: {
     id?: number;
@@ -488,21 +497,24 @@ export const api = {
     apiWorkflowJson?: string | null;
     isDefault?: boolean;
   }) =>
-    requestJson<{ workflow: any }>('/api/workflows', {
+    requestJson<{ workflow: WorkflowDetailRecord }>('/api/workflows', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
   setDefaultWorkflow: (id: number) =>
-    requestJson<{ ok: boolean; workflow: any }>(`/api/workflows/${id}/set-default`, {
-      method: 'POST',
-    }),
+    requestJson<{ ok: boolean; workflow: WorkflowDetailRecord }>(
+      `/api/workflows/${id}/set-default`,
+      {
+        method: 'POST',
+      }
+    ),
 
   testComfyUi: (baseUrl?: string) =>
-    requestJson<{ online: boolean; baseUrl: string; systemStats: any; error: string | null }>(
-      '/api/comfyui/test',
-      { method: 'POST', body: JSON.stringify({ baseUrl }) }
-    ),
+    requestJson<ComfyUiTestResponse>('/api/comfyui/test', {
+      method: 'POST',
+      body: JSON.stringify({ baseUrl }),
+    }),
 
   getComfyUiLiveStatus: () => requestJson<ComfyUiLiveStatus>('/api/comfyui/live-status'),
 
@@ -533,23 +545,24 @@ export const api = {
     workflowId?: number;
     positivePrompt?: string;
   }) =>
-    requestJson<{ job: any }>('/api/reproduce/submit', {
+    requestJson<{ job: ReproductionJobRecord }>('/api/reproduce/submit', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
 
-  listReproductionJobs: () => requestJson<{ items: any[] }>('/api/reproduce/jobs'),
+  listReproductionJobs: () => requestJson<{ items: ReproductionJobRecord[] }>('/api/reproduce/jobs'),
 
   // Backups
-  getBackups: () => requestJson<{ integrityOk: boolean; backups: any[] }>('/api/backups'),
+  getBackups: () =>
+    requestJson<{ integrityOk: boolean; backups: DatabaseBackupEntry[] }>('/api/backups'),
 
   createBackup: (label = 'manual') =>
-    requestJson<{ backup: any }>('/api/backups/create', {
+    requestJson<{ backup: DatabaseBackupEntry }>('/api/backups/create', {
       method: 'POST',
       body: JSON.stringify({ label }),
     }),
 
-  restoreAnnotationsJson: (payload: any) =>
+  restoreAnnotationsJson: (payload: Record<string, unknown>) =>
     requestJson<{ ok: boolean; restoredCounts: Record<string, number> }>(
       '/api/backups/annotations-restore',
       { method: 'POST', body: JSON.stringify(payload) }

@@ -531,16 +531,95 @@ export function resolveSelectedBaseCandidate(
   );
 }
 
+export function extractLoraCheckFromRandomRollResponse(llmContent: string): string | null {
+  const match = llmContent.match(
+    /<lora_check>([\s\S]*?)(?:<\/lora_check>|(?=<selected_base>)|(?=<proposed_prompt>))/i
+  );
+  if (!match || !match[1]) return null;
+  const cleaned = match[1].trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
 export function extractPromptFromRandomRollResponse(
   llmContent: string,
   characterName: string
 ): string {
-  const withoutBaseTag = llmContent
+  const withoutMetaTags = llmContent
+    .replace(/<lora_check>[\s\S]*?(?:<\/lora_check>|(?=<selected_base>)|(?=<proposed_prompt>))/gi, '')
     .replace(/<selected_base>[\s\S]*?(?:<\/selected_base>|(?=<proposed_prompt>)|\r?\n|$)/gi, '')
     .trim();
-  const match = withoutBaseTag.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
-  const raw = (match?.[1] || withoutBaseTag).replace(/^["']|["']$/g, '').trim();
+  const match = withoutMetaTags.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
+  const raw = (match?.[1] || withoutMetaTags).replace(/^["']|["']$/g, '').trim();
   return sanitizeAgentPrompt(raw, characterName);
+}
+
+const VERIFICATION_STOPWORDS = new Set([
+  'about', 'above', 'across', 'active', 'added', 'after', 'again', 'against', 'along', 'also',
+  'always', 'among', 'around', 'attached', 'avoid', 'background', 'because', 'before', 'behind',
+  'being', 'below', 'between', 'blend', 'both', 'bring', 'build', 'camera', 'category', 'character',
+  'check', 'clear', 'clearly', 'close', 'color', 'colors', 'combine', 'complement', 'composition',
+  'concept', 'conflict', 'conflicting', 'create', 'depict', 'describe', 'description', 'design',
+  'detail', 'details', 'Discard', 'discard', 'drop', 'dropped', 'during', 'effect', 'element',
+  'elements', 'Emphasis', 'emphasis', 'ensure', 'environment', 'every', 'feature', 'features',
+  'female', 'figure', 'filter', 'first', 'focus', 'frame', 'framing', 'front', 'general', 'generic',
+  'girl', 'given', 'great', 'handle', 'having', 'heavy', 'highlight', 'image', 'include', 'including',
+  'incorporate', 'instead', 'into', 'keep', 'keeping', 'krea2', 'light', 'lighting', 'like', 'lora',
+  'loras', 'looks', 'make', 'making', 'match', 'matching', 'medium', 'mention', 'model', 'models',
+  'motif', 'motifs', 'must', 'natural', 'never', 'notes', 'object', 'optional', 'other', 'outfit',
+  'overall', 'person', 'photo', 'photograph', 'photography', 'place', 'play', 'point', 'portrait',
+  'pose', 'present', 'primary', 'priority', 'profile', 'prompt', 'quality', 'random', 'rather',
+  'realistic', 'render', 'require', 'required', 'retain', 'rolled', 'rules', 'scene', 'second',
+  'select', 'selected', 'setting', 'setup', 'sharp', 'shoot', 'short', 'should', 'show', 'showcase',
+  'showing', 'shows', 'single', 'small', 'specific', 'strong', 'style', 'styled', 'styling',
+  'subject', 'subtle', 'suited', 'support', 'tags', 'tailor', 'theme', 'their', 'there', 'these',
+  'they', 'thing', 'things', 'think', 'third', 'this', 'those', 'three', 'through', 'together',
+  'token', 'tokens', 'toward', 'trait', 'traits', 'trigger', 'turbo', 'under', 'using', 'value',
+  'values', 'visual', 'vivid', 'wardrobe', 'where', 'which', 'while', 'without', 'woman', 'words',
+  'workflow', 'world', 'would', 'write',
+]);
+
+/**
+ * Extracts concrete visual keywords from `<lora_check>` (excluding any "Drop/Discard" tag-filter line)
+ * and verifies whether the generated `<proposed_prompt>` actually incorporates them.
+ */
+export function verifyPromptReflectsLoraCheck(
+  prompt: string,
+  loraCheck: string | null,
+  attachedLoraBlock?: string | null
+): { passed: boolean; expectedKeywords: string[]; matchedKeywords: string[] } {
+  const sourceLines = (loraCheck || attachedLoraBlock || '')
+    .split(/\r?\n/)
+    .filter((line) => !/\b(?:drop|dropped|discard|discarded|ignore|ignored|remove|removed)\s*:/i.test(line))
+    .map((line) =>
+      line
+        .replace(/^(?:[-*•]\s*)?[^:\n]{1,50}:\s*/, '')
+        .replace(/\[(?:concept|clothing|style|pose|lighting|character|unclassified)\]/gi, ' ')
+    );
+
+  const rawWords = sourceLines
+    .join(' ')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .map((w) => w.replace(/^-+|-+$/g, ''))
+    .filter((w) => w.length >= 4 && !VERIFICATION_STOPWORDS.has(w) && !/^\d+$/.test(w));
+
+  const expectedKeywords = Array.from(new Set(rawWords));
+  if (expectedKeywords.length < 2) {
+    return { passed: true, expectedKeywords, matchedKeywords: expectedKeywords };
+  }
+
+  const promptLower = prompt.toLowerCase();
+  const matchedKeywords = expectedKeywords.filter((kw) => {
+    const stem = kw.length >= 6 ? kw.replace(/(?:ing|ed|es|s)$/, '') : kw;
+    return promptLower.includes(kw) || (stem.length >= 4 && promptLower.includes(stem));
+  });
+
+  return {
+    passed: matchedKeywords.length >= 1,
+    expectedKeywords,
+    matchedKeywords,
+  };
 }
 
 function buildShuffledBaseContext(candidates: BaseModelCandidate[]): {
@@ -624,15 +703,20 @@ async function composeRandomRollPrompt(params: {
 
     const tagHint =
       params.tags.length > 0
-        ? `Optional setting, wardrobe, pose, or lighting motifs (use only what fits cleanly and discard anything conflicting): ${params.tags.join(', ')}.`
+        ? `Secondary optional motifs (keep ONLY motifs that harmonize with the Attached LoRAs, and explicitly drop any setting/outfit motif that conflicts): ${params.tags.join(', ')}.`
         : 'Invent a vivid, grounded setting, natural wardrobe, and expressive lighting.';
 
     const loraDirective = params.hasStyleLoras
-      ? '- Play to Attached LoRAs: Non-character LoRA(s) are active under Attached LoRAs. Actively design the visual aesthetic, lighting, wardrobe, pose, or setting to showcase their descriptions and categories, letting them take priority over generic motif tags.'
+      ? [
+          '- Mandatory Step 1 (<lora_check>): Before choosing a base model or writing the prompt, output <lora_check>...</lora_check> with:',
+          '  1. For each non-character Attached LoRA, state the concrete visual elements (specific setting, architecture, uniform/wardrobe, props, pose, or lighting) that MUST appear in <proposed_prompt> to showcase that LoRA.',
+          '  2. Tag Filter: List which optional random motifs to KEEP and which to DROP because they clash with the Attached LoRA concept/wardrobe.',
+          '- Play to Attached LoRAs: Attached non-character LoRA(s) are the primary driver of the scene. Every concrete visual element you listed in <lora_check> MUST be explicitly described inside <proposed_prompt>.',
+        ].join('\n')
       : '- Focus on a fresh, coherent scene that complements the subject naturally.';
 
     const baseDirective = shouldSelectBase
-      ? '- Base Model Choice (Last Step): Output <selected_base>"@handle"</selected_base> first using one exact @handle from Available Base Models that best matches the character, attached LoRAs, and intended scene mood, then tailor <proposed_prompt> to that chosen base model’s strengths. Never write base model names or @handles inside <proposed_prompt>.'
+      ? '- Base Model Choice: Output <selected_base>"@handle"</selected_base> using one exact @handle from Available Base Models that best matches the character, attached LoRAs, and intended scene mood, then tailor <proposed_prompt> to that chosen base model’s strengths. Never write base model names or @handles inside <proposed_prompt>.'
       : params.baseCandidates.length === 1
         ? '- Play to Active Base Model: Tailor lighting, photographic texture, and detail cues to complement the Active Base Model description without naming it in <proposed_prompt>.'
         : null;
@@ -657,12 +741,23 @@ async function composeRandomRollPrompt(params: {
       .filter(Boolean)
       .join('\n\n');
 
-    const responseFormatHint = shouldSelectBase
-      ? 'Return ONLY <selected_base>"@handle"</selected_base> and <proposed_prompt>...</proposed_prompt>.'
-      : 'Return ONLY <proposed_prompt>...</proposed_prompt>.';
+    const responseFormatHint = params.hasStyleLoras
+      ? shouldSelectBase
+        ? 'Return ONLY <lora_check>...</lora_check>, <selected_base>"@handle"</selected_base>, and <proposed_prompt>...</proposed_prompt>.'
+        : 'Return ONLY <lora_check>...</lora_check> and <proposed_prompt>...</proposed_prompt>.'
+      : shouldSelectBase
+        ? 'Return ONLY <selected_base>"@handle"</selected_base> and <proposed_prompt>...</proposed_prompt>.'
+        : 'Return ONLY <proposed_prompt>...</proposed_prompt>.';
 
     const userInstruction = params.hasStyleLoras
-      ? `Create a single fresh, spontaneous scene prompt for the subject that actively plays to the attached non-character LoRA(s). ${tagHint} ${responseFormatHint}`
+      ? [
+          'Create a single fresh, spontaneous scene prompt for the subject built directly around the attached non-character LoRA(s).',
+          attachedLoraBlock || '',
+          tagHint,
+          responseFormatHint,
+        ]
+          .filter(Boolean)
+          .join('\n\n')
       : `Create a single fresh, spontaneous scene prompt for the subject. ${tagHint} ${responseFormatHint}`;
 
     const res = await postChatCompletion({
@@ -676,16 +771,71 @@ async function composeRandomRollPrompt(params: {
         },
       ],
       temperature: 0.72,
-      maxTokens: 1200,
+      maxTokens: 1350,
       timeoutMs: 35_000,
     });
 
-    const chosenBase = shouldSelectBase
+    let chosenBase = shouldSelectBase
       ? resolveSelectedBaseCandidate(res.content, params.baseCandidates)
       : params.baseCandidates[0] || null;
+
+    let loraCheck = extractLoraCheckFromRandomRollResponse(res.content);
+    let sanitized = extractPromptFromRandomRollResponse(res.content, params.characterName);
+
+    if (params.hasStyleLoras && sanitized.length >= 15) {
+      const checkResult = verifyPromptReflectsLoraCheck(
+        sanitized,
+        loraCheck,
+        attachedLoraBlock
+      );
+
+      if (loraCheck) {
+        logger.info(
+          'LocalLLM',
+          `Random Roll <lora_check> (${checkResult.passed ? 'verified' : 'missed concept — retrying'}): ${loraCheck.replace(/\s+/g, ' ')}`
+        );
+      }
+
+      if (!checkResult.passed) {
+        const missingPreview = checkResult.expectedKeywords.slice(0, 10).join(', ');
+        const retryRes = await postChatCompletion({
+          baseUrl,
+          model: modelToUse,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userInstruction },
+            { role: 'assistant', content: res.content },
+            {
+              role: 'user',
+              content: `Self-Check Verification Failed: Your <proposed_prompt> did not explicitly include the visual concepts from your <lora_check> / Attached LoRAs (expected visual cues such as: ${missingPreview}). Rewrite <proposed_prompt> so the setting, wardrobe, or visual style explicitly depicts those attached LoRA elements while keeping strict character identity fidelity. ${responseFormatHint}`,
+            },
+          ],
+          temperature: 0.65,
+          maxTokens: 1200,
+          timeoutMs: 30_000,
+        });
+
+        const retrySanitized = extractPromptFromRandomRollResponse(
+          retryRes.content,
+          params.characterName
+        );
+        if (retrySanitized.length >= 15) {
+          sanitized = retrySanitized;
+          chosenBase =
+            (shouldSelectBase
+              ? resolveSelectedBaseCandidate(retryRes.content, params.baseCandidates)
+              : null) || chosenBase;
+          loraCheck = extractLoraCheckFromRandomRollResponse(retryRes.content) || loraCheck;
+          logger.info(
+            'LocalLLM',
+            'Random Roll post-generation LoRA verification retry succeeded'
+          );
+        }
+      }
+    }
+
     const resolvedCheckpoint = chosenBase?.filename || params.fallbackCheckpoint;
 
-    const sanitized = extractPromptFromRandomRollResponse(res.content, params.characterName);
     if (sanitized.length >= 15) {
       return {
         prompt: sanitized,

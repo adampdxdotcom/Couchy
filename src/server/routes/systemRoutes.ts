@@ -38,6 +38,16 @@ import {
   setSettings,
 } from '../services/settingsService.ts';
 import { normalizePillTypeSettings } from '../../shared/pillSettings.ts';
+import type { ComfyUiInstanceRecord, UpdateConfigPayload } from '../../shared/apiTypes.ts';
+import { getErrorMessage } from '../utils/httpError.ts';
+
+interface SavedSearchDbRow {
+  id: number;
+  name: string;
+  query_string: string;
+  filter_json: string | null;
+  created_at: string;
+}
 
 export const systemRouter = Router();
 
@@ -58,7 +68,9 @@ systemRouter.get('/health', (_req, res) => {
     db.prepare("SELECT COUNT(*) AS c FROM models WHERE model_type = 'lora'").get() as { c: number }
   ).c;
   const wfCount = (db.prepare('SELECT COUNT(*) AS c FROM workflows').get() as { c: number }).c;
-  const comfyRow = db.prepare('SELECT * FROM comfyui_instances WHERE is_default = 1').get() as any;
+  const comfyRow = db
+    .prepare('SELECT * FROM comfyui_instances WHERE is_default = 1')
+    .get() as ComfyUiInstanceRecord | undefined;
   const settingsMap = getSettingsMap([
     'quick_gen_box_enabled',
     'save_uploaded_prompt_images',
@@ -136,7 +148,7 @@ systemRouter.patch('/config', (req, res) => {
       saveCivitaiImportImages,
       galleryPillColorsEnabled,
       pillTypeSettings,
-    } = req.body || {};
+    } = (req.body || {}) as UpdateConfigPayload;
 
     if (comfyuiUrl && String(comfyuiUrl).trim()) {
       appConfig.comfyuiUrl = String(comfyuiUrl).trim().replace(/\/+$/, '');
@@ -183,8 +195,8 @@ systemRouter.patch('/config', (req, res) => {
     setSettings(settingUpdates);
 
     res.json({ ok: true, config: appConfig });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to update configuration' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to update configuration') });
   }
 });
 
@@ -194,11 +206,15 @@ systemRouter.patch('/config', (req, res) => {
  */
 systemRouter.post('/scans/trigger', async (req, res) => {
   try {
-    const scanType = req.body?.scanType || 'incremental';
+    const scanType = (req.body?.scanType || 'incremental') as
+      | 'incremental'
+      | 'full'
+      | 'reconcile'
+      | 'rebuild_metadata';
     const jobId = await runDirectoryScan(scanType);
     res.json({ jobId, scan: getActiveScanStatus() });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Failed to start scan' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to start scan') });
   }
 });
 
@@ -243,16 +259,15 @@ systemRouter.get('/organization/meta', (_req, res) => {
     )
     .all() as { name: string }[];
 
-  const savedSearches = db
-    .prepare('SELECT * FROM saved_searches ORDER BY created_at DESC')
-    .all()
-    .map((s: any) => ({
-      id: s.id,
-      name: s.name,
-      queryString: s.query_string,
-      filterJson: JSON.parse(s.filter_json || '{}'),
-      createdAt: s.created_at,
-    }));
+  const savedSearches = (
+    db.prepare('SELECT * FROM saved_searches ORDER BY created_at DESC').all() as SavedSearchDbRow[]
+  ).map((s) => ({
+    id: s.id,
+    name: s.name,
+    queryString: s.query_string,
+    filterJson: JSON.parse(s.filter_json || '{}'),
+    createdAt: s.created_at,
+  }));
 
   res.json({
     tags,
@@ -267,7 +282,7 @@ systemRouter.get('/organization/meta', (_req, res) => {
  */
 systemRouter.post('/organization/collections', (req, res) => {
   try {
-    const { name, description } = req.body || {};
+    const { name, description } = (req.body || {}) as { name?: unknown; description?: unknown };
     if (!name || !String(name).trim()) {
       res.status(400).json({ error: 'Collection name is required' });
       return;
@@ -276,8 +291,8 @@ systemRouter.post('/organization/collections', (req, res) => {
       .prepare('INSERT INTO collections (name, description) VALUES (?, ?)')
       .run(String(name).trim(), String(description || ''));
     res.json({ id: Number(info.lastInsertRowid), name: String(name).trim() });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to create collection' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to create collection') });
   }
 });
 
@@ -294,17 +309,17 @@ systemRouter.delete('/organization/collections/:id', (req, res) => {
  */
 systemRouter.post('/organization/tags', (req, res) => {
   try {
-    const { name, color } = req.body || {};
+    const { name, color } = (req.body || {}) as { name?: unknown; color?: unknown };
     if (!name || !String(name).trim()) {
       res.status(400).json({ error: 'Tag name is required' });
       return;
     }
     const info = db
       .prepare('INSERT INTO tags (name, color) VALUES (?, ?)')
-      .run(String(name).trim(), color || '#6366f1');
+      .run(String(name).trim(), typeof color === 'string' && color ? color : '#6366f1');
     res.json({ id: Number(info.lastInsertRowid), name: String(name).trim() });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to create tag' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to create tag') });
   }
 });
 
@@ -313,7 +328,11 @@ systemRouter.post('/organization/tags', (req, res) => {
  */
 systemRouter.post('/organization/saved-searches', (req, res) => {
   try {
-    const { name, queryString, filterJson } = req.body || {};
+    const { name, queryString, filterJson } = (req.body || {}) as {
+      name?: unknown;
+      queryString?: unknown;
+      filterJson?: unknown;
+    };
     if (!name || !String(name).trim()) {
       res.status(400).json({ error: 'Saved search name is required' });
       return;
@@ -326,8 +345,8 @@ systemRouter.post('/organization/saved-searches', (req, res) => {
          filter_json = excluded.filter_json`
     ).run(String(name).trim(), String(queryString || ''), JSON.stringify(filterJson || {}));
     res.json({ ok: true });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to save search' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to save search') });
   }
 });
 
@@ -355,10 +374,11 @@ systemRouter.get('/backups', (_req, res) => {
  */
 systemRouter.post('/backups/create', async (req, res) => {
   try {
-    const backup = await createDatabaseBackup(req.body?.label || 'manual');
+    const label = typeof req.body?.label === 'string' && req.body.label ? req.body.label : 'manual';
+    const backup = await createDatabaseBackup(label);
     res.json({ backup });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Backup failed' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Backup failed') });
   }
 });
 
@@ -382,8 +402,8 @@ systemRouter.post('/backups/annotations-restore', (req, res) => {
   try {
     const result = restoreUserAnnotationsJson(req.body);
     res.json({ ok: true, ...result });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to restore annotations' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to restore annotations') });
   }
 });
 
@@ -403,8 +423,8 @@ systemRouter.patch('/tagger/config', (req, res) => {
   try {
     const status = updateVisualTaggerConfig(req.body || {});
     res.json(status);
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to update visual tagger settings' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to update visual tagger settings') });
   }
 });
 
@@ -415,14 +435,19 @@ systemRouter.patch('/tagger/config', (req, res) => {
 systemRouter.post('/tagger/control', (req, res) => {
   try {
     const action = req.body?.action;
-    if (!['pause', 'resume', 'scan_unindexed', 'rescan_all'].includes(action)) {
+    if (
+      action !== 'pause' &&
+      action !== 'resume' &&
+      action !== 'scan_unindexed' &&
+      action !== 'rescan_all'
+    ) {
       res.status(400).json({ error: 'Invalid tagger control action' });
       return;
     }
     const status = controlVisualTaggerQueue(action);
     res.json(status);
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to control visual tagger queue' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to control visual tagger queue') });
   }
 });
 
@@ -440,7 +465,10 @@ systemRouter.get('/models/cleanup', (_req, res) => {
  */
 systemRouter.patch('/models/cleanup', (req, res) => {
   try {
-    const { enabled, retentionHours } = req.body || {};
+    const { enabled, retentionHours } = (req.body || {}) as {
+      enabled?: unknown;
+      retentionHours?: unknown;
+    };
     updateModelCleanupSettings({
       enabled: enabled !== undefined ? Boolean(enabled) : undefined,
       retentionHours: retentionHours !== undefined ? Number(retentionHours) : undefined,
@@ -451,8 +479,8 @@ systemRouter.patch('/models/cleanup', (req, res) => {
       });
     }
     res.json(getModelCleanupStatus());
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to update model cleanup settings' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to update model cleanup settings') });
   }
 });
 
@@ -463,7 +491,7 @@ systemRouter.patch('/models/cleanup', (req, res) => {
 systemRouter.post('/models/cleanup/run', async (req, res) => {
   try {
     const action = req.body?.action || 'scan';
-    if (!['scan', 'clean_due', 'clean_all'].includes(action)) {
+    if (action !== 'scan' && action !== 'clean_due' && action !== 'clean_all') {
       res.status(400).json({ error: 'Invalid cleanup action' });
       return;
     }
@@ -472,8 +500,8 @@ systemRouter.post('/models/cleanup/run', async (req, res) => {
       forceImmediate: action === 'clean_all',
     });
     res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Model cleanup scan failed' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Model cleanup scan failed') });
   }
 });
 
@@ -484,8 +512,8 @@ systemRouter.post('/models/cleanup/run', async (req, res) => {
 systemRouter.get('/help/readme', (_req, res) => {
   try {
     res.json(getHelpDocsPayload());
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Failed to load README.md' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to load README.md') });
   }
 });
 
@@ -498,8 +526,8 @@ systemRouter.post('/help/ask', async (req, res) => {
     const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
     const result = await askReadmeHelpAssistant({ messages });
     res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Help Assistant request failed' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Help Assistant request failed') });
   }
 });
 
@@ -525,8 +553,8 @@ systemRouter.get('/stats/generations', (req, res) => {
       tzOffsetMinutes: Number.isFinite(tzOffsetRaw) ? tzOffsetRaw : 0,
     });
     res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Failed to compute generation stats' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to compute generation stats') });
   }
 });
 
@@ -538,7 +566,7 @@ systemRouter.get('/stats/storage', async (_req, res) => {
   try {
     const result = await getStorageUsageStats();
     res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Failed to compute storage usage stats' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to compute storage usage stats') });
   }
 });

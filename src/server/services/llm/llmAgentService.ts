@@ -459,17 +459,24 @@ export async function converseQuickGenPrompt(params: {
   const excludedKeys = new Set(
     (params.excludedLoras || []).map((l) => normalizeLoraMatchKey(l)).filter(Boolean)
   );
+  const attachedKeys = new Set(
+    (params.loraNames || []).map((l) => normalizeLoraMatchKey(l)).filter(Boolean)
+  );
 
   const { candidateRows, presetRows, presetItemsMap } = loadAgentCatalog();
   const availableCandidates = candidateRows.filter((c) => {
     const fileKey = normalizeLoraMatchKey(c.filename);
     const nameKey = normalizeLoraMatchKey(c.name);
     const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : '';
-    return (
-      !excludedKeys.has(fileKey) &&
-      !excludedKeys.has(nameKey) &&
-      (!nickKey || !excludedKeys.has(nickKey))
-    );
+    const isExcluded =
+      excludedKeys.has(fileKey) ||
+      excludedKeys.has(nameKey) ||
+      Boolean(nickKey && excludedKeys.has(nickKey));
+    const isAlreadyAttached =
+      attachedKeys.has(fileKey) ||
+      attachedKeys.has(nameKey) ||
+      Boolean(nickKey && attachedKeys.has(nickKey));
+    return !isExcluded && !isAlreadyAttached;
   });
 
   const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
@@ -516,10 +523,10 @@ export async function converseQuickGenPrompt(params: {
     });
     contextNotes.push(
       [
-        `Optional non-character LoRAs available for selection:`,
+        `Optional non-character LoRAs available for selection (not yet attached):`,
         ...catalogLines,
         `LoRA Selection Rules:`,
-        `- If optional non-character LoRA(s) clearly match the scene, style, lighting, or outfit (keeping active ones that still fit), list up to 3 handles inside <selected_loras>["@handle1", "@handle2"]</selected_loras>.`,
+        `- Already-attached LoRAs remain active automatically—only select NEW additional LoRAs from the list above if they clearly match the scene, style, lighting, or outfit (up to 3 handles inside <selected_loras>["@handle1", "@handle2"]</selected_loras>).`,
         `- Do NOT select character LoRAs or write trigger words inside the prompt.`,
       ].join('\n')
     );

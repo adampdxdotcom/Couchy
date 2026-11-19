@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
@@ -17,8 +17,33 @@ import { matchFaceToCharacter } from '../services/faceRecognitionService.ts';
 import { resolveImageDiskPath } from '../services/scannerService.ts';
 import { invalidateInstalledModelsCache } from '../services/civitai/civitaiModelEnrichmentService.ts';
 import { normalizePortraitCrop } from '../../shared/utils.ts';
+import type { PortraitCrop } from '../../shared/types.ts';
+import { getErrorCode, getErrorMessage } from '../utils/httpError.ts';
 
 export const charactersRouter = Router();
+
+interface CharacterDbRow {
+  id: number;
+  name: string;
+  description: string | null;
+  physical_description: string | null;
+  notes: string | null;
+  portrait_image_id: number | null;
+  portrait_content_hash: string | null;
+  portrait_crop_json: string | null;
+}
+
+interface CharacterWriteBody {
+  name?: string;
+  description?: string;
+  physicalDescription?: string;
+  notes?: string;
+  aliases?: unknown[];
+  portraitImageId?: number | string | null;
+  portraitCrop?: PortraitCrop | null;
+  tagIds?: Array<number | string>;
+  collectionIds?: Array<number | string>;
+}
 
 /**
  * GET /api/characters
@@ -27,8 +52,8 @@ export const charactersRouter = Router();
 charactersRouter.get('/', (_req, res) => {
   try {
     res.json({ items: listCharacterProfiles() });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Failed to list characters' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to list characters') });
   }
 });
 
@@ -44,8 +69,8 @@ charactersRouter.get('/:id', (req, res) => {
       return;
     }
     res.json({ character: profile });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Failed to load character profile' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to load character profile') });
   }
 });
 
@@ -56,7 +81,7 @@ charactersRouter.get('/:id', (req, res) => {
 charactersRouter.post('/', (req, res) => {
   try {
     const { name, description, physicalDescription, notes, aliases, portraitImageId } =
-      req.body || {};
+      (req.body || {}) as CharacterWriteBody;
     if (!name || !String(name).trim()) {
       res.status(400).json({ error: 'Character name is required' });
       return;
@@ -100,8 +125,8 @@ charactersRouter.post('/', (req, res) => {
     runAssistedCharacterIdentificationForAll();
 
     res.json({ character: getCharacterProfileById(charId) });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to create character' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to create character') });
   }
 });
 
@@ -109,10 +134,12 @@ charactersRouter.post('/', (req, res) => {
  * PATCH /api/characters/:id
  * Updates a character profile's name, description, notes, portrait, aliases, tags, or collections.
  */
-const updateCharacterHandler = (req: any, res: any) => {
+const updateCharacterHandler = (req: Request, res: Response) => {
   try {
     const charId = Number(req.params.id);
-    const existing = db.prepare('SELECT * FROM characters WHERE id = ?').get(charId) as any;
+    const existing = db.prepare('SELECT * FROM characters WHERE id = ?').get(charId) as
+      | CharacterDbRow
+      | undefined;
     if (!existing) {
       res.status(404).json({ error: 'Character not found' });
       return;
@@ -128,7 +155,7 @@ const updateCharacterHandler = (req: any, res: any) => {
       aliases,
       tagIds,
       collectionIds,
-    } = req.body || {};
+    } = (req.body || {}) as CharacterWriteBody;
 
     let portraitId = existing.portrait_image_id;
     let portraitHash = existing.portrait_content_hash;
@@ -240,12 +267,12 @@ const updateCharacterHandler = (req: any, res: any) => {
 
     runAssistedCharacterIdentificationForAll();
     res.json({ character: getCharacterProfileById(charId) });
-  } catch (err: any) {
-    if (err?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+  } catch (err: unknown) {
+    if (getErrorCode(err) === 'SQLITE_CONSTRAINT_UNIQUE') {
       res.status(400).json({ error: 'A character with that name already exists.' });
       return;
     }
-    res.status(400).json({ error: err?.message || 'Failed to update character' });
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to update character') });
   }
 };
 
@@ -336,8 +363,8 @@ charactersRouter.post('/:id/analyze-portrait', async (req, res) => {
       modelUsed: analysis.modelUsed,
       character: getCharacterProfileById(charId),
     });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to analyze character portrait' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to analyze character portrait') });
   }
 });
 
@@ -348,8 +375,8 @@ charactersRouter.delete('/:id', (req, res) => {
   try {
     db.prepare('DELETE FROM characters WHERE id = ?').run(Number(req.params.id));
     res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Failed to delete character' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to delete character') });
   }
 });
 
@@ -363,8 +390,8 @@ charactersRouter.post('/:id/merge', (req, res) => {
     const sourceId = Number(req.body?.sourceCharacterId);
     const merged = mergeCharacters(targetId, sourceId);
     res.json({ character: merged });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Character merge failed' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Character merge failed') });
   }
 });
 
@@ -436,8 +463,8 @@ charactersRouter.post('/:id/loras', (req, res) => {
 
     runAssistedCharacterIdentificationForAll();
     res.json({ character: getCharacterProfileById(charId) });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to associate LoRA with character' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to associate LoRA with character') });
   }
 });
 
@@ -452,8 +479,8 @@ charactersRouter.delete('/:id/loras/:linkId', (req, res) => {
       charId
     );
     res.json({ character: getCharacterProfileById(charId) });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Failed to unlink LoRA' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to unlink LoRA') });
   }
 });
 
@@ -472,8 +499,8 @@ charactersRouter.post('/:id/workflows', (req, res) => {
     ).run(charId, Number(workflowId), roleLabel || 'Standard Workflow');
     runAssistedCharacterIdentificationForAll();
     res.json({ character: getCharacterProfileById(charId) });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to link workflow' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to link workflow') });
   }
 });
 
@@ -519,8 +546,8 @@ charactersRouter.post('/associations/status', (req, res) => {
     }
 
     res.json({ ok: true });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to update character association' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to update character association') });
   }
 });
 
@@ -571,8 +598,8 @@ charactersRouter.post('/associations/bulk-status', (req, res) => {
 
     tx();
     res.json({ ok: true, count: updatedCount });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to bulk update character associations' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to bulk update character associations') });
   }
 });
 
@@ -613,8 +640,8 @@ charactersRouter.post('/match-face', async (req, res) => {
       indexedCharactersCount: result.indexedCharactersCount,
       bestCandidate: result.bestCandidate,
     });
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Face matching failed' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Face matching failed') });
   }
 });
 
@@ -626,7 +653,7 @@ charactersRouter.post('/run-suggestions', (_req, res) => {
   try {
     const newSuggestions = runAssistedCharacterIdentificationForAll();
     res.json({ ok: true, newSuggestions });
-  } catch (err: any) {
-    res.status(500).json({ error: err?.message || 'Suggestion pass failed' });
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Suggestion pass failed') });
   }
 });

@@ -84,6 +84,32 @@ describe('randomRollService', () => {
       rr.extractPromptFromRandomRollResponse(outputUnclosed, 'Alice'),
       'Close-up portrait by a sunlit cafe window.'
     );
+
+    const outputWithLoraCheck = [
+      '<lora_check>',
+      '- Star Trek Settings [concept]: Must depict a Starfleet starship bridge, glowing LCARS consoles, or futuristic Starfleet duty uniform.',
+      '- Drop: cozy bedroom, wool sweater (conflicts with sci-fi starship setting); Keep: dramatic rim lighting.',
+      '</lora_check>',
+      '<selected_base>"@krea2-turbo"</selected_base>',
+      '<proposed_prompt>Medium shot of Alice standing on a sleek starship bridge beside glowing LCARS consoles in a fitted duty uniform.</proposed_prompt>',
+    ].join('\n');
+
+    const extractedCheck = rr.extractLoraCheckFromRandomRollResponse(outputWithLoraCheck);
+    assert.ok(extractedCheck?.includes('Starfleet starship bridge'));
+    const extractedPrompt = rr.extractPromptFromRandomRollResponse(outputWithLoraCheck, 'Alice');
+    assert.equal(
+      extractedPrompt,
+      'Medium shot of the subject standing on a sleek starship bridge beside glowing LCARS consoles in a fitted duty uniform.'
+    );
+
+    const passVerification = rr.verifyPromptReflectsLoraCheck(extractedPrompt, extractedCheck);
+    assert.equal(passVerification.passed, true);
+    assert.ok(passVerification.matchedKeywords.includes('starship'));
+
+    const missedPrompt =
+      'Medium shot of the subject sitting in a sunlit meadow wearing a floral sundress.';
+    const failVerification = rr.verifyPromptReflectsLoraCheck(missedPrompt, extractedCheck);
+    assert.equal(failVerification.passed, false);
   });
 
   it('enforces eligibility rules: characters with installed LoRAs, described mention checkpoints, and style LoRA exclusions', () => {

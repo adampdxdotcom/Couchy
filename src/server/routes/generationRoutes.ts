@@ -18,11 +18,27 @@ import {
   listGenerationBatches,
 } from '../services/generationDispatchService.ts';
 import { executeRandomRoll } from '../services/randomRollService.ts';
-import { type PromptTemplate } from '../../shared/types.ts';
+import {
+  type GenerationLoraSelection,
+  type PromptTemplate,
+  type QuickGenChatMessage,
+} from '../../shared/types.ts';
+import { getErrorMessage } from '../utils/httpError.ts';
+
+interface PromptTemplateDbRow {
+  id: number;
+  name: string;
+  positive_template: string;
+  negative_template: string | null;
+  is_default: number;
+  category: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 export const generationRouter = Router();
 
-function mapTemplateRow(row: any): PromptTemplate {
+function mapTemplateRow(row: PromptTemplateDbRow): PromptTemplate {
   return {
     id: row.id,
     name: row.name,
@@ -41,7 +57,7 @@ function mapTemplateRow(row: any): PromptTemplate {
 generationRouter.get('/templates', (_req, res) => {
   const rows = db
     .prepare('SELECT * FROM prompt_templates ORDER BY is_default DESC, updated_at DESC')
-    .all() as any[];
+    .all() as PromptTemplateDbRow[];
   res.json({ items: rows.map(mapTemplateRow) });
 });
 
@@ -93,17 +109,19 @@ generationRouter.post('/templates', (req, res) => {
     });
 
     const savedId = tx();
-    const saved = db.prepare('SELECT * FROM prompt_templates WHERE id = ?').get(savedId);
+    const saved = db
+      .prepare('SELECT * FROM prompt_templates WHERE id = ?')
+      .get(savedId) as PromptTemplateDbRow | undefined;
     const allRows = db
       .prepare('SELECT * FROM prompt_templates ORDER BY is_default DESC, updated_at DESC')
-      .all() as any[];
+      .all() as PromptTemplateDbRow[];
 
     res.json({
-      template: mapTemplateRow(saved),
+      template: saved ? mapTemplateRow(saved) : null,
       items: allRows.map(mapTemplateRow),
     });
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to save prompt template.') });
   }
 });
 
@@ -124,7 +142,7 @@ generationRouter.delete('/templates/:id', (req, res) => {
   }
   const allRows = db
     .prepare('SELECT * FROM prompt_templates ORDER BY is_default DESC, updated_at DESC')
-    .all() as any[];
+    .all() as PromptTemplateDbRow[];
   res.json({ ok: true, items: allRows.map(mapTemplateRow) });
 });
 
@@ -145,8 +163,8 @@ generationRouter.post('/lmstudio/config', async (req, res) => {
     const updated = updateLmStudioSettings(req.body || {});
     const status = await checkLmStudioStatus(updated.baseUrl);
     res.json(status);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to update Local LLM settings.') });
   }
 });
 
@@ -164,8 +182,8 @@ generationRouter.post('/lmstudio/templates', (req, res) => {
   try {
     const result = saveLmStudioGuidingTemplate(req.body || {});
     res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to save guiding template.') });
   }
 });
 
@@ -177,8 +195,8 @@ generationRouter.delete('/lmstudio/templates/:id', (req, res) => {
     const id = Number(req.params.id);
     const items = deleteLmStudioGuidingTemplate(id);
     res.json({ ok: true, items });
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to delete guiding template.') });
   }
 });
 
@@ -222,8 +240,8 @@ generationRouter.post('/lmstudio/generate-prompts', async (req, res) => {
     });
 
     res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to generate photo set prompts.') });
   }
 });
 
@@ -259,8 +277,8 @@ generationRouter.post('/lmstudio/chat', async (req, res) => {
       batchCount: batchCount ? Number(batchCount) : 1,
     });
     res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to converse with Local LLM.' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to converse with Local LLM.') });
   }
 });
 
@@ -280,8 +298,8 @@ generationRouter.post('/interrogate-image', async (req, res) => {
       userHint: userHint ? String(userHint).trim() : undefined,
     });
     res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to interrogate image.' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to interrogate image.') });
   }
 });
 
@@ -297,8 +315,10 @@ generationRouter.post('/civitai-image', async (req, res) => {
     }
     const result = await importCivitaiImageForQuickGen(rawUrl);
     res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to read Civitai image metadata.' });
+  } catch (err: unknown) {
+    res
+      .status(400)
+      .json({ error: getErrorMessage(err, 'Failed to read Civitai image metadata.') });
   }
 });
 
@@ -315,12 +335,30 @@ generationRouter.get('/batches', (_req, res) => {
  */
 generationRouter.post('/submit-batch', async (req, res) => {
   try {
-    const body = req.body || {};
+    const body = (req.body || {}) as {
+      characterId?: number | null;
+      workflowId?: number;
+      mode?: 'single' | 'theme_set';
+      themeTitle?: string;
+      aspectRatio?: string;
+      megapixels?: number;
+      steps?: number;
+      prompts?: unknown[];
+      triggerWord?: string;
+      negativePrompt?: string;
+      loras?: GenerationLoraSelection[];
+      checkpointName?: string | null;
+      baseSeed?: number;
+      seriesId?: number | null;
+      branchFromImageId?: number | null;
+      inspirationFilename?: string | null;
+      chatSnapshot?: QuickGenChatMessage[];
+    };
     if (!body.workflowId) {
       return res.status(400).json({ error: 'Please select a ComfyUI workflow.' });
     }
     const promptList: string[] = Array.isArray(body.prompts)
-      ? body.prompts.map((p: unknown) => String(p).trim()).filter(Boolean)
+      ? body.prompts.map((p) => String(p).trim()).filter(Boolean)
       : [];
     if (promptList.length === 0) {
       return res.status(400).json({ error: 'At least one positive prompt is required.' });
@@ -329,15 +367,15 @@ generationRouter.post('/submit-batch', async (req, res) => {
     const result = await dispatchGenerationBatch({
       characterId: body.characterId,
       workflowId: Number(body.workflowId),
-      mode: body.mode,
+      mode: body.mode || 'single',
       themeTitle: body.themeTitle,
-      aspectRatio: body.aspectRatio,
+      aspectRatio: body.aspectRatio || '2:3 (Portrait Photo)',
       megapixels: body.megapixels,
       steps: body.steps,
       prompts: promptList,
       triggerWord: body.triggerWord,
-      negativePrompt: body.negativePrompt,
-      loras: body.loras,
+      negativePrompt: body.negativePrompt ?? '',
+      loras: Array.isArray(body.loras) ? body.loras : [],
       checkpointName: body.checkpointName,
       baseSeed: body.baseSeed,
       seriesId: body.seriesId,
@@ -347,8 +385,8 @@ generationRouter.post('/submit-batch', async (req, res) => {
     });
 
     res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err.message });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to submit generation batch.') });
   }
 });
 
@@ -361,7 +399,7 @@ generationRouter.post('/random-roll', async (_req, res) => {
   try {
     const result = await executeRandomRoll();
     res.json(result);
-  } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to roll random generation.' });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to roll random generation.') });
   }
 });

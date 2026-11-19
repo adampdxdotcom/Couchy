@@ -154,7 +154,7 @@ export function buildLlmCharacterAndLoraContext(params: {
       matchedModel?.lora_category || matchedCharLora?.lora_category || 'unclassified';
     const catTag =
       rawCategory && rawCategory !== 'unclassified' ? ` [${rawCategory}]` : '';
-    const desc = clampContextText(matchedModel?.llm_description, 240);
+    const desc = clampContextText(matchedModel?.llm_description, 480);
     const variantNote =
       matchedCharLora?.appearance_label?.trim()
         ? `Variant: ${matchedCharLora.appearance_label.trim()}`
