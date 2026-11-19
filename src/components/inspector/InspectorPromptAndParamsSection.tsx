@@ -1,7 +1,49 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Sparkles } from 'lucide-react';
-import type { ImageRecord } from '../../shared/types.ts';
+import { Check, Copy, Layers, Sparkles } from 'lucide-react';
+import {
+  DEFAULT_PILL_TYPE_SETTINGS,
+  resolveLoraCategoryStyle,
+} from '../../shared/pillSettings.ts';
+import type {
+  ImageLoraRecord,
+  ImageRecord,
+  LoraCategory,
+  LoraExplorerItem,
+  PillTypeSettings,
+} from '../../shared/types.ts';
 import { copyTextToClipboard, getModelAvailabilityInfo } from '../../shared/utils.ts';
+import { normalizeLoraKey } from '../quickgen/quickGenUtils.ts';
+
+function formatLoraStrength(value: number): string {
+  const rounded = Math.round(Number(value ?? 1) * 100) / 100;
+  return Math.round(rounded * 100) % 10 !== 0 ? rounded.toFixed(2) : rounded.toFixed(1);
+}
+
+function resolveInspectorLoraMeta(
+  lora: ImageLoraRecord,
+  explorerLoras: LoraExplorerItem[]
+): { displayName: string; pillLabel: string; category: LoraCategory } {
+  const key = normalizeLoraKey(lora.loraName || '');
+  const match = key
+    ? explorerLoras.find(
+        (l) => normalizeLoraKey(l.filename) === key || normalizeLoraKey(l.name) === key
+      )
+    : undefined;
+
+  const cleanStem = (lora.loraName || '')
+    .trim()
+    .replace(/^.*[\\/]/, '')
+    .replace(/\.(safetensors|pt|ckpt|bin)$/i, '');
+  const displayName = match?.name?.trim() || cleanStem || 'LoRA';
+  const nick = (match?.nickname || '').trim().replace(/^@+/, '');
+  const pillLabel = nick || displayName;
+  const category: LoraCategory =
+    match?.loraCategory ||
+    lora.loraCategory ||
+    (match && match.characters.length > 0 ? 'character' : 'unclassified');
+
+  return { displayName, pillLabel, category };
+}
 
 interface InspectorPositivePromptSectionProps {
   activeImage: ImageRecord;
@@ -95,6 +137,8 @@ export const InspectorPositivePromptSection: React.FC<
 
 interface InspectorPromptAndParamsSectionProps {
   activeImage: ImageRecord;
+  loras?: LoraExplorerItem[];
+  pillTypeSettings?: PillTypeSettings;
   onFilterByLora: (loraFilename: string) => void;
   onClose: () => void;
 }
@@ -106,12 +150,13 @@ export const InspectorPromptAndParamsSection: React.FC<
   InspectorPromptAndParamsSectionProps
 > = ({
   activeImage,
+  loras = [],
+  pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   onFilterByLora,
   onClose,
 }) => {
   return (
     <>
-
       {/* Generation Parameters & Checkpoint */}
       <div className="space-y-2">
         <h4 className="font-display font-semibold text-zinc-200 uppercase tracking-wider">
@@ -161,7 +206,7 @@ export const InspectorPromptAndParamsSection: React.FC<
         )}
       </div>
 
-      {/* Extracted LoRA Chain (Model & CLIP Strengths) */}
+      {/* Extracted LoRA Chain */}
       <div className="space-y-2">
         <h4 className="font-display font-semibold text-zinc-200 uppercase tracking-wider">
           Extracted LoRAs ({activeImage.loras.length})
@@ -172,34 +217,54 @@ export const InspectorPromptAndParamsSection: React.FC<
           <div className="space-y-1.5">
             {activeImage.loras.map((l) => {
               const availability = getModelAvailabilityInfo(l);
+              const { displayName, pillLabel, category } = resolveInspectorLoraMeta(l, loras);
+              const pillStyle = resolveLoraCategoryStyle(category, pillTypeSettings);
+
               return (
-              <div
-                key={l.id}
-                className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 flex items-center justify-between gap-2"
-              >
-                <div className="min-w-0">
+                <div
+                  key={l.id}
+                  className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2.5 flex items-center justify-between gap-3"
+                >
+                  <div className="min-w-0 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onFilterByLora(l.loraName);
+                        onClose();
+                      }}
+                      title={`Filter gallery by ${displayName} (${l.loraName})`}
+                      className="font-medium text-zinc-100 hover:text-indigo-300 truncate block cursor-pointer text-left transition-colors"
+                    >
+                      {displayName}
+                    </button>
+                    {availability.state !== 'installed' && (
+                      <span
+                        className={`text-[10px] shrink-0 ${availability.colorClass}`}
+                        title={availability.tooltip}
+                      >
+                        {availability.label}
+                      </span>
+                    )}
+                  </div>
+
                   <button
                     type="button"
                     onClick={() => {
                       onFilterByLora(l.loraName);
                       onClose();
                     }}
-                    className="font-medium text-indigo-300 hover:text-indigo-200 truncate block cursor-pointer"
+                    title={`Filter gallery by ${displayName}`}
+                    className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-0.5 rounded-full border text-xs shadow-sm shrink-0 cursor-pointer transition-opacity hover:opacity-90 ${pillStyle.pill}`}
                   >
-                    {l.loraName}
-                  </button>
-                  <span className="text-[11px] text-zinc-500">
-                    {l.nodeType || 'LoraLoader'} · Source: {l.provenance} ·{' '}
-                    <span className={availability.colorClass} title={availability.tooltip}>
-                      {availability.label}
+                    <Layers className={`w-3 h-3 shrink-0 ${pillStyle.icon}`} />
+                    <span className={`font-medium truncate max-w-[140px] ${pillStyle.textLight}`}>
+                      {pillLabel}
                     </span>
-                  </span>
+                    <span className={`text-[11px] font-mono tabular-nums ${pillStyle.strengthText}`}>
+                      {formatLoraStrength(l.modelStrength)}x
+                    </span>
+                  </button>
                 </div>
-                <div className="text-right font-mono tabular-nums shrink-0">
-                  <div className="text-zinc-200">Model: {l.modelStrength}</div>
-                  <div className="text-zinc-400 text-[11px]">CLIP: {l.clipStrength}</div>
-                </div>
-              </div>
               );
             })}
           </div>

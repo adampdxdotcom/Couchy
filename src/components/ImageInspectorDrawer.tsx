@@ -22,6 +22,7 @@ import type {
   LoraExplorerItem,
   LoraPreset,
   ModelInventoryItem,
+  PillTypeSettings,
   QueuedGhostCardItem,
 } from '../shared/types.ts';
 
@@ -31,6 +32,7 @@ interface ImageInspectorDrawerProps {
   loras?: LoraExplorerItem[];
   models?: ModelInventoryItem[];
   presets?: LoraPreset[];
+  pillTypeSettings?: PillTypeSettings;
   ghostItems?: QueuedGhostCardItem[];
   onClose: () => void;
   onPrev?: () => void;
@@ -80,6 +82,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   loras = [],
   models = [],
   presets = [],
+  pillTypeSettings,
   ghostItems = [],
   onClose,
   onPrev,
@@ -487,6 +490,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
               <InspectorPromptAndParamsSection
                 activeImage={activeImage}
+                loras={loras}
+                pillTypeSettings={pillTypeSettings}
                 onFilterByLora={onFilterByLora}
                 onClose={onClose}
               />

@@ -336,6 +336,7 @@ export default function App() {
           loras={workspace.visibleLoras}
           models={workspace.models}
           presets={workspace.presets}
+          pillTypeSettings={workspace.pillTypeSettings}
           ghostItems={livePolling.activeGhostItems}
           onCancelGhost={livePolling.cancelGhostJob}
           onClose={() => setInspectedImageId(null)}
