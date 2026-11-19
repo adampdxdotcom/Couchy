@@ -16,6 +16,10 @@ import {
   rescheduleFailedDownload,
   runScheduledDownloadNow,
 } from '../services/downloadSchedulerService.ts';
+import {
+  listMissingRedownloadCandidates,
+  startRedownloadMissingModels,
+} from '../services/modelRedownloadService.ts';
 import { VALID_LORA_CATEGORIES } from '../../shared/pillSettings.ts';
 import type { LoraCategory } from '../../shared/types.ts';
 
@@ -227,6 +231,33 @@ modelDownloadsRouter.delete('/downloads/:id', (req, res) => {
 });
 
 /**
+ * POST /api/downloads/redownload-missing
+ * Queues redownloads for all missing Civitai and Hugging Face models (or a single job/filename).
+ */
+modelDownloadsRouter.post('/downloads/redownload-missing', (req, res) => {
+  try {
+    const onlyJobId =
+      req.body?.jobId !== undefined && req.body?.jobId !== null ? Number(req.body.jobId) : null;
+    const onlyFilename =
+      typeof req.body?.filename === 'string' && req.body.filename.trim()
+        ? req.body.filename.trim()
+        : null;
+    const result = startRedownloadMissingModels({
+      onlyJobId: Number.isFinite(onlyJobId) ? onlyJobId : null,
+      onlyFilename,
+    });
+    const remainingMissingCount = listMissingRedownloadCandidates().length;
+    res.json({
+      queuedCount: result.queuedCount,
+      jobs: result.jobs,
+      missingCount: remainingMissingCount,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to redownload missing models' });
+  }
+});
+
+/**
  * GET /api/downloads
  * Lists recent model downloads enriched with linked model record details and first Civitai preview URL.
  */
@@ -253,6 +284,9 @@ modelDownloadsRouter.get('/downloads', (_req, res) => {
     if (m.file_path) byFilePath.set(m.file_path.toLowerCase(), m);
     if (m.filename) byFilename.set(m.filename.toLowerCase(), m);
   }
+
+  const missingCandidates = listMissingRedownloadCandidates();
+  const missingByKey = new Set(missingCandidates.map((c) => c.key));
 
   const enriched = jobs.map((job) => {
     const destPath = typeof job.destination_path === 'string' ? job.destination_path : '';
@@ -289,18 +323,24 @@ modelDownloadsRouter.get('/downloads', (_req, res) => {
       job.provider === 'civitai' &&
       /401|403|early access/i.test(String(job.error_message || ''));
 
+    const canRedownload = Boolean(baseName && missingByKey.has(baseName));
+
     return {
       ...job,
       installed_model_id: matched?.id ?? null,
       installed_filename: matched?.filename ?? null,
       installed_model_type: matched?.model_type ?? null,
       is_installed: matched ? Boolean(matched.is_installed) : false,
-      in_downloads: Boolean(matched?.download_file_path),
+      in_downloads: Boolean(matched?.download_file_path) && !canRedownload,
       first_preview_url: firstPreviewUrl,
       early_access_ends_at: parsedPayload?.earlyAccessEndsAt ?? null,
       can_reschedule: canReschedule,
+      can_redownload: canRedownload,
     };
   });
 
-  res.json({ items: enriched });
+  res.json({
+    items: enriched,
+    missingCount: missingCandidates.length,
+  });
 });

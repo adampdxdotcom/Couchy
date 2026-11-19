@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { ArrowUpRight, Clock, FileWarning, Play, Trash2 } from 'lucide-react';
+import { ArrowUpRight, Clock, Download, FileWarning, Loader2, Play, RotateCcw, Trash2 } from 'lucide-react';
 import { api } from '../../api/client.ts';
 import { formatUnlockCountdown, formatUnlockLocalTime } from './earlyAccessUtils.ts';
 
 interface DownloadHistoryListProps {
   downloads: any[];
+  missingCount?: number;
   onRefreshDownloads: () => Promise<void>;
   onInspectDownload?: (job: any) => void;
   onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
@@ -17,12 +18,54 @@ interface DownloadHistoryListProps {
  */
 export const DownloadHistoryList: React.FC<DownloadHistoryListProps> = ({
   downloads,
+  missingCount = 0,
   onRefreshDownloads,
   onInspectDownload,
   onPushToast,
 }) => {
   const [brokenPreviewIds, setBrokenPreviewIds] = useState<Record<number, boolean>>({});
   const [busyJobId, setBusyJobId] = useState<number | null>(null);
+  const [isRedownloadingAll, setIsRedownloadingAll] = useState(false);
+
+  const handleRedownloadAllMissing = async () => {
+    if (isRedownloadingAll) return;
+    setIsRedownloadingAll(true);
+    try {
+      const res = await api.redownloadMissingModels();
+      await onRefreshDownloads();
+      if (res.queuedCount > 0) {
+        onPushToast?.(
+          `Queued ${res.queuedCount} missing Civitai / Hugging Face model${
+            res.queuedCount === 1 ? '' : 's'
+          } for sequential redownload`,
+          'success'
+        );
+      } else {
+        onPushToast?.('No missing Civitai or Hugging Face downloads found to recover.', 'info');
+      }
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Failed to redownload missing models', 'error');
+    } finally {
+      setIsRedownloadingAll(false);
+    }
+  };
+
+  const handleRedownloadSingleJob = async (job: any) => {
+    setBusyJobId(job.id);
+    try {
+      const res = await api.redownloadMissingModels({ jobId: job.id });
+      await onRefreshDownloads();
+      if (res.queuedCount > 0) {
+        onPushToast?.(`Queued redownload for ${job.model_name}`, 'success');
+      } else {
+        onPushToast?.(`${job.model_name} is already on disk or downloading.`, 'info');
+      }
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Could not redownload model', 'error');
+    } finally {
+      setBusyJobId(null);
+    }
+  };
 
   const handleRunNow = async (job: any) => {
     setBusyJobId(job.id);
@@ -68,17 +111,44 @@ export const DownloadHistoryList: React.FC<DownloadHistoryListProps> = ({
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-sm font-display font-semibold text-zinc-100">
           Server-Side Download Queue &amp; Hash Verification History
         </h3>
-        <button
-          type="button"
-          onClick={onRefreshDownloads}
-          className="text-xs text-indigo-400 hover:text-indigo-300 cursor-pointer"
-        >
-          Refresh Status
-        </button>
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            disabled={isRedownloadingAll || missingCount === 0}
+            onClick={() => void handleRedownloadAllMissing()}
+            title={
+              missingCount > 0
+                ? `Redownload ${missingCount} missing Civitai & Hugging Face model(s) sequentially`
+                : 'No missing Civitai or Hugging Face downloads detected'
+            }
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors ${
+              missingCount > 0
+                ? 'bg-indigo-600/20 hover:bg-indigo-600/30 border-indigo-500/50 text-indigo-200 cursor-pointer'
+                : 'bg-zinc-950 border-zinc-800 text-zinc-500 cursor-not-allowed opacity-60'
+            }`}
+          >
+            {isRedownloadingAll ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+            ) : (
+              <Download className="w-3.5 h-3.5 text-indigo-400" />
+            )}
+            <span>
+              Redownload Missing{missingCount > 0 ? ` (${missingCount})` : ''}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onRefreshDownloads}
+            className="text-xs text-indigo-400 hover:text-indigo-300 cursor-pointer"
+          >
+            Refresh Status
+          </button>
+        </div>
       </div>
 
       {downloads.length === 0 ? (
@@ -228,6 +298,18 @@ export const DownloadHistoryList: React.FC<DownloadHistoryListProps> = ({
                         </>
                       ) : (
                         <>
+                          {d.can_redownload && d.status !== 'downloading' && (
+                            <button
+                              type="button"
+                              disabled={busyJobId === d.id}
+                              onClick={() => void handleRedownloadSingleJob(d)}
+                              title="Redownload this missing model from Civitai / Hugging Face"
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 hover:text-white disabled:opacity-50 cursor-pointer text-[11px]"
+                            >
+                              <RotateCcw className="w-3 h-3 text-indigo-400" />
+                              <span>Redownload</span>
+                            </button>
+                          )}
                           {d.can_reschedule && (
                             <button
                               type="button"

@@ -482,7 +482,18 @@ export const api = {
       method: 'DELETE',
     }),
 
-  listDownloads: () => requestJson<{ items: DownloadJobRecord[] }>('/api/downloads'),
+  listDownloads: () =>
+    requestJson<{ items: DownloadJobRecord[]; missingCount?: number }>('/api/downloads'),
+
+  redownloadMissingModels: (payload?: { jobId?: number | null; filename?: string | null }) =>
+    requestJson<{
+      queuedCount: number;
+      jobs: DownloadJobRecord[];
+      missingCount: number;
+    }>('/api/downloads/redownload-missing', {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }),
 
   listWorkflows: () => requestJson<{ items: WorkflowLibraryItem[] }>('/api/workflows'),
 

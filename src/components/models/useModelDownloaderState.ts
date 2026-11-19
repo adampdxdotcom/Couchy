@@ -23,11 +23,13 @@ export function useModelDownloaderState(
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchNotice, setSearchNotice] = useState<string | null>(null);
   const [downloads, setDownloads] = useState<any[]>([]);
+  const [missingDownloadsCount, setMissingDownloadsCount] = useState<number>(0);
 
   const refreshDownloads = async () => {
     try {
       const res = await api.listDownloads();
       setDownloads(res.items || []);
+      setMissingDownloadsCount(Number(res.missingCount ?? 0));
     } catch {
       // ignore transient network error
     }
@@ -65,6 +67,7 @@ export function useModelDownloaderState(
         const res = await api.listDownloads();
         const next = res.items || [];
         setDownloads(next);
+        setMissingDownloadsCount(Number(res.missingCount ?? 0));
         if (!next.some((d: any) => d.status === 'downloading')) {
           await onRefreshInventory();
         }
@@ -118,6 +121,7 @@ export function useModelDownloaderState(
     searchNotice,
     setSearchNotice,
     downloads,
+    missingDownloadsCount,
     refreshDownloads,
     handleExternalSearch,
   };

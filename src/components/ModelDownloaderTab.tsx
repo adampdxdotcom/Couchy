@@ -29,6 +29,7 @@ interface ModelDownloaderTabProps {
   searchNotice?: string | null;
   onDismissSearchNotice?: () => void;
   downloads: any[];
+  missingDownloadsCount?: number;
   pillTypeSettings?: PillTypeSettings;
   onSearch: (e?: React.FormEvent, customQ?: string) => Promise<void>;
   onRefreshDownloads: () => Promise<void>;
@@ -55,6 +56,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
   searchNotice,
   onDismissSearchNotice,
   downloads,
+  missingDownloadsCount = 0,
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   onSearch,
   onRefreshDownloads,
@@ -168,6 +170,7 @@ export const ModelDownloaderTab: React.FC<ModelDownloaderTabProps> = ({
 
       <DownloadHistoryList
         downloads={downloads}
+        missingCount={missingDownloadsCount}
         onRefreshDownloads={onRefreshDownloads}
         onInspectDownload={onInspectDownload}
         onPushToast={onPushToast}
