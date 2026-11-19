@@ -168,8 +168,8 @@ export function listMissingRedownloadCandidates(): MissingRedownloadCandidate[] 
   const modelsRows = db
     .prepare(
       `SELECT id, name, filename, model_type, lora_category, file_path, download_file_path,
-              sha256_hash, is_installed, download_url, civitai_id, civitai_version_id,
-              civitai_url, hf_repo_id
+              sha256_hash, is_installed, COALESCE(is_hidden, 0) AS is_hidden,
+              download_url, civitai_id, civitai_version_id, civitai_url, hf_repo_id
        FROM models`
     )
     .all() as Array<{
@@ -182,6 +182,7 @@ export function listMissingRedownloadCandidates(): MissingRedownloadCandidate[] 
     download_file_path: string | null;
     sha256_hash: string | null;
     is_installed: number;
+    is_hidden: number;
     download_url: string | null;
     civitai_id: string | null;
     civitai_version_id: string | null;
@@ -191,8 +192,9 @@ export function listMissingRedownloadCandidates(): MissingRedownloadCandidate[] 
 
   const candidates = new Map<string, MissingRedownloadCandidate>();
 
-  // 1. Inspect `models` rows
+  // 1. Inspect `models` rows (excluding hidden models/LoRAs)
   for (const m of modelsRows) {
+    if (m.is_hidden) continue;
     const safeFilename = path.basename(String(m.filename || '').trim());
     if (!safeFilename) continue;
     const key = safeFilename.toLowerCase();
@@ -279,6 +281,7 @@ export function listMissingRedownloadCandidates(): MissingRedownloadCandidate[] 
     if (fileExistsWithSize(destPath)) continue;
 
     const existingModel = modelsRows.find((m) => m.filename.toLowerCase() === key);
+    if (existingModel?.is_hidden) continue;
     if (
       existingModel &&
       (fileExistsWithSize(existingModel.file_path) ||
