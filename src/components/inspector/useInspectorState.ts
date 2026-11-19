@@ -183,6 +183,9 @@ export function useInspectorState({
             visualWorkflowJson: res.visualWorkflowJson,
             apiWorkflowJson: res.apiWorkflowJson,
           });
+          if (res.image.seriesId && res.image.seriesId !== explicitSeriesId) {
+            setSlotASeriesContextId(res.image.seriesId);
+          }
           setEditablePositivePrompt(res.image.positivePrompt || '');
           setEditableLoras(res.image.loras || []);
           setEditableGenParams(buildEditableGenParamsFromImage(res.image));
@@ -231,10 +234,12 @@ export function useInspectorState({
   // Refresh active detail immediately when a pending series iteration completes and leaves the queue
   useEffect(() => {
     if (prevPendingCountRef.current > 0 && matchingPendingGhosts.length < prevPendingCountRef.current) {
-      refreshActiveDetail(selectedIterationId, slotASeriesContextId);
+      const nextSeriesPreference =
+        activeImage.seriesKind === 'multi_shot' ? null : slotASeriesContextId;
+      refreshActiveDetail(selectedIterationId, nextSeriesPreference);
     }
     prevPendingCountRef.current = matchingPendingGhosts.length;
-  }, [matchingPendingGhosts.length, selectedIterationId, slotASeriesContextId]);
+  }, [activeImage.seriesKind, matchingPendingGhosts.length, refreshActiveDetail, selectedIterationId, slotASeriesContextId]);
 
   const handleRateActiveImage = useCallback(
     async (targetRating: number) => {
@@ -585,7 +590,9 @@ export function useInspectorState({
         },
       });
       setReproStatusIsError(false);
-      setReproStatusMsg(`Submitted to ComfyUI (Prompt ID: ${res.job.comfyui_prompt_id})`);
+      setReproStatusMsg(
+        `Submitted to ComfyUI — will stack automatically on completion (Prompt ID: ${res.job.comfyui_prompt_id})`
+      );
       onUpdated();
     } catch (err: any) {
       setReproStatusIsError(true);

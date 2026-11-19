@@ -476,8 +476,9 @@ export function preserveFailedGenerationConversation(itemId: number): {
 }
 
 /**
- * Automatically stacks an upscaled image onto its source image's series
- * (or creates a new 2-image series `[sourceImageId, derivedImageId]` if standalone).
+ * Automatically stacks an upscaled or Inspector-reproduced image onto its source image's
+ * iterative series (or creates a new 2-image series `[sourceImageId, derivedImageId]` if standalone
+ * or branched from a `multi_shot` set).
  */
 export function attachUpscaledImageToSeries(
   sourceImageId: number,
@@ -504,7 +505,7 @@ export function attachUpscaledImageToSeries(
   return attachGeneratedImageToSeries({
     imageId: derivedImageId,
     seriesId: existingRow?.series_id ?? null,
-    branchFromImageId: sourceImageId,
+    branchFromImageId: existingRow?.series_id ? null : sourceImageId,
     chatSnapshotJson: existingRow?.chat_snapshot_json ?? null,
   });
 }

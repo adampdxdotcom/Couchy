@@ -577,16 +577,31 @@ export async function submitWorkflowReproduction(params: {
 
     // Lookup confirmed character on source image if present
     let sourceCharacterId: number | null = null;
+    let sourceCharacterName: string | null = null;
     if (params.imageId) {
       const charRow = db
         .prepare(
-          `SELECT character_id FROM image_characters
-           WHERE image_id = ? AND status = 'confirmed' LIMIT 1`
+          `SELECT ic.character_id, c.name AS character_name
+           FROM image_characters ic
+           JOIN characters c ON c.id = ic.character_id
+           WHERE ic.image_id = ? AND ic.status = 'confirmed' LIMIT 1`
         )
-        .get(params.imageId) as { character_id?: number } | undefined;
+        .get(params.imageId) as { character_id?: number; character_name?: string } | undefined;
       if (charRow?.character_id) {
         sourceCharacterId = Number(charRow.character_id);
+        sourceCharacterName = charRow.character_name || null;
       }
+
+      registerQueuedPromptSeriesTarget(promptId, {
+        sourceImageId: params.imageId,
+        characterId: sourceCharacterId,
+        characterName: sourceCharacterName,
+        prompt:
+          typeof params.positivePrompt === 'string' && params.positivePrompt.trim()
+            ? params.positivePrompt.trim()
+            : `Run Workflow from Image #${params.imageId}`,
+        isUpscale: true,
+      });
     }
 
     // Poll ComfyUI /history/<prompt_id> in the background via unified poller
@@ -595,6 +610,14 @@ export async function submitWorkflowReproduction(params: {
       characterId: sourceCharacterId,
       maxAttempts: 90,
       onSuccess: ({ outputImageIds }) => {
+        if (params.imageId) {
+          for (const derivedId of outputImageIds) {
+            if (derivedId !== params.imageId) {
+              attachUpscaledImageToSeries(params.imageId, derivedId);
+            }
+          }
+          notifyImageIndexed();
+        }
         db.prepare(
           `UPDATE reproduction_jobs
            SET status = 'completed',

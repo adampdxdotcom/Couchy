@@ -292,6 +292,9 @@ function collectReproductionJobGhosts(
       existingCount + items.length === 0
     );
     const reproLoraNames = queueMeta?.loraNames || parseLoraNamesJson(rj.img_lora_names_json);
+    const seriesTarget = rj.source_image_id
+      ? resolveSeriesTargetForJob(null, Number(rj.source_image_id), outputImageId, true)
+      : { targetSeriesId: null, targetImageId: null, isBranchSplit: false };
 
     items.push({
       itemId: 1_000_000 + Number(rj.job_id),
@@ -310,6 +313,9 @@ function collectReproductionJobGhosts(
       characterId: rj.char_id ? Number(rj.char_id) : null,
       characterName: rj.char_name || null,
       outputImageId,
+      targetSeriesId: seriesTarget.targetSeriesId,
+      targetImageId: seriesTarget.targetImageId,
+      isBranchSplit: seriesTarget.isBranchSplit,
       createdAt: toIsoUtc(rj.submitted_at),
     });
   }
