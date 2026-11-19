@@ -8,12 +8,18 @@ import {
 } from './llmClientService.ts';
 import {
   buildLlmCharacterAndLoraContext,
+  extractLoraCheckBlock,
   interpolatePromptTemplate,
   normalizeLoraMatchKey,
   sanitizeAgentPrompt,
+  verifyPromptReflectsLoraCheck,
 } from './llmPromptUtils.ts';
 
-function parseShotPromptsFromLlm(cleaned: string): string[] {
+function parseShotPromptsFromLlm(rawContent: string): string[] {
+  const cleaned = rawContent
+    .replace(/<lora_check>[\s\S]*?(?:<\/lora_check>|(?=<shot_1>)|(?=<shot>))/gi, '')
+    .trim();
+
   // 1. Primary parser: <shot_1>...</shot_1> XML tags
   const shotTagMatches = Array.from(
     cleaned.matchAll(/<shot(?:_\d+)?>([\s\S]*?)<\/shot(?:_\d+)?>/gi)
@@ -121,12 +127,13 @@ export async function generatePhotoSetPromptsWithAgent(params: {
         })
       : '';
 
-  const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
-    characterName: params.characterName,
-    characterDescription: params.characterDescription,
-    characterPhysicalDescription: params.characterPhysicalDescription,
-    loraNames: params.loraNames,
-  });
+  const { characterBlock, attachedLoraBlock, nonCharacterLoraBlock, hasNonCharacterLoras } =
+    buildLlmCharacterAndLoraContext({
+      characterName: params.characterName,
+      characterDescription: params.characterDescription,
+      characterPhysicalDescription: params.characterPhysicalDescription,
+      loraNames: params.loraNames,
+    });
 
   const expansionDirectiveRaw =
     params.expansionDirective?.trim() ||
@@ -141,11 +148,22 @@ export async function generatePhotoSetPromptsWithAgent(params: {
     basePrompt: resolvedBaseStyle || params.theme,
   });
 
+  const loraExpansionRule = hasNonCharacterLoras
+    ? [
+        'ATTACHED LORA SELF-CHECK RULE:',
+        '- Before outputting <shot_1>, output <lora_check>...</lora_check> stating the concrete visual elements (setting, architecture, uniform/wardrobe, props, lighting, or style) from the Attached non-character LoRA(s) that must anchor every shot in this set.',
+        '- Every single shot (<shot_1> through <shot_' +
+          count +
+          '>) MUST explicitly include those visual elements so no shot drifts away from the attached LoRA concept.',
+      ].join('\n')
+    : null;
+
   const sentSystemPrompt = [
     settings.conversationSystemPrompt,
     expansionDirective,
     characterBlock,
     attachedLoraBlock,
+    loraExpansionRule,
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -159,9 +177,14 @@ export async function generatePhotoSetPromptsWithAgent(params: {
   if (resolvedBaseStyle && resolvedBaseStyle.trim() !== params.theme.trim()) {
     userLines.push('', `Visual Style Foundation:`, resolvedBaseStyle.trim());
   }
+  if (hasNonCharacterLoras && nonCharacterLoraBlock) {
+    userLines.push('', nonCharacterLoraBlock);
+  }
   userLines.push(
     '',
-    `Return ONLY ${count} prompts wrapped in <shot_1>...</shot_1> through <shot_${count}>...</shot_${count}> tags with no extra commentary.`
+    hasNonCharacterLoras
+      ? `Return ONLY <lora_check>...</lora_check> followed by ${count} prompts wrapped in <shot_1>...</shot_1> through <shot_${count}>...</shot_${count}> tags with no extra commentary.`
+      : `Return ONLY ${count} prompts wrapped in <shot_1>...</shot_1> through <shot_${count}>...</shot_${count}> tags with no extra commentary.`
   );
   const sentUserPrompt = userLines.join('\n');
 
@@ -179,7 +202,8 @@ export async function generatePhotoSetPromptsWithAgent(params: {
       timeoutMs: 90_000,
     });
 
-    const parsedPrompts = parseShotPromptsFromLlm(res.content);
+    let loraCheck = extractLoraCheckBlock(res.content);
+    let parsedPrompts = parseShotPromptsFromLlm(res.content);
     if (parsedPrompts.length === 0) {
       throw new Error('Local LLM response could not be parsed into individual prompts.');
     }
@@ -188,9 +212,59 @@ export async function generatePhotoSetPromptsWithAgent(params: {
       parsedPrompts.push(parsedPrompts[parsedPrompts.length % parsedPrompts.length]);
     }
 
-    const sanitizedPrompts = parsedPrompts
+    let sanitizedPrompts = parsedPrompts
       .slice(0, count)
       .map((p) => sanitizeAgentPrompt(p, params.characterName));
+
+    if (hasNonCharacterLoras && sanitizedPrompts.length > 0) {
+      const checkResults = sanitizedPrompts.map((shot) =>
+        verifyPromptReflectsLoraCheck(shot, loraCheck, nonCharacterLoraBlock)
+      );
+      const passedCount = checkResults.filter((r) => r.passed).length;
+      const allPassed = passedCount === sanitizedPrompts.length;
+
+      if (loraCheck) {
+        logger.info(
+          'LocalLLM',
+          `Batch Expansion <lora_check> (${passedCount}/${sanitizedPrompts.length} shots verified): ${loraCheck.replace(/\s+/g, ' ')}`
+        );
+      }
+
+      if (!allPassed) {
+        const expectedKeywords = checkResults[0]?.expectedKeywords.slice(0, 10).join(', ') || '';
+        const retryRes = await postChatCompletion({
+          baseUrl,
+          model: modelToUse,
+          messages: [
+            { role: 'system', content: sentSystemPrompt },
+            { role: 'user', content: sentUserPrompt },
+            { role: 'assistant', content: res.content },
+            {
+              role: 'user',
+              content: `Self-Check Verification Failed: One or more expanded shots omitted the concrete visual elements from your <lora_check> / Attached LoRAs (expected visual cues such as: ${expectedKeywords}). Rewrite all ${count} shots (<shot_1> through <shot_${count}>) so EVERY shot explicitly depicts those attached LoRA setting, wardrobe, or visual style elements.`,
+            },
+          ],
+          temperature: 0.68,
+          maxTokens: 4096,
+          timeoutMs: 75_000,
+        });
+
+        const retryParsed = parseShotPromptsFromLlm(retryRes.content);
+        if (retryParsed.length > 0) {
+          while (retryParsed.length < count) {
+            retryParsed.push(retryParsed[retryParsed.length % retryParsed.length]);
+          }
+          sanitizedPrompts = retryParsed
+            .slice(0, count)
+            .map((p) => sanitizeAgentPrompt(p, params.characterName));
+          loraCheck = extractLoraCheckBlock(retryRes.content) || loraCheck;
+          logger.info(
+            'LocalLLM',
+            'Batch Expansion post-generation LoRA verification retry succeeded'
+          );
+        }
+      }
+    }
 
     return {
       prompts: sanitizedPrompts,
@@ -299,6 +373,7 @@ function parseAgentConversationResponse(params: {
   proposalKind: 'prompt' | 'concept';
   selectedLoras: string[];
   selectedPreset: { id: number; name: string; nickname: string } | null;
+  loraCheck: string | null;
 } {
   const { withoutThink, availableCandidates, presetRows, targetBatchCount, characterName } = params;
 
@@ -366,9 +441,15 @@ function parseAgentConversationResponse(params: {
     }
   }
 
+  const loraCheck = extractLoraCheckBlock(withoutThink);
+
   const cleanedContent = withoutThink
     .replace(/<selected_loras>[\s\S]*?(?:<\/selected_loras>|$)/gi, '')
     .replace(/<selected_preset>[\s\S]*?(?:<\/selected_preset>|$)/gi, '')
+    .replace(
+      /<lora_check>[\s\S]*?(?:<\/lora_check>|(?=<proposed_prompt>)|(?=<proposed_concept>)|$)/gi,
+      ''
+    )
     .trim();
 
   let proposedPrompt: string | null = null;
@@ -417,7 +498,14 @@ function parseAgentConversationResponse(params: {
     replyText = 'Could you share a bit more about the scene, lighting, or mood you have in mind?';
   }
 
-  return { reply: replyText, proposedPrompt, proposalKind, selectedLoras, selectedPreset };
+  return {
+    reply: replyText,
+    proposedPrompt,
+    proposalKind,
+    selectedLoras,
+    selectedPreset,
+    loraCheck,
+  };
 }
 
 /**
@@ -557,6 +645,16 @@ export async function converseQuickGenPrompt(params: {
     );
   }
 
+  contextNotes.push(
+    [
+      `LORA CONCEPT SELF-CHECK & TAG ORDER (whenever you emit a <proposed_prompt> or <proposed_concept> and any non-character LoRA is already attached OR newly selected via <selected_loras>):`,
+      `1. Write your brief conversational reply first.`,
+      `2. If selecting new LoRA(s) or a preset on this turn, emit <selected_preset> / <selected_loras> BEFORE the prompt block.`,
+      `3. Next, emit <lora_check>...</lora_check> listing each active or newly selected non-character LoRA and the concrete visual elements (setting, architecture, uniform/wardrobe, props, lighting, or style) that MUST appear in your proposal (if the user explicitly asked to change away from an earlier LoRA's setting/outfit, mark that line "Skip: user pivot").`,
+      `4. Finally, emit <proposed_prompt>...</proposed_prompt> (or <proposed_concept>...</proposed_concept>) explicitly weaving every active visual element from <lora_check> into the scene description.`,
+    ].join('\n')
+  );
+
   const validMessages = params.messages.filter(
     (m) =>
       m &&
@@ -608,7 +706,7 @@ export async function converseQuickGenPrompt(params: {
       model: modelToUse,
       messages: [{ role: 'system', content: systemPrompt }, ...recentMessages],
       temperature: 0.7,
-      maxTokens: 1500,
+      maxTokens: 1650,
       timeoutMs: 90_000,
     });
 
@@ -620,6 +718,76 @@ export async function converseQuickGenPrompt(params: {
       characterName: params.characterName,
     });
 
+    // Combine already-attached LoRAs + any newly selected LoRAs from this turn for post-generation verification
+    const combinedLoraNames = Array.from(
+      new Set([...(params.loraNames || []), ...parsed.selectedLoras])
+    );
+    const { nonCharacterLoraBlock, hasNonCharacterLoras } = buildLlmCharacterAndLoraContext({
+      characterName: params.characterName,
+      loraNames: combinedLoraNames,
+    });
+
+    if (parsed.proposedPrompt && hasNonCharacterLoras) {
+      const checkResult = verifyPromptReflectsLoraCheck(
+        parsed.proposedPrompt,
+        parsed.loraCheck,
+        nonCharacterLoraBlock
+      );
+
+      if (parsed.loraCheck) {
+        logger.info(
+          'LocalLLM',
+          `Conversation <lora_check> (${checkResult.passed ? 'verified' : 'missed concept — retrying'}): ${parsed.loraCheck.replace(/\s+/g, ' ')}`
+        );
+      }
+
+      if (!checkResult.passed) {
+        const missingPreview = checkResult.expectedKeywords.slice(0, 10).join(', ');
+        const targetTag = parsed.proposalKind === 'concept' ? 'proposed_concept' : 'proposed_prompt';
+        const retryRes = await postChatCompletion({
+          baseUrl,
+          model: modelToUse,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...recentMessages,
+            { role: 'assistant', content: res.content },
+            {
+              role: 'user',
+              content: `Self-Check Verification Failed: Your <${targetTag}> did not explicitly include the visual concepts from your active/selected LoRAs (expected visual cues such as: ${missingPreview}). Keep your conversational reply, <selected_loras>, and <lora_check>, and rewrite <${targetTag}>...</${targetTag}> so the setting, wardrobe, lighting, or visual style explicitly depicts those LoRA elements.`,
+            },
+          ],
+          temperature: 0.65,
+          maxTokens: 1500,
+          timeoutMs: 60_000,
+        });
+
+        const retryParsed = parseAgentConversationResponse({
+          withoutThink: retryRes.content,
+          availableCandidates,
+          presetRows,
+          targetBatchCount,
+          characterName: params.characterName,
+        });
+
+        if (retryParsed.proposedPrompt && retryParsed.proposedPrompt.length >= 15) {
+          parsed.proposedPrompt = retryParsed.proposedPrompt;
+          if (retryParsed.reply) parsed.reply = retryParsed.reply;
+          if (retryParsed.selectedLoras.length > 0) {
+            parsed.selectedLoras = Array.from(
+              new Set([...parsed.selectedLoras, ...retryParsed.selectedLoras])
+            ).slice(0, 3);
+          }
+          if (!parsed.selectedPreset && retryParsed.selectedPreset) {
+            parsed.selectedPreset = retryParsed.selectedPreset;
+          }
+          logger.info(
+            'LocalLLM',
+            'Conversation post-generation LoRA verification retry succeeded'
+          );
+        }
+      }
+    }
+
     logger.info(
       'LocalLLM',
       `Conversation turn completed (${res.modelUsed}) | proposalKind=${parsed.proposalKind} | hasProposal=${Boolean(
@@ -628,7 +796,11 @@ export async function converseQuickGenPrompt(params: {
     );
 
     return {
-      ...parsed,
+      reply: parsed.reply,
+      proposedPrompt: parsed.proposedPrompt,
+      proposalKind: parsed.proposalKind,
+      selectedLoras: parsed.selectedLoras,
+      selectedPreset: parsed.selectedPreset,
       modelUsed: res.modelUsed,
     };
   } catch (err: any) {

@@ -110,6 +110,18 @@ describe('randomRollService', () => {
       'Medium shot of the subject sitting in a sunlit meadow wearing a floral sundress.';
     const failVerification = rr.verifyPromptReflectsLoraCheck(missedPrompt, extractedCheck);
     assert.equal(failVerification.passed, false);
+
+    const pivotedLoraCheck = [
+      '- Star Trek Settings [concept]: Skip: user pivot to sunny beach.',
+      '- Dramatic Rim Light [lighting]: Must include high-contrast golden rim lighting and deep shadows.',
+    ].join('\n');
+    const beachPromptWithRimLight =
+      'Medium shot of the subject walking along a sunny beach with high-contrast golden rim lighting and deep shadows.';
+    const pivotVerification = rr.verifyPromptReflectsLoraCheck(
+      beachPromptWithRimLight,
+      pivotedLoraCheck
+    );
+    assert.equal(pivotVerification.passed, true);
   });
 
   it('enforces eligibility rules: characters with installed LoRAs, described mention checkpoints, and style LoRA exclusions', () => {

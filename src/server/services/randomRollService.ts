@@ -13,9 +13,11 @@ import {
 } from './llm/llmClientService.ts';
 import {
   buildLlmCharacterAndLoraContext,
+  extractLoraCheckBlock,
   filterCharacterIdentityTags,
   normalizeLoraMatchKey,
   sanitizeAgentPrompt,
+  verifyPromptReflectsLoraCheck,
 } from './llm/llmPromptUtils.ts';
 import { getWorkflowDefaults } from './workflowCompilerService.ts';
 
@@ -531,14 +533,8 @@ export function resolveSelectedBaseCandidate(
   );
 }
 
-export function extractLoraCheckFromRandomRollResponse(llmContent: string): string | null {
-  const match = llmContent.match(
-    /<lora_check>([\s\S]*?)(?:<\/lora_check>|(?=<selected_base>)|(?=<proposed_prompt>))/i
-  );
-  if (!match || !match[1]) return null;
-  const cleaned = match[1].trim();
-  return cleaned.length > 0 ? cleaned : null;
-}
+export const extractLoraCheckFromRandomRollResponse = extractLoraCheckBlock;
+export { verifyPromptReflectsLoraCheck };
 
 export function extractPromptFromRandomRollResponse(
   llmContent: string,
@@ -551,75 +547,6 @@ export function extractPromptFromRandomRollResponse(
   const match = withoutMetaTags.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
   const raw = (match?.[1] || withoutMetaTags).replace(/^["']|["']$/g, '').trim();
   return sanitizeAgentPrompt(raw, characterName);
-}
-
-const VERIFICATION_STOPWORDS = new Set([
-  'about', 'above', 'across', 'active', 'added', 'after', 'again', 'against', 'along', 'also',
-  'always', 'among', 'around', 'attached', 'avoid', 'background', 'because', 'before', 'behind',
-  'being', 'below', 'between', 'blend', 'both', 'bring', 'build', 'camera', 'category', 'character',
-  'check', 'clear', 'clearly', 'close', 'color', 'colors', 'combine', 'complement', 'composition',
-  'concept', 'conflict', 'conflicting', 'create', 'depict', 'describe', 'description', 'design',
-  'detail', 'details', 'Discard', 'discard', 'drop', 'dropped', 'during', 'effect', 'element',
-  'elements', 'Emphasis', 'emphasis', 'ensure', 'environment', 'every', 'feature', 'features',
-  'female', 'figure', 'filter', 'first', 'focus', 'frame', 'framing', 'front', 'general', 'generic',
-  'girl', 'given', 'great', 'handle', 'having', 'heavy', 'highlight', 'image', 'include', 'including',
-  'incorporate', 'instead', 'into', 'keep', 'keeping', 'krea2', 'light', 'lighting', 'like', 'lora',
-  'loras', 'looks', 'make', 'making', 'match', 'matching', 'medium', 'mention', 'model', 'models',
-  'motif', 'motifs', 'must', 'natural', 'never', 'notes', 'object', 'optional', 'other', 'outfit',
-  'overall', 'person', 'photo', 'photograph', 'photography', 'place', 'play', 'point', 'portrait',
-  'pose', 'present', 'primary', 'priority', 'profile', 'prompt', 'quality', 'random', 'rather',
-  'realistic', 'render', 'require', 'required', 'retain', 'rolled', 'rules', 'scene', 'second',
-  'select', 'selected', 'setting', 'setup', 'sharp', 'shoot', 'short', 'should', 'show', 'showcase',
-  'showing', 'shows', 'single', 'small', 'specific', 'strong', 'style', 'styled', 'styling',
-  'subject', 'subtle', 'suited', 'support', 'tags', 'tailor', 'theme', 'their', 'there', 'these',
-  'they', 'thing', 'things', 'think', 'third', 'this', 'those', 'three', 'through', 'together',
-  'token', 'tokens', 'toward', 'trait', 'traits', 'trigger', 'turbo', 'under', 'using', 'value',
-  'values', 'visual', 'vivid', 'wardrobe', 'where', 'which', 'while', 'without', 'woman', 'words',
-  'workflow', 'world', 'would', 'write',
-]);
-
-/**
- * Extracts concrete visual keywords from `<lora_check>` (excluding any "Drop/Discard" tag-filter line)
- * and verifies whether the generated `<proposed_prompt>` actually incorporates them.
- */
-export function verifyPromptReflectsLoraCheck(
-  prompt: string,
-  loraCheck: string | null,
-  attachedLoraBlock?: string | null
-): { passed: boolean; expectedKeywords: string[]; matchedKeywords: string[] } {
-  const sourceLines = (loraCheck || attachedLoraBlock || '')
-    .split(/\r?\n/)
-    .filter((line) => !/\b(?:drop|dropped|discard|discarded|ignore|ignored|remove|removed)\s*:/i.test(line))
-    .map((line) =>
-      line
-        .replace(/^(?:[-*•]\s*)?[^:\n]{1,50}:\s*/, '')
-        .replace(/\[(?:concept|clothing|style|pose|lighting|character|unclassified)\]/gi, ' ')
-    );
-
-  const rawWords = sourceLines
-    .join(' ')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, ' ')
-    .split(/\s+/)
-    .map((w) => w.replace(/^-+|-+$/g, ''))
-    .filter((w) => w.length >= 4 && !VERIFICATION_STOPWORDS.has(w) && !/^\d+$/.test(w));
-
-  const expectedKeywords = Array.from(new Set(rawWords));
-  if (expectedKeywords.length < 2) {
-    return { passed: true, expectedKeywords, matchedKeywords: expectedKeywords };
-  }
-
-  const promptLower = prompt.toLowerCase();
-  const matchedKeywords = expectedKeywords.filter((kw) => {
-    const stem = kw.length >= 6 ? kw.replace(/(?:ing|ed|es|s)$/, '') : kw;
-    return promptLower.includes(kw) || (stem.length >= 4 && promptLower.includes(stem));
-  });
-
-  return {
-    passed: matchedKeywords.length >= 1,
-    expectedKeywords,
-    matchedKeywords,
-  };
 }
 
 function buildShuffledBaseContext(candidates: BaseModelCandidate[]): {

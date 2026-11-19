@@ -72,6 +72,8 @@ export function buildLlmCharacterAndLoraContext(params: {
 }): {
   characterBlock: string | null;
   attachedLoraBlock: string | null;
+  nonCharacterLoraBlock: string | null;
+  hasNonCharacterLoras: boolean;
 } {
   const attachedKeys = (params.loraNames || [])
     .map((l) => ({ raw: l, key: normalizeLoraMatchKey(l) }))
@@ -117,6 +119,7 @@ export function buildLlmCharacterAndLoraContext(params: {
   let fallbackDbCharPhysical = '';
 
   const attachedLines: string[] = [];
+  const nonCharacterLines: string[] = [];
   const seenKeys = new Set<string>();
 
   for (const { raw, key } of attachedKeys) {
@@ -161,10 +164,16 @@ export function buildLlmCharacterAndLoraContext(params: {
         : '';
 
     const detailParts = [variantNote, desc].filter(Boolean);
-    if (detailParts.length > 0) {
-      attachedLines.push(`- ${label}${catTag}: ${detailParts.join(' — ')}`);
-    } else {
-      attachedLines.push(`- ${label}${catTag}`);
+    const formattedLine =
+      detailParts.length > 0
+        ? `- ${label}${catTag}: ${detailParts.join(' — ')}`
+        : `- ${label}${catTag}`;
+    attachedLines.push(formattedLine);
+
+    const isCharCategory =
+      Boolean(matchedCharLora) || rawCategory.trim().toLowerCase() === 'character';
+    if (!isCharCategory) {
+      nonCharacterLines.push(formattedLine);
     }
   }
 
@@ -217,7 +226,110 @@ export function buildLlmCharacterAndLoraContext(params: {
         ].join('\n')
       : null;
 
-  return { characterBlock, attachedLoraBlock };
+  const nonCharacterLoraBlock =
+    nonCharacterLines.length > 0
+      ? [
+          `Active Non-Character LoRAs (reflect their concrete visual elements in the scene):`,
+          ...nonCharacterLines,
+        ].join('\n')
+      : null;
+
+  return {
+    characterBlock,
+    attachedLoraBlock,
+    nonCharacterLoraBlock,
+    hasNonCharacterLoras: nonCharacterLines.length > 0,
+  };
+}
+
+/**
+ * Extracts `<lora_check>...</lora_check>` scratchpad content from an LLM response if present.
+ */
+export function extractLoraCheckBlock(llmContent: string): string | null {
+  const match = llmContent.match(
+    /<lora_check>([\s\S]*?)(?:<\/lora_check>|(?=<selected_base>)|(?=<selected_preset>)|(?=<selected_loras>)|(?=<proposed_prompt>)|(?=<proposed_concept>)|(?=<shot_1>)|(?=<shot>))/i
+  );
+  if (!match || !match[1]) return null;
+  const cleaned = match[1].trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+const VERIFICATION_STOPWORDS = new Set([
+  'about', 'above', 'across', 'active', 'added', 'after', 'again', 'against', 'along', 'also',
+  'always', 'among', 'around', 'attached', 'avoid', 'background', 'because', 'before', 'behind',
+  'being', 'below', 'between', 'blend', 'both', 'bring', 'build', 'camera', 'category', 'character',
+  'check', 'clear', 'clearly', 'close', 'color', 'colors', 'combine', 'complement', 'composition',
+  'concept', 'conflict', 'conflicting', 'create', 'depict', 'describe', 'description', 'design',
+  'detail', 'details', 'discard', 'drop', 'dropped', 'during', 'effect', 'element', 'elements',
+  'emphasis', 'ensure', 'environment', 'every', 'feature', 'features', 'female', 'figure', 'filter',
+  'first', 'focus', 'frame', 'framing', 'front', 'general', 'generic', 'girl', 'given', 'great',
+  'handle', 'having', 'heavy', 'highlight', 'image', 'include', 'including', 'incorporate',
+  'instead', 'into', 'keep', 'keeping', 'krea2', 'light', 'lighting', 'like', 'lora', 'loras',
+  'looks', 'make', 'making', 'match', 'matching', 'medium', 'mention', 'model', 'models', 'motif',
+  'motifs', 'must', 'natural', 'never', 'notes', 'object', 'optional', 'other', 'outfit', 'overall',
+  'person', 'photo', 'photograph', 'photography', 'place', 'play', 'point', 'portrait', 'pose',
+  'present', 'primary', 'priority', 'profile', 'prompt', 'quality', 'random', 'rather', 'realistic',
+  'render', 'require', 'required', 'retain', 'rolled', 'rules', 'scene', 'second', 'select',
+  'selected', 'setting', 'setup', 'sharp', 'shoot', 'short', 'should', 'show', 'showcase',
+  'showing', 'shows', 'single', 'small', 'specific', 'strong', 'style', 'styled', 'styling',
+  'subject', 'subtle', 'suited', 'support', 'tags', 'tailor', 'theme', 'their', 'there', 'these',
+  'they', 'thing', 'things', 'think', 'third', 'this', 'those', 'three', 'through', 'together',
+  'token', 'tokens', 'toward', 'trait', 'traits', 'trigger', 'turbo', 'under', 'using', 'value',
+  'values', 'visual', 'vivid', 'wardrobe', 'where', 'which', 'while', 'without', 'woman', 'words',
+  'workflow', 'world', 'would', 'write',
+]);
+
+/**
+ * Extracts concrete visual keywords from `<lora_check>` (excluding any "Drop/Discard/Skip" lines)
+ * or fallback LoRA description block and checks whether the target prompt text reflects them.
+ */
+export function verifyPromptReflectsLoraCheck(
+  prompt: string,
+  loraCheck: string | null,
+  fallbackLoraBlock?: string | null
+): { passed: boolean; expectedKeywords: string[]; matchedKeywords: string[] } {
+  const rawLines = (loraCheck || fallbackLoraBlock || '').split(/\r?\n/);
+
+  // If the self-check explicitly notes a user-requested pivot/override away from an old LoRA, skip lines marked skipped/pivoted/dropped
+  const sourceLines = rawLines
+    .filter(
+      (line) =>
+        !/\b(?:drop|dropped|discard|discarded|ignore|ignored|remove|removed|skip|skipped|user\s+pivot|overridden)\s*:/i.test(
+          line
+        ) &&
+        !/^attached\s+loras\b/i.test(line.trim()) &&
+        !/^active\s+non-character\s+loras\b/i.test(line.trim())
+    )
+    .map((line) =>
+      line
+        .replace(/^(?:[-*•]\s*)?[^:\n]{1,50}:\s*/, '')
+        .replace(/\[(?:concept|clothing|style|pose|lighting|character|unclassified)\]/gi, ' ')
+    );
+
+  const rawWords = sourceLines
+    .join(' ')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .split(/\s+/)
+    .map((w) => w.replace(/^-+|-+$/g, ''))
+    .filter((w) => w.length >= 4 && !VERIFICATION_STOPWORDS.has(w) && !/^\d+$/.test(w));
+
+  const expectedKeywords = Array.from(new Set(rawWords));
+  if (expectedKeywords.length < 2) {
+    return { passed: true, expectedKeywords, matchedKeywords: expectedKeywords };
+  }
+
+  const promptLower = prompt.toLowerCase();
+  const matchedKeywords = expectedKeywords.filter((kw) => {
+    const stem = kw.length >= 6 ? kw.replace(/(?:ing|ed|es|s)$/, '') : kw;
+    return promptLower.includes(kw) || (stem.length >= 4 && promptLower.includes(stem));
+  });
+
+  return {
+    passed: matchedKeywords.length >= 1,
+    expectedKeywords,
+    matchedKeywords,
+  };
 }
 
 /**
