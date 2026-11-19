@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { BookmarkPlus, Columns2, Heart, Keyboard, Loader2, RotateCcw, Star, Trash2, X } from 'lucide-react';
+import { BookmarkPlus, Columns2, Heart, Keyboard, Loader2, Play, RotateCcw, Star, Trash2, X } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
@@ -9,7 +9,10 @@ import { ComparePickerModal } from './inspector/ComparePickerModal.tsx';
 import { InspectorSingleViewer } from './inspector/InspectorSingleViewer.tsx';
 import { InspectorCharacterSection } from './inspector/InspectorCharacterSection.tsx';
 import { InspectorWorkflowSection } from './inspector/InspectorWorkflowSection.tsx';
-import { InspectorPromptAndParamsSection } from './inspector/InspectorPromptAndParamsSection.tsx';
+import {
+  InspectorPositivePromptSection,
+  InspectorPromptAndParamsSection,
+} from './inspector/InspectorPromptAndParamsSection.tsx';
 import { InspectorTagsAndNotesSection } from './inspector/InspectorTagsAndNotesSection.tsx';
 import { useInspectorState } from './inspector/useInspectorState.ts';
 import { MAX_SYSTEM_LORAS, normalizeLoraKey } from './quickgen/quickGenUtils.ts';
@@ -437,7 +440,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             </div>
 
             {/* Inspector Body */}
-            <div className="p-4 sm:p-5 pb-20 space-y-5 text-xs min-w-0">
+            <div className="flex-1 p-4 sm:p-5 pb-8 space-y-5 text-xs min-w-0">
               <InspectorCharacterSection
                 activeImage={activeImage}
                 characters={characters}
@@ -447,8 +450,14 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 onUpdated={onUpdated}
               />
 
-              <InspectorWorkflowSection
+              <InspectorPositivePromptSection
                 activeImage={activeImage}
+                editablePositivePrompt={editablePositivePrompt}
+                onChangeEditablePositivePrompt={setEditablePositivePrompt}
+                onReusePrompt={onReusePrompt}
+              />
+
+              <InspectorWorkflowSection
                 currentMegapixels={currentMegapixels}
                 upscaleTargetMp={upscaleTargetMp}
                 onChangeUpscaleTargetMp={setUpscaleTargetMp}
@@ -457,7 +466,6 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 isUpscalingImage={isUpscalingImage}
                 reproStatusMsg={reproStatusMsg}
                 reproStatusIsError={reproStatusIsError}
-                onRunWorkflow={handleRunWorkflow}
                 onUpscaleImage={handleUpscaleImage}
               />
 
@@ -479,10 +487,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
               <InspectorPromptAndParamsSection
                 activeImage={activeImage}
-                editablePositivePrompt={editablePositivePrompt}
-                onChangeEditablePositivePrompt={setEditablePositivePrompt}
                 onFilterByLora={onFilterByLora}
-                onReusePrompt={onReusePrompt}
                 onClose={onClose}
               />
 
@@ -510,6 +515,25 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 onUpdated={onUpdated}
               />
             </div>
+
+            {/* Sticky Bottom Full-Width Run Workflow Footer */}
+            {(activeImage.hasVisualWorkflow || activeImage.hasApiWorkflow) && (
+              <div className="sticky bottom-0 z-10 bg-zinc-900/95 backdrop-blur-xs border-t border-zinc-800 px-4 sm:px-5 py-3">
+                <button
+                  type="button"
+                  onClick={handleRunWorkflow}
+                  disabled={isRunningWorkflow || isUpscalingImage}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold rounded-lg cursor-pointer transition-colors shadow-lg shadow-indigo-950/50"
+                >
+                  {isRunningWorkflow ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Play className="w-4 h-4" />
+                  )}
+                  <span>{isRunningWorkflow ? 'Running...' : 'Run Workflow'}</span>
+                </button>
+              </div>
+            )}
           </aside>
         </>
       )}
