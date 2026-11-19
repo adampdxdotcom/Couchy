@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowUpRight, Clock, Download, FileWarning, Loader2, Play, RotateCcw, Trash2 } from 'lucide-react';
+import { ArrowUpRight, Clock, Download, FileWarning, Loader2, Play, RotateCcw, Trash2, X } from 'lucide-react';
 import { api } from '../../api/client.ts';
 import { formatUnlockCountdown, formatUnlockLocalTime } from './earlyAccessUtils.ts';
 
@@ -26,6 +26,41 @@ export const DownloadHistoryList: React.FC<DownloadHistoryListProps> = ({
   const [brokenPreviewIds, setBrokenPreviewIds] = useState<Record<number, boolean>>({});
   const [busyJobId, setBusyJobId] = useState<number | null>(null);
   const [isRedownloadingAll, setIsRedownloadingAll] = useState(false);
+  const [isCancellingAll, setIsCancellingAll] = useState(false);
+
+  const activeOrQueuedCount = downloads.filter(
+    (d) => d.status === 'downloading' || d.status === 'queued'
+  ).length;
+
+  const handleCancelAllActive = async () => {
+    if (isCancellingAll || activeOrQueuedCount === 0) return;
+    setIsCancellingAll(true);
+    try {
+      const res = await api.cancelAllDownloads();
+      await onRefreshDownloads();
+      onPushToast?.(
+        `Cancelled ${res.cancelledCount} active/queued download${res.cancelledCount === 1 ? '' : 's'}`,
+        'info'
+      );
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Failed to cancel active downloads', 'error');
+    } finally {
+      setIsCancellingAll(false);
+    }
+  };
+
+  const handleCancelDownload = async (job: any) => {
+    setBusyJobId(job.id);
+    try {
+      await api.cancelDownload(job.id);
+      await onRefreshDownloads();
+      onPushToast?.(`Cancelled download for ${job.model_name}`, 'info');
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Could not cancel download', 'error');
+    } finally {
+      setBusyJobId(null);
+    }
+  };
 
   const handleRedownloadAllMissing = async () => {
     if (isRedownloadingAll) return;
@@ -116,6 +151,23 @@ export const DownloadHistoryList: React.FC<DownloadHistoryListProps> = ({
           Server-Side Download Queue &amp; Hash Verification History
         </h3>
         <div className="flex items-center gap-2.5">
+          {activeOrQueuedCount > 0 && (
+            <button
+              type="button"
+              disabled={isCancellingAll}
+              onClick={() => void handleCancelAllActive()}
+              title={`Cancel all ${activeOrQueuedCount} active and queued download(s)`}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border bg-rose-500/15 hover:bg-rose-500/25 border-rose-500/40 text-rose-200 text-xs font-medium cursor-pointer transition-colors disabled:opacity-50"
+            >
+              {isCancellingAll ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-400" />
+              ) : (
+                <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+              )}
+              <span>Cancel All ({activeOrQueuedCount})</span>
+            </button>
+          )}
+
           <button
             type="button"
             disabled={isRedownloadingAll || missingCount === 0}

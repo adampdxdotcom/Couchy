@@ -39,22 +39,31 @@ export function useModelDownloaderState(
     refreshDownloads();
   }, [subTab]);
 
-  // Automatically clear any preview card once its server-side download completes
+  // Automatically clear any preview card once its server-side download completes or is cancelled
   useEffect(() => {
-    if (activePreviewDownloads.length === 0 || downloads.length === 0) return;
+    if (activePreviewDownloads.length === 0) return;
     const finishedEntries = activePreviewDownloads.filter((entry) => {
       const job = downloads.find((d: any) => Number(d.id) === entry.jobId);
-      return Boolean(job && job.status !== 'downloading');
+      return !job || job.status !== 'downloading';
     });
     if (finishedEntries.length === 0) return;
 
     const finishedJobIds = new Set(finishedEntries.map((e) => e.jobId));
-    const finishedCardKeys = new Set(finishedEntries.map((e) => e.cardKey));
+    const completedCardKeys = new Set(
+      finishedEntries
+        .filter((entry) => {
+          const job = downloads.find((d: any) => Number(d.id) === entry.jobId);
+          return Boolean(job && job.status === 'completed');
+        })
+        .map((e) => e.cardKey)
+    );
 
     setActivePreviewDownloads((prev) => prev.filter((e) => !finishedJobIds.has(e.jobId)));
-    setSearchResults((prev) =>
-      prev.filter((r) => !finishedCardKeys.has(getDownloaderCardKey(r)))
-    );
+    if (completedCardKeys.size > 0) {
+      setSearchResults((prev) =>
+        prev.filter((r) => !completedCardKeys.has(getDownloaderCardKey(r)))
+      );
+    }
   }, [downloads, activePreviewDownloads]);
 
   // Poll every 1.5s while any model download is actively streaming or queued

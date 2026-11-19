@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   CheckCircle2,
   Clock,
@@ -7,7 +7,9 @@ import {
   Loader2,
   Play,
   RotateCw,
+  X,
 } from 'lucide-react';
+import { api } from '../../api/client.ts';
 import { formatBytes } from '../../shared/utils.ts';
 import {
   formatUnlockCountdown,
@@ -58,6 +60,8 @@ export const DownloaderCardActions: React.FC<DownloaderCardActionsProps> = ({
   onDirectLoraDownload,
   onOpenDownloadModal,
 }) => {
+  const [isCancellingJob, setIsCancellingJob] = useState(false);
+
   const dlPct =
     matchingJob && matchingJob.total_bytes > 0
       ? Math.min(100, Math.round((matchingJob.bytes_downloaded / matchingJob.total_bytes) * 100))
@@ -66,25 +70,50 @@ export const DownloaderCardActions: React.FC<DownloaderCardActionsProps> = ({
   if (isDownloadingNow) {
     return (
       <div className="space-y-2 bg-zinc-950 border border-indigo-500/40 rounded-lg p-3">
-        <div className="flex items-center justify-between text-xs">
-          <span className="inline-flex items-center gap-2 font-medium text-indigo-300">
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            <span>
+        <div className="flex items-center justify-between text-xs gap-2">
+          <span className="inline-flex items-center gap-2 font-medium text-indigo-300 min-w-0 truncate">
+            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+            <span className="truncate">
               Downloading to /downloads/{targetFolder}/{displayFilename}
             </span>
           </span>
-          <span className="font-mono tabular-nums text-zinc-200">
-            {matchingJob ? (
-              <>
-                {formatBytes(matchingJob.bytes_downloaded || 0)}
-                {matchingJob.total_bytes > 0
-                  ? ` / ${formatBytes(matchingJob.total_bytes)} (${dlPct ?? 0}%)`
-                  : ''}
-              </>
-            ) : (
-              'Starting...'
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="font-mono tabular-nums text-zinc-200">
+              {matchingJob ? (
+                <>
+                  {formatBytes(matchingJob.bytes_downloaded || 0)}
+                  {matchingJob.total_bytes > 0
+                    ? ` / ${formatBytes(matchingJob.total_bytes)} (${dlPct ?? 0}%)`
+                    : ''}
+                </>
+              ) : (
+                'Starting...'
+              )}
+            </span>
+            {matchingJob?.id && (
+              <button
+                type="button"
+                disabled={isCancellingJob}
+                onClick={async () => {
+                  setIsCancellingJob(true);
+                  try {
+                    await api.cancelDownload(Number(matchingJob.id));
+                  } finally {
+                    setIsCancellingJob(false);
+                  }
+                }}
+                title="Cancel active download and delete partial .part file"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-900 hover:bg-rose-500/20 border border-zinc-800 hover:border-rose-500/40 text-zinc-300 hover:text-rose-300 disabled:opacity-50 cursor-pointer text-[11px] transition-colors"
+              >
+                {isCancellingJob ? (
+                  <Loader2 className="w-3 h-3 animate-spin text-rose-400" />
+                ) : (
+                  <X className="w-3 h-3 text-rose-400" />
+                )}
+                <span>Cancel</span>
+              </button>
             )}
-          </span>
+          </div>
         </div>
         <div className="w-full h-2 bg-zinc-900 rounded-full overflow-hidden border border-zinc-800">
           <div

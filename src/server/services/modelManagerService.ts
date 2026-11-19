@@ -607,6 +607,37 @@ export interface ExecuteDownloadJobParams {
   deferAuthErrorToCaller?: boolean;
 }
 
+const activeDownloadControllers = new Map<number, AbortController>();
+const cancelledDownloadJobIds = new Set<number>();
+
+/**
+ * Aborts an actively streaming download job if one is running for `jobId`.
+ */
+export function abortActiveDownloadStream(jobId: number): boolean {
+  cancelledDownloadJobIds.add(jobId);
+  const controller = activeDownloadControllers.get(jobId);
+  if (controller) {
+    controller.abort();
+    activeDownloadControllers.delete(jobId);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Aborts all actively streaming download jobs.
+ */
+export function abortAllActiveDownloadStreams(): number {
+  let count = 0;
+  for (const [jobId, controller] of activeDownloadControllers.entries()) {
+    cancelledDownloadJobIds.add(jobId);
+    controller.abort();
+    activeDownloadControllers.delete(jobId);
+    count += 1;
+  }
+  return count;
+}
+
 /**
  * Streams a remote model file to disk (.part -> atomic rename), verifies SHA-256,
  * registers the model in SQLite, enriches Civitai previews, and syncs ComfyUI inventory.
@@ -616,6 +647,11 @@ export async function executeDownloadJob(
   params: ExecuteDownloadJobParams
 ): Promise<void> {
   const partPath = `${params.destinationPath}.part`;
+  cancelledDownloadJobIds.delete(jobId);
+  const abortController = new AbortController();
+  activeDownloadControllers.set(jobId, abortController);
+  let fileStream: fs.WriteStream | null = null;
+
   try {
     fs.mkdirSync(path.dirname(params.destinationPath), { recursive: true });
 
@@ -626,13 +662,13 @@ export async function executeDownloadJob(
       headers.Authorization = `Bearer ${appConfig.hfApiToken}`;
     }
 
-    let res = await fetch(params.sourceUrl, { headers });
+    let res = await fetch(params.sourceUrl, { headers, signal: abortController.signal });
     if ((!res.ok || !res.body) && /^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(params.sourceUrl)) {
       const altDomain: CivitaiDomain = /civitai\.red/i.test(params.sourceUrl)
         ? 'civitai.com'
         : 'civitai.red';
       const altUrl = rewriteCivitaiDownloadUrl(params.sourceUrl, altDomain);
-      const retryRes = await fetch(altUrl, { headers });
+      const retryRes = await fetch(altUrl, { headers, signal: abortController.signal });
       if (retryRes.ok && retryRes.body) {
         res = retryRes;
       }
@@ -699,12 +735,16 @@ export async function executeDownloadJob(
     db.prepare('UPDATE download_jobs SET total_bytes = ? WHERE id = ?').run(totalBytes, jobId);
 
     const hash = crypto.createHash('sha256');
-    const fileStream = fs.createWriteStream(partPath);
+    fileStream = fs.createWriteStream(partPath);
     let bytesDownloaded = 0;
     let lastUpdate = Date.now();
 
     const nodeReadable = Readable.fromWeb(res.body as any);
     for await (const chunk of nodeReadable) {
+      if (abortController.signal.aborted || cancelledDownloadJobIds.has(jobId)) {
+        nodeReadable.destroy();
+        throw new Error('Download cancelled by user.');
+      }
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       hash.update(buf);
       fileStream.write(buf);
@@ -720,8 +760,13 @@ export async function executeDownloadJob(
     }
 
     await new Promise<void>((resolve, reject) => {
-      fileStream.end((err?: Error | null) => (err ? reject(err) : resolve()));
+      fileStream!.end((err?: Error | null) => (err ? reject(err) : resolve()));
     });
+    fileStream = null;
+
+    if (abortController.signal.aborted || cancelledDownloadJobIds.has(jobId)) {
+      throw new Error('Download cancelled by user.');
+    }
 
     const actualHash = hash.digest('hex').toUpperCase();
     const expected = params.expectedHash ? params.expectedHash.trim().toUpperCase() : null;
@@ -873,12 +918,29 @@ export async function executeDownloadJob(
       }).catch(() => {});
     }
   } catch (err: any) {
+    if (fileStream) {
+      try {
+        fileStream.destroy();
+      } catch {
+        // ignore
+      }
+    }
     if (fs.existsSync(partPath)) {
       try {
         fs.unlinkSync(partPath);
       } catch {
         // ignore cleanup error
       }
+    }
+    const wasCancelled =
+      cancelledDownloadJobIds.has(jobId) ||
+      abortController.signal.aborted ||
+      err?.name === 'AbortError';
+    if (wasCancelled) {
+      db.prepare(`DELETE FROM download_jobs WHERE id = ? AND status IN ('downloading', 'queued')`).run(
+        jobId
+      );
+      return;
     }
     if (params.deferAuthErrorToCaller && (err?.httpStatus === 401 || err?.httpStatus === 403)) {
       throw err;
@@ -888,6 +950,9 @@ export async function executeDownloadJob(
        SET status = 'failed', error_message = ?, completed_at = datetime('now')
        WHERE id = ?`
     ).run(err?.message || 'Download error', jobId);
+  } finally {
+    activeDownloadControllers.delete(jobId);
+    cancelledDownloadJobIds.delete(jobId);
   }
 }
 

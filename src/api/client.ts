@@ -482,6 +482,16 @@ export const api = {
       method: 'DELETE',
     }),
 
+  cancelDownload: (id: number) =>
+    requestJson<{ ok: boolean; deletedId: number }>(`/api/downloads/${id}`, {
+      method: 'DELETE',
+    }),
+
+  cancelAllDownloads: () =>
+    requestJson<{ ok: boolean; cancelledCount: number }>('/api/downloads/cancel-all', {
+      method: 'POST',
+    }),
+
   listDownloads: () =>
     requestJson<{ items: DownloadJobRecord[]; missingCount?: number }>('/api/downloads'),
 

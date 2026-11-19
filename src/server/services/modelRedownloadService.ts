@@ -8,6 +8,8 @@ import {
   SUBFOLDER_TO_MODEL_TYPE,
 } from './modelDownloadPaths.ts';
 import {
+  abortActiveDownloadStream,
+  abortAllActiveDownloadStreams,
   executeDownloadJob,
   type ExecuteDownloadJobParams,
   type ScheduledDownloadPayload,
@@ -551,3 +553,79 @@ export function ensureRedownloadQueueRunning(): void {
     });
   }
 }
+
+/**
+ * Cancels an active (`downloading`), waiting (`queued`), or `scheduled` download job,
+ * aborting any active network stream, removing any partial `.part` file, and deleting the job row.
+ */
+export function cancelDownloadJob(jobId: number): { ok: true; deletedId: number } {
+  const job = db
+    .prepare('SELECT id, status, destination_path FROM download_jobs WHERE id = ?')
+    .get(jobId) as { id: number; status: string; destination_path: string | null } | undefined;
+  if (!job) {
+    throw new Error('Download job not found.');
+  }
+  if (!['downloading', 'queued', 'scheduled'].includes(job.status)) {
+    throw new Error(`Cannot cancel a download with status "${job.status}".`);
+  }
+
+  // Remove from sequential queue if waiting
+  for (let i = redownloadQueue.length - 1; i >= 0; i -= 1) {
+    if (redownloadQueue[i].jobId === jobId) {
+      redownloadQueue.splice(i, 1);
+    }
+  }
+
+  // Abort active stream if currently downloading
+  abortActiveDownloadStream(jobId);
+
+  if (job.destination_path) {
+    const partPath = `${job.destination_path}.part`;
+    if (fs.existsSync(partPath)) {
+      try {
+        fs.unlinkSync(partPath);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  db.prepare(`DELETE FROM download_jobs WHERE id = ?`).run(jobId);
+  return { ok: true, deletedId: jobId };
+}
+
+/**
+ * Cancels all currently active (`downloading`) and waiting (`queued`) download jobs.
+ */
+export function cancelAllActiveAndQueuedDownloads(): { ok: true; cancelledCount: number } {
+  redownloadQueue.length = 0;
+
+  const activeOrQueuedRows = db
+    .prepare(
+      `SELECT id, destination_path FROM download_jobs WHERE status IN ('downloading', 'queued')`
+    )
+    .all() as Array<{ id: number; destination_path: string | null }>;
+
+  abortAllActiveDownloadStreams();
+
+  for (const row of activeOrQueuedRows) {
+    abortActiveDownloadStream(row.id);
+    if (row.destination_path) {
+      const partPath = `${row.destination_path}.part`;
+      if (fs.existsSync(partPath)) {
+        try {
+          fs.unlinkSync(partPath);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  const info = db
+    .prepare(`DELETE FROM download_jobs WHERE status IN ('downloading', 'queued')`)
+    .run();
+
+  return { ok: true, cancelledCount: Number(info.changes || activeOrQueuedRows.length) };
+}
+

@@ -12,11 +12,12 @@ import {
   startConfirmedModelDownload,
 } from '../services/modelManagerService.ts';
 import {
-  cancelScheduledDownload,
   rescheduleFailedDownload,
   runScheduledDownloadNow,
 } from '../services/downloadSchedulerService.ts';
 import {
+  cancelAllActiveAndQueuedDownloads,
+  cancelDownloadJob,
   ensureRedownloadQueueRunning,
   listMissingRedownloadCandidates,
   startRedownloadMissingModels,
@@ -214,8 +215,21 @@ modelDownloadsRouter.post('/downloads/:id/reschedule', async (req, res) => {
 });
 
 /**
+ * POST /api/downloads/cancel-all
+ * Cancels all active (`downloading`) and waiting (`queued`) download jobs.
+ */
+modelDownloadsRouter.post('/downloads/cancel-all', (_req, res) => {
+  try {
+    const result = cancelAllActiveAndQueuedDownloads();
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to cancel active downloads' });
+  }
+});
+
+/**
  * DELETE /api/downloads/:id
- * Cancels and removes a pending scheduled download job.
+ * Cancels and removes an active (`downloading`), waiting (`queued`), or `scheduled` download job.
  */
 modelDownloadsRouter.delete('/downloads/:id', (req, res) => {
   try {
@@ -224,10 +238,10 @@ modelDownloadsRouter.delete('/downloads/:id', (req, res) => {
       res.status(400).json({ error: 'Invalid download job id' });
       return;
     }
-    const result = cancelScheduledDownload(jobId);
+    const result = cancelDownloadJob(jobId);
     res.json(result);
   } catch (err: any) {
-    res.status(400).json({ error: err?.message || 'Failed to cancel scheduled download' });
+    res.status(400).json({ error: err?.message || 'Failed to cancel download' });
   }
 });
 
