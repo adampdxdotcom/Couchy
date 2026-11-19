@@ -544,6 +544,7 @@ export const api = {
     imageId?: number;
     workflowId?: number;
     positivePrompt?: string;
+    loras?: Array<{ loraName: string; modelStrength: number; clipStrength?: number }>;
   }) =>
     requestJson<{ job: ReproductionJobRecord }>('/api/reproduce/submit', {
       method: 'POST',

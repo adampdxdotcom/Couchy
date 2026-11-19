@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../api/client.ts';
 import { findAttachedGhostsForImage } from '../../shared/utils.ts';
 import { pickDefaultCompareImageId } from './splitCompareUtils.ts';
-import type { ImageRecord, QueuedGhostCardItem } from '../../shared/types.ts';
+import type { ImageLoraRecord, ImageRecord, QueuedGhostCardItem } from '../../shared/types.ts';
 
 export interface InspectorDetailData {
   image?: ImageRecord;
@@ -68,6 +68,7 @@ export function useInspectorState({
   );
   const [detailData, setDetailData] = useState<InspectorDetailData | null>(null);
   const [editablePositivePrompt, setEditablePositivePrompt] = useState(image.positivePrompt || '');
+  const [editableLoras, setEditableLoras] = useState<ImageLoraRecord[]>(image.loras || []);
   const [notes, setNotes] = useState(image.notes);
 
   const [isRunningWorkflow, setIsRunningWorkflow] = useState(false);
@@ -129,6 +130,8 @@ export function useInspectorState({
     setDetailData(null);
     setSelectedIterationId(image.id);
     setSlotASeriesContextId(image.seriesId ?? null);
+    setEditablePositivePrompt(image.positivePrompt || '');
+    setEditableLoras(image.loras || []);
     setShowSeriesMiniGallery(false);
     setIsSplitMode(false);
     setCompareSelection(null);
@@ -151,6 +154,7 @@ export function useInspectorState({
             apiWorkflowJson: res.apiWorkflowJson,
           });
           setEditablePositivePrompt(res.image.positivePrompt || '');
+          setEditableLoras(res.image.loras || []);
           setNotes(res.image.notes || '');
           const imgMp =
             res.image.width > 0 && res.image.height > 0
@@ -515,6 +519,11 @@ export function useInspectorState({
         imageId: activeImage.id,
         workflowId: activeImage.workflowId ?? undefined,
         positivePrompt: editablePositivePrompt,
+        loras: editableLoras.map((l) => ({
+          loraName: l.loraName,
+          modelStrength: Number(l.modelStrength ?? 1.0),
+          clipStrength: Number(l.clipStrength ?? l.modelStrength ?? 1.0),
+        })),
       });
       setReproStatusIsError(false);
       setReproStatusMsg(`Submitted to ComfyUI (Prompt ID: ${res.job.comfyui_prompt_id})`);
@@ -616,6 +625,8 @@ export function useInspectorState({
     setDetailData,
     editablePositivePrompt,
     setEditablePositivePrompt,
+    editableLoras,
+    setEditableLoras,
     notes,
     setNotes,
     isRunningWorkflow,

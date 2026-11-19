@@ -17,6 +17,7 @@ import {
 } from './comfyuiLiveMonitor.ts';
 import {
   compileUpscaleWorkflow,
+  injectLorasIntoGraph,
   injectPositivePromptIntoGraph,
 } from './workflowCompilerService.ts';
 import { attachUpscaledImageToSeries } from './seriesService.ts';
@@ -461,6 +462,7 @@ export async function submitWorkflowReproduction(params: {
   imageId?: number;
   workflowId?: number;
   positivePrompt?: string;
+  loras?: Array<{ loraName: string; modelStrength: number; clipStrength?: number }>;
 }): Promise<any> {
   const validation = await validateWorkflowReproduction({
     imageId: params.imageId,
@@ -473,12 +475,30 @@ export async function submitWorkflowReproduction(params: {
     throw new Error('ComfyUI is offline. Verify connection settings before submitting.');
   }
 
-  const missingDeps = validation.requiredModels.filter((m) => m.status === 'missing').map((m) => m.name);
+  // If the caller provided an edited LoRA list, ignore missing-model checks for removed LoRAs
+  const activeEditedLoraKeys = Array.isArray(params.loras)
+    ? new Set(
+        params.loras
+          .map((l) => (l.loraName || '').trim().toLowerCase())
+          .filter(Boolean)
+      )
+    : null;
+
+  const missingDeps = validation.requiredModels
+    .filter((m) => {
+      if (m.status !== 'missing') return false;
+      if (activeEditedLoraKeys && m.modelType === 'lora') {
+        return activeEditedLoraKeys.has(m.name.trim().toLowerCase());
+      }
+      return true;
+    })
+    .map((m) => m.name);
+
   if (missingDeps.length > 0) {
     throw new Error(`Cannot run workflow with missing models: ${missingDeps.join(', ')}`);
   }
 
-  // Clone the API prompt payload and inject edited positivePrompt if provided
+  // Clone the API prompt payload and inject edited positivePrompt / loras if provided
   const promptPayload: Record<string, any> = JSON.parse(
     JSON.stringify(validation.apiPromptPayload)
   );
@@ -492,6 +512,10 @@ export async function submitWorkflowReproduction(params: {
       origPrompt = metaRow?.positive_prompt ?? null;
     }
     injectPositivePromptIntoGraph(promptPayload, params.positivePrompt, origPrompt);
+  }
+
+  if (Array.isArray(params.loras)) {
+    injectLorasIntoGraph(promptPayload, params.loras);
   }
 
   const resolvedWorkflowId = validation.workflowId || params.workflowId || 0;

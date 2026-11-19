@@ -122,6 +122,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     setDetailData,
     editablePositivePrompt,
     setEditablePositivePrompt,
+    editableLoras,
+    setEditableLoras,
     notes,
     setNotes,
     isRunningWorkflow,
@@ -456,6 +458,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
               <InspectorPositivePromptSection
                 activeImage={activeImage}
                 editablePositivePrompt={editablePositivePrompt}
+                editableLoras={editableLoras}
                 onChangeEditablePositivePrompt={setEditablePositivePrompt}
                 onReusePrompt={onReusePrompt}
               />
@@ -490,6 +493,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
               <InspectorPromptAndParamsSection
                 activeImage={activeImage}
+                editableLoras={editableLoras}
+                onChangeEditableLoras={setEditableLoras}
                 loras={loras}
                 pillTypeSettings={pillTypeSettings}
                 onFilterByLora={onFilterByLora}

@@ -237,6 +237,140 @@ export function injectPositivePromptIntoGraph(
 }
 
 /**
+ * Injects an edited list of LoRAs (filenames and strengths) into a reproduced workflow graph,
+ * supporting both Power Lora Loader (rgthree) and standard LoraLoader / LoraLoaderModelOnly nodes.
+ */
+export function injectLorasIntoGraph(
+  graph: Record<string, any>,
+  loras: Array<{ loraName: string; modelStrength: number; clipStrength?: number }>
+): boolean {
+  const activeLoras = (loras || []).filter((l) => Boolean(l.loraName?.trim()));
+  let modified = false;
+
+  const loraRowLookup = db.prepare(
+    `SELECT comfyui_path, filename, trigger_word FROM models
+     WHERE LOWER(filename) = LOWER(?) OR LOWER(comfyui_path) = LOWER(?)
+     LIMIT 1`
+  );
+
+  const normalizeStem = (name: string): string =>
+    name
+      .trim()
+      .replace(/\\/g, '/')
+      .split('/')
+      .pop()!
+      .replace(/\.(safetensors|pt|ckpt|pth|bin|gguf|sft)$/i, '')
+      .toLowerCase();
+
+  const resolvedLoras: Array<{
+    comfyPath: string;
+    stem: string;
+    modelStrength: number;
+    clipStrength: number;
+    triggerWord: string;
+  }> = [];
+  const seenStems = new Set<string>();
+
+  for (const lora of activeLoras) {
+    const stem = normalizeStem(lora.loraName);
+    if (!stem || seenStems.has(stem)) continue;
+    seenStems.add(stem);
+
+    const row = loraRowLookup.get(lora.loraName, lora.loraName) as
+      | { comfyui_path: string | null; filename: string | null; trigger_word: string | null }
+      | undefined;
+
+    const modelStrength = Number.isFinite(Number(lora.modelStrength))
+      ? Number(lora.modelStrength)
+      : 1.0;
+    const clipStrength = Number.isFinite(Number(lora.clipStrength))
+      ? Number(lora.clipStrength)
+      : modelStrength;
+
+    resolvedLoras.push({
+      comfyPath: row?.comfyui_path || row?.filename || lora.loraName,
+      stem,
+      modelStrength,
+      clipStrength,
+      triggerWord: (row?.trigger_word || '').trim(),
+    });
+  }
+
+  // 1. Update Power Lora Loader (rgthree) node if present
+  const powerLoraNode =
+    graph['50']?.inputs
+      ? graph['50']
+      : Object.values(graph).find(
+          (n: any) =>
+            n &&
+            typeof n === 'object' &&
+            (String(n.class_type || '').toLowerCase().includes('power lora loader') ||
+              Boolean(n.inputs?.PowerLoraLoaderHeaderWidget))
+        );
+
+  if (powerLoraNode?.inputs) {
+    const powerInputs = powerLoraNode.inputs;
+    for (const key of Object.keys(powerInputs)) {
+      if (/^lora_\d+$/i.test(key)) {
+        delete powerInputs[key];
+      }
+    }
+
+    resolvedLoras.forEach((entry, idx) => {
+      powerInputs[`lora_${idx + 1}`] = {
+        on: true,
+        lora: entry.comfyPath,
+        strength: entry.modelStrength,
+      };
+    });
+
+    if (graph['30_23']?.inputs && 'value' in graph['30_23'].inputs) {
+      graph['30_23'].inputs.value = resolvedLoras.length > 0;
+    }
+
+    if (graph['30_27']?.inputs && 'string_b' in graph['30_27'].inputs) {
+      const triggers = resolvedLoras.map((l) => l.triggerWord).filter(Boolean);
+      if (triggers.length > 0 || resolvedLoras.length === 0) {
+        graph['30_27'].inputs.string_b = triggers.join(', ');
+      }
+    }
+
+    modified = true;
+  }
+
+  // 2. Update standard LoraLoader / LoraLoaderModelOnly nodes if present
+  for (const node of Object.values(graph)) {
+    if (!node || typeof node !== 'object' || !node.inputs) continue;
+    const classType = String(node.class_type || '');
+    if (classType === 'LoraLoader' || classType === 'LoraLoaderModelOnly') {
+      const nodeLoraName = String(node.inputs.lora_name || '');
+      const nodeStem = normalizeStem(nodeLoraName);
+      const match = resolvedLoras.find((l) => l.stem === nodeStem);
+      if (match) {
+        node.inputs.lora_name = match.comfyPath;
+        if ('strength_model' in node.inputs) {
+          node.inputs.strength_model = match.modelStrength;
+        }
+        if ('strength_clip' in node.inputs) {
+          node.inputs.strength_clip = match.clipStrength;
+        }
+      } else {
+        // Disable removed LoRA in single-loader node by zeroing strengths
+        if ('strength_model' in node.inputs) {
+          node.inputs.strength_model = 0;
+        }
+        if ('strength_clip' in node.inputs) {
+          node.inputs.strength_clip = 0;
+        }
+      }
+      modified = true;
+    }
+  }
+
+  return modified;
+}
+
+/**
  * Deterministic compiler for the primary Krea2_turbo System Workflow (`primary_workflow.json`):
  * - Node #30_19: User Prompt value
  * - Node #30_27: LoRA Trigger Word string_b
