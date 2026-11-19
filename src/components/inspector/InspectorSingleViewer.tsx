@@ -313,8 +313,8 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
         loupeEnabled ? 'cursor-crosshair' : ''
       } ${
         isFullScreen
-          ? 'fixed inset-0 z-50 bg-black/95 pb-11'
-          : 'flex-1 min-h-0 lg:pb-11'
+          ? 'fixed inset-0 z-50 bg-black/95'
+          : 'flex-1 min-h-0'
       }`}
     >
       {/* Previous Image Arrow */}
@@ -419,7 +419,7 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
       {/* Persistent Bottom Metadata, Fit/Native, Loupe, Full Screen & Download Bar */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="fixed bottom-0 inset-x-0 h-11 bg-zinc-950/95 border-t border-zinc-800/80 px-2.5 sm:px-4 flex items-center justify-between gap-2 text-xs text-zinc-400 backdrop-blur-md z-30 shadow-lg select-none"
+        className="shrink-0 w-full h-11 bg-zinc-950/95 border-t border-zinc-800/80 px-2.5 sm:px-4 flex items-center justify-between gap-2 text-xs text-zinc-400 backdrop-blur-md z-30 shadow-lg select-none"
       >
         <div className="flex items-center gap-1.5 sm:gap-2 font-mono tabular-nums truncate min-w-0 text-xs">
           <span className="text-zinc-200 font-sans font-medium truncate max-w-[90px] sm:max-w-[180px] lg:max-w-xs">
