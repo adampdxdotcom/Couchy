@@ -394,6 +394,26 @@ export const DownloadHistoryList: React.FC<DownloadHistoryListProps> = ({
                                 ).toFixed(0)}/${(d.total_bytes / (1024 * 1024)).toFixed(0)} MB)`
                               : `${d.status} · ${pct}%`}
                           </span>
+                          {(d.status === 'downloading' || d.status === 'queued') && (
+                            <button
+                              type="button"
+                              disabled={busyJobId === d.id}
+                              onClick={() => void handleCancelDownload(d)}
+                              title={
+                                d.status === 'downloading'
+                                  ? 'Cancel active download and delete partial .part file'
+                                  : 'Remove from download queue'
+                              }
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-zinc-900 hover:bg-rose-500/20 border border-zinc-800 hover:border-rose-500/40 text-zinc-300 hover:text-rose-300 disabled:opacity-50 cursor-pointer text-[11px] transition-colors"
+                            >
+                              {busyJobId === d.id ? (
+                                <Loader2 className="w-3 h-3 animate-spin text-rose-400" />
+                              ) : (
+                                <X className="w-3 h-3 text-rose-400" />
+                              )}
+                              <span>Cancel</span>
+                            </button>
+                          )}
                         </>
                       )}
                     </div>
