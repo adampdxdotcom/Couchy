@@ -297,12 +297,12 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
           {/* Right Pane: Comprehensive Metadata, Character & Workflow Reproduction Inspector */}
           <aside
-            className={`w-full max-w-full lg:w-[500px] xl:w-[540px] bg-zinc-900 border-l border-zinc-800 flex flex-col h-[55vh] lg:h-full overflow-y-auto overflow-x-hidden ${
+            className={`w-full max-w-full lg:w-[500px] xl:w-[540px] bg-zinc-900 border-l border-zinc-800 flex flex-col h-[55vh] lg:h-full overflow-hidden ${
               isFullScreen ? 'hidden' : ''
             }`}
           >
             {/* Inspector Header */}
-            <div className="sticky top-0 z-10 bg-zinc-900/95 backdrop-blur-xs border-b border-zinc-800 px-4 sm:px-5 py-3.5 flex items-center justify-between gap-2 sm:gap-3">
+            <div className="shrink-0 z-10 bg-zinc-900/95 backdrop-blur-xs border-b border-zinc-800 px-4 sm:px-5 py-3.5 flex items-center justify-between gap-2 sm:gap-3">
               <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
                 <div className="flex items-center gap-1 shrink-0" title="Rate 1–5 (Keys 1–5, 0 to clear)">
                   {[1, 2, 3, 4, 5].map((star) => (
@@ -439,8 +439,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
               </div>
             </div>
 
-            {/* Inspector Body */}
-            <div className="flex-1 p-4 sm:p-5 pb-8 space-y-5 text-xs min-w-0">
+            {/* Inspector Body (independent scroll container) */}
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 sm:p-5 pb-8 space-y-5 text-xs min-w-0">
               <InspectorCharacterSection
                 activeImage={activeImage}
                 characters={characters}
@@ -516,9 +516,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
               />
             </div>
 
-            {/* Sticky Bottom Full-Width Run Workflow Footer */}
+            {/* Pinned Bottom Full-Width Run Workflow Footer */}
             {(activeImage.hasVisualWorkflow || activeImage.hasApiWorkflow) && (
-              <div className="sticky bottom-0 z-10 bg-zinc-900/95 backdrop-blur-xs border-t border-zinc-800 px-4 sm:px-5 py-3">
+              <div className="shrink-0 z-10 bg-zinc-900/95 backdrop-blur-xs border-t border-zinc-800 px-4 sm:px-5 py-3">
                 <button
                   type="button"
                   onClick={handleRunWorkflow}
