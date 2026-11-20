@@ -131,10 +131,14 @@ export const api = {
   deleteSearchPreset: (id: number) =>
     requestJson<{ ok: boolean }>(`/api/organization/saved-searches/${id}`, { method: 'DELETE' }),
 
-  queryImages: (filters: Partial<GalleryFilterState>) =>
+  queryImages: (
+    filters: Partial<GalleryFilterState>,
+    options?: { signal?: AbortSignal }
+  ) =>
     requestJson<{ items: ImageRecord[]; total: number }>('/api/images/query', {
       method: 'POST',
       body: JSON.stringify(filters),
+      signal: options?.signal,
     }),
 
   getImageDetail: (id: number, seriesId?: number | null) =>

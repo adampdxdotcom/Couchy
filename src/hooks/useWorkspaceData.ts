@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client.ts';
 import { normalizePillTypeSettings } from '../shared/pillSettings.ts';
 import type {
@@ -90,19 +90,35 @@ export function useWorkspaceData() {
   const [savedSearches, setSavedSearches] = useState<SavedSearchPreset[]>([]);
   const [healthData, setHealthData] = useState<any>(null);
 
+  // Live refs prevent stale search/filter closures and out-of-order responses from overwriting cleared results
+  const filtersRef = useRef<GalleryFilterState>(filters);
+  filtersRef.current = filters;
+  const allImagesRef = useRef<ImageRecord[]>(allImages);
+  allImagesRef.current = allImages;
+  const filterQuerySeqRef = useRef<number>(0);
+  const filterAbortRef = useRef<AbortController | null>(null);
+  const prevQueryRef = useRef<string>(filters.query);
+
+  const cancelPendingFilterQuery = useCallback(() => {
+    filterQuerySeqRef.current += 1;
+    if (filterAbortRef.current) {
+      filterAbortRef.current.abort();
+      filterAbortRef.current = null;
+    }
+  }, []);
+
   const loadMetadataAndEntities = useCallback(async () => {
     // Prioritize querying gallery images immediately so cards render without waiting for secondary metadata
     const imagesPromise = api
       .queryImages({ rejectedMode: 'include', archivedMode: 'include' })
       .then((unfilteredRes) => {
         const allItems = unfilteredRes.items || [];
+        allImagesRef.current = allItems;
         setAllImages(allItems);
-        setFilters((currFilters) => {
-          if (isDefaultFilters(currFilters)) {
-            setImages(allItems.filter((img) => !img.isRejected && !img.isArchived));
-          }
-          return currFilters;
-        });
+        if (isDefaultFilters(filtersRef.current)) {
+          cancelPendingFilterQuery();
+          setImages(allItems.filter((img) => !img.isRejected && !img.isArchived));
+        }
       })
       .catch((err) => {
         console.error('Failed to query images:', err);
@@ -135,48 +151,90 @@ export function useWorkspaceData() {
     });
 
     await Promise.allSettled([imagesPromise, metaPromise]);
-  }, []);
+  }, [cancelPendingFilterQuery]);
 
   const loadFilteredImages = useCallback(
-    async (options?: { silent?: boolean }) => {
-      if (isDefaultFilters(filters) && allImages.length > 0) {
-        setImages(allImages.filter((img) => !img.isRejected && !img.isArchived));
+    async (targetFilters: GalleryFilterState, options?: { silent?: boolean }) => {
+      // Always cancel any earlier in-flight filter request and advance sequence counter
+      cancelPendingFilterQuery();
+      const seq = filterQuerySeqRef.current;
+
+      if (isDefaultFilters(targetFilters)) {
+        if (allImagesRef.current.length > 0) {
+          setImages(allImagesRef.current.filter((img) => !img.isRejected && !img.isArchived));
+        }
         setIsLoadingImages(false);
         return;
       }
+
+      const controller = new AbortController();
+      filterAbortRef.current = controller;
+
       if (!options?.silent) {
         setIsLoadingImages(true);
       }
       try {
-        const res = await api.queryImages(filters);
+        const res = await api.queryImages(targetFilters, { signal: controller.signal });
+        if (seq !== filterQuerySeqRef.current) return;
         setImages(res.items || []);
-      } catch (err) {
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || seq !== filterQuerySeqRef.current) return;
         console.error('Failed to query filtered images:', err);
       } finally {
-        setIsLoadingImages(false);
+        if (seq === filterQuerySeqRef.current) {
+          if (filterAbortRef.current === controller) {
+            filterAbortRef.current = null;
+          }
+          setIsLoadingImages(false);
+        }
       }
     },
-    [filters, allImages]
+    [cancelPendingFilterQuery]
   );
 
   useEffect(() => {
     loadMetadataAndEntities();
-  }, [loadMetadataAndEntities]);
+    return () => {
+      cancelPendingFilterQuery();
+    };
+  }, [loadMetadataAndEntities, cancelPendingFilterQuery]);
 
   useEffect(() => {
-    if (!isDefaultFilters(filters)) {
-      loadFilteredImages({ silent: images.length > 0 });
-    } else if (allImages.length > 0) {
-      setImages(allImages.filter((img) => !img.isRejected && !img.isArchived));
+    const queryChanged = prevQueryRef.current !== filters.query;
+    prevQueryRef.current = filters.query;
+
+    if (isDefaultFilters(filters)) {
+      cancelPendingFilterQuery();
+      if (allImages.length > 0) {
+        setImages(allImages.filter((img) => !img.isRejected && !img.isArchived));
+      }
+      setIsLoadingImages(false);
+      return;
     }
-  }, [filters, allImages, loadFilteredImages]);
+
+    // Debounce active text typing so intermediate keystrokes don't race; run filter toggles immediately
+    const delayMs = queryChanged && filters.query.trim().length > 0 ? 180 : 0;
+    if (delayMs === 0) {
+      void loadFilteredImages(filters, { silent: allImages.length > 0 });
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void loadFilteredImages(filters, { silent: allImages.length > 0 });
+    }, delayMs);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [filters, allImages, loadFilteredImages, cancelPendingFilterQuery]);
 
   const refreshWorkspaceData = useCallback(async () => {
     await loadMetadataAndEntities();
-    if (!isDefaultFilters(filters)) {
-      await loadFilteredImages({ silent: true });
+    // Read latest filters from ref after metadata refresh finishes so cleared searches never resurrect
+    const latestFilters = filtersRef.current;
+    if (!isDefaultFilters(latestFilters)) {
+      await loadFilteredImages(latestFilters, { silent: true });
     }
-  }, [loadMetadataAndEntities, loadFilteredImages, filters]);
+  }, [loadMetadataAndEntities, loadFilteredImages]);
 
   const totalGalleryPages = Math.max(1, Math.ceil(images.length / galleryPageSize));
   const currentGalleryPage = Math.min(Math.max(1, galleryPage), totalGalleryPages);
