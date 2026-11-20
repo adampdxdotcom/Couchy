@@ -93,6 +93,9 @@ export function useInspectorState({
     image.seriesId ?? null
   );
   const [detailData, setDetailData] = useState<InspectorDetailData | null>(null);
+  const detailCacheRef = useRef<Map<number, InspectorDetailData>>(new Map());
+  const detailFetchSeqRef = useRef<number>(0);
+
   const [editablePositivePrompt, setEditablePositivePrompt] = useState(image.positivePrompt || '');
   const [editableLoras, setEditableLoras] = useState<ImageLoraRecord[]>(image.loras || []);
   const [editableGenParams, setEditableGenParams] = useState<InspectorEditableGenParams>(() =>
@@ -114,16 +117,64 @@ export function useInspectorState({
   const [compareDetailImage, setCompareDetailImage] = useState<ImageRecord | null>(null);
   const [showComparePicker, setShowComparePicker] = useState(false);
 
-  const activeImage =
+  const knownSeriesItems =
+    detailData?.image?.seriesItems && detailData.image.seriesItems.length > 0
+      ? detailData.image.seriesItems
+      : image.seriesItems || [];
+
+  const cachedSelectedDetail = detailCacheRef.current.get(selectedIterationId);
+  const matchingSeriesStep = knownSeriesItems.find((si) => si.imageId === selectedIterationId);
+
+  // Never flash back to the original poster image while switching between steps in a series stack
+  const activeImage: ImageRecord =
     detailData?.image && detailData.image.id === selectedIterationId
       ? detailData.image
-      : allImages.find((img) => img.id === selectedIterationId) || image;
+      : cachedSelectedDetail?.image && cachedSelectedDetail.image.id === selectedIterationId
+      ? cachedSelectedDetail.image
+      : allImages.find((img) => img.id === selectedIterationId) ||
+        (matchingSeriesStep
+          ? {
+              ...(detailData?.image || image),
+              id: matchingSeriesStep.imageId,
+              filename: matchingSeriesStep.filename,
+              thumbnailUrl: matchingSeriesStep.thumbnailUrl,
+              originalUrl: matchingSeriesStep.originalUrl,
+              width: matchingSeriesStep.width || image.width,
+              height: matchingSeriesStep.height || image.height,
+              isFavorite: matchingSeriesStep.isFavorite,
+              rating: matchingSeriesStep.rating,
+              createdAt: matchingSeriesStep.createdAt || image.createdAt,
+              chatSnapshot: matchingSeriesStep.chatSnapshot || [],
+              isUploadedReference: Boolean(matchingSeriesStep.isUploadedReference),
+              seriesItems: knownSeriesItems,
+            }
+          : image);
   const seriesContextId = slotASeriesContextId ?? activeImage.seriesId ?? null;
 
+  const matchingCompareStep = compareSelection
+    ? knownSeriesItems.find((si) => si.imageId === compareSelection.imageId)
+    : undefined;
   const compareImage: ImageRecord | null = compareSelection
     ? compareDetailImage && compareDetailImage.id === compareSelection.imageId
       ? compareDetailImage
-      : allImages.find((img) => img.id === compareSelection.imageId) || null
+      : allImages.find((img) => img.id === compareSelection.imageId) ||
+        (matchingCompareStep
+          ? {
+              ...image,
+              id: matchingCompareStep.imageId,
+              filename: matchingCompareStep.filename,
+              thumbnailUrl: matchingCompareStep.thumbnailUrl,
+              originalUrl: matchingCompareStep.originalUrl,
+              width: matchingCompareStep.width || image.width,
+              height: matchingCompareStep.height || image.height,
+              isFavorite: matchingCompareStep.isFavorite,
+              rating: matchingCompareStep.rating,
+              createdAt: matchingCompareStep.createdAt || image.createdAt,
+              chatSnapshot: matchingCompareStep.chatSnapshot || [],
+              isUploadedReference: Boolean(matchingCompareStep.isUploadedReference),
+              seriesItems: knownSeriesItems,
+            }
+          : null)
     : null;
 
   const currentMegapixels =
@@ -156,6 +207,7 @@ export function useInspectorState({
 
   // Sync selectedIterationId and reset per-image mode state when outer image prop changes
   useEffect(() => {
+    detailCacheRef.current.clear();
     setDetailData(null);
     setSelectedIterationId(image.id);
     setSlotASeriesContextId(image.seriesId ?? null);
@@ -169,20 +221,49 @@ export function useInspectorState({
     setShowComparePicker(false);
   }, [image.id]);
 
+  // Background-prefetch adjacent series steps' full-resolution originals for snappy navigation
+  useEffect(() => {
+    const items = activeImage.seriesItems || [];
+    if (items.length <= 1) return;
+    const idx = items.findIndex((it) => it.imageId === activeImage.id);
+    if (idx < 0) return;
+
+    const neighborUrls = [items[idx - 1]?.originalUrl, items[idx + 1]?.originalUrl].filter(
+      (url): url is string => Boolean(url)
+    );
+    const preloaders = neighborUrls.map((url) => {
+      const preloadImg = new Image();
+      preloadImg.referrerPolicy = 'no-referrer';
+      preloadImg.src = url;
+      return preloadImg;
+    });
+    return () => {
+      preloaders.forEach((preloadImg) => {
+        preloadImg.src = '';
+      });
+    };
+  }, [activeImage.id, activeImage.seriesItems]);
+
   const refreshActiveDetail = useCallback(
     (
       targetId = selectedIterationId,
       explicitSeriesId: number | null = seriesContextId
     ) => {
+      const seq = ++detailFetchSeqRef.current;
       api
         .getImageDetail(targetId, explicitSeriesId)
         .then((res) => {
-          setDetailData({
+          const nextDetail: InspectorDetailData = {
             image: res.image,
             rawMetadata: res.rawMetadata,
             visualWorkflowJson: res.visualWorkflowJson,
             apiWorkflowJson: res.apiWorkflowJson,
-          });
+          };
+          detailCacheRef.current.set(res.image.id, nextDetail);
+          // Ignore stale responses if the user already switched to another step
+          if (seq !== detailFetchSeqRef.current) return;
+
+          setDetailData(nextDetail);
           if (res.image.seriesId && res.image.seriesId !== explicitSeriesId) {
             setSlotASeriesContextId(res.image.seriesId);
           }

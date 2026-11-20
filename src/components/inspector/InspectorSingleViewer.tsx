@@ -3,6 +3,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Loader2,
   Lock,
   Maximize2,
   Minimize2,
@@ -53,6 +54,7 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
   const [singleLoupeUV, setSingleLoupeUV] = useState<LoupeUV | null>(null);
   const [singleLoupePinned, setSingleLoupePinned] = useState(false);
   const [isDraggingPan, setIsDraggingPan] = useState(false);
+  const [loadedOriginalUrl, setLoadedOriginalUrl] = useState<string | null>(null);
 
   const singleViewerPaneRef = useRef<HTMLDivElement | null>(null);
   const scrollCanvasRef = useRef<HTMLDivElement | null>(null);
@@ -128,6 +130,14 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
     scrollEl.scrollLeft = Math.max(0, (scrollEl.scrollWidth - scrollEl.clientWidth) / 2);
     scrollEl.scrollTop = Math.max(0, (scrollEl.scrollHeight - scrollEl.clientHeight) / 2);
   };
+
+  // Detect already-cached full-resolution bitmaps before paint to avoid any thumbnail flash
+  useLayoutEffect(() => {
+    const imgEl = singleViewerImgRef.current;
+    if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+      setLoadedOriginalUrl(activeImage.originalUrl);
+    }
+  }, [activeImage.originalUrl]);
 
   useLayoutEffect(() => {
     if (framingMode !== 'native') return;
@@ -338,7 +348,7 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
       <div
         ref={scrollCanvasRef}
         onPointerDown={handleCanvasPointerDown}
-        className={`flex-1 min-h-0 w-full flex p-3 sm:p-5 ${
+        className={`relative flex-1 min-h-0 w-full flex p-3 sm:p-5 ${
           framingMode === 'native'
             ? `overflow-auto items-start justify-start ${
                 loupeEnabled
@@ -350,20 +360,48 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
             : 'overflow-hidden items-center justify-center'
         }`}
       >
+        {/* Instant cached thumbnail fallback while full-resolution original streams from server */}
+        {loadedOriginalUrl !== activeImage.originalUrl &&
+          activeImage.thumbnailUrl &&
+          activeImage.thumbnailUrl !== activeImage.originalUrl && (
+            <img
+              key={`thumb-${activeImage.thumbnailUrl}`}
+              src={activeImage.thumbnailUrl}
+              alt={activeImage.filename}
+              referrerPolicy="no-referrer"
+              draggable={false}
+              className="w-full h-full max-w-full max-h-full object-contain rounded select-none pointer-events-none"
+            />
+          )}
+
+        {loadedOriginalUrl !== activeImage.originalUrl && (
+          <div className="pointer-events-none absolute top-4 right-4 z-10 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-950/80 border border-zinc-700/70 text-[11px] font-mono text-zinc-300 backdrop-blur-sm">
+            <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />
+            <span>Loading full-res…</span>
+          </div>
+        )}
+
         <img
+          key={activeImage.originalUrl}
           ref={singleViewerImgRef}
           src={activeImage.originalUrl}
           alt={activeImage.filename}
           referrerPolicy="no-referrer"
           draggable={false}
           onLoad={() => {
+            setLoadedOriginalUrl(activeImage.originalUrl);
             if (framingMode === 'native') {
               applyNativeScrollAlignment();
             }
           }}
+          onError={() => {
+            setLoadedOriginalUrl(activeImage.originalUrl);
+          }}
           onClick={handleToggleZoomFromImageClick}
           className={`rounded transition-transform duration-150 ${
-            framingMode === 'native'
+            loadedOriginalUrl !== activeImage.originalUrl
+              ? 'absolute opacity-0 pointer-events-none max-w-full max-h-full object-contain'
+              : framingMode === 'native'
               ? 'max-w-none block m-auto'
               : 'max-w-full max-h-full object-contain'
           } ${
