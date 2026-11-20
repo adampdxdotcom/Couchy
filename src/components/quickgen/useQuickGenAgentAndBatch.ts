@@ -47,6 +47,7 @@ interface UseQuickGenAgentAndBatchParams {
     options?: { respectRemovedKeys?: boolean; silent?: boolean }
   ) => void;
   resetQuickGenState: (options?: { minimizeIfNeeded?: boolean; onAfterReset?: () => void }) => void;
+  onClearCharacterAfterRandomRoll?: () => void;
   focusInputAtEnd: (delayMs?: number, moveToEnd?: boolean) => void;
   onRefreshAll: () => Promise<void>;
   onPushToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
@@ -83,6 +84,7 @@ export function useQuickGenAgentAndBatch({
   resolveActiveLoraStack,
   applyPreset,
   resetQuickGenState,
+  onClearCharacterAfterRandomRoll,
   focusInputAtEnd,
   onRefreshAll,
   onPushToast,
@@ -132,13 +134,89 @@ export function useQuickGenAgentAndBatch({
         batchCount,
       });
 
-      // Character-only mode: do not auto-attach Agent-selected presets or non-character LoRAs
+      const preExistingLoraKeys = new Set(
+        selectedLoras.map((l) => normalizeLoraKey(l.loraName))
+      );
+
+      let appliedAgentPreset: LoraPreset | null = null;
+      if (res.selectedPreset?.id) {
+        const matchedPreset = presets.find((p) => p.id === res.selectedPreset!.id);
+        if (matchedPreset) {
+          applyPreset(matchedPreset, { respectRemovedKeys: true, silent: true });
+          appliedAgentPreset = matchedPreset;
+        }
+      }
+
+      const seenKeys = new Set<string>();
+      const resolvedPickedLoras: LoraExplorerItem[] = [];
+      for (const pickedName of res.selectedLoras || []) {
+        if (resolvedPickedLoras.length >= 3) break;
+        const pickedKey = normalizeLoraKey(pickedName);
+        if (!pickedKey || seenKeys.has(pickedKey) || removedLoraKeys.has(pickedKey)) continue;
+        seenKeys.add(pickedKey);
+
+        const matched = loras.find(
+          (l) =>
+            normalizeLoraKey(l.filename) === pickedKey ||
+            normalizeLoraKey(l.name) === pickedKey
+        );
+        if (!matched) continue;
+        if (
+          matched.loraCategory === 'character' ||
+          matched.characters.length > 0 ||
+          isCharacterLora(matched.filename, attachedCharacter, loras)
+        ) {
+          continue;
+        }
+        resolvedPickedLoras.push(matched);
+      }
+
+      if (resolvedPickedLoras.length > 0) {
+        setAttachedLoras((prev) => {
+          const next = [...prev];
+          for (const matched of resolvedPickedLoras) {
+            const matchedKey = normalizeLoraKey(matched.filename);
+            const existingIdx = next.findIndex(
+              (item) => normalizeLoraKey(item.loraName) === matchedKey
+            );
+            const cleanLabel = getCleanLoraLabel(matched);
+            if (existingIdx >= 0) {
+              next[existingIdx] = {
+                ...next[existingIdx],
+                showPill: true,
+                nickname: next[existingIdx].nickname || cleanLabel,
+              };
+            } else if (next.length < MAX_SYSTEM_LORAS) {
+              next.push({
+                loraName: matched.filename,
+                modelStrength: matched.defaultModelStrength ?? 1.0,
+                clipStrength: matched.defaultClipStrength ?? 1.0,
+                triggerWord: matched.triggerWord || '',
+                nickname: cleanLabel,
+                showPill: true,
+              });
+            }
+          }
+          return next;
+        });
+      }
+
+      const pickedLoraHistory = Array.from(
+        new Set([
+          ...(appliedAgentPreset?.items
+            .map((it) => it.loraName)
+            .filter((name) => !removedLoraKeys.has(normalizeLoraKey(name))) || []),
+          ...resolvedPickedLoras.map((l) => l.filename),
+        ])
+      ).filter((name) => !preExistingLoraKeys.has(normalizeLoraKey(name)));
+
       const assistantMsg: QuickGenChatMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
         content: res.reply,
         proposedPrompt: res.proposedPrompt,
         proposalKind: res.proposalKind,
+        selectedLoras: pickedLoraHistory.length > 0 ? pickedLoraHistory : undefined,
         excludedLoras: currentRemovedKeys.length > 0 ? currentRemovedKeys : undefined,
       };
       setChatMessages((prev) => [...prev, assistantMsg]);
@@ -347,12 +425,15 @@ export function useQuickGenAgentAndBatch({
     await dispatchBatchToComfy(proposedPromptText, batchCount > 1, onAfterReset, undefined, messageId);
   };
 
-  /** Runs a popularity-weighted Random Roll and dispatches immediately without modifying the draft. */
+  /** Runs Random Roll (honoring any attached character, otherwise popularity-weighted) and dispatches immediately. */
   const handleRandomRoll = async () => {
     if (isRollingRandom || isSubmitting || isChatting) return;
     setIsRollingRandom(true);
     try {
-      const res = await api.triggerRandomRoll();
+      const pinnedCharacterId = attachedCharacter?.id ?? null;
+      const res = await api.triggerRandomRoll(
+        pinnedCharacterId ? { characterId: pinnedCharacterId } : undefined
+      );
       const submittedCount = res.batch.items.filter((i) => i.status === 'submitted').length;
       const failedCount = res.batch.items.filter((i) => i.status === 'failed').length;
       const shortAr =
@@ -376,6 +457,9 @@ export function useQuickGenAgentAndBatch({
         );
       }
 
+      if (pinnedCharacterId) {
+        onClearCharacterAfterRandomRoll?.();
+      }
       await onRefreshAll();
     } catch (err: any) {
       onPushToast(err?.message || 'Failed to execute Random Roll.', 'error');

@@ -343,6 +343,33 @@ export function buildMentionEntries(params: {
     }
   }
 
+  for (const lora of loras.filter((l) => l.mentionEnabled && l.isInstalled && !l.isHidden)) {
+    const nick = (lora.nickname || '').toLowerCase();
+    const loraName = lora.name.toLowerCase();
+    const loraFile = lora.filename.toLowerCase();
+    const trig = (lora.triggerWord || '').toLowerCase();
+
+    const matchesLora =
+      !q ||
+      (nick && nick.includes(q)) ||
+      loraName.includes(q) ||
+      loraFile.includes(q) ||
+      (trig && trig.includes(q));
+
+    if (matchesLora) {
+      const displayLabel = getCleanLoraLabel(lora);
+      loraEntries.push({
+        key: `lora-${lora.filename}`,
+        type: 'lora',
+        loraItem: lora,
+        title: displayLabel,
+        subtitle: `LoRA · ${lora.loraCategory} · ${(lora.defaultModelStrength ?? 1.0).toFixed(1)}x`,
+        thumbnailUrl: null,
+        promptSnippet: displayLabel,
+      });
+    }
+  }
+
   for (const model of models.filter(
     (m) =>
       (m.modelType === 'diffusion' || m.modelType === 'checkpoint') &&
@@ -378,9 +405,48 @@ export function buildMentionEntries(params: {
     }
   }
 
-  // Character-only mode: omit non-character LoRAs and presets from @ mention entries
+  for (const preset of presets) {
+    const pName = preset.name.toLowerCase();
+    const pNick = (preset.nickname || '').toLowerCase();
+    const pUser = (preset.userDescription || '').toLowerCase();
+    const pAgent = (preset.agentDescription || '').toLowerCase();
+    const pCkpt = (preset.checkpointName || '').toLowerCase();
+
+    const matchesPreset =
+      !q ||
+      pName.includes(q) ||
+      (pNick && pNick.includes(q)) ||
+      (pUser && pUser.includes(q)) ||
+      (pAgent && pAgent.includes(q)) ||
+      (pCkpt && pCkpt.includes(q)) ||
+      preset.items.some(
+        (it) =>
+          it.loraName.toLowerCase().includes(q) ||
+          (it.displayName || '').toLowerCase().includes(q)
+      );
+
+    if (matchesPreset) {
+      const displayLabel = getCleanPresetLabel(preset);
+      const basePart = preset.checkpointDisplayName
+        ? ` + ${preset.checkpointDisplayName}`
+        : '';
+      presetEntries.push({
+        key: `preset-${preset.id}`,
+        type: 'preset',
+        presetItem: preset,
+        title: displayLabel,
+        subtitle: `Preset · ${preset.items.length} LoRA${preset.items.length === 1 ? '' : 's'}${basePart}`,
+        thumbnailUrl: null,
+        promptSnippet: preset.name,
+      });
+    }
+  }
+
+  // Place Character, Preset, LoRA, and Base Model matches above matching image prompts in All
   const allCombined = [
     ...directCharEntries,
+    ...presetEntries,
+    ...loraEntries,
     ...modelEntries,
     ...imagePromptEntries,
   ];
@@ -388,9 +454,9 @@ export function buildMentionEntries(params: {
     all: allCombined.length,
     characters: directCharEntries.length,
     photos: imagePromptEntries.length,
-    loras: 0,
+    loras: loraEntries.length,
     models: modelEntries.length,
-    presets: 0,
+    presets: presetEntries.length,
   };
 
   const mentionEntries =
@@ -399,11 +465,11 @@ export function buildMentionEntries(params: {
       : tab === 'photos'
       ? imagePromptEntries
       : tab === 'loras'
-      ? []
+      ? loraEntries
       : tab === 'models'
       ? modelEntries
       : tab === 'presets'
-      ? []
+      ? presetEntries
       : allCombined;
 
   return { mentionEntries, mentionCounts };

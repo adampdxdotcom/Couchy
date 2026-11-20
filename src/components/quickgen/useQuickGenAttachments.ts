@@ -166,13 +166,48 @@ export function useQuickGenAttachments({
 
   const applyPreset = (
     preset: LoraPreset,
-    _options?: { respectRemovedKeys?: boolean; silent?: boolean }
+    options?: { respectRemovedKeys?: boolean; silent?: boolean }
   ) => {
-    // Character-only mode: apply preset checkpoint if defined, without adding extra LoRAs
-    if (preset.checkpointName) {
-      setAttachedCheckpoint(preset.checkpointName);
+    const respectRemoved = Boolean(options?.respectRemovedKeys);
+    if (!respectRemoved) {
+      setRemovedLoraKeys((prev) => {
+        const next = new Set(prev);
+        for (const item of preset.items) {
+          next.delete(normalizeLoraKey(item.loraName));
+        }
+        return next;
+      });
     }
-    setAttachedPreset(null);
+
+    setAttachedCheckpoint(preset.checkpointName || null);
+
+    let truncatedCount = 0;
+    let matchedCharStrength: number | null = null;
+    setAttachedLoras((prev) => {
+      const merged = mergePresetLoras({
+        prevLoras: prev,
+        preset,
+        prevPreset: attachedPreset,
+        attachedCharacter,
+        removedLoraKeys,
+        respectRemovedKeys: respectRemoved,
+        loras,
+      });
+      truncatedCount = merged.truncatedCount;
+      matchedCharStrength = merged.matchedCharacterStrength;
+      return merged.nextLoras;
+    });
+
+    if (matchedCharStrength !== null) {
+      setCharacterLoraStrength(matchedCharStrength);
+    }
+    setAttachedPreset(preset);
+    if (truncatedCount > 0 && !options?.silent) {
+      onPushToast(
+        `Applied "${preset.name}" (${truncatedCount} LoRA skipped due to ${MAX_SYSTEM_LORAS}-LoRA limit)`,
+        'warning'
+      );
+    }
   };
 
   const handleRemovePreset = () => {

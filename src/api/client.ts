@@ -763,7 +763,7 @@ export const api = {
       { method: 'POST', body: JSON.stringify(payload) }
     ),
 
-  triggerRandomRoll: () =>
+  triggerRandomRoll: (payload?: { characterId?: number | null }) =>
     requestJson<{
       batch: GenerationBatchRecord;
       batches: GenerationBatchRecord[];
@@ -777,7 +777,10 @@ export const api = {
         usedLmStudio: boolean;
         prompt: string;
       };
-    }>('/api/generation/random-roll', { method: 'POST' }),
+    }>('/api/generation/random-roll', {
+      method: 'POST',
+      body: JSON.stringify(payload?.characterId ? { characterId: payload.characterId } : {}),
+    }),
 
   // Visual Keyword Tagger (WD14 ONNX)
   getVisualTaggerStatus: () => requestJson<VisualTaggerStatus>('/api/tagger/status'),

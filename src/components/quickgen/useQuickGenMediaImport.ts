@@ -225,7 +225,29 @@ export function useQuickGenMediaImport({
       if (res.aspectRatio) setAspectRatio(res.aspectRatio);
       if (res.checkpointName) setAttachedCheckpoint(res.checkpointName);
 
-      // Character-only mode: do not attach external Civitai LoRAs
+      if (res.loras.length > 0) {
+        const mappedLoras: GenerationLoraSelection[] = res.loras
+          .slice(0, MAX_SYSTEM_LORAS)
+          .map((item) => {
+            const key = normalizeLoraKey(item.loraName);
+            const matchedExplorer = loras.find(
+              (l) => normalizeLoraKey(l.filename) === key || normalizeLoraKey(l.name) === key
+            );
+            return {
+              loraName: matchedExplorer?.filename || item.loraName,
+              modelStrength: item.modelStrength,
+              clipStrength: item.clipStrength,
+              triggerWord: item.triggerWord || matchedExplorer?.triggerWord || '',
+              nickname:
+                item.nickname ||
+                getCleanLoraLabel(matchedExplorer || { loraName: item.loraName }),
+              showPill: true,
+            };
+          });
+        setAttachedLoras(mappedLoras);
+        setRemovedLoraKeys(new Set());
+      }
+
       pulseHighlight(1400);
       focusInputAtEnd(60, true);
 
@@ -233,9 +255,12 @@ export function useQuickGenMediaImport({
       if (res.inspirationFilename) importedParts.push('1MP photo');
       if (res.prompt) importedParts.push('prompt');
       if (res.checkpointName) importedParts.push('base model');
+      if (res.loras.length > 0) {
+        importedParts.push(`${res.loras.length} LoRA${res.loras.length === 1 ? '' : 's'}`);
+      }
       if (res.aspectRatio) importedParts.push(res.aspectRatio.split(' ')[0]);
 
-      const skippedCount = res.skippedCheckpoint ? 1 : 0;
+      const skippedCount = res.skippedLoras.length + (res.skippedCheckpoint ? 1 : 0);
       const omittedParts: string[] = [];
       if (!res.prompt) omittedParts.push('prompt unavailable');
       if (skippedCount > 0) {

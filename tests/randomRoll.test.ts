@@ -180,7 +180,7 @@ describe('randomRollService', () => {
     );
   });
 
-  it('rolls only the character LoRA in executeRandomRoll without attaching extra style LoRAs', async () => {
+  it('honors a pinned characterId in executeRandomRoll while still rolling compatible style LoRAs', async () => {
     ctx.db
       .prepare(
         `INSERT INTO models (name, filename, model_type, lora_category, base_model, trigger_word, is_installed, is_hidden, mention_enabled)
@@ -188,8 +188,25 @@ describe('randomRollService', () => {
       )
       .run();
 
-    const result = await rr.executeRandomRoll();
-    assert.equal(result.rollSummary.characterName, 'ValidChar');
-    assert.deepEqual(result.rollSummary.loraNames, ['char_valid.safetensors']);
+    const noLoraRow = ctx.db
+      .prepare(`SELECT id FROM characters WHERE name = 'NoLoraChar'`)
+      .get() as { id: number };
+    const validRow = ctx.db
+      .prepare(`SELECT id FROM characters WHERE name = 'ValidChar'`)
+      .get() as { id: number };
+
+    // When ValidChar is pinned, Random Roll uses ValidChar and still permits style LoRAs alongside its character LoRA
+    const pinnedValid = await rr.executeRandomRoll({ characterId: validRow.id });
+    assert.equal(pinnedValid.rollSummary.characterId, validRow.id);
+    assert.equal(pinnedValid.rollSummary.characterName, 'ValidChar');
+    assert.ok(pinnedValid.rollSummary.loraNames.includes('char_valid.safetensors'));
+
+    // Explicit characterId bypasses random-roll installed-LoRA eligibility filtering
+    const pinnedNoLora = await rr.executeRandomRoll({ characterId: noLoraRow.id });
+    assert.equal(pinnedNoLora.rollSummary.characterId, noLoraRow.id);
+    assert.equal(pinnedNoLora.rollSummary.characterName, 'NoLoraChar');
+
+    // Nonexistent characterId throws cleanly
+    assert.throws(() => rr.selectRolledCharacter(999999), /not found/i);
   });
 });

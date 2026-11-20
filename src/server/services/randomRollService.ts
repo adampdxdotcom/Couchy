@@ -113,55 +113,92 @@ export function normalizeBaseModelGroup(raw: string | null | undefined): string 
   return s;
 }
 
-export function selectRolledCharacter() {
-  const rows = db
-    .prepare(
-      `SELECT
-         c.id,
-         c.name,
-         c.description,
-         c.physical_description,
-         COUNT(DISTINCT CASE WHEN i.id IS NOT NULL THEN ic.image_content_hash END) AS usage_count,
-         COUNT(DISTINCT CASE WHEN i.id IS NOT NULL AND COALESCE(r.is_favorite, 0) = 1 THEN ic.image_content_hash END) AS fav_count
-       FROM characters c
-       LEFT JOIN image_characters ic ON ic.character_id = c.id AND ic.status = 'confirmed'
-       LEFT JOIN images i ON i.content_hash = ic.image_content_hash
-         AND i.is_missing = 0
-         AND COALESCE(i.is_uploaded_reference, 0) = 0
-       LEFT JOIN ratings r ON r.content_hash = i.content_hash
-       WHERE (COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL)
-         AND EXISTS (
-           SELECT 1
-           FROM character_loras cl
-           JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
-           WHERE cl.character_id = c.id
-             AND COALESCE(m.is_installed, 0) = 1
-         )
-       GROUP BY c.id`
-    )
-    .all() as Array<{
-    id: number;
-    name: string;
-    description: string;
-    physical_description: string;
-    usage_count: number;
-    fav_count: number;
-  }>;
+export function selectRolledCharacter(preferredCharacterId?: number | null) {
+  let picked:
+    | {
+        id: number;
+        name: string;
+        description: string;
+        physical_description: string;
+        usage_count?: number;
+        fav_count?: number;
+      }
+    | undefined;
 
-  if (rows.length === 0) {
-    throw new Error('No characters with an installed LoRA are available for Random Roll.');
+  if (
+    preferredCharacterId !== undefined &&
+    preferredCharacterId !== null &&
+    Number.isFinite(Number(preferredCharacterId)) &&
+    Number(preferredCharacterId) > 0
+  ) {
+    picked = db
+      .prepare(
+        `SELECT id, name, description, physical_description
+         FROM characters
+         WHERE id = ?`
+      )
+      .get(Number(preferredCharacterId)) as
+      | {
+          id: number;
+          name: string;
+          description: string;
+          physical_description: string;
+        }
+      | undefined;
+
+    if (!picked) {
+      throw new Error(`Selected character #${preferredCharacterId} was not found.`);
+    }
+  } else {
+    const rows = db
+      .prepare(
+        `SELECT
+           c.id,
+           c.name,
+           c.description,
+           c.physical_description,
+           COUNT(DISTINCT CASE WHEN i.id IS NOT NULL THEN ic.image_content_hash END) AS usage_count,
+           COUNT(DISTINCT CASE WHEN i.id IS NOT NULL AND COALESCE(r.is_favorite, 0) = 1 THEN ic.image_content_hash END) AS fav_count
+         FROM characters c
+         LEFT JOIN image_characters ic ON ic.character_id = c.id AND ic.status = 'confirmed'
+         LEFT JOIN images i ON i.content_hash = ic.image_content_hash
+           AND i.is_missing = 0
+           AND COALESCE(i.is_uploaded_reference, 0) = 0
+         LEFT JOIN ratings r ON r.content_hash = i.content_hash
+         WHERE (COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL)
+           AND EXISTS (
+             SELECT 1
+             FROM character_loras cl
+             JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
+             WHERE cl.character_id = c.id
+               AND COALESCE(m.is_installed, 0) = 1
+           )
+         GROUP BY c.id`
+      )
+      .all() as Array<{
+      id: number;
+      name: string;
+      description: string;
+      physical_description: string;
+      usage_count: number;
+      fav_count: number;
+    }>;
+
+    if (rows.length === 0) {
+      throw new Error('No characters with an installed LoRA are available for Random Roll.');
+    }
+
+    picked = pickWeightedItem(
+      rows.map((row) => ({
+        item: row,
+        weight: computeSublinearPopularityWeight(
+          Number(row.usage_count || 0),
+          Number(row.fav_count || 0),
+          rows.length > 1 && recentCharacterIds.includes(row.id)
+        ),
+      }))
+    )!;
   }
-
-  const picked = pickWeightedItem(
-    rows.map((row) => ({
-      item: row,
-      weight: computeSublinearPopularityWeight(
-        Number(row.usage_count || 0),
-        Number(row.fav_count || 0),
-        rows.length > 1 && recentCharacterIds.includes(row.id)
-      ),
-    }))
-  )!;
 
   // Pick among installed character LoRAs attached to this character
   const charLoras = db
@@ -782,11 +819,14 @@ async function composeRandomRollPrompt(params: {
 }
 
 /**
- * Picks a popularity-weighted character, tags, and aspect ratio,
- * then lets the Local LLM choose the best fitting described base model last and write a cohesive prompt
- * before submitting immediately at the default workflow's native resolution and steps.
+ * Picks a popularity-weighted character (or uses the user's pinned characterId when provided),
+ * compatible style LoRAs, tags, and aspect ratio, then lets the Local LLM choose the best fitting
+ * described base model last and write a cohesive prompt before submitting immediately at the
+ * default workflow's native resolution and steps.
  */
-export async function executeRandomRoll(): Promise<{
+export async function executeRandomRoll(options?: {
+  characterId?: number | null;
+}): Promise<{
   batch: GenerationBatchRecord;
   batches: GenerationBatchRecord[];
   rollSummary: RandomRollSummary;
@@ -801,10 +841,13 @@ export async function executeRandomRoll(): Promise<{
   }
 
   const wfDefaults = getWorkflowDefaults(defaultWf.id);
-  const { character, charLora } = selectRolledCharacter();
+  const { character, charLora } = selectRolledCharacter(options?.characterId);
   const charBaseGroup = normalizeBaseModelGroup(charLora?.base_model);
-  // Character-only mode: do not attach extra style LoRAs during Random Roll
-  const effectiveBaseGroup = charBaseGroup || '';
+  const styleLoras = selectRolledStyleLoras(charBaseGroup);
+  const effectiveBaseGroup =
+    charBaseGroup ||
+    styleLoras.map((sl) => normalizeBaseModelGroup(sl.baseModel)).find(Boolean) ||
+    '';
 
   const tags = selectRolledTags(5);
   const aspectRatio = selectRolledAspectRatio(wfDefaults.defaultAspectRatio ?? null);
@@ -823,11 +866,19 @@ export async function executeRandomRoll(): Promise<{
       triggerWord: charLora.trigger_word || '',
     });
   }
+  for (const sl of styleLoras) {
+    loras.push({
+      loraName: sl.filename,
+      modelStrength: sl.modelStrength,
+      clipStrength: sl.clipStrength,
+      triggerWord: sl.triggerWord,
+    });
+  }
 
   const triggerWord = Array.from(
     new Set(
-      (charLora?.trigger_word || '')
-        .split(',')
+      [charLora?.trigger_word, ...styleLoras.map((sl) => sl.triggerWord)]
+        .flatMap((t) => (t || '').split(','))
         .map((t) => t.trim())
         .filter(Boolean)
     )
@@ -838,13 +889,17 @@ export async function executeRandomRoll(): Promise<{
     characterDescription: character.description || '',
     characterPhysicalDescription: character.physical_description || '',
     loraNames: loras.map((l) => l.loraName),
-    hasStyleLoras: false,
+    hasStyleLoras: styleLoras.length > 0,
     tags,
     baseCandidates,
     fallbackCheckpoint,
   });
 
-  recordRecentRoll(character.id, [], checkpointName);
+  recordRecentRoll(
+    character.id,
+    styleLoras.map((l) => l.filename),
+    checkpointName
+  );
 
   // Omit megapixels and steps so dispatch uses the default workflow's native resolution & steps
   const { batch, batches } = await dispatchGenerationBatch({

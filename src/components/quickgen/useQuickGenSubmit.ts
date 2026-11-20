@@ -8,7 +8,13 @@ import type {
   WorkflowLibraryItem,
 } from '../../shared/types.ts';
 import { resolveDefaultWorkflow } from '../../shared/utils.ts';
-import { clampQuickGenSteps, snapToHalfMp, type QuickGenPrefill } from './quickGenUtils.ts';
+import {
+  clampQuickGenSteps,
+  isCharacterLora,
+  normalizeLoraKey,
+  snapToHalfMp,
+  type QuickGenPrefill,
+} from './quickGenUtils.ts';
 import { useQuickGenAttachments } from './useQuickGenAttachments.ts';
 import { useQuickGenMediaImport } from './useQuickGenMediaImport.ts';
 import { useQuickGenAgentAndBatch } from './useQuickGenAgentAndBatch.ts';
@@ -223,6 +229,22 @@ export function useQuickGenSubmit({
     setRemovedLoraKeys,
   });
 
+  const clearCharacterAfterRandomRoll = () => {
+    const charToClear = attachedCharacter;
+    setAttachedCharacter(null);
+    setCharacterLoraStrength(1.0);
+    if (!charToClear) return;
+
+    const charKeys = new Set(charToClear.loras.map((cl) => normalizeLoraKey(cl.loraName)));
+    setAttachedLoras((prev) =>
+      prev.filter(
+        (al) =>
+          !charKeys.has(normalizeLoraKey(al.loraName)) &&
+          !isCharacterLora(al.loraName, charToClear, loras)
+      )
+    );
+  };
+
   const agentAndBatch = useQuickGenAgentAndBatch({
     prompt,
     setPrompt,
@@ -250,6 +272,7 @@ export function useQuickGenSubmit({
     resolveActiveLoraStack: attachments.resolveActiveLoraStack,
     applyPreset: attachments.applyPreset,
     resetQuickGenState,
+    onClearCharacterAfterRandomRoll: clearCharacterAfterRandomRoll,
     focusInputAtEnd,
     onRefreshAll,
     onPushToast,

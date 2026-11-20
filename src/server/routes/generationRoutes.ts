@@ -392,12 +392,20 @@ generationRouter.post('/submit-batch', async (req, res) => {
 
 /**
  * POST /api/generation/random-roll
- * Rolls weighted-random character, compatible base model, optional style LoRAs,
- * popular tags, and aspect ratio, generates a hidden prompt, and dispatches immediately.
+ * Rolls weighted-random character (or uses pinned characterId), compatible base model,
+ * optional style LoRAs, popular tags, and aspect ratio, then dispatches immediately.
  */
-generationRouter.post('/random-roll', async (_req, res) => {
+generationRouter.post('/random-roll', async (req, res) => {
   try {
-    const result = await executeRandomRoll();
+    const rawCharId = req.body?.characterId;
+    const characterId =
+      rawCharId !== undefined &&
+      rawCharId !== null &&
+      Number.isFinite(Number(rawCharId)) &&
+      Number(rawCharId) > 0
+        ? Number(rawCharId)
+        : null;
+    const result = await executeRandomRoll({ characterId });
     res.json(result);
   } catch (err: unknown) {
     res.status(400).json({ error: getErrorMessage(err, 'Failed to roll random generation.') });

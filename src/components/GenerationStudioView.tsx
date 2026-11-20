@@ -47,7 +47,9 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
   onOpenSystemSettings,
 }) => {
   // 1. Character, LoRA Stack & Trigger Word State
-  const [selectedCharacterId, setSelectedCharacterId] = useState<number | null>(null);
+  const [selectedCharacterId, setSelectedCharacterId] = useState<number | null>(
+    characters[0]?.id ?? null
+  );
   const [activeLoras, setActiveLoras] = useState<GenerationLoraSelection[]>([]);
   const [triggerWord, setTriggerWord] = useState<string>('');
 
@@ -331,14 +333,6 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
     setSubmitFeedback(null);
 
     try {
-      // Only include LoRAs belonging to the selected character (no other LoRAs at this time)
-      const allowedCharKeys = new Set(
-        (selectedCharacter?.loras || []).map((cl) => cl.loraName.trim().toLowerCase())
-      );
-      const characterOnlyLoras = selectedCharacter
-        ? activeLoras.filter((l) => allowedCharKeys.has(l.loraName.trim().toLowerCase()))
-        : [];
-
       const res = await api.submitGenerationBatch({
         characterId: selectedCharacterId,
         workflowId: selectedWorkflowId,
@@ -349,12 +343,9 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
         prompts: outgoingPrompts,
         triggerWord: triggerWord.trim() || undefined,
         negativePrompt,
-        loras: characterOnlyLoras,
+        loras: activeLoras,
         checkpointName: selectedCheckpoint || undefined,
       });
-
-      // Clear selected character after submission (also resets activeLoras & triggerWord via effect)
-      setSelectedCharacterId(null);
 
       setSubmitFeedback({
         message: `Batch #${res.batch.id} (${res.batch.items?.length || 0} generations) dispatched to ComfyUI.`,

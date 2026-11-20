@@ -81,13 +81,15 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
         </button>
       </div>
 
-      {/* Filter Tabs: All | Characters | Photos | Models */}
+      {/* Filter Tabs: All | Characters | Photos | Presets | LoRAs | Models */}
       <div className="px-3.5 sm:px-4 py-2 border-b border-zinc-800/80 bg-zinc-900/40 flex items-center gap-1.5 overflow-x-auto overscroll-x-contain shrink-0">
         {(
           [
             { id: 'all', label: 'All', count: counts.all },
             { id: 'characters', label: 'Characters', count: counts.characters },
             { id: 'photos', label: 'Photos', count: counts.photos },
+            { id: 'presets', label: 'Presets', count: counts.presets },
+            { id: 'loras', label: 'LoRAs', count: counts.loras },
             { id: 'models', label: 'Models', count: counts.models },
           ] as const
         ).map((tab) => {
@@ -101,6 +103,8 @@ export const QuickGenMentionPopover: React.FC<QuickGenMentionPopoverProps> = ({
                 isTabActive
                   ? tab.id === 'models'
                     ? 'bg-emerald-600 text-white shadow-sm'
+                    : tab.id === 'presets'
+                    ? 'bg-fuchsia-600 text-white shadow-sm'
                     : 'bg-indigo-600 text-white shadow-sm'
                   : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
               }`}

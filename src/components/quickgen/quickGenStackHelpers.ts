@@ -54,10 +54,22 @@ export function resolveActiveLoraStackData(params: {
     };
   });
 
-  // Character-only mode: include only the attached character's own LoRAs
   const selectedLoras: GenerationLoraSelection[] = [...charLoras];
+  for (const al of attachedLoras) {
+    const alKey = normalizeLoraKey(al.loraName);
+    if (removedLoraKeys.has(alKey)) continue;
+    if (!selectedLoras.some((sl) => normalizeLoraKey(sl.loraName) === alKey)) {
+      const matchedExplorer = loras.find(
+        (l) => normalizeLoraKey(l.filename) === alKey || normalizeLoraKey(l.name) === alKey
+      );
+      selectedLoras.push({
+        ...al,
+        triggerWord: al.triggerWord?.trim() || matchedExplorer?.triggerWord?.trim() || '',
+      });
+    }
+  }
 
-  // Join unique trigger tokens from the active character LoRAs
+  // Join unique trigger tokens (character triggers first, then active pilled LoRAs)
   const triggerTokens: string[] = [];
   const seenTokens = new Set<string>();
   const appendTriggerTokens = (raw?: string | null) => {
@@ -74,6 +86,9 @@ export function resolveActiveLoraStackData(params: {
 
   for (const cl of activeCharLoraRecords) {
     appendTriggerTokens(cl.triggerWord);
+  }
+  for (const sl of selectedLoras) {
+    appendTriggerTokens(sl.triggerWord);
   }
 
   return { selectedLoras, triggerWord: triggerTokens.join(', ') };
@@ -120,7 +135,6 @@ export function buildReusedLoraSelections(params: {
     };
 
     const belongsToAttachedChar = prefillCharLoraKeys.has(rawKey);
-    if (!belongsToAttachedChar) continue;
 
     reusedSelections.push({
       loraName: matchedExplorerLora?.filename || imgLora.loraName,
@@ -134,7 +148,11 @@ export function buildReusedLoraSelections(params: {
       nickname:
         prefillExtra.nickname ||
         getCleanLoraLabel(matchedExplorerLora || { loraName: imgLora.loraName }),
-      showPill: false,
+      showPill: belongsToAttachedChar
+        ? false
+        : prefillExtra.showPill !== undefined
+        ? Boolean(prefillExtra.showPill)
+        : Boolean(matchedExplorerLora?.mentionEnabled),
       isCharacterPill: prefillExtra.isCharacterPill,
       portraitThumbnailUrl: prefillExtra.portraitThumbnailUrl,
       portraitCrop: prefillExtra.portraitCrop,
