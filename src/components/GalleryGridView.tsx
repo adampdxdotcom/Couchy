@@ -762,16 +762,6 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                         </span>
                       </span>
                     )}
-
-                    {img.isRandomRoll && (
-                      <span
-                        title="Generated via Random Roll"
-                        aria-label="Generated via Random Roll"
-                        className="inline-flex items-center justify-center p-1 rounded-md bg-black/75 backdrop-blur-xs border border-indigo-500/40 text-indigo-300 shadow-sm pointer-events-auto"
-                      >
-                        <Dices className="w-3.5 h-3.5" />
-                      </span>
-                    )}
                   </div>
 
                   <button
@@ -969,7 +959,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                     </div>
                   )}
 
-                  {/* Image Details: Resolution & Ratio */}
+                  {/* Image Details: Resolution, Ratio & Random Roll */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400 font-mono tabular-nums min-w-0">
                       <span>
@@ -979,6 +969,18 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                         <>
                           <span aria-hidden="true">·</span>
                           <span>{formatImageAspectRatio(img.width, img.height)}</span>
+                        </>
+                      )}
+                      {img.isRandomRoll && (
+                        <>
+                          <span aria-hidden="true">·</span>
+                          <span
+                            title="Generated via Random Roll"
+                            aria-label="Generated via Random Roll"
+                            className="inline-flex items-center text-indigo-400"
+                          >
+                            <Dices className="w-3.5 h-3.5" />
+                          </span>
                         </>
                       )}
                     </div>
