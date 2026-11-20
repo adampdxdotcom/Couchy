@@ -34,6 +34,27 @@ interface LmStudioTemplatesSectionProps {
   guidingFeedback: string | null;
 }
 
+/**
+ * Fast synchronous BPE-style token estimator (typically within ~5% of Gemma/Llama/Qwen tokenizers).
+ */
+function estimatePromptTokens(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) return 0;
+  const pieces = trimmed.match(/[A-Za-z0-9]+|[^\sA-Za-z0-9]|\n+/g);
+  if (!pieces) return Math.ceil(trimmed.length / 4);
+  let count = 0;
+  for (const piece of pieces) {
+    if (piece.startsWith('\n')) {
+      count += piece.length;
+    } else if (/^[A-Za-z0-9]+$/.test(piece)) {
+      count += piece.length <= 7 ? 1 : Math.ceil(piece.length / 4);
+    } else {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> = ({
   lmStatus,
   lmBaseUrl,
@@ -55,6 +76,8 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
   guidingFeedback,
 }) => {
   const [showRuntimeContext, setShowRuntimeContext] = useState(false);
+  const agentPromptTokens = estimatePromptTokens(conversationSystemPrompt);
+  const batchPromptTokens = estimatePromptTokens(batchExpansionPrompt);
 
   return (
     <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-5">
@@ -235,9 +258,25 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
               Primary Agent System Prompt
             </label>
           </div>
-          <span className="text-[11px] text-zinc-400 font-mono">
-            Used in ALL Agent chat turns &amp; batch expansions
-          </span>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono tabular-nums">
+            <span
+              title="Estimated BPE token count for this base system prompt (before runtime LoRA/preset catalog and chat history)"
+              className={`px-2 py-0.5 rounded border ${
+                agentPromptTokens > 1500
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                  : 'bg-zinc-950 border-zinc-800 text-indigo-300'
+              }`}
+            >
+              ~{agentPromptTokens.toLocaleString()} tokens
+            </span>
+            <span className="text-zinc-500">
+              {conversationSystemPrompt.length.toLocaleString()} chars
+            </span>
+            <span className="text-zinc-600 hidden sm:inline">·</span>
+            <span className="text-zinc-400 hidden sm:inline">
+              Used in ALL Agent chat turns &amp; batch expansions
+            </span>
+          </div>
         </div>
 
         <textarea
@@ -285,9 +324,17 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
               Batch Expansion Instructions (x2–x8 &amp; Generation Studio)
             </label>
           </div>
-          <span className="text-[11px] text-zinc-400 font-mono">
-            4096 max tokens &middot; 90s timeout &middot; &lt;shot_1&gt; tags
-          </span>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono tabular-nums">
+            <span
+              title="Estimated BPE token count for the batch expansion instructions"
+              className="px-2 py-0.5 rounded bg-zinc-950 border border-zinc-800 text-indigo-300"
+            >
+              ~{batchPromptTokens.toLocaleString()} tokens
+            </span>
+            <span className="text-zinc-400">
+              4096 max tokens &middot; 90s timeout &middot; &lt;shot_1&gt; tags
+            </span>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
