@@ -51,6 +51,7 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
     number,
     { id: number; hasVisual: boolean; hasApi: boolean }
   >();
+  const randomRollImageIds = new Set<number>();
 
   if (rows.length === 1) {
     const single = rows[0];
@@ -170,6 +171,19 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
         hasApi: Boolean(wfRow.hasApi),
       });
     }
+
+    const rrRow = db
+      .prepare(
+        `SELECT 1
+         FROM generation_items gi
+         JOIN generation_batches gb ON gb.id = gi.batch_id
+         WHERE gi.output_image_id = ? AND gb.theme_title = 'Random Roll'
+         LIMIT 1`
+      )
+      .get(single.id);
+    if (rrRow) {
+      randomRollImageIds.add(single.id);
+    }
   } else {
     // Bulk fetch all image_loras in one query
     const allLoras = db
@@ -288,6 +302,17 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
         else visualTagsByHash.set(vt.contentHash, [item]);
       }
     }
+    const allRandomRollRows = db
+      .prepare(
+        `SELECT DISTINCT gi.output_image_id AS imageId
+         FROM generation_items gi
+         JOIN generation_batches gb ON gb.id = gi.batch_id
+         WHERE gi.output_image_id IS NOT NULL AND gb.theme_title = 'Random Roll'`
+      )
+      .all() as { imageId: number }[];
+    for (const rr of allRandomRollRows) {
+      randomRollImageIds.add(Number(rr.imageId));
+    }
   }
 
   const isSingleDetail = rows.length === 1;
@@ -331,6 +356,7 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
       fileMtime: r.file_mtime,
       isMissing: Boolean(r.is_missing),
       isUploadedReference: Boolean(r.is_uploaded_reference),
+      isRandomRoll: randomRollImageIds.has(r.id),
       thumbnailUrl: `/api/images/${r.id}/thumbnail${hashParam}`,
       originalUrl: `/api/images/${r.id}/file`,
       dependencyStatus: r.dependency_status,

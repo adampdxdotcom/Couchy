@@ -20,6 +20,7 @@ import {
   FolderPlus,
   Layers,
   MessageSquare,
+  Dices,
 } from 'lucide-react';
 import {
   DEFAULT_PILL_TYPE_SETTINGS,
@@ -759,6 +760,16 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                         <span>
                           {attachedGhost ? `${img.seriesCount || 1} +1` : img.seriesCount}
                         </span>
+                      </span>
+                    )}
+
+                    {img.isRandomRoll && (
+                      <span
+                        title="Generated via Random Roll"
+                        aria-label="Generated via Random Roll"
+                        className="inline-flex items-center justify-center p-1 rounded-md bg-black/75 backdrop-blur-xs border border-indigo-500/40 text-indigo-300 shadow-sm pointer-events-auto"
+                      >
+                        <Dices className="w-3.5 h-3.5" />
                       </span>
                     )}
                   </div>

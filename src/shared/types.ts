@@ -129,6 +129,7 @@ export interface ImageRecord {
   fileMtime: string;
   isMissing: boolean;
   isUploadedReference?: boolean;
+  isRandomRoll?: boolean;
   thumbnailUrl: string;
   originalUrl: string;
   dependencyStatus: DependencyStatus;

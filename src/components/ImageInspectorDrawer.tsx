@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { BookmarkPlus, Columns2, Heart, Keyboard, Loader2, Play, RotateCcw, Star, Trash2, X } from 'lucide-react';
+import { BookmarkPlus, Columns2, Dices, Heart, Keyboard, Loader2, Play, RotateCcw, Star, Trash2, X } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
@@ -388,6 +388,16 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 </button>
 
                 {renderDependencyLabel(activeImage.dependencyStatus)}
+
+                {activeImage.isRandomRoll && (
+                  <span
+                    title="Generated via Random Roll"
+                    aria-label="Generated via Random Roll"
+                    className="inline-flex items-center justify-center p-1.5 rounded-lg bg-indigo-500/15 border border-indigo-500/35 text-indigo-300 shrink-0"
+                  >
+                    <Dices className="w-3.5 h-3.5" />
+                  </span>
+                )}
               </div>
 
               <div className="relative flex items-center gap-1.5 sm:gap-2 shrink-0">
