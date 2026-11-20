@@ -132,87 +132,13 @@ export function useQuickGenAgentAndBatch({
         batchCount,
       });
 
-      let appliedAgentPreset: LoraPreset | null = null;
-      if (res.selectedPreset?.id) {
-        const matchedPreset = presets.find((p) => p.id === res.selectedPreset!.id) || null;
-        if (matchedPreset) {
-          appliedAgentPreset = matchedPreset;
-          applyPreset(matchedPreset, { respectRemovedKeys: true, silent: true });
-        }
-      }
-
-      const resolvedPickedLoras: LoraExplorerItem[] = [];
-      if (Array.isArray(res.selectedLoras) && res.selectedLoras.length > 0) {
-        const seenKeys = new Set<string>();
-        for (const pickedName of res.selectedLoras) {
-          if (resolvedPickedLoras.length >= 3) break;
-          const pickedKey = normalizeLoraKey(pickedName);
-          if (!pickedKey || seenKeys.has(pickedKey) || removedLoraKeys.has(pickedKey)) continue;
-          const matched = loras.find(
-            (l) =>
-              normalizeLoraKey(l.filename) === pickedKey || normalizeLoraKey(l.name) === pickedKey
-          );
-          if (!matched) continue;
-          // Character LoRAs stay locked to Characters
-          if (
-            matched.loraCategory === 'character' ||
-            matched.characters.length > 0 ||
-            isCharacterLora(matched.filename, attachedCharacter, loras)
-          ) {
-            continue;
-          }
-          seenKeys.add(pickedKey);
-          resolvedPickedLoras.push(matched);
-        }
-      }
-
-      if (resolvedPickedLoras.length > 0) {
-        setAttachedLoras((prev) => {
-          const next = [...prev];
-          for (const matched of resolvedPickedLoras) {
-            const matchedKey = normalizeLoraKey(matched.filename);
-            if (removedLoraKeys.has(matchedKey)) continue;
-            const existingIdx = next.findIndex((al) => normalizeLoraKey(al.loraName) === matchedKey);
-            const cleanLabel = getCleanLoraLabel(matched);
-            if (existingIdx >= 0) {
-              next[existingIdx] = {
-                ...next[existingIdx],
-                nickname: cleanLabel,
-                triggerWord: matched.triggerWord || next[existingIdx].triggerWord || '',
-                showPill: true,
-              };
-            } else if (next.length < MAX_SYSTEM_LORAS) {
-              next.push({
-                loraName: matched.filename,
-                modelStrength: matched.defaultModelStrength ?? 1.0,
-                clipStrength: matched.defaultClipStrength ?? 1.0,
-                triggerWord: matched.triggerWord || '',
-                nickname: cleanLabel,
-                showPill: true,
-              });
-            }
-          }
-          return next;
-        });
-      }
-
-      const preExistingLoraKeys = new Set(
-        selectedLoras.map((l) => normalizeLoraKey(l.loraName)).filter(Boolean)
-      );
-      const pickedLoraHistory = Array.from(
-        new Set([
-          ...(appliedAgentPreset ? appliedAgentPreset.items.map((it) => it.loraName) : []),
-          ...resolvedPickedLoras.map((l) => l.filename),
-        ])
-      ).filter((name) => !preExistingLoraKeys.has(normalizeLoraKey(name)));
-
+      // Character-only mode: do not auto-attach Agent-selected presets or non-character LoRAs
       const assistantMsg: QuickGenChatMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
         content: res.reply,
         proposedPrompt: res.proposedPrompt,
         proposalKind: res.proposalKind,
-        selectedLoras: pickedLoraHistory.length > 0 ? pickedLoraHistory : undefined,
         excludedLoras: currentRemovedKeys.length > 0 ? currentRemovedKeys : undefined,
       };
       setChatMessages((prev) => [...prev, assistantMsg]);

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Trash2 } from 'lucide-react';
 import type {
   CharacterProfile,
@@ -29,39 +29,7 @@ export const CharacterLoraStackPanel: React.FC<CharacterLoraStackPanelProps> = (
   onChangeTriggerWord,
   activeLoras,
   onChangeActiveLoras,
-  loras,
 }) => {
-  const [extraLoraToAdd, setExtraLoraToAdd] = useState<string>('');
-
-  const handleAddExtraLora = () => {
-    if (!extraLoraToAdd) return;
-    let knownTrigger = '';
-    for (const c of characters) {
-      const found = c.loras.find(
-        (cl) => cl.loraName.toLowerCase() === extraLoraToAdd.toLowerCase()
-      );
-      if (found?.triggerWord) {
-        knownTrigger = found.triggerWord;
-        break;
-      }
-    }
-
-    onChangeActiveLoras((prev) => [
-      ...prev,
-      {
-        loraName: extraLoraToAdd,
-        modelStrength: 1.0,
-        clipStrength: 1.0,
-        appearanceLabel: 'Additional LoRA',
-        triggerWord: knownTrigger,
-      },
-    ]);
-
-    if (knownTrigger && !triggerWord.includes(knownTrigger)) {
-      onChangeTriggerWord(triggerWord.trim() ? `${triggerWord.trim()}, ${knownTrigger}` : knownTrigger);
-    }
-    setExtraLoraToAdd('');
-  };
 
   return (
     <section className="p-5 bg-zinc-900/60 border border-zinc-800/90 rounded-xl space-y-4">
@@ -118,8 +86,8 @@ export const CharacterLoraStackPanel: React.FC<CharacterLoraStackPanelProps> = (
       <div className="space-y-2">
         {activeLoras.length === 0 ? (
           <div className="p-3 bg-zinc-950/60 border border-zinc-800/80 rounded-lg text-xs text-zinc-400">
-            No LoRAs active. Node #30_23 (Enable LoRA) will be set to{' '}
-            <code className="text-zinc-300">false</code>. Choose a character or add a LoRA below.
+            No character LoRAs active. Node #30_23 (Enable LoRA) will be set to{' '}
+            <code className="text-zinc-300">false</code>. Choose a character above.
           </div>
         ) : (
           activeLoras.map((item, idx) => (
@@ -204,31 +172,6 @@ export const CharacterLoraStackPanel: React.FC<CharacterLoraStackPanelProps> = (
           ))
         )}
 
-        {/* Add additional LoRA dropdown (ComfyUI-installed only) */}
-        <div className="flex items-center gap-2 pt-1">
-          <select
-            value={extraLoraToAdd}
-            onChange={(e) => setExtraLoraToAdd(e.target.value)}
-            className="flex-1 px-2.5 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-300"
-          >
-            <option value="">+ Add another LoRA to Power Lora Loader (#50)...</option>
-            {loras
-              .filter((l) => l.isInstalled)
-              .map((l) => (
-                <option key={l.filename} value={l.filename}>
-                  {l.name} ({l.loraCategory})
-                </option>
-              ))}
-          </select>
-          <button
-            type="button"
-            disabled={!extraLoraToAdd}
-            onClick={handleAddExtraLora}
-            className="px-3 py-1.5 text-xs font-medium text-zinc-100 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 rounded-lg whitespace-nowrap shrink-0 cursor-pointer transition-colors"
-          >
-            Add LoRA
-          </button>
-        </div>
       </div>
     </section>
   );

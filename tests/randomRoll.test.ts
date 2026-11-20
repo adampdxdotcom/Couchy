@@ -179,4 +179,17 @@ describe('randomRollService', () => {
       ['described_krea.safetensors']
     );
   });
+
+  it('rolls only the character LoRA in executeRandomRoll without attaching extra style LoRAs', async () => {
+    ctx.db
+      .prepare(
+        `INSERT INTO models (name, filename, model_type, lora_category, base_model, trigger_word, is_installed, is_hidden, mention_enabled)
+         VALUES ('FilmStyle', 'film_style.safetensors', 'lora', 'style', 'Krea2', 'film_trig', 1, 0, 1)`
+      )
+      .run();
+
+    const result = await rr.executeRandomRoll();
+    assert.equal(result.rollSummary.characterName, 'ValidChar');
+    assert.deepEqual(result.rollSummary.loraNames, ['char_valid.safetensors']);
+  });
 });

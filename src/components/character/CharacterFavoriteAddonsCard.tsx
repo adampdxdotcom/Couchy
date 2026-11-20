@@ -140,53 +140,11 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
   const handleNewImageClick = () => {
     if (!onLaunchNewImage) return;
 
-    const pickedLoras: QuickGenPrefillLora[] = [];
-
-    if (selectedFriendKey) {
-      const friend = friends.find((f) => f.key === selectedFriendKey);
-      if (friend) {
-        const friendProfile = friend.characterId
-          ? allCharacters.find((c) => c.id === friend.characterId)
-          : undefined;
-        const explorerMatch = loras.find(
-          (l) => l.filename.toLowerCase() === friend.loraName.toLowerCase()
-        );
-        const friendTrigger =
-          friendProfile?.loras.find(
-            (cl) => cl.loraName.toLowerCase() === friend.loraName.toLowerCase()
-          )?.triggerWord ||
-          friendProfile?.loras[0]?.triggerWord ||
-          explorerMatch?.triggerWord ||
-          '';
-
-        pickedLoras.push({
-          loraName: friend.loraName,
-          modelStrength: friend.avgModelStrength,
-          clipStrength: friend.avgClipStrength,
-          triggerWord: friendTrigger,
-          nickname: friend.characterName,
-          isCharacterPill: true,
-          portraitThumbnailUrl: friend.portraitThumbnailUrl,
-          portraitCrop: friend.portraitCrop,
-          showPill: true,
-        });
-      }
-    }
-
-    for (const addon of addonLoras) {
-      if (!selectedAddonKeys.has(addon.key)) continue;
-      pickedLoras.push({
-        loraName: addon.loraName,
-        modelStrength: addon.avgModelStrength,
-        clipStrength: addon.avgClipStrength,
-        showPill: true,
-      });
-    }
-
+    // Character-only mode: launch with the character and optional base model, no extra LoRAs
     onLaunchNewImage({
       character,
       checkpointName: selectedCheckpoint || defaultCheckpoint || null,
-      loras: pickedLoras,
+      loras: [],
     });
   };
 
@@ -253,10 +211,6 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                   : defaultCheckpoint
                   ? `${resolveBaseModelDisplayLabel(defaultCheckpoint, models)} (default)`
                   : 'default model'
-              }${
-                selectedAddonKeys.size + (selectedFriendKey ? 1 : 0) > 0
-                  ? `, and ${selectedAddonKeys.size + (selectedFriendKey ? 1 : 0)} selected LoRA(s)`
-                  : ''
               }`}
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-medium transition-colors cursor-pointer shadow-sm shrink-0"
             >
@@ -377,16 +331,12 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                     >
                       <button
                         type="button"
-                        disabled={isDisabled}
+                        disabled
                         onClick={() => handleToggleAddon(addon.key)}
                         title={
                           !addon.isInstalled
                             ? `${addon.loraName}: ${availability.tooltip}`
-                            : !isSelected && atLoraLimit
-                            ? `Maximum ${MAX_SYSTEM_LORAS} total LoRAs reached`
-                            : isSelected
-                            ? `Deselect ${addon.displayName}`
-                            : `Select ${addon.displayName} (${formatPillStrength(addon.avgModelStrength)}x) for New Image`
+                            : `${addon.displayName} (character-only LoRA mode active)`
                         }
                         className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border text-xs shadow-sm transition-all min-w-0 max-w-[65%] ${
                           !addon.isInstalled
@@ -474,16 +424,12 @@ export const CharacterFavoriteAddonsCard: React.FC<CharacterFavoriteAddonsCardPr
                     >
                       <button
                         type="button"
-                        disabled={isDisabled}
+                        disabled
                         onClick={() => handleToggleFriend(friend.key)}
                         title={
                           !friend.isInstalled
                             ? `${friend.loraName}: ${availability.tooltip}`
-                            : wouldExceedCap
-                            ? `Maximum ${MAX_SYSTEM_LORAS} total LoRAs reached`
-                            : isSelected
-                            ? `Deselect ${friend.characterName}`
-                            : `Select ${friend.characterName} (${formatPillStrength(friend.avgModelStrength)}x) for New Image`
+                            : `${friend.characterName} (character-only LoRA mode active)`
                         }
                         className={`inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-full border text-xs shadow-sm transition-all min-w-0 max-w-[65%] ${
                           !friend.isInstalled

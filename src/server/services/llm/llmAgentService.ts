@@ -544,28 +544,9 @@ export async function converseQuickGenPrompt(params: {
   const baseUrl = settings.baseUrl.replace(/\/+$/, '');
   const modelToUse = status.selectedModel || settings.selectedModel || 'local-model';
 
-  const excludedKeys = new Set(
-    (params.excludedLoras || []).map((l) => normalizeLoraMatchKey(l)).filter(Boolean)
-  );
-  const attachedKeys = new Set(
-    (params.loraNames || []).map((l) => normalizeLoraMatchKey(l)).filter(Boolean)
-  );
-
-  const { candidateRows, presetRows, presetItemsMap } = loadAgentCatalog();
-  const availableCandidates = candidateRows.filter((c) => {
-    const fileKey = normalizeLoraMatchKey(c.filename);
-    const nameKey = normalizeLoraMatchKey(c.name);
-    const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : '';
-    const isExcluded =
-      excludedKeys.has(fileKey) ||
-      excludedKeys.has(nameKey) ||
-      Boolean(nickKey && excludedKeys.has(nickKey));
-    const isAlreadyAttached =
-      attachedKeys.has(fileKey) ||
-      attachedKeys.has(nameKey) ||
-      Boolean(nickKey && attachedKeys.has(nickKey));
-    return !isExcluded && !isAlreadyAttached;
-  });
+  // Character-only mode: do not offer non-character LoRAs or preset stacks to the Agent
+  const availableCandidates: CandidateLoraRow[] = [];
+  const presetRows: CandidatePresetRow[] = [];
 
   const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
     characterName: params.characterName,
@@ -576,64 +557,7 @@ export async function converseQuickGenPrompt(params: {
 
   const contextNotes: string[] = [];
   if (characterBlock) contextNotes.push(characterBlock);
-  if (params.activePresetName?.trim()) {
-    contextNotes.push(`Active LoRA Preset: ${params.activePresetName.trim()}`);
-  }
   if (attachedLoraBlock) contextNotes.push(attachedLoraBlock);
-
-  if (presetRows.length > 0) {
-    const presetLines = presetRows.map((p) => {
-      const handle = getCandidateHandle(p);
-      const baseLabel = p.checkpoint_name
-        ? `Base: ${p.checkpoint_name.replace(/\.(safetensors|pt|ckpt|gguf|sft)$/i, '')}`
-        : 'Base: System Workflow Default';
-      const lorasSummary = (presetItemsMap.get(p.id) || []).join(', ');
-      const composition = lorasSummary ? `${baseLabel}; LoRAs: ${lorasSummary}` : baseLabel;
-      return `- @${handle} [${composition}]: ${p.agent_description.trim()}`;
-    });
-    contextNotes.push(
-      [
-        `Saved LoRA Presets available for selection (each applies a curated Base Model + LoRA stack with tuned strengths):`,
-        ...presetLines,
-        `Preset Selection Rules:`,
-        `- If one of these saved Presets best fits the user's request, emit <selected_preset>"@handle"</selected_preset> (choose at most 1 preset).`,
-        `- Do NOT write preset handles or LoRA filenames inside the generated prompt itself.`,
-      ].join('\n')
-    );
-  }
-
-  if (availableCandidates.length > 0) {
-    const catalogLines = availableCandidates.map((c) => {
-      const handle = getCandidateHandle(c);
-      const cat =
-        c.lora_category && c.lora_category !== 'unclassified' ? ` [${c.lora_category}]` : '';
-      return `- @${handle}${cat}: ${c.llm_description.trim()}`;
-    });
-    contextNotes.push(
-      [
-        `Optional non-character LoRAs available for selection (not yet attached):`,
-        ...catalogLines,
-        `LoRA Selection Rules:`,
-        `- Already-attached LoRAs remain active automatically—only select NEW additional LoRAs from the list above if they clearly match the scene, style, lighting, or outfit (up to 3 handles inside <selected_loras>["@handle1", "@handle2"]</selected_loras>).`,
-        `- Do NOT select character LoRAs or write trigger words inside the prompt.`,
-      ].join('\n')
-    );
-  }
-
-  if (excludedKeys.size > 0) {
-    const excludedLabels = candidateRows
-      .filter((c) => {
-        const fileKey = normalizeLoraMatchKey(c.filename);
-        const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : '';
-        return excludedKeys.has(fileKey) || (nickKey && excludedKeys.has(nickKey));
-      })
-      .map((c) => `@${getCandidateHandle(c)}`);
-    const fallbackExcluded = Array.from(excludedKeys).map((k) => `@${k}`);
-    const displayExcluded = excludedLabels.length > 0 ? excludedLabels : fallbackExcluded;
-    contextNotes.push(
-      `User-deselected LoRAs (respect the user's choice and do NOT select these again unless the user explicitly asks to re-enable them): ${displayExcluded.join(', ')}.`
-    );
-  }
 
   if (targetBatchCount > 1) {
     contextNotes.push(
@@ -644,16 +568,6 @@ export async function converseQuickGenPrompt(params: {
       `ACTIVE MODE: SINGLE SHOT. Wrap each ready-to-generate prompt in <proposed_prompt>...</proposed_prompt> tags.`
     );
   }
-
-  contextNotes.push(
-    [
-      `LORA CONCEPT SELF-CHECK & TAG ORDER (whenever you emit a <proposed_prompt> or <proposed_concept> and any non-character LoRA is already attached OR newly selected via <selected_loras>):`,
-      `1. Write your brief conversational reply first.`,
-      `2. If selecting new LoRA(s) or a preset on this turn, emit <selected_preset> / <selected_loras> BEFORE the prompt block.`,
-      `3. Next, emit <lora_check>...</lora_check> listing each active or newly selected non-character LoRA and the concrete visual elements (setting, architecture, uniform/wardrobe, props, lighting, or style) that MUST appear in your proposal (if the user explicitly asked to change away from an earlier LoRA's setting/outfit, mark that line "Skip: user pivot").`,
-      `4. Finally, emit <proposed_prompt>...</proposed_prompt> (or <proposed_concept>...</proposed_concept>) explicitly weaving every active visual element from <lora_check> into the scene description.`,
-    ].join('\n')
-  );
 
   const validMessages = params.messages.filter(
     (m) =>

@@ -782,7 +782,7 @@ async function composeRandomRollPrompt(params: {
 }
 
 /**
- * Picks a popularity-weighted character, compatible style LoRAs, tags, and aspect ratio,
+ * Picks a popularity-weighted character, tags, and aspect ratio,
  * then lets the Local LLM choose the best fitting described base model last and write a cohesive prompt
  * before submitting immediately at the default workflow's native resolution and steps.
  */
@@ -803,11 +803,8 @@ export async function executeRandomRoll(): Promise<{
   const wfDefaults = getWorkflowDefaults(defaultWf.id);
   const { character, charLora } = selectRolledCharacter();
   const charBaseGroup = normalizeBaseModelGroup(charLora?.base_model);
-  const styleLoras = selectRolledStyleLoras(charBaseGroup);
-  const effectiveBaseGroup =
-    charBaseGroup ||
-    styleLoras.map((sl) => normalizeBaseModelGroup(sl.baseModel)).find(Boolean) ||
-    '';
+  // Character-only mode: do not attach extra style LoRAs during Random Roll
+  const effectiveBaseGroup = charBaseGroup || '';
 
   const tags = selectRolledTags(5);
   const aspectRatio = selectRolledAspectRatio(wfDefaults.defaultAspectRatio ?? null);
@@ -826,19 +823,11 @@ export async function executeRandomRoll(): Promise<{
       triggerWord: charLora.trigger_word || '',
     });
   }
-  for (const sl of styleLoras) {
-    loras.push({
-      loraName: sl.filename,
-      modelStrength: sl.modelStrength,
-      clipStrength: sl.clipStrength,
-      triggerWord: sl.triggerWord,
-    });
-  }
 
   const triggerWord = Array.from(
     new Set(
-      [charLora?.trigger_word, ...styleLoras.map((sl) => sl.triggerWord)]
-        .flatMap((t) => (t || '').split(','))
+      (charLora?.trigger_word || '')
+        .split(',')
         .map((t) => t.trim())
         .filter(Boolean)
     )
@@ -849,17 +838,13 @@ export async function executeRandomRoll(): Promise<{
     characterDescription: character.description || '',
     characterPhysicalDescription: character.physical_description || '',
     loraNames: loras.map((l) => l.loraName),
-    hasStyleLoras: styleLoras.length > 0,
+    hasStyleLoras: false,
     tags,
     baseCandidates,
     fallbackCheckpoint,
   });
 
-  recordRecentRoll(
-    character.id,
-    styleLoras.map((l) => l.filename),
-    checkpointName
-  );
+  recordRecentRoll(character.id, [], checkpointName);
 
   // Omit megapixels and steps so dispatch uses the default workflow's native resolution & steps
   const { batch, batches } = await dispatchGenerationBatch({
