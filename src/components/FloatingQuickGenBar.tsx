@@ -319,7 +319,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
             }
             onClick={submitState.handleRandomRoll}
             aria-label="Random Roll generation"
-            title="Random Roll: pick a character (or use your attached character), compatible model, style LoRAs & tags and submit immediately"
+            title="Random Roll: pick a character (or use your attached character), compatible model, style LoRAs & tags and submit immediately (honors xN count)"
             className={`pointer-events-auto inline-flex items-center justify-center px-3 py-1.5 rounded-t-xl bg-zinc-900/98 border-t border-x border-zinc-800 transition-colors shadow-lg select-none shrink-0 ${
               submitState.isRollingRandom
                 ? 'text-indigo-300 cursor-wait'
@@ -725,7 +725,7 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
                   ? 'opacity-40 cursor-not-allowed bg-zinc-800/50 text-zinc-500'
                   : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 cursor-pointer'
               }`}
-              title="Random Roll: pick a character (or use your attached character), compatible model, style LoRAs & tags and submit immediately"
+              title="Random Roll: pick a character (or use your attached character), compatible model, style LoRAs & tags and submit immediately (honors xN count)"
             >
               {submitState.isRollingRandom ? (
                 <Loader2 className="w-4 h-4 animate-spin text-indigo-300" />

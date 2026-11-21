@@ -209,4 +209,51 @@ describe('randomRollService', () => {
     // Nonexistent characterId throws cleanly
     assert.throws(() => rr.selectRolledCharacter(999999), /not found/i);
   });
+
+  it('progressively dispatches multi-image Random Roll shots and respects batch cancellation', async () => {
+    const validRow = ctx.db
+      .prepare(`SELECT id FROM characters WHERE name = 'ValidChar'`)
+      .get() as { id: number };
+
+    // 1. Multi-shot progressive roll (x3) creates 1 multi_shot series & 3 items, returning after Shot 1
+    const multi = await rr.executeRandomRoll({ characterId: validRow.id, count: 3 });
+    assert.equal(multi.rollSummary.totalCount, 3);
+    assert.equal(multi.batch.mode, 'theme_set');
+    assert.equal(multi.batch.totalCount, 3);
+    assert.equal(multi.batch.items.length, 3);
+    assert.ok(multi.batch.items[0].prompt.length >= 15);
+    assert.equal(multi.batch.items[1].status, 'pending');
+    assert.equal(multi.batch.items[2].status, 'pending');
+    assert.ok(multi.progressiveTask);
+
+    const seriesRow = ctx.db
+      .prepare(
+        `SELECT s.series_kind FROM generation_batches gb JOIN image_series s ON s.id = gb.series_id WHERE gb.id = ?`
+      )
+      .get(multi.batch.id) as { series_kind: string } | undefined;
+    assert.equal(seriesRow?.series_kind, 'multi_shot');
+
+    // Waiting on progressiveTask populates distinct prompts across all 3 shots
+    await multi.progressiveTask;
+    const finalItems = ctx.db
+      .prepare(`SELECT item_index, prompt FROM generation_items WHERE batch_id = ? ORDER BY item_index ASC`)
+      .all(multi.batch.id) as Array<{ item_index: number; prompt: string }>;
+    assert.equal(finalItems.length, 3);
+    assert.equal(new Set(finalItems.map((i) => i.prompt)).size, 3);
+
+    // 2. Cancelling a progressive batch stops remaining pending items from being written/dispatched
+    const { markPromptsCancelled } = await import('../src/server/services/comfyuiLiveMonitor.ts');
+    const cancelledRoll = await rr.executeRandomRoll({ characterId: validRow.id, count: 4 });
+    markPromptsCancelled([], cancelledRoll.batch.id);
+    ctx.db
+      .prepare(`UPDATE generation_items SET status = 'cancelled' WHERE batch_id = ? AND status = 'pending'`)
+      .run(cancelledRoll.batch.id);
+    await cancelledRoll.progressiveTask;
+
+    const cancelledItems = ctx.db
+      .prepare(`SELECT item_index, prompt, status FROM generation_items WHERE batch_id = ? ORDER BY item_index ASC`)
+      .all(cancelledRoll.batch.id) as Array<{ item_index: number; prompt: string; status: string }>;
+    assert.equal(cancelledItems[1].status, 'cancelled');
+    assert.equal(cancelledItems[1].prompt, '');
+  });
 });

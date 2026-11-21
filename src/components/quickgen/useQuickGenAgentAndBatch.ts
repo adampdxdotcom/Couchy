@@ -47,7 +47,7 @@ interface UseQuickGenAgentAndBatchParams {
     options?: { respectRemovedKeys?: boolean; silent?: boolean }
   ) => void;
   resetQuickGenState: (options?: { minimizeIfNeeded?: boolean; onAfterReset?: () => void }) => void;
-  onClearCharacterAfterRandomRoll?: () => void;
+  onResetAfterRandomRoll?: () => void;
   focusInputAtEnd: (delayMs?: number, moveToEnd?: boolean) => void;
   onRefreshAll: () => Promise<void>;
   onPushToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
@@ -84,7 +84,7 @@ export function useQuickGenAgentAndBatch({
   resolveActiveLoraStack,
   applyPreset,
   resetQuickGenState,
-  onClearCharacterAfterRandomRoll,
+  onResetAfterRandomRoll,
   focusInputAtEnd,
   onRefreshAll,
   onPushToast,
@@ -425,15 +425,17 @@ export function useQuickGenAgentAndBatch({
     await dispatchBatchToComfy(proposedPromptText, batchCount > 1, onAfterReset, undefined, messageId);
   };
 
-  /** Runs Random Roll (honoring any attached character, otherwise popularity-weighted) and dispatches immediately. */
+  /** Runs Random Roll (honoring any attached character and batchCount) and dispatches immediately. */
   const handleRandomRoll = async () => {
     if (isRollingRandom || isSubmitting || isChatting) return;
     setIsRollingRandom(true);
     try {
       const pinnedCharacterId = attachedCharacter?.id ?? null;
-      const res = await api.triggerRandomRoll(
-        pinnedCharacterId ? { characterId: pinnedCharacterId } : undefined
-      );
+      const requestedCount = Math.max(1, Math.min(8, Math.round(batchCount || 1)));
+      const res = await api.triggerRandomRoll({
+        ...(pinnedCharacterId ? { characterId: pinnedCharacterId } : {}),
+        ...(requestedCount > 1 ? { count: requestedCount } : {}),
+      });
       const submittedCount = res.batch.items.filter((i) => i.status === 'submitted').length;
       const failedCount = res.batch.items.filter((i) => i.status === 'failed').length;
       const shortAr =
@@ -451,14 +453,18 @@ export function useQuickGenAgentAndBatch({
           res.rollSummary.loraNames.length > 0
             ? ` · ${res.rollSummary.loraNames.length} LoRA(s)`
             : '';
+        const multiShotText =
+          requestedCount > 1
+            ? ` · 1/${requestedCount} queued (writing remaining shots…)`
+            : '';
         onPushToast(
-          `Random Roll #${res.batch.id}: ${res.rollSummary.characterName} · ${shortAr}${extraLoraText}`,
+          `Random Roll #${res.batch.id}: ${res.rollSummary.characterName} · ${shortAr}${extraLoraText}${multiShotText}`,
           'success'
         );
       }
 
-      if (pinnedCharacterId) {
-        onClearCharacterAfterRandomRoll?.();
+      if (pinnedCharacterId || requestedCount > 1) {
+        onResetAfterRandomRoll?.();
       }
       await onRefreshAll();
     } catch (err: any) {

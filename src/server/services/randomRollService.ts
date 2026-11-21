@@ -5,21 +5,31 @@ import {
   type GenerationLoraSelection,
 } from '../../shared/types.ts';
 import { resolveClosestAspectRatio } from '../../shared/utils.ts';
-import { dispatchGenerationBatch } from './generationDispatchService.ts';
+import { isBatchCancelled } from './comfyuiLiveMonitor.ts';
 import {
-  checkLmStudioStatus,
-  getLmStudioSettings,
-  postChatCompletion,
-} from './llm/llmClientService.ts';
+  dispatchGenerationBatch,
+  dispatchPendingGenerationItem,
+  touchBatchPendingItems,
+  type PendingBatchSlot,
+} from './generationDispatchService.ts';
+import { filterCharacterIdentityTags, normalizeLoraMatchKey } from './llm/llmPromptUtils.ts';
 import {
-  buildLlmCharacterAndLoraContext,
-  extractLoraCheckBlock,
-  filterCharacterIdentityTags,
-  normalizeLoraMatchKey,
-  sanitizeAgentPrompt,
+  composeRandomRollPrompt,
+  extractLoraCheckFromRandomRollResponse,
+  extractPromptFromRandomRollResponse,
+  resolveSelectedBaseCandidate,
   verifyPromptReflectsLoraCheck,
-} from './llm/llmPromptUtils.ts';
+  type BaseModelCandidate,
+} from './randomRollPromptService.ts';
 import { getWorkflowDefaults } from './workflowCompilerService.ts';
+
+export {
+  extractLoraCheckFromRandomRollResponse,
+  extractPromptFromRandomRollResponse,
+  resolveSelectedBaseCandidate,
+  verifyPromptReflectsLoraCheck,
+  type BaseModelCandidate,
+};
 
 export interface WeightedCandidate<T> {
   item: T;
@@ -36,6 +46,7 @@ export interface RandomRollSummary {
   aspectRatio: string;
   usedLmStudio: boolean;
   prompt: string;
+  totalCount: number;
 }
 
 const recentCharacterIds: number[] = [];
@@ -226,24 +237,6 @@ export function selectRolledCharacter(preferredCharacterId?: number | null) {
   const installedCharLora =
     charLoras.length > 0 ? charLoras[Math.floor(Math.random() * charLoras.length)] : null;
   return { character: picked, charLora: installedCharLora };
-}
-
-export interface BaseModelCandidate {
-  filename: string;
-  name: string;
-  nickname: string | null;
-  base_model: string | null;
-  llm_description: string;
-  usage_count: number;
-  fav_count: number;
-}
-
-function getBaseModelHandle(candidate: BaseModelCandidate): string {
-  return (
-    (candidate.nickname || '').trim().replace(/^@+/, '') ||
-    candidate.name.trim() ||
-    candidate.filename.replace(/\.(?:safetensors|ckpt|pt|bin|gguf|sft)$/i, '').trim()
-  );
 }
 
 /**
@@ -520,316 +513,105 @@ function selectRolledAspectRatio(fallbackRatio: string | null): string {
   );
 }
 
-function buildOfflineRandomPrompt(characterName: string, tags: string[]): string {
-  const framings = [
-    'medium three-quarter portrait, candid natural posture, 85mm lens, shallow depth of field',
-    'intimate close-up portrait, sharp catchlights in eyes, soft rim light, film grain',
-    'editorial full-body shot, atmospheric depth, architectural perspective, 35mm lens',
-    'over-the-shoulder candid composition, golden natural illumination, rich ambient detail',
-  ];
-  const lightings = [
-    'soft golden hour sunlight, warm shadows',
-    'moody overcast daylight, crisp editorial contrast',
-    'warm indoor practical lighting, subtle ambient glow',
-    'dramatic side window light, natural skin texture',
-  ];
-  const framing = framings[Math.floor(Math.random() * framings.length)];
-  const lighting = lightings[Math.floor(Math.random() * lightings.length)];
-  const sceneCue = tags.length > 0 ? tags.join(', ') : 'relaxed outdoor lifestyle scene';
-  return sanitizeAgentPrompt(
-    `the subject in a spontaneous scene featuring ${sceneCue}, ${framing}, ${lighting}`,
-    characterName
-  );
-}
-
-export function resolveSelectedBaseCandidate(
-  llmContent: string,
-  candidates: BaseModelCandidate[]
-): BaseModelCandidate | null {
-  const match = llmContent.match(
-    /<selected_base>([\s\S]*?)(?:<\/selected_base>|(?=<proposed_prompt>)|\r?\n|$)/i
-  );
-  if (!match || !match[1]) return null;
-  const rawToken = match[1].replace(/^["'\s]+|["'\s]+$/g, '');
-  const targetKey = normalizeLoraMatchKey(rawToken);
-  if (!targetKey) return null;
-
-  return (
-    candidates.find((c) => {
-      const handleKey = normalizeLoraMatchKey(getBaseModelHandle(c));
-      const nameKey = normalizeLoraMatchKey(c.name);
-      const fileKey = normalizeLoraMatchKey(c.filename);
-      const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : '';
-      return (
-        handleKey === targetKey ||
-        nameKey === targetKey ||
-        fileKey === targetKey ||
-        (Boolean(nickKey) && nickKey === targetKey)
-      );
-    }) || null
-  );
-}
-
-export const extractLoraCheckFromRandomRollResponse = extractLoraCheckBlock;
-export { verifyPromptReflectsLoraCheck };
-
-export function extractPromptFromRandomRollResponse(
-  llmContent: string,
-  characterName: string
-): string {
-  const withoutMetaTags = llmContent
-    .replace(/<lora_check>[\s\S]*?(?:<\/lora_check>|(?=<selected_base>)|(?=<proposed_prompt>))/gi, '')
-    .replace(/<selected_base>[\s\S]*?(?:<\/selected_base>|(?=<proposed_prompt>)|\r?\n|$)/gi, '')
-    .trim();
-  const match = withoutMetaTags.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
-  const raw = (match?.[1] || withoutMetaTags).replace(/^["']|["']$/g, '').trim();
-  return sanitizeAgentPrompt(raw, characterName);
-}
-
-function buildShuffledBaseContext(candidates: BaseModelCandidate[]): {
-  block: string | null;
-  shouldSelectBase: boolean;
-} {
-  if (candidates.length === 0) {
-    return { block: null, shouldSelectBase: false };
-  }
-
-  if (candidates.length === 1) {
-    const only = candidates[0];
-    const desc = only.llm_description.replace(/\s+/g, ' ').trim().slice(0, 320);
-    return {
-      block: `Active Base Model (${getBaseModelHandle(only)}): ${desc}\n- Write the visual medium, lighting, and detail level to play to this base model's strengths.`,
-      shouldSelectBase: false,
-    };
-  }
-
-  // Shuffle order on each roll so position #1 doesn't bias the LLM
-  const shuffled = [...candidates];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-
-  const lines = shuffled.map((c) => {
-    const handle = getBaseModelHandle(c);
-    const desc = c.llm_description.replace(/\s+/g, ' ').trim().slice(0, 300);
-    const tier = getCheckpointCooldownTier(c.filename);
-    const cooldownNote =
-      tier === 1
-        ? ' [used last roll — pick only if clearly the best fit, otherwise prefer another fitting option for variety]'
-        : '';
-    return `- @${handle}: ${desc}${cooldownNote}`;
-  });
-
-  return {
-    block: [
-      'Available Base Models (choose ONE via <selected_base>"@handle"</selected_base> whose Model Details & Strengths best suit this Character, Attached LoRAs, and scene):',
-      ...lines,
-    ].join('\n'),
-    shouldSelectBase: true,
-  };
-}
-
-async function composeRandomRollPrompt(params: {
+/**
+ * Sequentially authors Shots 2..N via the Local LLM agent (sharing prior shot prompts
+ * to avoid repetition) and dispatches each shot to ComfyUI as soon as its prompt is ready.
+ */
+async function runProgressiveRandomRollShots(params: {
+  batchId: number;
+  workflowId: number;
+  pendingSlots: PendingBatchSlot[];
+  totalCount: number;
+  initialPrompt: string;
+  characterId: number;
   characterName: string;
   characterDescription: string;
   characterPhysicalDescription: string;
-  loraNames: string[];
+  loras: GenerationLoraSelection[];
   hasStyleLoras: boolean;
   tags: string[];
+  aspectRatio: string;
+  triggerWord: string;
   baseCandidates: BaseModelCandidate[];
-  fallbackCheckpoint: string | null;
-}): Promise<{ prompt: string; checkpointName: string | null; usedLmStudio: boolean }> {
-  try {
-    const status = await checkLmStudioStatus();
-    if (!status.online) {
-      return {
-        prompt: buildOfflineRandomPrompt(params.characterName, params.tags),
-        checkpointName: params.fallbackCheckpoint,
-        usedLmStudio: false,
-      };
+  lockedCheckpoint: string | null;
+}): Promise<void> {
+  const previousPrompts = [params.initialPrompt];
+
+  for (const slot of params.pendingSlots) {
+    if (!db.open || isBatchCancelled(params.batchId)) {
+      break;
     }
 
-    const settings = getLmStudioSettings();
-    const baseUrl = settings.baseUrl.replace(/\/+$/, '');
-    const modelToUse = status.selectedModel || settings.selectedModel || 'local-model';
+    try {
+      touchBatchPendingItems(params.batchId);
 
-    const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
-      characterName: params.characterName,
-      characterDescription: params.characterDescription,
-      characterPhysicalDescription: params.characterPhysicalDescription,
-      loraNames: params.loraNames,
-    });
+      const { prompt } = await composeRandomRollPrompt({
+        characterName: params.characterName,
+        characterDescription: params.characterDescription,
+        characterPhysicalDescription: params.characterPhysicalDescription,
+        loraNames: params.loras.map((l) => l.loraName),
+        hasStyleLoras: params.hasStyleLoras,
+        tags: params.tags,
+        baseCandidates: params.baseCandidates,
+        fallbackCheckpoint: params.lockedCheckpoint,
+        recentCheckpointKeys,
+        shotNumber: slot.itemIndex,
+        totalShots: params.totalCount,
+        previousPrompts,
+        lockedCheckpoint: params.lockedCheckpoint,
+      });
 
-    const { block: baseModelBlock, shouldSelectBase } = buildShuffledBaseContext(
-      params.baseCandidates
-    );
+      if (!db.open || isBatchCancelled(params.batchId)) {
+        break;
+      }
 
-    const tagHint =
-      params.tags.length > 0
-        ? `Secondary optional motifs (keep ONLY motifs that harmonize with the Attached LoRAs, and explicitly drop any setting/outfit motif that conflicts): ${params.tags.join(', ')}.`
-        : 'Invent a vivid, grounded setting, natural wardrobe, and expressive lighting.';
+      previousPrompts.push(prompt);
+      const { cancelled } = await dispatchPendingGenerationItem({
+        batchId: params.batchId,
+        itemId: slot.itemId,
+        prompt,
+        seed: slot.seed,
+        workflowId: params.workflowId,
+        aspectRatio: params.aspectRatio,
+        triggerWord: params.triggerWord,
+        negativePrompt: '',
+        loras: params.loras,
+        checkpointName: params.lockedCheckpoint,
+        characterId: params.characterId,
+      });
 
-    const loraDirective = params.hasStyleLoras
-      ? [
-          '- Mandatory Step 1 (<lora_check>): Before choosing a base model or writing the prompt, output <lora_check>...</lora_check> with:',
-          '  1. For each non-character Attached LoRA, state the concrete visual elements (specific setting, architecture, uniform/wardrobe, props, pose, or lighting) that MUST appear in <proposed_prompt> to showcase that LoRA.',
-          '  2. Tag Filter: List which optional random motifs to KEEP and which to DROP because they clash with the Attached LoRA concept/wardrobe.',
-          '- Play to Attached LoRAs: Attached non-character LoRA(s) are the primary driver of the scene. Every concrete visual element you listed in <lora_check> MUST be explicitly described inside <proposed_prompt>.',
-        ].join('\n')
-      : '- Focus on a fresh, coherent scene that complements the subject naturally.';
-
-    const baseDirective = shouldSelectBase
-      ? '- Base Model Choice: Output <selected_base>"@handle"</selected_base> using one exact @handle from Available Base Models that best matches the character, attached LoRAs, and intended scene mood, then tailor <proposed_prompt> to that chosen base model’s strengths. Never write base model names or @handles inside <proposed_prompt>.'
-      : params.baseCandidates.length === 1
-        ? '- Play to Active Base Model: Tailor lighting, photographic texture, and detail cues to complement the Active Base Model description without naming it in <proposed_prompt>.'
-        : null;
-
-    const randomRollRules = [
-      'RANDOM ROLL RULES:',
-      '- Output ONE original, ready-to-generate prompt wrapped inside <proposed_prompt>...</proposed_prompt>. Never include character names, base model names, or model/LoRA filenames inside <proposed_prompt>.',
-      '- Strict Identity Fidelity: Follow the Character Profile strictly for sex/gender pronouns and permanent physical traits. NEVER invent, guess, or insert a race, ethnicity, nationality, skin tone, hair color, eye color, or biological sex not explicitly supported by the Character Profile; leave unspecified identity traits unstated so the active character LoRA supplies them.',
-      loraDirective,
-      baseDirective,
-    ]
-      .filter(Boolean)
-      .join('\n');
-
-    const systemPrompt = [
-      settings.conversationSystemPrompt,
-      characterBlock,
-      attachedLoraBlock,
-      baseModelBlock,
-      randomRollRules,
-    ]
-      .filter(Boolean)
-      .join('\n\n');
-
-    const responseFormatHint = params.hasStyleLoras
-      ? shouldSelectBase
-        ? 'Return ONLY <lora_check>...</lora_check>, <selected_base>"@handle"</selected_base>, and <proposed_prompt>...</proposed_prompt>.'
-        : 'Return ONLY <lora_check>...</lora_check> and <proposed_prompt>...</proposed_prompt>.'
-      : shouldSelectBase
-        ? 'Return ONLY <selected_base>"@handle"</selected_base> and <proposed_prompt>...</proposed_prompt>.'
-        : 'Return ONLY <proposed_prompt>...</proposed_prompt>.';
-
-    const userInstruction = params.hasStyleLoras
-      ? [
-          'Create a single fresh, spontaneous scene prompt for the subject built directly around the attached non-character LoRA(s).',
-          attachedLoraBlock || '',
-          tagHint,
-          responseFormatHint,
-        ]
-          .filter(Boolean)
-          .join('\n\n')
-      : `Create a single fresh, spontaneous scene prompt for the subject. ${tagHint} ${responseFormatHint}`;
-
-    const res = await postChatCompletion({
-      baseUrl,
-      model: modelToUse,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        {
-          role: 'user',
-          content: userInstruction,
-        },
-      ],
-      temperature: 0.72,
-      maxTokens: 1350,
-      timeoutMs: 35_000,
-    });
-
-    let chosenBase = shouldSelectBase
-      ? resolveSelectedBaseCandidate(res.content, params.baseCandidates)
-      : params.baseCandidates[0] || null;
-
-    let loraCheck = extractLoraCheckFromRandomRollResponse(res.content);
-    let sanitized = extractPromptFromRandomRollResponse(res.content, params.characterName);
-
-    if (params.hasStyleLoras && sanitized.length >= 15) {
-      const checkResult = verifyPromptReflectsLoraCheck(
-        sanitized,
-        loraCheck,
-        attachedLoraBlock
+      if (cancelled) break;
+    } catch (err: any) {
+      logger.error(
+        'ComfyUI',
+        `Progressive Random Roll batch #${params.batchId} shot #${slot.itemIndex} failed`,
+        err?.message || err
       );
-
-      if (loraCheck) {
-        logger.info(
-          'LocalLLM',
-          `Random Roll <lora_check> (${checkResult.passed ? 'verified' : 'missed concept — retrying'}): ${loraCheck.replace(/\s+/g, ' ')}`
-        );
-      }
-
-      if (!checkResult.passed) {
-        const missingPreview = checkResult.expectedKeywords.slice(0, 10).join(', ');
-        const retryRes = await postChatCompletion({
-          baseUrl,
-          model: modelToUse,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userInstruction },
-            { role: 'assistant', content: res.content },
-            {
-              role: 'user',
-              content: `Self-Check Verification Failed: Your <proposed_prompt> did not explicitly include the visual concepts from your <lora_check> / Attached LoRAs (expected visual cues such as: ${missingPreview}). Rewrite <proposed_prompt> so the setting, wardrobe, or visual style explicitly depicts those attached LoRA elements while keeping strict character identity fidelity. ${responseFormatHint}`,
-            },
-          ],
-          temperature: 0.65,
-          maxTokens: 1200,
-          timeoutMs: 30_000,
-        });
-
-        const retrySanitized = extractPromptFromRandomRollResponse(
-          retryRes.content,
-          params.characterName
-        );
-        if (retrySanitized.length >= 15) {
-          sanitized = retrySanitized;
-          chosenBase =
-            (shouldSelectBase
-              ? resolveSelectedBaseCandidate(retryRes.content, params.baseCandidates)
-              : null) || chosenBase;
-          loraCheck = extractLoraCheckFromRandomRollResponse(retryRes.content) || loraCheck;
-          logger.info(
-            'LocalLLM',
-            'Random Roll post-generation LoRA verification retry succeeded'
-          );
-        }
+      if (db.open) {
+        db.prepare(
+          `UPDATE generation_items
+           SET status = 'failed', error_message = ?, completed_at = datetime('now')
+           WHERE id = ? AND status = 'pending'`
+        ).run(err?.message || 'Failed during progressive Random Roll generation', slot.itemId);
       }
     }
-
-    const resolvedCheckpoint = chosenBase?.filename || params.fallbackCheckpoint;
-
-    if (sanitized.length >= 15) {
-      return {
-        prompt: sanitized,
-        checkpointName: resolvedCheckpoint,
-        usedLmStudio: true,
-      };
-    }
-  } catch (err) {
-    logger.warn('LocalLLM', 'Random Roll LLM prompt synthesis failed, using offline fallback', err);
   }
-
-  return {
-    prompt: buildOfflineRandomPrompt(params.characterName, params.tags),
-    checkpointName: params.fallbackCheckpoint,
-    usedLmStudio: false,
-  };
 }
 
 /**
  * Picks a popularity-weighted character (or uses the user's pinned characterId when provided),
- * compatible style LoRAs, tags, and aspect ratio, then lets the Local LLM choose the best fitting
- * described base model last and write a cohesive prompt before submitting immediately at the
- * default workflow's native resolution and steps.
+ * compatible style LoRAs, tags, and aspect ratio, then authors Shot 1 and dispatches immediately.
+ * When `count > 1`, Shots 2..N are generated sequentially by the agent in the background and
+ * appended to the same batch and multi-shot series as each prompt completes.
  */
 export async function executeRandomRoll(options?: {
   characterId?: number | null;
+  count?: number | null;
 }): Promise<{
   batch: GenerationBatchRecord;
   batches: GenerationBatchRecord[];
   rollSummary: RandomRollSummary;
+  progressiveTask?: Promise<void>;
 }> {
   const defaultWf = db
     .prepare(
@@ -840,6 +622,10 @@ export async function executeRandomRoll(options?: {
     throw new Error('No default ComfyUI workflow configured.');
   }
 
+  const totalCount = Math.max(
+    1,
+    Math.min(8, Math.round(Number(options?.count ?? 1)) || 1)
+  );
   const wfDefaults = getWorkflowDefaults(defaultWf.id);
   const { character, charLora } = selectRolledCharacter(options?.characterId);
   const charBaseGroup = normalizeBaseModelGroup(charLora?.base_model);
@@ -893,6 +679,9 @@ export async function executeRandomRoll(options?: {
     tags,
     baseCandidates,
     fallbackCheckpoint,
+    recentCheckpointKeys,
+    shotNumber: 1,
+    totalShots: totalCount,
   });
 
   recordRecentRoll(
@@ -902,18 +691,41 @@ export async function executeRandomRoll(options?: {
   );
 
   // Omit megapixels and steps so dispatch uses the default workflow's native resolution & steps
-  const { batch, batches } = await dispatchGenerationBatch({
+  const { batch, batches, pendingSlots } = await dispatchGenerationBatch({
     characterId: character.id,
     workflowId: defaultWf.id,
-    mode: 'single',
-    themeTitle: 'Random Roll',
+    mode: totalCount > 1 ? 'theme_set' : 'single',
+    themeTitle: totalCount > 1 ? 'Random Roll Set' : 'Random Roll',
     aspectRatio,
     prompts: [prompt],
+    totalPlannedCount: totalCount,
     triggerWord,
     negativePrompt: '',
     loras,
     checkpointName,
   });
+
+  const progressiveTask =
+    totalCount > 1 && pendingSlots && pendingSlots.length > 0
+      ? runProgressiveRandomRollShots({
+          batchId: batch.id,
+          workflowId: defaultWf.id,
+          pendingSlots,
+          totalCount,
+          initialPrompt: prompt,
+          characterId: character.id,
+          characterName: character.name,
+          characterDescription: character.description || '',
+          characterPhysicalDescription: character.physical_description || '',
+          loras,
+          hasStyleLoras: styleLoras.length > 0,
+          tags,
+          aspectRatio,
+          triggerWord,
+          baseCandidates,
+          lockedCheckpoint: checkpointName,
+        })
+      : undefined;
 
   const rollSummary: RandomRollSummary = {
     characterId: character.id,
@@ -924,12 +736,15 @@ export async function executeRandomRoll(options?: {
     aspectRatio,
     usedLmStudio,
     prompt,
+    totalCount,
   };
 
   logger.info(
     'ComfyUI',
-    `Random Roll queued batch #${batch.id}: char=${character.name} ckpt=${checkpointName || 'default'} loras=${loras.length} ar=${aspectRatio} llm=${usedLmStudio}`
+    `Random Roll queued batch #${batch.id} (${totalCount} shot${totalCount === 1 ? '' : 's'}): char=${character.name} ckpt=${checkpointName || 'default'} loras=${loras.length} ar=${aspectRatio} llm=${usedLmStudio}`
   );
 
-  return { batch, batches, rollSummary };
+  return progressiveTask
+    ? { batch, batches, rollSummary, progressiveTask }
+    : { batch, batches, rollSummary };
 }

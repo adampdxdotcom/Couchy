@@ -229,7 +229,8 @@ export function useQuickGenSubmit({
     setRemovedLoraKeys,
   });
 
-  const clearCharacterAfterRandomRoll = () => {
+  const resetAfterRandomRoll = () => {
+    setBatchCount(1);
     const charToClear = attachedCharacter;
     setAttachedCharacter(null);
     setCharacterLoraStrength(1.0);
@@ -272,7 +273,7 @@ export function useQuickGenSubmit({
     resolveActiveLoraStack: attachments.resolveActiveLoraStack,
     applyPreset: attachments.applyPreset,
     resetQuickGenState,
-    onClearCharacterAfterRandomRoll: clearCharacterAfterRandomRoll,
+    onResetAfterRandomRoll: resetAfterRandomRoll,
     focusInputAtEnd,
     onRefreshAll,
     onPushToast,

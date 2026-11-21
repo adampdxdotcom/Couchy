@@ -41,6 +41,7 @@ export interface DispatchGenerationBatchInput {
   megapixels?: number | null;
   steps?: number | null;
   prompts: string[];
+  totalPlannedCount?: number;
   triggerWord?: string;
   negativePrompt?: string;
   loras?: GenerationLoraSelection[];
@@ -50,6 +51,12 @@ export interface DispatchGenerationBatchInput {
   branchFromImageId?: number | null;
   inspirationFilename?: string | null;
   chatSnapshot?: QuickGenChatMessage[];
+}
+
+export interface PendingBatchSlot {
+  itemId: number;
+  itemIndex: number;
+  seed: string;
 }
 
 /**
@@ -210,13 +217,137 @@ function trackGenerationItem(
   });
 }
 
+async function submitItemToComfyUi(params: {
+  batchId: number;
+  itemId: number;
+  prompt: string;
+  seed: string;
+  workflowId: number;
+  aspectRatio: string;
+  megapixels: number;
+  steps?: number;
+  width: number;
+  height: number;
+  loras: GenerationLoraSelection[];
+  checkpointName: string | null;
+  triggerWord?: string;
+  negativePrompt?: string;
+  characterId?: number | null;
+}): Promise<void> {
+  const {
+    batchId,
+    itemId,
+    prompt,
+    seed,
+    workflowId,
+    aspectRatio,
+    megapixels,
+    steps,
+    width,
+    height,
+    loras,
+    checkpointName,
+    triggerWord,
+    negativePrompt,
+    characterId,
+  } = params;
+
+  try {
+    const apiPayload = compileWorkflowForGeneration({
+      workflowId,
+      positivePrompt: prompt,
+      triggerWord: triggerWord !== undefined ? String(triggerWord) : undefined,
+      negativePrompt: (negativePrompt || '').trim(),
+      seed,
+      aspectRatio,
+      megapixels,
+      steps,
+      width,
+      height,
+      loras,
+      checkpointName: checkpointName || undefined,
+    });
+    const hasInlineUpscale = Boolean(findInlineUpscaleNodes(apiPayload));
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const comfyRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        prompt: apiPayload,
+        client_id: COUCHY_COMFY_CLIENT_ID,
+      }),
+    });
+    clearTimeout(timer);
+
+    if (!comfyRes.ok) {
+      const errText = await comfyRes.text();
+      throw new Error(`ComfyUI HTTP ${comfyRes.status}: ${errText}`);
+    }
+
+    const data = (await comfyRes.json()) as { prompt_id?: string };
+    const promptId = data.prompt_id || `prompt-${Date.now()}-${itemId}`;
+
+    // If the user cancelled this batch while /prompt was in flight, immediately remove it
+    if (isBatchCancelled(batchId)) {
+      markPromptsCancelled([promptId], batchId);
+      fetch(`${appConfig.comfyuiUrl}/queue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delete: [promptId] }),
+      }).catch(() => {});
+      db.prepare(
+        `UPDATE generation_items
+         SET comfyui_prompt_id = ?, status = 'cancelled', error_message = 'Cancelled by user', completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(promptId, itemId);
+      return;
+    }
+
+    db.prepare(
+      `UPDATE generation_items
+       SET comfyui_prompt_id = ?, status = 'submitted'
+       WHERE id = ?`
+    ).run(promptId, itemId);
+
+    trackGenerationItem(
+      itemId,
+      promptId,
+      characterId ? Number(characterId) : null,
+      megapixels > 3.0 && !hasInlineUpscale ? megapixels : undefined
+    );
+    logger.info(
+      'ComfyUI',
+      `Submitted batch #${batchId} item #${itemId} (${promptId}) [${width}x${height}]`
+    );
+  } catch (err: any) {
+    const errMsg = err?.message || 'Failed to submit to ComfyUI';
+    logger.error('ComfyUI', `Failed to submit batch #${batchId} item #${itemId}`, errMsg);
+    if (db.open) {
+      db.prepare(
+        `UPDATE generation_items
+         SET status = 'failed', error_message = ?, completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(errMsg, itemId);
+      preserveFailedGenerationConversation(itemId);
+    }
+  }
+}
+
 /**
  * Compiles workflow settings, persists generation batch/items in SQLite,
- * dispatches sequential `/prompt` jobs to ComfyUI, and registers live tracking.
+ * dispatches initial `/prompt` jobs to ComfyUI, and reserves any pending slots
+ * for progressive background generation.
  */
 export async function dispatchGenerationBatch(
   input: DispatchGenerationBatchInput
-): Promise<{ batch: GenerationBatchRecord; batches: GenerationBatchRecord[] }> {
+): Promise<{
+  batch: GenerationBatchRecord;
+  batches: GenerationBatchRecord[];
+  pendingSlots?: PendingBatchSlot[];
+}> {
   const workflowId = Number(input.workflowId);
   const promptList = input.prompts.map((p) => String(p).trim()).filter(Boolean);
   if (!workflowId) {
@@ -225,6 +356,11 @@ export async function dispatchGenerationBatch(
   if (promptList.length === 0) {
     throw new Error('At least one positive prompt is required.');
   }
+
+  const effectiveTotalCount = Math.max(
+    promptList.length,
+    Math.min(20, Math.round(Number(input.totalPlannedCount || promptList.length)) || promptList.length)
+  );
 
   let wfDefaultMp: number | null = null;
   let wfDefaultAr: string | null = null;
@@ -279,8 +415,12 @@ export async function dispatchGenerationBatch(
     );
   }
 
-  if (!effectiveSeriesId && !input.branchFromImageId && (promptList.length > 1 || inspirationImageId)) {
-    const seriesKind = promptList.length > 1 ? 'multi_shot' : 'iterative';
+  if (
+    !effectiveSeriesId &&
+    !input.branchFromImageId &&
+    (effectiveTotalCount > 1 || inspirationImageId)
+  ) {
+    const seriesKind = effectiveTotalCount > 1 ? 'multi_shot' : 'iterative';
     const createdSeries = db
       .prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (NULL, ?)`)
       .run(seriesKind);
@@ -315,7 +455,7 @@ export async function dispatchGenerationBatch(
       workflowId,
       input.themeTitle ? String(input.themeTitle).trim() : null,
       input.mode === 'theme_set' ? 'theme_set' : 'single',
-      promptList.length,
+      effectiveTotalCount,
       resolvedAr,
       resolvedMp,
       computedWidth,
@@ -336,120 +476,161 @@ export async function dispatchGenerationBatch(
      VALUES (?, ?, ?, ?, ?, 'pending')`
   );
 
-  const createdItems: { itemId: number; index: number; prompt: string; seed: string }[] = [];
+  const immediateItems: { itemId: number; index: number; prompt: string; seed: string }[] = [];
+  const pendingSlots: PendingBatchSlot[] = [];
   const hasFixedBaseSeed = Boolean(input.baseSeed && Number(input.baseSeed) > 0);
   const startingSeed = hasFixedBaseSeed
     ? Math.floor(Number(input.baseSeed))
     : Math.floor(Math.random() * 1e15) + 1;
 
-  for (let i = 0; i < promptList.length; i++) {
+  for (let i = 0; i < effectiveTotalCount; i++) {
     const itemSeed = hasFixedBaseSeed
       ? String(startingSeed + i)
       : String(Math.floor(Math.random() * 1e15) + 1);
+    const shotPrompt = promptList[i] || '';
     const info = insertItem.run(
       batchId,
       i + 1,
-      promptList[i],
+      shotPrompt,
       (input.negativePrompt || '').trim(),
       itemSeed
     );
-    createdItems.push({
-      itemId: Number(info.lastInsertRowid),
-      index: i + 1,
-      prompt: promptList[i],
-      seed: itemSeed,
-    });
+    const itemId = Number(info.lastInsertRowid);
+    if (shotPrompt) {
+      immediateItems.push({ itemId, index: i + 1, prompt: shotPrompt, seed: itemSeed });
+    } else {
+      pendingSlots.push({ itemId, itemIndex: i + 1, seed: itemSeed });
+    }
   }
 
-  for (const item of createdItems) {
+  for (const item of immediateItems) {
     if (isBatchCancelled(batchId)) {
       break;
     }
-    try {
-      const apiPayload = compileWorkflowForGeneration({
-        workflowId,
-        positivePrompt: item.prompt,
-        triggerWord: input.triggerWord !== undefined ? String(input.triggerWord) : undefined,
-        negativePrompt: (input.negativePrompt || '').trim(),
-        seed: item.seed,
-        aspectRatio: resolvedAr,
-        megapixels: resolvedMp,
-        steps: resolvedSteps,
-        width: computedWidth,
-        height: computedHeight,
-        loras: loraSelections,
-        checkpointName: input.checkpointName || undefined,
-      });
-      const hasInlineUpscale = Boolean(findInlineUpscaleNodes(apiPayload));
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 8000);
-      const comfyRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          prompt: apiPayload,
-          client_id: COUCHY_COMFY_CLIENT_ID,
-        }),
-      });
-      clearTimeout(timer);
-
-      if (!comfyRes.ok) {
-        const errText = await comfyRes.text();
-        throw new Error(`ComfyUI HTTP ${comfyRes.status}: ${errText}`);
-      }
-
-      const data = (await comfyRes.json()) as { prompt_id?: string };
-      const promptId = data.prompt_id || `prompt-${Date.now()}-${item.itemId}`;
-
-      // If the user cancelled this batch while /prompt was in flight, immediately remove it
-      if (isBatchCancelled(batchId)) {
-        markPromptsCancelled([promptId], batchId);
-        fetch(`${appConfig.comfyuiUrl}/queue`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ delete: [promptId] }),
-        }).catch(() => {});
-        db.prepare(
-          `UPDATE generation_items
-           SET comfyui_prompt_id = ?, status = 'cancelled', error_message = 'Cancelled by user', completed_at = datetime('now')
-           WHERE id = ?`
-        ).run(promptId, item.itemId);
-        break;
-      }
-
-      db.prepare(
-        `UPDATE generation_items
-         SET comfyui_prompt_id = ?, status = 'submitted'
-         WHERE id = ?`
-      ).run(promptId, item.itemId);
-
-      trackGenerationItem(
-        item.itemId,
-        promptId,
-        input.characterId ? Number(input.characterId) : null,
-        resolvedMp > 3.0 && !hasInlineUpscale ? resolvedMp : undefined
-      );
-      logger.info(
-        'ComfyUI',
-        `Submitted batch #${batchId} item #${item.itemId} (${promptId}) [${computedWidth}x${computedHeight}]`
-      );
-    } catch (err: any) {
-      const errMsg = err?.message || 'Failed to submit to ComfyUI';
-      logger.error('ComfyUI', `Failed to submit batch #${batchId} item #${item.itemId}`, errMsg);
-      db.prepare(
-        `UPDATE generation_items
-         SET status = 'failed', error_message = ?, completed_at = datetime('now')
-         WHERE id = ?`
-      ).run(errMsg, item.itemId);
-      preserveFailedGenerationConversation(item.itemId);
-    }
+    await submitItemToComfyUi({
+      batchId,
+      itemId: item.itemId,
+      prompt: item.prompt,
+      seed: item.seed,
+      workflowId,
+      aspectRatio: resolvedAr,
+      megapixels: resolvedMp,
+      steps: resolvedSteps,
+      width: computedWidth,
+      height: computedHeight,
+      loras: loraSelections,
+      checkpointName: resolvedCheckpointName,
+      triggerWord: input.triggerWord,
+      negativePrompt: input.negativePrompt,
+      characterId: input.characterId,
+    });
   }
 
   invalidateComfyQueueCache();
 
   const batches = listGenerationBatches(25);
   const createdBatch = batches.find((b) => b.id === batchId) || batches[0];
-  return { batch: createdBatch, batches };
+  return pendingSlots.length > 0
+    ? { batch: createdBatch, batches, pendingSlots }
+    : { batch: createdBatch, batches };
+}
+
+/**
+ * Refreshes timestamps on remaining pending slots while background prompt generation is active
+ * so live ghost-card tracking does not treat multi-shot LLM waits as orphaned jobs.
+ */
+export function touchBatchPendingItems(batchId: number): void {
+  if (!db.open || batchId <= 0) return;
+  db.prepare(
+    `UPDATE generation_items
+     SET created_at = datetime('now')
+     WHERE batch_id = ? AND status = 'pending'`
+  ).run(batchId);
+}
+
+/**
+ * Populates a pre-allocated pending generation item with its prompt and dispatches it to ComfyUI.
+ */
+export async function dispatchPendingGenerationItem(params: {
+  batchId: number;
+  itemId: number;
+  prompt: string;
+  seed: string;
+  workflowId: number;
+  aspectRatio?: string | null;
+  megapixels?: number | null;
+  steps?: number | null;
+  loras?: GenerationLoraSelection[];
+  checkpointName?: string | null;
+  triggerWord?: string;
+  negativePrompt?: string;
+  characterId?: number | null;
+}): Promise<{ cancelled: boolean }> {
+  const { batchId, itemId } = params;
+  if (!db.open || isBatchCancelled(batchId)) {
+    return { cancelled: true };
+  }
+
+  const cleanPrompt = params.prompt.trim();
+  if (!cleanPrompt) {
+    throw new Error('Cannot dispatch empty pending prompt.');
+  }
+
+  const updateInfo = db
+    .prepare(
+      `UPDATE generation_items
+       SET prompt = ?, created_at = datetime('now')
+       WHERE id = ? AND batch_id = ? AND status = 'pending'`
+    )
+    .run(cleanPrompt, itemId, batchId);
+
+  if (updateInfo.changes === 0 || isBatchCancelled(batchId)) {
+    return { cancelled: true };
+  }
+
+  const batchRow = db
+    .prepare(
+      `SELECT aspect_ratio, megapixels, width, height, checkpoint_name
+       FROM generation_batches
+       WHERE id = ?`
+    )
+    .get(batchId) as
+    | {
+        aspect_ratio: string;
+        megapixels: number;
+        width: number;
+        height: number;
+        checkpoint_name: string | null;
+      }
+    | undefined;
+
+  if (!batchRow) {
+    return { cancelled: true };
+  }
+
+  const resolvedAr = normalizeResolutionSelectorRatio(
+    params.aspectRatio || batchRow.aspect_ratio || undefined
+  );
+  const resolvedMp = Number(params.megapixels ?? batchRow.megapixels ?? 3.0);
+
+  await submitItemToComfyUi({
+    batchId,
+    itemId,
+    prompt: cleanPrompt,
+    seed: params.seed,
+    workflowId: params.workflowId,
+    aspectRatio: resolvedAr,
+    megapixels: resolvedMp,
+    steps: params.steps ?? undefined,
+    width: Number(batchRow.width),
+    height: Number(batchRow.height),
+    loras: Array.isArray(params.loras) ? params.loras : [],
+    checkpointName: params.checkpointName ?? batchRow.checkpoint_name ?? null,
+    triggerWord: params.triggerWord,
+    negativePrompt: params.negativePrompt,
+    characterId: params.characterId,
+  });
+
+  invalidateComfyQueueCache();
+  return { cancelled: isBatchCancelled(batchId) };
 }

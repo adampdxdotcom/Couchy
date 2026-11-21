@@ -393,7 +393,8 @@ generationRouter.post('/submit-batch', async (req, res) => {
 /**
  * POST /api/generation/random-roll
  * Rolls weighted-random character (or uses pinned characterId), compatible base model,
- * optional style LoRAs, popular tags, and aspect ratio, then dispatches immediately.
+ * optional style LoRAs, popular tags, and aspect ratio, then dispatches immediately
+ * (with progressive multi-shot generation when count > 1).
  */
 generationRouter.post('/random-roll', async (req, res) => {
   try {
@@ -405,8 +406,21 @@ generationRouter.post('/random-roll', async (req, res) => {
       Number(rawCharId) > 0
         ? Number(rawCharId)
         : null;
-    const result = await executeRandomRoll({ characterId });
-    res.json(result);
+    const rawCount = req.body?.count;
+    const count =
+      rawCount !== undefined && rawCount !== null && Number.isFinite(Number(rawCount))
+        ? Math.max(1, Math.min(8, Math.round(Number(rawCount))))
+        : 1;
+    const { batch, batches, rollSummary, progressiveTask } = await executeRandomRoll({
+      characterId,
+      count,
+    });
+    if (progressiveTask) {
+      void progressiveTask.catch(() => {
+        // Errors are already logged and recorded per-item inside runProgressiveRandomRollShots
+      });
+    }
+    res.json({ batch, batches, rollSummary });
   } catch (err: unknown) {
     res.status(400).json({ error: getErrorMessage(err, 'Failed to roll random generation.') });
   }
