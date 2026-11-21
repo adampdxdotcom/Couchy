@@ -122,6 +122,19 @@ describe('randomRollService', () => {
       pivotedLoraCheck
     );
     assert.equal(pivotVerification.passed, true);
+
+    // Unclosed <lora_check> or <proposed_concept> without <proposed_prompt> must never leak
+    const leakedLoraCheck = [
+      '<lora_check>',
+      '- wetness: sweat on forehead, neck, shoulders, collarbones, and midriff',
+      '- realistic: natural skin texture, slight imperfections in framing Covering all 4 shots in set with:',
+      '- wetness: sweat on forehead, neck, shoulders, collarbones, and midriff',
+    ].join('\n');
+    assert.equal(rr.extractPromptFromRandomRollResponse(leakedLoraCheck, 'Alice'), '');
+
+    const leakedConceptOnly =
+      '<lora_check>- wetness: damp skin</lora_check>\n<proposed_concept>Four-shot rain sequence.</proposed_concept>';
+    assert.equal(rr.extractPromptFromRandomRollResponse(leakedConceptOnly, 'Alice'), '');
   });
 
   it('enforces eligibility rules: characters with installed LoRAs, described mention checkpoints, and style LoRA exclusions', () => {

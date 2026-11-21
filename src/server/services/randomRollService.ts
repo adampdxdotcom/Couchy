@@ -534,6 +534,7 @@ async function runProgressiveRandomRollShots(params: {
   triggerWord: string;
   baseCandidates: BaseModelCandidate[];
   lockedCheckpoint: string | null;
+  lockedLoraCheck?: string | null;
 }): Promise<void> {
   const previousPrompts = [params.initialPrompt];
 
@@ -559,6 +560,7 @@ async function runProgressiveRandomRollShots(params: {
         totalShots: params.totalCount,
         previousPrompts,
         lockedCheckpoint: params.lockedCheckpoint,
+        lockedLoraCheck: params.lockedLoraCheck,
       });
 
       if (!db.open || isBatchCancelled(params.batchId)) {
@@ -670,7 +672,7 @@ export async function executeRandomRoll(options?: {
     )
   ).join(', ');
 
-  const { prompt, checkpointName, usedLmStudio } = await composeRandomRollPrompt({
+  const { prompt, checkpointName, usedLmStudio, loraCheck } = await composeRandomRollPrompt({
     characterName: character.name,
     characterDescription: character.description || '',
     characterPhysicalDescription: character.physical_description || '',
@@ -724,6 +726,7 @@ export async function executeRandomRoll(options?: {
           triggerWord,
           baseCandidates,
           lockedCheckpoint: checkpointName,
+          lockedLoraCheck: loraCheck,
         })
       : undefined;
 

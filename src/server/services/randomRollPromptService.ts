@@ -100,12 +100,22 @@ export function extractPromptFromRandomRollResponse(
   llmContent: string,
   characterName: string
 ): string {
-  const withoutMetaTags = llmContent
-    .replace(/<lora_check>[\s\S]*?(?:<\/lora_check>|(?=<selected_base>)|(?=<proposed_prompt>))/gi, '')
-    .replace(/<selected_base>[\s\S]*?(?:<\/selected_base>|(?=<proposed_prompt>)|\r?\n|$)/gi, '')
-    .trim();
-  const match = withoutMetaTags.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
-  const raw = (match?.[1] || withoutMetaTags).replace(/^["']|["']$/g, '').trim();
+  // Prefer explicit <proposed_prompt> content so <lora_check>/<selected_base> never leak through
+  const match = llmContent.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
+  if (match && match[1]) {
+    const insideTag = match[1]
+      .replace(/<\/?(?:lora_check|selected_base|proposed_concept|proposed_prompt)>/gi, '')
+      .replace(/^["']|["']$/g, '')
+      .trim();
+    return sanitizeAgentPrompt(insideTag, characterName);
+  }
+
+  // If scratchpad/concept tags were emitted without <proposed_prompt>, never return raw scratchpad text
+  if (/<(?:lora_check|selected_base|proposed_concept|shot_\d+)\b/i.test(llmContent)) {
+    return '';
+  }
+
+  const raw = llmContent.replace(/^["']|["']$/g, '').trim();
   return sanitizeAgentPrompt(raw, characterName);
 }
 
@@ -200,10 +210,17 @@ export async function composeRandomRollPrompt(params: {
   totalShots?: number;
   previousPrompts?: string[];
   lockedCheckpoint?: string | null;
-}): Promise<{ prompt: string; checkpointName: string | null; usedLmStudio: boolean }> {
+  lockedLoraCheck?: string | null;
+}): Promise<{
+  prompt: string;
+  checkpointName: string | null;
+  usedLmStudio: boolean;
+  loraCheck?: string | null;
+}> {
   const shotNumber = Math.max(1, params.shotNumber || 1);
   const totalShots = Math.max(1, params.totalShots || 1);
   const resolvedFallbackCkpt = params.lockedCheckpoint || params.fallbackCheckpoint;
+  const requireLoraCheck = params.hasStyleLoras && shotNumber === 1;
 
   try {
     const status = await checkLmStudioStatus();
@@ -212,6 +229,7 @@ export async function composeRandomRollPrompt(params: {
         prompt: buildOfflineRandomPrompt(params.characterName, params.tags, shotNumber - 1),
         checkpointName: resolvedFallbackCkpt,
         usedLmStudio: false,
+        loraCheck: params.lockedLoraCheck || null,
       };
     }
 
@@ -241,14 +259,23 @@ export async function composeRandomRollPrompt(params: {
         ? `Secondary optional motifs (keep ONLY motifs that harmonize with the Attached LoRAs, and explicitly drop any setting/outfit motif that conflicts): ${params.tags.join(', ')}.`
         : 'Invent a vivid, grounded setting, natural wardrobe, and expressive lighting.';
 
-    const loraDirective = params.hasStyleLoras
+    const loraDirective = requireLoraCheck
       ? [
           '- Mandatory Step 1 (<lora_check>): Before choosing a base model or writing the prompt, output <lora_check>...</lora_check> with:',
           '  1. For each non-character Attached LoRA, state the concrete visual elements (specific setting, architecture, uniform/wardrobe, props, pose, or lighting) that MUST appear in <proposed_prompt> to showcase that LoRA.',
           '  2. Tag Filter: List which optional random motifs to KEEP and which to DROP because they clash with the Attached LoRA concept/wardrobe.',
           '- Play to Attached LoRAs: Attached non-character LoRA(s) are the primary driver of the scene. Every concrete visual element you listed in <lora_check> MUST be explicitly described inside <proposed_prompt>.',
         ].join('\n')
-      : '- Focus on a fresh, coherent scene that complements the subject naturally.';
+      : params.hasStyleLoras
+        ? [
+            '- Play to Attached LoRAs: Attached non-character LoRA(s) are the primary driver of this shot and MUST be explicitly depicted inside <proposed_prompt>.',
+            params.lockedLoraCheck
+              ? `- Required LoRA Visual Cues (already verified): ${params.lockedLoraCheck.replace(/\s+/g, ' ').trim()}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join('\n')
+        : '- Focus on a fresh, coherent scene that complements the subject naturally.';
 
     const baseDirective = shouldSelectBase
       ? '- Base Model Choice: Output <selected_base>"@handle"</selected_base> using one exact @handle from Available Base Models that best matches the character, attached LoRAs, and intended scene mood, then tailor <proposed_prompt> to that chosen base model’s strengths. Never write base model names or @handles inside <proposed_prompt>.'
@@ -258,7 +285,10 @@ export async function composeRandomRollPrompt(params: {
 
     const multiShotDirective =
       totalShots > 1
-        ? `- Multi-Shot Set Variety (Shot ${shotNumber} of ${totalShots}): Keep the same overall world/concept and LoRA style, but invent a distinctly new camera framing, pose, gesture, lighting angle, or interaction compared to any prior shots in this set.`
+        ? [
+            `- Multi-Shot Single-Frame Rule (Shot ${shotNumber} of ${totalShots}): Even though this is part of a ${totalShots}-shot set, ignore any Batch Concept or <proposed_concept> mode—write ONLY ONE standalone prompt for Shot ${shotNumber} inside <proposed_prompt>...</proposed_prompt>.`,
+            '- Set Variety: Keep the same overall world/concept and LoRA style, but choose a distinctly different camera framing, pose, gesture, lighting angle, or action from prior shots.',
+          ].join('\n')
         : null;
 
     const randomRollRules = [
@@ -282,18 +312,18 @@ export async function composeRandomRollPrompt(params: {
       .filter(Boolean)
       .join('\n\n');
 
-    const responseFormatHint = params.hasStyleLoras
+    const responseFormatHint = requireLoraCheck
       ? shouldSelectBase
         ? 'Return ONLY <lora_check>...</lora_check>, <selected_base>"@handle"</selected_base>, and <proposed_prompt>...</proposed_prompt>.'
         : 'Return ONLY <lora_check>...</lora_check> and <proposed_prompt>...</proposed_prompt>.'
       : shouldSelectBase
         ? 'Return ONLY <selected_base>"@handle"</selected_base> and <proposed_prompt>...</proposed_prompt>.'
-        : 'Return ONLY <proposed_prompt>...</proposed_prompt>.';
+        : 'Return ONLY <proposed_prompt>...</proposed_prompt>. Do NOT output <lora_check>, <proposed_concept>, or a multi-shot summary.';
 
     const priorBlock =
       params.previousPrompts && params.previousPrompts.length > 0
         ? [
-            `Already planned shots in this ${totalShots}-shot set (DO NOT repeat these framings, poses, or actions):`,
+            `Already written shots in this ${totalShots}-shot set (DO NOT repeat these framings, poses, or actions):`,
             ...params.previousPrompts.map((p, i) => `Shot ${i + 1}: ${p}`),
           ].join('\n')
         : null;
@@ -301,8 +331,8 @@ export async function composeRandomRollPrompt(params: {
     const leadLine =
       totalShots > 1
         ? params.hasStyleLoras
-          ? `Create Shot ${shotNumber} of ${totalShots} for a cohesive multi-shot set built around the attached non-character LoRA(s).`
-          : `Create Shot ${shotNumber} of ${totalShots} for a cohesive multi-shot set featuring fresh framing and action.`
+          ? `Write ONLY Shot ${shotNumber} of ${totalShots} as one standalone image prompt built directly around the attached non-character LoRA(s).`
+          : `Write ONLY Shot ${shotNumber} of ${totalShots} as one standalone image prompt with fresh framing and action.`
         : params.hasStyleLoras
           ? 'Create a single fresh, spontaneous scene prompt for the subject built directly around the attached non-character LoRA(s).'
           : 'Create a single fresh, spontaneous scene prompt for the subject.';
@@ -323,28 +353,69 @@ export async function composeRandomRollPrompt(params: {
       timeoutMs: 35_000,
     });
 
+    let latestContent = res.content;
     let chosenBase = shouldSelectBase
-      ? resolveSelectedBaseCandidate(res.content, params.baseCandidates)
+      ? resolveSelectedBaseCandidate(latestContent, params.baseCandidates)
       : lockedCandidate;
 
-    let loraCheck = extractLoraCheckFromRandomRollResponse(res.content);
-    let sanitized = extractPromptFromRandomRollResponse(res.content, params.characterName);
+    let loraCheck =
+      extractLoraCheckFromRandomRollResponse(latestContent) || params.lockedLoraCheck || null;
+    let sanitized = extractPromptFromRandomRollResponse(latestContent, params.characterName);
+
+    // Retry once if the model returned scratchpad/meta tags without a valid <proposed_prompt>
+    if (sanitized.length < 15) {
+      const formatRetryRes = await postChatCompletion({
+        baseUrl,
+        model: modelToUse,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userInstruction },
+          { role: 'assistant', content: latestContent },
+          {
+            role: 'user',
+            content: `Format Error: Your response did not include a valid <proposed_prompt>...</proposed_prompt> for Shot ${shotNumber}. Write ONLY ONE standalone image prompt wrapped inside <proposed_prompt>...</proposed_prompt> (no <lora_check>, no <proposed_concept>, and no multi-shot summary).`,
+          },
+        ],
+        temperature: 0.68,
+        maxTokens: 900,
+        timeoutMs: 25_000,
+      });
+
+      const formatRetrySanitized = extractPromptFromRandomRollResponse(
+        formatRetryRes.content,
+        params.characterName
+      );
+      if (formatRetrySanitized.length >= 15) {
+        latestContent = formatRetryRes.content;
+        sanitized = formatRetrySanitized;
+        chosenBase =
+          (shouldSelectBase
+            ? resolveSelectedBaseCandidate(formatRetryRes.content, params.baseCandidates)
+            : null) || chosenBase;
+        loraCheck =
+          extractLoraCheckFromRandomRollResponse(formatRetryRes.content) || loraCheck;
+      }
+    }
 
     if (params.hasStyleLoras && sanitized.length >= 15) {
       const checkResult = verifyPromptReflectsLoraCheck(sanitized, loraCheck, attachedLoraBlock);
 
       if (!checkResult.passed) {
         const missingPreview = checkResult.expectedKeywords.slice(0, 10).join(', ');
+        const retryHint =
+          shotNumber > 1
+            ? 'Return ONLY <proposed_prompt>...</proposed_prompt>.'
+            : responseFormatHint;
         const retryRes = await postChatCompletion({
           baseUrl,
           model: modelToUse,
           messages: [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userInstruction },
-            { role: 'assistant', content: res.content },
+            { role: 'assistant', content: latestContent },
             {
               role: 'user',
-              content: `Self-Check Verification Failed: Your <proposed_prompt> did not explicitly include the visual concepts from your <lora_check> / Attached LoRAs (expected visual cues such as: ${missingPreview}). Rewrite <proposed_prompt> so the setting, wardrobe, or visual style explicitly depicts those attached LoRA elements while keeping strict character identity fidelity. ${responseFormatHint}`,
+              content: `Self-Check Verification Failed: Your <proposed_prompt> did not explicitly include the visual concepts from your <lora_check> / Attached LoRAs (expected visual cues such as: ${missingPreview}). Rewrite <proposed_prompt> so the setting, wardrobe, or visual style explicitly depicts those attached LoRA elements while keeping strict character identity fidelity. ${retryHint}`,
             },
           ],
           temperature: 0.65,
@@ -374,6 +445,7 @@ export async function composeRandomRollPrompt(params: {
         prompt: sanitized,
         checkpointName: resolvedCheckpoint,
         usedLmStudio: true,
+        loraCheck,
       };
     }
   } catch {
@@ -384,5 +456,6 @@ export async function composeRandomRollPrompt(params: {
     prompt: buildOfflineRandomPrompt(params.characterName, params.tags, shotNumber - 1),
     checkpointName: resolvedFallbackCkpt,
     usedLmStudio: false,
+    loraCheck: params.lockedLoraCheck || null,
   };
 }
