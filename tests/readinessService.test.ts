@@ -72,7 +72,13 @@ describe('readinessService & cleaned primary_workflow.json', () => {
       UNETLoader: { input: { required: { unet_name: [['krea2_fp8.safetensors']] } } },
       CLIPLoader: { input: { required: { clip_name: [['qwen3vl_4b_fp8_scaled.safetensors']] } } },
       VAELoader: { input: { required: { vae_name: [['qwen_image_vae.safetensors']] } } },
-      UpscaleModelLoader: { input: { required: { model_name: [['4x-ESRGAN.pth']] } } },
+      UpscaleModelLoader: {
+        input: {
+          required: {
+            model_name: ['COMBO', { options: ['4x-ESRGAN.pth', '4x-UltraSharp.pth'] }],
+          },
+        },
+      },
     };
 
     const initial = await readinessSvc.getGenerationReadiness();

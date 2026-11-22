@@ -3,6 +3,7 @@ import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import { getExecutableApiGraph } from './workflowCompilerService.ts';
 import { checkLmStudioStatus } from './llm/llmClientService.ts';
+import { extractComfyObjectInfoChoices } from './modelInventoryService.ts';
 import type { GenerationReadinessResponse, ReadinessCheckItem } from '../../shared/apiTypes.ts';
 
 const REQUIRED_KREA2_NODES = [
@@ -11,15 +12,6 @@ const REQUIRED_KREA2_NODES = [
   'ComfySwitchNode',
   'TextGenerate',
 ];
-
-function extractLoaderChoices(
-  objectInfo: Record<string, any> | null,
-  nodeClass: string,
-  inputField: string
-): string[] {
-  const raw = objectInfo?.[nodeClass]?.input?.required?.[inputField]?.[0];
-  return Array.isArray(raw) ? raw.map((v) => String(v)).filter(Boolean) : [];
-}
 
 function matchesFilename(installedList: string[], target: string): boolean {
   const cleanTarget = target.trim().replace(/\\/g, '/').toLowerCase();
@@ -127,8 +119,8 @@ export async function getGenerationReadiness(): Promise<GenerationReadinessRespo
     .all() as Array<{ filename: string; comfyui_path: string | null; model_type: string }>;
 
   const liveUnets = [
-    ...extractLoaderChoices(objectInfo, 'UNETLoader', 'unet_name'),
-    ...extractLoaderChoices(objectInfo, 'CheckpointLoaderSimple', 'ckpt_name'),
+    ...extractComfyObjectInfoChoices(objectInfo, 'UNETLoader', 'unet_name'),
+    ...extractComfyObjectInfoChoices(objectInfo, 'CheckpointLoaderSimple', 'ckpt_name'),
   ];
   const dbUnets = dbModelRows
     .filter((m) => m.model_type === 'diffusion' || m.model_type === 'checkpoint')
@@ -188,29 +180,31 @@ export async function getGenerationReadiness(): Promise<GenerationReadinessRespo
   };
 
   // 4. Support weights check (CLIP, VAE, 4x-ESRGAN)
-  const liveClips = extractLoaderChoices(objectInfo, 'CLIPLoader', 'clip_name');
-  const liveVaes = extractLoaderChoices(objectInfo, 'VAELoader', 'vae_name');
-  const liveUpscalers = extractLoaderChoices(objectInfo, 'UpscaleModelLoader', 'model_name');
+  const liveClips = extractComfyObjectInfoChoices(objectInfo, 'CLIPLoader', 'clip_name');
+  const liveVaes = extractComfyObjectInfoChoices(objectInfo, 'VAELoader', 'vae_name');
+  const liveUpscalers = extractComfyObjectInfoChoices(
+    objectInfo,
+    'UpscaleModelLoader',
+    'model_name'
+  );
   const dbAllNames = dbModelRows.map((m) => m.comfyui_path || m.filename);
 
+  const isSupportWeightReady = (liveList: string[], target: string): boolean => {
+    if (comfyuiOnline && liveList.length > 0) {
+      return matchesFilename(liveList, target);
+    }
+    return dbAllNames.length === 0 || matchesFilename(dbAllNames, target);
+  };
+
   const missingSupport: string[] = [];
-  if (defaultClipName) {
-    const clipOk = comfyuiOnline
-      ? matchesFilename(liveClips, defaultClipName)
-      : dbAllNames.length === 0 || matchesFilename(dbAllNames, defaultClipName);
-    if (!clipOk) missingSupport.push(defaultClipName);
+  if (defaultClipName && !isSupportWeightReady(liveClips, defaultClipName)) {
+    missingSupport.push(defaultClipName);
   }
-  if (defaultVaeName) {
-    const vaeOk = comfyuiOnline
-      ? matchesFilename(liveVaes, defaultVaeName)
-      : dbAllNames.length === 0 || matchesFilename(dbAllNames, defaultVaeName);
-    if (!vaeOk) missingSupport.push(defaultVaeName);
+  if (defaultVaeName && !isSupportWeightReady(liveVaes, defaultVaeName)) {
+    missingSupport.push(defaultVaeName);
   }
-  if (defaultUpscalerName) {
-    const upOk = comfyuiOnline
-      ? matchesFilename(liveUpscalers, defaultUpscalerName)
-      : dbAllNames.length === 0 || matchesFilename(dbAllNames, defaultUpscalerName);
-    if (!upOk) missingSupport.push(defaultUpscalerName);
+  if (defaultUpscalerName && !isSupportWeightReady(liveUpscalers, defaultUpscalerName)) {
+    missingSupport.push(defaultUpscalerName);
   }
 
   const supportCheck: ReadinessCheckItem = {

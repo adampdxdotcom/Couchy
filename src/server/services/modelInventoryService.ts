@@ -26,6 +26,32 @@ export interface LoraMentionConfigInput {
 }
 
 /**
+ * Extracts selectable options from ComfyUI /object_info for both V1 array inputs
+ * (`[["a.pth"], {}]`) and V3 COMBO inputs (`["COMBO", { options: ["a.pth"] }]`).
+ */
+export function extractComfyObjectInfoChoices(
+  objectInfo: Record<string, any> | null,
+  nodeClass: string,
+  inputField: string
+): string[] {
+  const nodeDef = objectInfo?.[nodeClass];
+  const fieldDef = nodeDef?.input?.required?.[inputField] ?? nodeDef?.input?.optional?.[inputField];
+  if (!Array.isArray(fieldDef)) return [];
+
+  let rawOptions: unknown[] | null = null;
+  if (Array.isArray(fieldDef[0])) {
+    rawOptions = fieldDef[0];
+  } else if (fieldDef[0] === 'COMBO' && Array.isArray(fieldDef[1]?.options)) {
+    rawOptions = fieldDef[1].options;
+  }
+
+  if (!rawOptions) return [];
+  return rawOptions
+    .map((v) => String(v ?? '').trim())
+    .filter((v) => Boolean(v) && v !== 'None');
+}
+
+/**
  * Computes SHA-256 and AutoV2 (first 10 chars) for smaller model files (<= 350MB) asynchronously.
  */
 async function computeModelHashesIfFeasible(
@@ -129,10 +155,8 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
       comfyApiOnline = true;
       const objInfo = (await res.json()) as Record<string, any>;
       const extractList = (nodeName: string, inputKey: string, mType: ModelType) => {
-        const list = objInfo?.[nodeName]?.input?.required?.[inputKey]?.[0];
-        if (!Array.isArray(list)) return;
+        const list = extractComfyObjectInfoChoices(objInfo, nodeName, inputKey);
         for (const rawEntry of list) {
-          if (typeof rawEntry !== 'string' || rawEntry === 'None') continue;
           const normalizedRaw = rawEntry.replace(/\\/g, '/').trim();
           const filename = normalizedRaw.split('/').pop() || normalizedRaw;
           const key = filename.toLowerCase();
