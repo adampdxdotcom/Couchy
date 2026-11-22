@@ -195,8 +195,8 @@ Open `http://localhost:9980` in your browser (or view logs with `docker compose 
 
 The sticky top bar spans every workspace:
 - **6 Workspaces**: **Gallery**, **Characters**, **Generation Studio**, **LoRAs & Models**, **Workflow**, and **System** (collapsing into a drawer on mobile).
-- **Live Status Pill**: Displays live ComfyUI generation percentage, current step progress, active running/queued counts, and brief action toasts.
-- **Status & Message Center Dropdown**: Click the status pill to inspect ComfyUI and Local LLM connectivity, the loaded LLM model, and the **Last 10 Messages** log (with one-click **Clear**).
+- **Live Status Pill**: Displays live ComfyUI generation percentage, current step progress, active running/queued counts, brief action toasts, and—when ComfyUI is idle—a persistent amber **Civitai Activity** indicator whenever shared posts receive new likes/reactions or comments.
+- **Status & Message Center Dropdown**: Click the status pill to inspect ComfyUI and Local LLM connectivity, jump to or mark seen any **Civitai Activity** alerts, and review the **Last 10 Messages** log (with one-click **Clear**).
 
 ---
 
@@ -326,7 +326,7 @@ Open **LoRAs & Models** for four integrated tabs:
 
 ### System Administration & In-App Help
 
-The **System** workspace includes the top **Save Uploaded Prompt Images (1MP)**, **Save Civitai Import Images (1MP)** (controlling **Quick Gen Box** `Inspo` Step 1 archiving), and **Share 0-Character Images (Civitai)** *(**Off** by default)* toggles, alongside 8 tabs:
+The **System** workspace includes the top **Save Uploaded Prompt Images (1MP)**, **Save Civitai Import Images (1MP)** (controlling **Quick Gen Box** `Inspo` Step 1 archiving), **Share 0-Character Images (Civitai)** *(**Off** by default)*, and **Civitai Activity Notifications** *(**On** by default)* toggles, alongside 8 tabs:
 
 1. **Search**: Enable/disable local visual keyword tagging, switch **CPU vs. NVIDIA GPU**, adjust confidence threshold, and **Pause / Resume**, **Scan Unindexed**, or **Rescan All**.
 2. **Quick Gen & Pills**: Toggle the **Quick Gen Box**, **Gallery Pill Colors**, and per-type `@mention` insertion rules (Characters, Base Models, LoRAs).

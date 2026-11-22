@@ -21,6 +21,7 @@ let CivitaiPayloadTooLargeError: typeof import('../src/server/services/civitai/c
 let syncCivitaiActivityForImage: typeof import('../src/server/services/civitai/civitaiActivitySyncService.ts').syncCivitaiActivityForImage;
 let syncAllCivitaiShareActivity: typeof import('../src/server/services/civitai/civitaiActivitySyncService.ts').syncAllCivitaiShareActivity;
 let markCivitaiActivitySeenForImage: typeof import('../src/server/services/civitai/civitaiActivitySyncService.ts').markCivitaiActivitySeenForImage;
+let markAllCivitaiActivitySeen: typeof import('../src/server/services/civitai/civitaiActivitySyncService.ts').markAllCivitaiActivitySeen;
 let stopCivitaiActivityScheduler: typeof import('../src/server/services/civitai/civitaiActivitySyncService.ts').stopCivitaiActivityScheduler;
 let queryGalleryImages: typeof import('../src/server/services/galleryQueryService.ts').queryGalleryImages;
 let configureScheduledBackups: typeof import('../src/server/services/backupService.ts').configureScheduledBackups;
@@ -122,6 +123,7 @@ before(async () => {
     syncCivitaiActivityForImage,
     syncAllCivitaiShareActivity,
     markCivitaiActivitySeenForImage,
+    markAllCivitaiActivitySeen,
     stopCivitaiActivityScheduler,
   } = await import('../src/server/services/civitai/civitaiActivitySyncService.ts'));
   ({ queryGalleryImages } = await import('../src/server/services/galleryQueryService.ts'));
@@ -670,5 +672,13 @@ describe('Civitai Draft Post System', () => {
     assert.ok(!unseenIds.includes(pubSeenId));
     assert.ok(unseenIds.includes(stackStep0Id));
     assert.ok(!unseenIds.includes(draftOnlyId));
+
+    // Mark all unseen Civitai activity as seen -> unseen_activity filter becomes empty while has_activity stays intact
+    const clearedRows = markAllCivitaiActivitySeen();
+    assert.ok(clearedRows >= 1);
+    const unseenAfterClear = queryGalleryImages({ civitaiShareMode: 'unseen_activity' }).map((i) => i.id);
+    assert.equal(unseenAfterClear.includes(stackStep0Id), false);
+    const activityAfterClear = queryGalleryImages({ civitaiShareMode: 'has_activity' }).map((i) => i.id);
+    assert.ok(activityAfterClear.includes(stackStep0Id));
   });
 });

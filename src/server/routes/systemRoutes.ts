@@ -70,6 +70,7 @@ function buildSafeConfigSnapshot(): HealthConfigSnapshot {
     'save_uploaded_prompt_images',
     'save_civitai_import_images',
     'allow_civitai_share_uncharacterized',
+    'civitai_activity_notifications_enabled',
     'gallery_pill_colors_enabled',
     'pill_type_settings_json',
   ]);
@@ -93,6 +94,11 @@ function buildSafeConfigSnapshot(): HealthConfigSnapshot {
     allowCivitaiShareUncharacterized: getBoolSetting(
       'allow_civitai_share_uncharacterized',
       false,
+      settingsMap
+    ),
+    civitaiActivityNotificationsEnabled: getBoolSetting(
+      'civitai_activity_notifications_enabled',
+      true,
       settingsMap
     ),
     galleryPillColorsEnabled: getBoolSetting('gallery_pill_colors_enabled', false, settingsMap),
@@ -185,6 +191,7 @@ systemRouter.patch('/config', (req, res) => {
       saveUploadedPromptImages,
       saveCivitaiImportImages,
       allowCivitaiShareUncharacterized,
+      civitaiActivityNotificationsEnabled,
       galleryPillColorsEnabled,
       pillTypeSettings,
     } = (req.body || {}) as UpdateConfigPayload;
@@ -253,6 +260,12 @@ systemRouter.patch('/config', (req, res) => {
       settingUpdates.push([
         'allow_civitai_share_uncharacterized',
         allowCivitaiShareUncharacterized ? '1' : '0',
+      ]);
+    }
+    if (civitaiActivityNotificationsEnabled !== undefined) {
+      settingUpdates.push([
+        'civitai_activity_notifications_enabled',
+        civitaiActivityNotificationsEnabled ? '1' : '0',
       ]);
     }
     if (galleryPillColorsEnabled !== undefined) {

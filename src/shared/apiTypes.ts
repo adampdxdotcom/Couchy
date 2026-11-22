@@ -44,6 +44,7 @@ export interface HealthConfigSnapshot {
   saveUploadedPromptImages: boolean;
   saveCivitaiImportImages: boolean;
   allowCivitaiShareUncharacterized: boolean;
+  civitaiActivityNotificationsEnabled: boolean;
   galleryPillColorsEnabled: boolean;
   pillTypeSettings: PillTypeSettings;
   autoCleanCopiedModels: boolean;
@@ -75,8 +76,16 @@ export interface UpdateConfigPayload {
   saveUploadedPromptImages?: boolean;
   saveCivitaiImportImages?: boolean;
   allowCivitaiShareUncharacterized?: boolean;
+  civitaiActivityNotificationsEnabled?: boolean;
   galleryPillColorsEnabled?: boolean;
   pillTypeSettings?: PillTypeSettings;
+}
+
+export interface CivitaiActivityAlertSummary {
+  imageCount: number;
+  singleImageId: number | null;
+  reactionCount: number;
+  commentCount: number;
 }
 
 export interface DatabaseBackupEntry {

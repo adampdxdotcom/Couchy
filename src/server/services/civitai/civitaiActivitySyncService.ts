@@ -311,6 +311,26 @@ export function markCivitaiActivitySeenForImage(imageId: number): boolean {
 }
 
 /**
+ * Marks all current Civitai reaction and comment counts across all shared posts as seen.
+ */
+export function markAllCivitaiActivitySeen(): number {
+  const info = db
+    .prepare(
+      `UPDATE image_civitai_drafts
+       SET seen_reaction_count = MAX(seen_reaction_count, reaction_count),
+           seen_comment_count = MAX(seen_comment_count, comment_count)
+       WHERE status = 'published'
+         AND (reaction_count > seen_reaction_count OR comment_count > seen_comment_count)`
+    )
+    .run();
+
+  if (info.changes > 0) {
+    notifyWorkspaceDataChanged();
+  }
+  return info.changes;
+}
+
+/**
  * Sweeps all Civitai draft/published rows in `image_civitai_drafts` gently in the background.
  */
 export async function syncAllCivitaiShareActivity(options?: {

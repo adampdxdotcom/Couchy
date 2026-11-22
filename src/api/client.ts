@@ -174,6 +174,11 @@ export const api = {
       method: 'POST',
     }),
 
+  markAllCivitaiShareSeen: () =>
+    requestJson<{ ok: boolean; updatedCount: number }>('/api/images/civitai-share/seen-all', {
+      method: 'POST',
+    }),
+
   updateImageAnnotations: (
     id: number,
     payload: {

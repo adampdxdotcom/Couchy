@@ -21,6 +21,7 @@ import { useAppToasts } from './hooks/useAppToasts.ts';
 import { INITIAL_FILTERS, useWorkspaceData } from './hooks/useWorkspaceData.ts';
 import { useLiveStatusPolling } from './hooks/useLiveStatusPolling.ts';
 import { useGalleryImageActions } from './hooks/useGalleryImageActions.ts';
+import { useCivitaiNotifications } from './hooks/useCivitaiNotifications.ts';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<WorkspaceTab>('gallery');
@@ -76,6 +77,23 @@ export default function App() {
     await workspace.refreshWorkspaceData();
   }, [livePolling.refreshComfyStatus, workspace.refreshWorkspaceData]);
 
+  const civitaiNotifications = useCivitaiNotifications({
+    allImages: workspace.allImages,
+    isLoadingImages: workspace.isLoadingImages,
+    notificationsEnabled: workspace.healthData?.config?.civitaiActivityNotificationsEnabled !== false,
+    pushToast: toasts.pushToast,
+    onRefreshAll: refreshAll,
+    onOpenImage: (imageId) => setInspectedImageId(imageId),
+    onFilterGalleryUnseen: () => {
+      workspace.setGalleryPage(1);
+      workspace.setFilters({
+        ...INITIAL_FILTERS,
+        civitaiShareMode: 'unseen_activity',
+      });
+      setActiveTab('gallery');
+    },
+  });
+
   const imageActions = useGalleryImageActions({
     activeTab,
     setActiveTab,
@@ -123,6 +141,9 @@ export default function App() {
           isMobileMenuOpen={isMobileMenuOpen}
           onMobileMenuOpenChange={setIsMobileMenuOpen}
           lmStudioStatus={livePolling.lmStudioStatus}
+          civitaiAlert={civitaiNotifications.civitaiAlert}
+          onOpenCivitaiAlert={civitaiNotifications.handleOpenCivitaiAlert}
+          onDismissCivitaiAlert={civitaiNotifications.handleDismissCivitaiAlert}
         />
 
         {activeTab === 'gallery' && (

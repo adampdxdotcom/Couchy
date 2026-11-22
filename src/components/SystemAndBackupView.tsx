@@ -94,6 +94,8 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   const [allowCivitaiShareUncharacterized, setAllowCivitaiShareUncharacterized] = useState<boolean>(
     healthData?.config?.allowCivitaiShareUncharacterized === true
   );
+  const [civitaiActivityNotificationsEnabled, setCivitaiActivityNotificationsEnabled] =
+    useState<boolean>(healthData?.config?.civitaiActivityNotificationsEnabled !== false);
   const [galleryPillColorsEnabled, setGalleryPillColorsEnabled] = useState<boolean>(
     healthData?.config?.galleryPillColorsEnabled === true
   );
@@ -122,6 +124,11 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
         healthData.config.allowCivitaiShareUncharacterized === true
       );
     }
+    if (healthData?.config?.civitaiActivityNotificationsEnabled !== undefined) {
+      setCivitaiActivityNotificationsEnabled(
+        healthData.config.civitaiActivityNotificationsEnabled !== false
+      );
+    }
     if (healthData?.config?.galleryPillColorsEnabled !== undefined) {
       setGalleryPillColorsEnabled(healthData.config.galleryPillColorsEnabled === true);
     }
@@ -136,6 +143,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
     healthData?.config?.saveUploadedPromptImages,
     healthData?.config?.saveCivitaiImportImages,
     healthData?.config?.allowCivitaiShareUncharacterized,
+    healthData?.config?.civitaiActivityNotificationsEnabled,
     healthData?.config?.galleryPillColorsEnabled,
     healthData?.config?.pillTypeSettings,
     healthData?.visualTagger,
@@ -314,6 +322,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       saveUploadedPromptImages,
       saveCivitaiImportImages,
       allowCivitaiShareUncharacterized,
+      civitaiActivityNotificationsEnabled,
       galleryPillColorsEnabled,
       pillTypeSettings,
     });
@@ -391,6 +400,24 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       await onRefreshAll();
     } catch (err: any) {
       setBackupMsg(`Failed to update 0-character Civitai sharing setting: ${err.message}`);
+    }
+  };
+
+  const handleToggleCivitaiActivityNotifications = async (enabled: boolean) => {
+    setCivitaiActivityNotificationsEnabled(enabled);
+    try {
+      await api.updateConfig({
+        civitaiActivityNotificationsEnabled: enabled,
+      });
+      setBackupMsg(
+        enabled
+          ? 'Civitai activity notifications enabled.'
+          : 'Civitai activity notifications disabled.'
+      );
+      setTimeout(() => setBackupMsg(null), 3000);
+      await onRefreshAll();
+    } catch (err: any) {
+      setBackupMsg(`Failed to update Civitai activity notifications setting: ${err.message}`);
     }
   };
 
@@ -523,10 +550,12 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
         saveUploadedPromptImages={saveUploadedPromptImages}
         saveCivitaiImportImages={saveCivitaiImportImages}
         allowCivitaiShareUncharacterized={allowCivitaiShareUncharacterized}
+        civitaiActivityNotificationsEnabled={civitaiActivityNotificationsEnabled}
         uploadedImagesDir={healthData?.config?.uploadedImagesDir}
         onToggleSaveUploadedPromptImages={handleToggleSaveUploadedPromptImages}
         onToggleSaveCivitaiImportImages={handleToggleSaveCivitaiImportImages}
         onToggleAllowCivitaiShareUncharacterized={handleToggleAllowCivitaiShareUncharacterized}
+        onToggleCivitaiActivityNotifications={handleToggleCivitaiActivityNotifications}
       />
 
       {/* System Sub-Tab Navigation */}

@@ -18,6 +18,7 @@ import { ensureCharacterPortraitIfUnset } from '../services/characterService.ts'
 import { ensureWebpThumbnail, resolveImageDiskPath } from '../services/scannerService.ts';
 import { submitImageUpscale } from '../services/comfyuiService.ts';
 import {
+  markAllCivitaiActivitySeen,
   markCivitaiActivitySeenForImage,
   syncCivitaiActivityForImage,
 } from '../services/civitai/civitaiActivitySyncService.ts';
@@ -44,6 +45,15 @@ imagesRouter.post('/query', (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to query images' });
   }
+});
+
+/**
+ * POST /api/images/civitai-share/seen-all
+ * Marks all current unseen Civitai activity across shared images as seen.
+ */
+imagesRouter.post('/civitai-share/seen-all', (_req, res) => {
+  const updatedCount = markAllCivitaiActivitySeen();
+  res.json({ ok: true, updatedCount });
 });
 
 /**

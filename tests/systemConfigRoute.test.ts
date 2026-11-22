@@ -92,6 +92,18 @@ describe('systemRoutes /api/config & /api/health security and validation', () =>
     assert.ok(!healthText.includes('secret-civitai-token-123'));
     assert.ok(!healthText.includes('hf_secret_token_456'));
     assert.ok(!healthText.includes('sk-local-llm-secret-789'));
+
+    const healthBody = JSON.parse(healthText);
+    assert.equal(healthBody.config.civitaiActivityNotificationsEnabled, true);
+
+    const disableNotifRes = await fetch(`${baseUrl}/api/config`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ civitaiActivityNotificationsEnabled: false }),
+    });
+    assert.equal(disableNotifRes.status, 200);
+    const disableNotifBody = await disableNotifRes.json();
+    assert.equal(disableNotifBody.config.civitaiActivityNotificationsEnabled, false);
   });
 
   it('rejects invalid URLs, relative directory paths, and out-of-range backup intervals without mutating config', async () => {
