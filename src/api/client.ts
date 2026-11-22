@@ -29,6 +29,7 @@ import type {
   StatsGranularity,
   StatsPeriod,
   GenerationStatsResponse,
+  LibraryUsageStatsResponse,
   StorageUsageStatsResponse,
   VisualTagItem,
   VisualTaggerStatus,
@@ -893,6 +894,8 @@ export const api = {
   },
 
   getStorageStats: () => requestJson<StorageUsageStatsResponse>('/api/stats/storage'),
+
+  getLibraryUsageStats: () => requestJson<LibraryUsageStatsResponse>('/api/stats/library-usage'),
 
   importCivitaiImageUrl: (url: string) =>
     requestJson<CivitaiImageImportResult>('/api/generation/civitai-image', {

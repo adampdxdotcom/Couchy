@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BarChart3, Calendar, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import { api } from '../../api/client.ts';
 import { StorageUsageCard } from './StorageUsageCard.tsx';
+import { LibraryUsageRankingsCard } from './LibraryUsageRankingsCard.tsx';
 import type {
   GenerationStatsBucket,
   GenerationStatsResponse,
@@ -520,6 +521,9 @@ export const StatsSection: React.FC = () => {
 
       {/* Storage Usage Breakdown */}
       <StorageUsageCard />
+
+      {/* Library Usage & Random Roll Rankings */}
+      <LibraryUsageRankingsCard />
     </div>
   );
 };

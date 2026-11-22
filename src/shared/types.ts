@@ -897,6 +897,54 @@ export interface StorageUsageStatsResponse {
   generatedAt: string;
 }
 
+export type UsageRankSortMode = 'usage' | 'roll_score';
+
+export interface UsageRankItem {
+  id: number;
+  name: string;
+  subtitle?: string | null;
+  usageCount: number;
+  favoriteCount: number;
+  rollScore: number;
+  rollOddsPercent: number;
+  usageRank: number;
+  rollRank: number;
+  rollEligible: boolean;
+  excludedReasons: string[];
+  category?: LoraCategory;
+  baseModel?: string | null;
+  baseGroup?: string | null;
+  portraitImageId?: number | null;
+}
+
+export interface UsageRankGroup {
+  totalCount: number;
+  eligibleCount: number;
+  totalUses: number;
+  totalFavorites: number;
+  topByUsage: UsageRankItem | null;
+  topByRollScore: UsageRankItem | null;
+  items: UsageRankItem[];
+}
+
+export interface LoraCategorySummary {
+  category: LoraCategory;
+  label: string;
+  totalCount: number;
+  eligibleCount: number;
+  totalUses: number;
+  topByUsage: UsageRankItem | null;
+  topByRollScore: UsageRankItem | null;
+}
+
+export interface LibraryUsageStatsResponse {
+  characters: UsageRankGroup;
+  baseModels: UsageRankGroup;
+  loras: UsageRankGroup;
+  loraByCategory: LoraCategorySummary[];
+  generatedAt: string;
+}
+
 export interface CivitaiImageImportResult {
   sourceUrl: string;
   civitaiDomain: 'civitai.com' | 'civitai.red';

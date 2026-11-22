@@ -31,6 +31,7 @@ import {
 } from '../services/helpDocsService.ts';
 import { getGenerationStats } from '../services/statsService.ts';
 import { getStorageUsageStats } from '../services/storageStatsService.ts';
+import { getLibraryUsageStats } from '../services/libraryUsageStatsService.ts';
 import {
   getBoolSetting,
   getJsonSetting,
@@ -568,5 +569,18 @@ systemRouter.get('/stats/storage', async (_req, res) => {
     res.json(result);
   } catch (err: unknown) {
     res.status(500).json({ error: getErrorMessage(err, 'Failed to compute storage usage stats') });
+  }
+});
+
+/**
+ * GET /api/stats/library-usage
+ * Returns usage counts, favorites, Random Roll scores/odds, and rankings
+ * across all characters, installed base models, and installed LoRAs by type.
+ */
+systemRouter.get('/stats/library-usage', (_req, res) => {
+  try {
+    res.json(getLibraryUsageStats());
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to compute library usage stats') });
   }
 });
