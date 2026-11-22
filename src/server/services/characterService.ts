@@ -255,6 +255,7 @@ function buildCharacterProfile(row: any): CharacterProfile {
     portraitContentHash: row.portrait_content_hash || null,
     portraitThumbnailUrl: portraitId ? `/api/images/${portraitId}/thumbnail` : null,
     portraitCrop: normalizePortraitCrop(row.portrait_crop_json),
+    allowCivitaiShare: Boolean(row.allow_civitai_share),
     aliases,
     loras: loras.map((l) => {
       const isInstalled = Boolean(l.isInstalled);

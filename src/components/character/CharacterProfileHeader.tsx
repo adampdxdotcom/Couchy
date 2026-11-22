@@ -7,6 +7,7 @@ import {
   Pencil,
   Plus,
   ScanFace,
+  Share2,
   Trash2,
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
@@ -59,6 +60,7 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
   const [showLinkLoraForm, setShowLinkLoraForm] = useState(false);
   const [linkLoraName, setLinkLoraName] = useState('');
   const [linkLoraTriggerWord, setLinkLoraTriggerWord] = useState('');
+  const [isTogglingCivitaiShare, setIsTogglingCivitaiShare] = useState(false);
 
   useEffect(() => {
     setNameInput(character.name);
@@ -176,6 +178,50 @@ export const CharacterProfileHeader: React.FC<CharacterProfileHeaderProps> = ({
             <span className="font-mono tabular-nums">
               Download All Images ({confirmedImages.length})
             </span>
+          </button>
+          <button
+            type="button"
+            disabled={isTogglingCivitaiShare}
+            aria-pressed={character.allowCivitaiShare}
+            onClick={async () => {
+              if (isTogglingCivitaiShare) return;
+              const nextEnabled = !character.allowCivitaiShare;
+              setIsTogglingCivitaiShare(true);
+              try {
+                await api.updateCharacter(character.id, { allowCivitaiShare: nextEnabled });
+                await onRefresh();
+                onPushToast?.(
+                  nextEnabled
+                    ? `Share on CivitAI enabled for ${character.name}.`
+                    : `Share on CivitAI disabled for ${character.name}.`,
+                  'success'
+                );
+              } catch (err: any) {
+                onPushToast?.(
+                  err?.message || 'Failed to update Civitai sharing permission.',
+                  'error'
+                );
+              } finally {
+                setIsTogglingCivitaiShare(false);
+              }
+            }}
+            title={
+              character.allowCivitaiShare
+                ? 'Sharing on CivitAI is enabled for images of this character (click to disable)'
+                : 'Enable Share on CivitAI so eligible images of this character can be drafted to Civitai'
+            }
+            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50 ${
+              character.allowCivitaiShare
+                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/20'
+                : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            {isTogglingCivitaiShare ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+            ) : (
+              <Share2 className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span>Share on CivitAI: {character.allowCivitaiShare ? 'On' : 'Off'}</span>
           </button>
           <button
             type="button"

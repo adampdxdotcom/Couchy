@@ -1,11 +1,12 @@
-import React, { useMemo, useState } from 'react';
-import { BookmarkPlus, Columns2, Dices, Heart, Keyboard, Loader2, Play, RotateCcw, Star, Trash2, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { BookmarkPlus, Columns2, Dices, Heart, Keyboard, Loader2, Play, RotateCcw, Share2, Star, Trash2, X } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
 import { SeriesMiniGalleryModal } from './inspector/SeriesMiniGalleryModal.tsx';
 import { SplitCompareView } from './inspector/SplitCompareView.tsx';
 import { ComparePickerModal } from './inspector/ComparePickerModal.tsx';
+import { CivitaiDraftModal } from './inspector/CivitaiDraftModal.tsx';
 import { InspectorSingleViewer } from './inspector/InspectorSingleViewer.tsx';
 import { InspectorCharacterSection } from './inspector/InspectorCharacterSection.tsx';
 import { InspectorWorkflowSection } from './inspector/InspectorWorkflowSection.tsx';
@@ -16,6 +17,7 @@ import {
 import { InspectorTagsAndNotesSection } from './inspector/InspectorTagsAndNotesSection.tsx';
 import { useInspectorState } from './inspector/useInspectorState.ts';
 import { MAX_SYSTEM_LORAS, normalizeLoraKey } from './quickgen/quickGenUtils.ts';
+import type { CivitaiShareEligibilityResponse } from '../shared/apiTypes.ts';
 import type {
   CharacterProfile,
   ImageRecord,
@@ -171,6 +173,52 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   });
 
   const [isCreatingPreset, setIsCreatingPreset] = useState(false);
+  const [civitaiShareStatus, setCivitaiShareStatus] =
+    useState<CivitaiShareEligibilityResponse | null>(null);
+  const [isLoadingShareStatus, setIsLoadingShareStatus] = useState(false);
+  const [showCivitaiDraftModal, setShowCivitaiDraftModal] = useState(false);
+
+  const characterTagSig = useMemo(
+    () =>
+      [
+        (activeImage.characters || []).map((c) => `${c.characterId}:${c.status}`).join(','),
+        (activeImage.tags || []).map((t) => t.name).join(','),
+        characters.map((c) => `${c.id}:${c.allowCivitaiShare ? 1 : 0}`).join(','),
+      ].join('|'),
+    [activeImage.characters, activeImage.tags, characters]
+  );
+
+  const refreshCivitaiShareStatus = useCallback(async () => {
+    setIsLoadingShareStatus(true);
+    try {
+      const res = await api.getImageCivitaiShareStatus(activeImage.id);
+      setCivitaiShareStatus(res);
+    } catch {
+      setCivitaiShareStatus(null);
+    } finally {
+      setIsLoadingShareStatus(false);
+    }
+  }, [activeImage.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoadingShareStatus(true);
+    setShowCivitaiDraftModal(false);
+    api
+      .getImageCivitaiShareStatus(activeImage.id)
+      .then((res) => {
+        if (!cancelled) setCivitaiShareStatus(res);
+      })
+      .catch(() => {
+        if (!cancelled) setCivitaiShareStatus(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingShareStatus(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeImage.id, characterTagSig]);
 
   const nextUserPresetName = useMemo(() => resolveNextUserPresetName(presets), [presets]);
   const hasPresetModels = Boolean(
@@ -385,6 +433,41 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   }
                 >
                   <Trash2 className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isLoadingShareStatus || !civitaiShareStatus?.eligible}
+                  onClick={() => {
+                    if (civitaiShareStatus?.eligible) {
+                      setShowCivitaiDraftModal(true);
+                    }
+                  }}
+                  className={`p-1.5 rounded-lg border shrink-0 transition-colors ${
+                    isLoadingShareStatus || !civitaiShareStatus?.eligible
+                      ? 'bg-zinc-950 border-zinc-800/70 text-zinc-600 cursor-not-allowed opacity-45'
+                      : (civitaiShareStatus.existingDrafts?.length || 0) > 0
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/20 cursor-pointer'
+                      : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-indigo-300 hover:border-indigo-500/50 cursor-pointer'
+                  }`}
+                  title={
+                    isLoadingShareStatus
+                      ? 'Checking Civitai draft sharing eligibility...'
+                      : !civitaiShareStatus
+                      ? 'Unable to verify Civitai sharing status'
+                      : !civitaiShareStatus.eligible
+                      ? civitaiShareStatus.reasons.join(' ')
+                      : (civitaiShareStatus.existingDrafts?.length || 0) > 0
+                      ? `Share on Civitai as Private Draft (${civitaiShareStatus.existingDrafts.length} draft(s) already created)`
+                      : 'Share on Civitai as Private Draft'
+                  }
+                  aria-label="Share on Civitai as Private Draft"
+                >
+                  {isLoadingShareStatus ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-zinc-500" />
+                  ) : (
+                    <Share2 className="w-4 h-4" />
+                  )}
                 </button>
 
                 {renderDependencyLabel(activeImage.dependencyStatus)}
@@ -644,6 +727,18 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             setShowComparePicker(false);
           }}
           onClose={() => setShowComparePicker(false)}
+        />
+      )}
+
+      {showCivitaiDraftModal && civitaiShareStatus?.eligible && (
+        <CivitaiDraftModal
+          image={activeImage}
+          eligibility={civitaiShareStatus}
+          onClose={() => setShowCivitaiDraftModal(false)}
+          onDraftCreated={() => {
+            void refreshCivitaiShareStatus();
+          }}
+          onPushToast={onPushToast}
         />
       )}
 

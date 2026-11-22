@@ -191,6 +191,7 @@ export interface CharacterProfile {
   portraitContentHash: string | null;
   portraitThumbnailUrl: string | null;
   portraitCrop?: PortraitCrop | null;
+  allowCivitaiShare: boolean;
   aliases: { id: number; alias: string }[];
   loras: {
     id: number;

@@ -17,6 +17,13 @@ import {
 import { ensureCharacterPortraitIfUnset } from '../services/characterService.ts';
 import { ensureWebpThumbnail, resolveImageDiskPath } from '../services/scannerService.ts';
 import { submitImageUpscale } from '../services/comfyuiService.ts';
+import { evaluateCivitaiShareEligibility } from '../services/civitai/civitaiShareEligibility.ts';
+import {
+  CivitaiShareValidationError,
+  shareImageAsCivitaiDraft,
+} from '../services/civitai/civitaiDraftShareService.ts';
+import { CivitaiPayloadTooLargeError } from '../services/civitai/civitaiMcpClient.ts';
+import type { CivitaiShareDraftRequest } from '../../shared/apiTypes.ts';
 import type { GalleryFilterState } from '../../shared/types.ts';
 
 export const imagesRouter = Router();
@@ -456,6 +463,44 @@ imagesRouter.post('/:id/upscale', async (req, res) => {
     res.json({ ok: true, ...result });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || 'Failed to queue image upscale' });
+  }
+});
+
+/**
+ * GET /api/images/:id/civitai-share
+ * Evaluates Civitai draft-sharing eligibility, candidate model versions, and prefilled fields.
+ */
+imagesRouter.get('/:id/civitai-share', async (req, res) => {
+  try {
+    const status = await evaluateCivitaiShareEligibility(Number(req.params.id));
+    res.json(status);
+  } catch (err: any) {
+    const message = err?.message || 'Failed to evaluate Civitai sharing eligibility';
+    res.status(message === 'Image not found' ? 404 : 500).json({ error: message });
+  }
+});
+
+/**
+ * POST /api/images/:id/civitai-share
+ * Creates a private draft post (`publish: false`) on Civitai via deterministic MCP HTTP calls.
+ */
+imagesRouter.post('/:id/civitai-share', async (req, res) => {
+  try {
+    const result = await shareImageAsCivitaiDraft(
+      Number(req.params.id),
+      (req.body || {}) as CivitaiShareDraftRequest
+    );
+    res.json(result);
+  } catch (err: any) {
+    if (err instanceof CivitaiPayloadTooLargeError) {
+      res.status(413).json({ error: err.message, code: err.code });
+      return;
+    }
+    if (err instanceof CivitaiShareValidationError) {
+      res.status(400).json({ error: err.message });
+      return;
+    }
+    res.status(502).json({ error: err?.message || 'Failed to create Civitai draft post' });
   }
 });
 

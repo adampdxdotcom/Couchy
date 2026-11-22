@@ -36,6 +36,9 @@ import type {
   WorkflowLibraryItem,
 } from '../shared/types.ts';
 import type {
+  CivitaiShareDraftRequest,
+  CivitaiShareDraftResponse,
+  CivitaiShareEligibilityResponse,
   ComfyUiTestResponse,
   DatabaseBackupEntry,
   DownloadJobRecord,
@@ -59,13 +62,18 @@ async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     let errMsg = `HTTP ${res.status}`;
+    let errCode: string | undefined;
     try {
       const body = await res.json();
       if (body.error) errMsg = body.error;
+      if (body.code) errCode = String(body.code);
     } catch {
       // ignore parse error
     }
-    throw new Error(errMsg);
+    const err = new Error(errMsg) as Error & { code?: string; status?: number };
+    err.code = errCode;
+    err.status = res.status;
+    throw err;
   }
   return res.json() as Promise<T>;
 }
@@ -152,6 +160,15 @@ export const api = {
       apiWorkflowJson: string | null;
     }>(`/api/images/${id}${seriesId ? `?seriesId=${seriesId}` : ''}`),
 
+  getImageCivitaiShareStatus: (id: number) =>
+    requestJson<CivitaiShareEligibilityResponse>(`/api/images/${id}/civitai-share`),
+
+  shareImageCivitaiDraft: (id: number, payload: CivitaiShareDraftRequest) =>
+    requestJson<CivitaiShareDraftResponse>(`/api/images/${id}/civitai-share`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   updateImageAnnotations: (
     id: number,
     payload: {
@@ -237,6 +254,7 @@ export const api = {
       notes?: string;
       portraitImageId?: number | null;
       portraitCrop?: PortraitCrop | null;
+      allowCivitaiShare?: boolean;
       aliases?: string[];
       tagIds?: number[];
       collectionIds?: number[];

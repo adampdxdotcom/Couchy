@@ -91,6 +91,9 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   const [saveCivitaiImportImages, setSaveCivitaiImportImages] = useState<boolean>(
     healthData?.config?.saveCivitaiImportImages !== false
   );
+  const [allowCivitaiShareUncharacterized, setAllowCivitaiShareUncharacterized] = useState<boolean>(
+    healthData?.config?.allowCivitaiShareUncharacterized === true
+  );
   const [galleryPillColorsEnabled, setGalleryPillColorsEnabled] = useState<boolean>(
     healthData?.config?.galleryPillColorsEnabled === true
   );
@@ -114,6 +117,11 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
     if (healthData?.config?.saveCivitaiImportImages !== undefined) {
       setSaveCivitaiImportImages(healthData.config.saveCivitaiImportImages !== false);
     }
+    if (healthData?.config?.allowCivitaiShareUncharacterized !== undefined) {
+      setAllowCivitaiShareUncharacterized(
+        healthData.config.allowCivitaiShareUncharacterized === true
+      );
+    }
     if (healthData?.config?.galleryPillColorsEnabled !== undefined) {
       setGalleryPillColorsEnabled(healthData.config.galleryPillColorsEnabled === true);
     }
@@ -127,6 +135,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
     healthData?.config?.quickGenBoxEnabled,
     healthData?.config?.saveUploadedPromptImages,
     healthData?.config?.saveCivitaiImportImages,
+    healthData?.config?.allowCivitaiShareUncharacterized,
     healthData?.config?.galleryPillColorsEnabled,
     healthData?.config?.pillTypeSettings,
     healthData?.visualTagger,
@@ -304,6 +313,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       quickGenBoxEnabled,
       saveUploadedPromptImages,
       saveCivitaiImportImages,
+      allowCivitaiShareUncharacterized,
       galleryPillColorsEnabled,
       pillTypeSettings,
     });
@@ -363,6 +373,24 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       await onRefreshAll();
     } catch (err: any) {
       setBackupMsg(`Failed to update Civitai import images setting: ${err.message}`);
+    }
+  };
+
+  const handleToggleAllowCivitaiShareUncharacterized = async (enabled: boolean) => {
+    setAllowCivitaiShareUncharacterized(enabled);
+    try {
+      await api.updateConfig({
+        allowCivitaiShareUncharacterized: enabled,
+      });
+      setBackupMsg(
+        enabled
+          ? '0-character images are now eligible for Civitai draft sharing.'
+          : '0-character images are blocked from Civitai draft sharing.'
+      );
+      setTimeout(() => setBackupMsg(null), 3000);
+      await onRefreshAll();
+    } catch (err: any) {
+      setBackupMsg(`Failed to update 0-character Civitai sharing setting: ${err.message}`);
     }
   };
 
@@ -494,9 +522,11 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       <WorkspacePreferencesSection
         saveUploadedPromptImages={saveUploadedPromptImages}
         saveCivitaiImportImages={saveCivitaiImportImages}
+        allowCivitaiShareUncharacterized={allowCivitaiShareUncharacterized}
         uploadedImagesDir={healthData?.config?.uploadedImagesDir}
         onToggleSaveUploadedPromptImages={handleToggleSaveUploadedPromptImages}
         onToggleSaveCivitaiImportImages={handleToggleSaveCivitaiImportImages}
+        onToggleAllowCivitaiShareUncharacterized={handleToggleAllowCivitaiShareUncharacterized}
       />
 
       {/* System Sub-Tab Navigation */}

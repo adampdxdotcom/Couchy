@@ -31,6 +31,7 @@ interface CharacterDbRow {
   portrait_image_id: number | null;
   portrait_content_hash: string | null;
   portrait_crop_json: string | null;
+  allow_civitai_share?: number;
 }
 
 interface CharacterWriteBody {
@@ -41,6 +42,7 @@ interface CharacterWriteBody {
   aliases?: unknown[];
   portraitImageId?: number | string | null;
   portraitCrop?: PortraitCrop | null;
+  allowCivitaiShare?: boolean;
   tagIds?: Array<number | string>;
   collectionIds?: Array<number | string>;
 }
@@ -80,7 +82,7 @@ charactersRouter.get('/:id', (req, res) => {
  */
 charactersRouter.post('/', (req, res) => {
   try {
-    const { name, description, physicalDescription, notes, aliases, portraitImageId } =
+    const { name, description, physicalDescription, notes, aliases, portraitImageId, allowCivitaiShare } =
       (req.body || {}) as CharacterWriteBody;
     if (!name || !String(name).trim()) {
       res.status(400).json({ error: 'Character name is required' });
@@ -97,8 +99,8 @@ charactersRouter.post('/', (req, res) => {
 
     const info = db
       .prepare(
-        `INSERT INTO characters (name, description, physical_description, notes, portrait_image_id, portrait_content_hash)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO characters (name, description, physical_description, notes, portrait_image_id, portrait_content_hash, allow_civitai_share)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         String(name).trim(),
@@ -106,7 +108,8 @@ charactersRouter.post('/', (req, res) => {
         String(physicalDescription || ''),
         String(notes || ''),
         portraitImageId ? Number(portraitImageId) : null,
-        portraitHash
+        portraitHash,
+        allowCivitaiShare === true ? 1 : 0
       );
     const charId = Number(info.lastInsertRowid);
 
@@ -152,6 +155,7 @@ const updateCharacterHandler = (req: Request, res: Response) => {
       notes,
       portraitImageId,
       portraitCrop,
+      allowCivitaiShare,
       aliases,
       tagIds,
       collectionIds,
@@ -216,9 +220,16 @@ const updateCharacterHandler = (req: Request, res: Response) => {
       return;
     }
 
+    const nextAllowCivitaiShare =
+      allowCivitaiShare !== undefined
+        ? allowCivitaiShare
+          ? 1
+          : 0
+        : Number(existing.allow_civitai_share ?? 0);
+
     db.prepare(
       `UPDATE characters
-       SET name = ?, description = ?, physical_description = ?, notes = ?, portrait_image_id = ?, portrait_content_hash = ?, portrait_crop_json = ?,
+       SET name = ?, description = ?, physical_description = ?, notes = ?, portrait_image_id = ?, portrait_content_hash = ?, portrait_crop_json = ?, allow_civitai_share = ?,
            updated_at = datetime('now')
        WHERE id = ?`
     ).run(
@@ -231,6 +242,7 @@ const updateCharacterHandler = (req: Request, res: Response) => {
       portraitId,
       portraitHash,
       nextPortraitCropJson,
+      nextAllowCivitaiShare,
       charId
     );
 
@@ -265,7 +277,19 @@ const updateCharacterHandler = (req: Request, res: Response) => {
       }
     }
 
-    runAssistedCharacterIdentificationForAll();
+    // Skip expensive suggestion pass when only sharing permission or portrait framing changed
+    if (
+      name !== undefined ||
+      description !== undefined ||
+      physicalDescription !== undefined ||
+      notes !== undefined ||
+      aliases !== undefined ||
+      tagIds !== undefined ||
+      collectionIds !== undefined ||
+      portraitImageId !== undefined
+    ) {
+      runAssistedCharacterIdentificationForAll();
+    }
     res.json({ character: getCharacterProfileById(charId) });
   } catch (err: unknown) {
     if (getErrorCode(err) === 'SQLITE_CONSTRAINT_UNIQUE') {

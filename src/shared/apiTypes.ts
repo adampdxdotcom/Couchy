@@ -43,6 +43,7 @@ export interface HealthConfigSnapshot {
   quickGenBoxEnabled: boolean;
   saveUploadedPromptImages: boolean;
   saveCivitaiImportImages: boolean;
+  allowCivitaiShareUncharacterized: boolean;
   galleryPillColorsEnabled: boolean;
   pillTypeSettings: PillTypeSettings;
   autoCleanCopiedModels: boolean;
@@ -73,6 +74,7 @@ export interface UpdateConfigPayload {
   quickGenBoxEnabled?: boolean;
   saveUploadedPromptImages?: boolean;
   saveCivitaiImportImages?: boolean;
+  allowCivitaiShareUncharacterized?: boolean;
   galleryPillColorsEnabled?: boolean;
   pillTypeSettings?: PillTypeSettings;
 }
@@ -189,4 +191,71 @@ export interface GenerationReadinessResponse {
   availableUnets: string[];
   checks: ReadinessCheckItem[];
   checkedAt: string;
+}
+
+export type CivitaiShareUploadMode = 'original_png' | 'jpeg_exif';
+
+export interface CivitaiDraftRecord {
+  id: number;
+  civitaiPostId: number;
+  draftUrl: string;
+  title: string;
+  uploadMode: CivitaiShareUploadMode;
+  modelVersionId: number | null;
+  createdAt: string;
+}
+
+export interface CivitaiModelVersionCandidate {
+  modelVersionId: number;
+  label: string;
+  modelName: string;
+  modelType: string;
+  civitaiId: string | null;
+  source: 'lora' | 'checkpoint';
+}
+
+export interface CivitaiShareLinkedCharacter {
+  id: number;
+  name: string;
+  status: 'confirmed' | 'suggested';
+  allowCivitaiShare: boolean;
+}
+
+export interface CivitaiShareEligibilityResponse {
+  eligible: boolean;
+  hasCivitaiKey: boolean;
+  reasons: string[];
+  hasNativeMetadata: boolean;
+  isStandaloneUpscale: boolean;
+  sourceOriginalImageId: number | null;
+  fileSizeBytes: number;
+  width: number;
+  height: number;
+  format: string;
+  linkedCharacters: CivitaiShareLinkedCharacter[];
+  allowUncharacterizedSetting: boolean;
+  prefilledTitle: string;
+  prefilledDescription: string;
+  prefilledTags: string[];
+  recommendedModelVersionId: number | null;
+  candidateModelVersions: CivitaiModelVersionCandidate[];
+  embeddedResourceNames: string[];
+  existingDrafts: CivitaiDraftRecord[];
+}
+
+export interface CivitaiShareDraftRequest {
+  title?: string;
+  detail?: string;
+  tags?: string[];
+  modelVersionId?: number | null;
+  uploadMode?: CivitaiShareUploadMode;
+}
+
+export interface CivitaiShareDraftResponse {
+  ok: boolean;
+  postId: number;
+  draftUrl: string;
+  uploadMode: CivitaiShareUploadMode;
+  processingImageIds: number[];
+  draft: CivitaiDraftRecord;
 }

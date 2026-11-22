@@ -69,6 +69,7 @@ function buildSafeConfigSnapshot(): HealthConfigSnapshot {
     'quick_gen_box_enabled',
     'save_uploaded_prompt_images',
     'save_civitai_import_images',
+    'allow_civitai_share_uncharacterized',
     'gallery_pill_colors_enabled',
     'pill_type_settings_json',
   ]);
@@ -89,6 +90,11 @@ function buildSafeConfigSnapshot(): HealthConfigSnapshot {
     quickGenBoxEnabled: getBoolSetting('quick_gen_box_enabled', true, settingsMap),
     saveUploadedPromptImages: getBoolSetting('save_uploaded_prompt_images', false, settingsMap),
     saveCivitaiImportImages: getBoolSetting('save_civitai_import_images', true, settingsMap),
+    allowCivitaiShareUncharacterized: getBoolSetting(
+      'allow_civitai_share_uncharacterized',
+      false,
+      settingsMap
+    ),
     galleryPillColorsEnabled: getBoolSetting('gallery_pill_colors_enabled', false, settingsMap),
     pillTypeSettings: normalizePillTypeSettings(
       getJsonSetting<unknown>('pill_type_settings_json', null, settingsMap)
@@ -178,6 +184,7 @@ systemRouter.patch('/config', (req, res) => {
       quickGenBoxEnabled,
       saveUploadedPromptImages,
       saveCivitaiImportImages,
+      allowCivitaiShareUncharacterized,
       galleryPillColorsEnabled,
       pillTypeSettings,
     } = (req.body || {}) as UpdateConfigPayload;
@@ -241,6 +248,12 @@ systemRouter.patch('/config', (req, res) => {
     }
     if (saveCivitaiImportImages !== undefined) {
       settingUpdates.push(['save_civitai_import_images', saveCivitaiImportImages ? '1' : '0']);
+    }
+    if (allowCivitaiShareUncharacterized !== undefined) {
+      settingUpdates.push([
+        'allow_civitai_share_uncharacterized',
+        allowCivitaiShareUncharacterized ? '1' : '0',
+      ]);
     }
     if (galleryPillColorsEnabled !== undefined) {
       settingUpdates.push(['gallery_pill_colors_enabled', galleryPillColorsEnabled ? '1' : '0']);
