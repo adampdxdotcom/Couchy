@@ -248,27 +248,6 @@ export function useQuickGenAgentAndBatch({
     try {
       const { selectedLoras, triggerWord } = resolveActiveLoraStack();
 
-      let promptsToRun: string[] = [];
-      if (cleanedPreExpanded.length > 0) {
-        promptsToRun = cleanedPreExpanded;
-      } else if (expandWithAgentSet) {
-        const agentRes = await api.generateSetPromptsWithAgent({
-          characterName: attachedCharacter?.name || '',
-          characterDescription: attachedCharacter?.description || '',
-          characterPhysicalDescription: attachedCharacter?.physicalDescription || '',
-          loraNames: selectedLoras.map((l) => l.loraName),
-          theme: cleanPrompt,
-          count: batchCount,
-          basePromptTemplate: '{theme}',
-        });
-        promptsToRun =
-          agentRes.prompts && agentRes.prompts.length > 0
-            ? agentRes.prompts
-            : Array.from({ length: batchCount }, () => cleanPrompt);
-      } else {
-        promptsToRun = Array.from({ length: batchCount }, () => cleanPrompt);
-      }
-
       const markedChatMessages =
         sourceMessageId && chatMessages.length > 0
           ? chatMessages.map((m) => (m.id === sourceMessageId ? { ...m, submitted: true } : m))
@@ -283,25 +262,57 @@ export function useQuickGenAgentAndBatch({
           ? patchLastAssistantExclusions(markedChatMessages, Array.from(removedLoraKeys))
           : undefined;
 
+      const isProgressiveAgentExpand = expandWithAgentSet && cleanedPreExpanded.length === 0;
       const isMultiShotSet = expandWithAgentSet || cleanedPreExpanded.length > 1;
-      const res = await api.submitGenerationBatch({
-        characterId: attachedCharacter?.id || null,
-        workflowId: resolvedWorkflow.id,
-        mode: isMultiShotSet ? 'theme_set' : 'single',
-        themeTitle: (cleanPrompt || promptsToRun[0] || '').slice(0, 80),
-        aspectRatio,
-        megapixels,
-        steps: steps !== workflowDefaultSteps ? steps : undefined,
-        prompts: promptsToRun,
-        triggerWord,
-        negativePrompt: '',
-        loras: selectedLoras,
-        checkpointName: attachedCheckpoint || undefined,
-        seriesId: isMultiShotSet ? null : activeSeriesId,
-        branchFromImageId: isMultiShotSet ? null : branchFromImageId,
-        inspirationFilename: !activeSeriesId && !branchFromImageId ? inspirationFilename : null,
-        chatSnapshot: snapshotForBatch,
-      });
+
+      let res: { batch: Awaited<ReturnType<typeof api.submitGenerationBatch>>['batch'] };
+      if (isProgressiveAgentExpand) {
+        res = await api.submitAgentBatch({
+          characterId: attachedCharacter?.id || null,
+          characterName: attachedCharacter?.name || '',
+          characterDescription: attachedCharacter?.description || '',
+          characterPhysicalDescription: attachedCharacter?.physicalDescription || '',
+          workflowId: resolvedWorkflow.id,
+          theme: cleanPrompt,
+          count: batchCount,
+          aspectRatio,
+          megapixels,
+          steps: steps !== workflowDefaultSteps ? steps : undefined,
+          triggerWord,
+          negativePrompt: '',
+          loras: selectedLoras,
+          checkpointName: attachedCheckpoint || undefined,
+          seriesId: null,
+          branchFromImageId: null,
+          inspirationFilename: !activeSeriesId && !branchFromImageId ? inspirationFilename : null,
+          chatMessages: chatMessages.map((m) => ({ role: m.role, content: m.content })),
+          chatSnapshot: snapshotForBatch,
+        });
+      } else {
+        const promptsToRun =
+          cleanedPreExpanded.length > 0
+            ? cleanedPreExpanded
+            : Array.from({ length: batchCount }, () => cleanPrompt);
+
+        res = await api.submitGenerationBatch({
+          characterId: attachedCharacter?.id || null,
+          workflowId: resolvedWorkflow.id,
+          mode: isMultiShotSet ? 'theme_set' : 'single',
+          themeTitle: (cleanPrompt || promptsToRun[0] || '').slice(0, 80),
+          aspectRatio,
+          megapixels,
+          steps: steps !== workflowDefaultSteps ? steps : undefined,
+          prompts: promptsToRun,
+          triggerWord,
+          negativePrompt: '',
+          loras: selectedLoras,
+          checkpointName: attachedCheckpoint || undefined,
+          seriesId: isMultiShotSet ? null : activeSeriesId,
+          branchFromImageId: isMultiShotSet ? null : branchFromImageId,
+          inspirationFilename: !activeSeriesId && !branchFromImageId ? inspirationFilename : null,
+          chatSnapshot: snapshotForBatch,
+        });
+      }
 
       const submittedCount = res.batch.items.filter((i) => i.status === 'submitted').length;
       const failedCount = res.batch.items.filter((i) => i.status === 'failed').length;
@@ -319,10 +330,14 @@ export function useQuickGenAgentAndBatch({
           (sl) => !attachedCharKeys.has(normalizeLoraKey(sl.loraName))
         ).length;
         const loraCountNotice = extraLoraCount > 0 ? ` + ${extraLoraCount} LoRA(s)` : '';
+        const progressiveNotice =
+          isProgressiveAgentExpand && res.batch.totalCount > 1
+            ? ' · writing remaining shots…'
+            : '';
         onPushToast(
           `Queued Batch #${res.batch.id} (${submittedCount}/${res.batch.totalCount} sent${
             attachedCharacter ? ` · ${attachedCharacter.name}` : ''
-          }${loraCountNotice})`,
+          }${loraCountNotice}${progressiveNotice})`,
           'success'
         );
       }
@@ -351,6 +366,7 @@ export function useQuickGenAgentAndBatch({
         theme: cleanConcept,
         count: batchCount,
         basePromptTemplate: '{theme}',
+        chatMessages: chatMessages.map((m) => ({ role: m.role, content: m.content })),
       });
       const expanded =
         agentRes.prompts && agentRes.prompts.length > 0

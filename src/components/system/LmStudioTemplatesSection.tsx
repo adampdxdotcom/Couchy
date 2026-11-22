@@ -364,10 +364,9 @@ export const LmStudioTemplatesSection: React.FC<LmStudioTemplatesSectionProps> =
 
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-[11px] text-zinc-400">
-            Appended after your Primary Agent Prompt whenever expanding a Set Concept into{' '}
-            <code className="text-zinc-200">{'{count}'}</code> shots. Keep{' '}
-            <code className="text-zinc-200">&lt;shot_1&gt;...&lt;/shot_&#123;count&#125;&gt;</code>{' '}
-            so multi-shot quotes and detailed paragraphs parse reliably.
+            Guides shot framing and pacing when expanding a Set Concept into{' '}
+            <code className="text-zinc-200">{'{count}'}</code> shots—each shot is authored
+            individually for full ~80–140 word detail while preserving requested wardrobe and mood.
           </p>
           <div className="flex items-center gap-2">
             <button

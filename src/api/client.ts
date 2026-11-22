@@ -679,6 +679,7 @@ export const api = {
     expansionDirective?: string;
     modelOverride?: string;
     baseUrlOverride?: string;
+    chatMessages?: Array<{ role: string; content: string }>;
   }) =>
     requestJson<{
       prompts: string[];
@@ -689,6 +690,37 @@ export const api = {
       sentUserPrompt: string;
       warning?: string;
     }>('/api/generation/lmstudio/generate-prompts', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  submitAgentBatch: (payload: {
+    characterId?: number | null;
+    characterName?: string;
+    characterDescription?: string;
+    characterPhysicalDescription?: string;
+    workflowId: number;
+    theme: string;
+    count: number;
+    aspectRatio: string;
+    megapixels?: number;
+    steps?: number;
+    triggerWord?: string;
+    negativePrompt?: string;
+    loras: GenerationLoraSelection[];
+    checkpointName?: string;
+    seriesId?: number | null;
+    branchFromImageId?: number | null;
+    inspirationFilename?: string | null;
+    chatMessages?: Array<{ role: string; content: string }>;
+    chatSnapshot?: QuickGenChatMessage[];
+  }) =>
+    requestJson<{
+      batch: GenerationBatchRecord;
+      batches: GenerationBatchRecord[];
+      totalCount: number;
+      usedLmStudio: boolean;
+    }>('/api/generation/lmstudio/submit-agent-batch', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

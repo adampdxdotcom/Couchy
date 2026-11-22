@@ -61,7 +61,9 @@ Return ONLY a JSON array of prompt strings.`,
       !curConv.trim() ||
       (curConv.includes('The final objective is a prompt that communicates exactly what the camera should capture') &&
         !curConv.includes('Prompt Structure & Sentence Order:')) ||
-      curConv.includes('stay faithful to its stated permanent biological traits without inventing conflicting permanent features');
+      curConv.includes('stay faithful to its stated permanent biological traits without inventing conflicting permanent features') ||
+      (curConv.includes('Prompt Structure & Sentence Order:') &&
+        !curConv.includes('state of undress/nudity'));
     if (isPriorFactoryConversation) {
       db.prepare(
         'UPDATE lm_studio_settings SET conversation_system_prompt = ? WHERE id = 1'
@@ -82,7 +84,10 @@ Return ONLY a JSON array of prompt strings.`,
     const isPriorFactoryBatch =
       !curBatch.trim() ||
       (curBatch.startsWith('You are now expanding the approved Set Concept / Theme into {count} distinct') &&
-        !curBatch.includes('Respect Concept Intent'));
+        !curBatch.includes('Respect Concept Intent')) ||
+      (curBatch.startsWith('Expand the approved Set Concept / Theme into {count} distinct, standalone image generation prompts.') &&
+        curBatch.includes('Wrap each prompt in <shot_1>...</shot_1>') &&
+        !curBatch.includes('Respect Concept Intent & Mandatory Anchors'));
     if (isPriorFactoryBatch) {
       db.prepare(
         'UPDATE lm_studio_settings SET batch_expansion_prompt = ? WHERE id = 1'

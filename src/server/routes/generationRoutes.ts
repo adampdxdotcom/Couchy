@@ -12,6 +12,7 @@ import {
   converseQuickGenPrompt,
   generatePhotoSetPromptsWithAgent,
 } from '../services/llm/llmAgentService.ts';
+import { executeProgressiveAgentBatch } from '../services/llm/batchExpansionService.ts';
 import { importCivitaiImageForQuickGen } from '../services/civitai/civitaiImageShareService.ts';
 import {
   dispatchGenerationBatch,
@@ -217,6 +218,7 @@ generationRouter.post('/lmstudio/generate-prompts', async (req, res) => {
       expansionDirective,
       modelOverride,
       baseUrlOverride,
+      chatMessages,
     } = req.body || {};
 
     if (!theme?.trim()) {
@@ -237,11 +239,82 @@ generationRouter.post('/lmstudio/generate-prompts', async (req, res) => {
       expansionDirective: typeof expansionDirective === 'string' ? expansionDirective : undefined,
       modelOverride,
       baseUrlOverride,
+      chatMessages: Array.isArray(chatMessages) ? chatMessages : undefined,
     });
 
     res.json(result);
   } catch (err: unknown) {
     res.status(400).json({ error: getErrorMessage(err, 'Failed to generate photo set prompts.') });
+  }
+});
+
+/**
+ * POST /api/generation/lmstudio/submit-agent-batch
+ * Authors Shot 1 immediately and dispatches to ComfyUI, then expands and queues Shots 2..N
+ * sequentially in the background into the same batch and multi_shot series.
+ */
+generationRouter.post('/lmstudio/submit-agent-batch', async (req, res) => {
+  try {
+    const body = (req.body || {}) as {
+      characterId?: number | null;
+      characterName?: string;
+      characterDescription?: string;
+      characterPhysicalDescription?: string;
+      workflowId?: number;
+      theme?: string;
+      count?: number;
+      aspectRatio?: string;
+      megapixels?: number;
+      steps?: number;
+      triggerWord?: string;
+      negativePrompt?: string;
+      loras?: GenerationLoraSelection[];
+      checkpointName?: string | null;
+      seriesId?: number | null;
+      branchFromImageId?: number | null;
+      inspirationFilename?: string | null;
+      chatMessages?: Array<{ role: string; content: string }>;
+      chatSnapshot?: QuickGenChatMessage[];
+    };
+    if (!body.workflowId) {
+      return res.status(400).json({ error: 'Please select a ComfyUI workflow.' });
+    }
+    if (!body.theme?.trim()) {
+      return res.status(400).json({ error: 'Please enter a photo set concept or theme.' });
+    }
+
+    const { batch, batches, totalCount, usedLmStudio, progressiveTask } =
+      await executeProgressiveAgentBatch({
+        workflowId: Number(body.workflowId),
+        characterId: body.characterId ?? null,
+        characterName: body.characterName || 'Character',
+        characterDescription: body.characterDescription || '',
+        characterPhysicalDescription: body.characterPhysicalDescription || '',
+        loras: Array.isArray(body.loras) ? body.loras : [],
+        checkpointName: body.checkpointName,
+        triggerWord: body.triggerWord,
+        negativePrompt: body.negativePrompt ?? '',
+        aspectRatio: body.aspectRatio || '2:3 (Portrait Photo)',
+        megapixels: body.megapixels,
+        steps: body.steps,
+        theme: body.theme.trim(),
+        count: Math.max(1, Math.min(20, Number(body.count) || 4)),
+        seriesId: body.seriesId ?? null,
+        branchFromImageId: body.branchFromImageId ?? null,
+        inspirationFilename: body.inspirationFilename ?? null,
+        chatMessages: Array.isArray(body.chatMessages) ? body.chatMessages : undefined,
+        chatSnapshot: body.chatSnapshot,
+      });
+
+    if (progressiveTask) {
+      void progressiveTask.catch(() => {
+        // Errors are already logged and recorded per-item inside runProgressiveAgentBatchShots
+      });
+    }
+
+    res.json({ batch, batches, totalCount, usedLmStudio });
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to expand and submit agent batch.') });
   }
 });
 
