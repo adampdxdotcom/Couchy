@@ -1,12 +1,9 @@
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import type Database from 'better-sqlite3';
 import { appConfig } from '../config.ts';
+import { resolveServerWorkflowPath } from '../workflows/workflowPaths.ts';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const PRIMARY_WORKFLOW_PATH = path.resolve(__dirname, '../workflows/primary_workflow.json');
+const PRIMARY_WORKFLOW_PATH = resolveServerWorkflowPath('primary_workflow.json');
 
 /**
  * Idempotently seeds the default ComfyUI instance, primary Krea2_turbo workflow

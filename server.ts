@@ -1,6 +1,5 @@
 import express from 'express';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import { appConfig } from './src/server/config.ts';
 import { logger } from './src/server/logger.ts';
 
@@ -10,7 +9,7 @@ async function startServer() {
   innerApp.use(express.json({ limit: '25mb' }));
 
   const disableHmr = process.env.DISABLE_HMR === 'true';
-  let viteServer: Awaited<ReturnType<typeof createViteServer>> | null = null;
+  let viteServer: import('vite').ViteDevServer | null = null;
   let reconcileTimer: ReturnType<typeof setInterval> | null = null;
 
   // Prepare DB migrations, API routers, and Vite/static middleware while port binding proceeds immediately
@@ -35,13 +34,15 @@ async function startServer() {
       import('./src/server/routes/presetsRoutes.ts'),
       import('./src/server/services/comfyuiLiveMonitor.ts'),
       process.env.NODE_ENV !== 'production'
-        ? createViteServer({
-            server: {
-              middlewareMode: true,
-              ...(disableHmr ? { hmr: false, ws: false, watch: null } : {}),
-            },
-            appType: 'spa',
-          })
+        ? import('vite').then(({ createServer: createViteServer }) =>
+            createViteServer({
+              server: {
+                middlewareMode: true,
+                ...(disableHmr ? { hmr: false, ws: false, watch: null } : {}),
+              },
+              appType: 'spa',
+            })
+          )
         : Promise.resolve(null),
     ]);
 

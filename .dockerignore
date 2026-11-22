@@ -1,9 +1,11 @@
 node_modules
 dist
+dist-server
 data
 gallery-data
 mounted-data
 model-downloads
+public/assets/aistudio
 .git
 .env*
 *.log

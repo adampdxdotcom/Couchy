@@ -1,0 +1,21152 @@
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// src/server/config.ts
+import fs from "fs";
+import path from "path";
+import dotenv from "dotenv";
+function resolveStoragePath(envValue, dockerDefault, localFallback) {
+  const candidate = envValue?.trim() || dockerDefault;
+  try {
+    fs.mkdirSync(candidate, { recursive: true });
+    return candidate;
+  } catch {
+    const resolvedLocal = path.resolve(process.cwd(), localFallback);
+    fs.mkdirSync(resolvedLocal, { recursive: true });
+    return resolvedLocal;
+  }
+}
+function resolveDbFilePath(envValue) {
+  const candidate = envValue?.trim() || "/app/data/gallery.db";
+  try {
+    fs.mkdirSync(path.dirname(candidate), { recursive: true });
+    return candidate;
+  } catch {
+    const localDir = path.resolve(process.cwd(), "gallery-data");
+    fs.mkdirSync(localDir, { recursive: true });
+    return path.join(localDir, "gallery.db");
+  }
+}
+function resolveListenPort() {
+  const eqArg = process.argv.find((arg) => arg.startsWith("--port="));
+  if (eqArg) {
+    const cliPort = Number(eqArg.slice("--port=".length));
+    if (Number.isFinite(cliPort) && cliPort > 0) return cliPort;
+  }
+  const portFlagIdx = process.argv.indexOf("--port");
+  if (portFlagIdx !== -1 && process.argv[portFlagIdx + 1]) {
+    const cliPort = Number(process.argv[portFlagIdx + 1]);
+    if (Number.isFinite(cliPort) && cliPort > 0) return cliPort;
+  }
+  const envPort = Number(process.env.PORT || 0);
+  const explicitNginxPort = process.env.NGINX_PORT ? Number(process.env.NGINX_PORT) : null;
+  const defaultAppPort = Number(process.env.DEFAULT_APP_PORT || 3e3);
+  if (envPort > 0 && (explicitNginxPort === null || envPort !== explicitNginxPort)) {
+    return envPort;
+  }
+  return Number.isFinite(defaultAppPort) && defaultAppPort > 0 ? defaultAppPort : 3e3;
+}
+var appConfig;
+var init_config = __esm({
+  "src/server/config.ts"() {
+    dotenv.config();
+    appConfig = {
+      port: resolveListenPort(),
+      comfyuiUrl: (process.env.COMFYUI_URL || "http://comfyui:8188").replace(/\/+$/, ""),
+      lmStudioUrl: (process.env.LOCAL_LLM_URL || process.env.LLM_BASE_URL || process.env.LM_STUDIO_URL || "http://localhost:1234/v1").replace(/\/+$/, ""),
+      localLlmApiKey: (process.env.LOCAL_LLM_API_KEY || process.env.LLM_API_KEY || process.env.LM_STUDIO_API_KEY || "").trim(),
+      comfyuiOutputDir: resolveStoragePath(process.env.COMFYUI_OUTPUT_DIR, "/data/output", "mounted-data/output"),
+      comfyuiModelsDir: resolveStoragePath(process.env.COMFYUI_MODELS_DIR, "/data/models", "mounted-data/models"),
+      databasePath: resolveDbFilePath(process.env.DATABASE_PATH),
+      thumbnailPath: resolveStoragePath(
+        process.env.THUMBNAIL_PATH === "/app/data/thumbnails" ? "/data/thumbnails" : process.env.THUMBNAIL_PATH,
+        "/data/thumbnails",
+        "data/thumbnails"
+      ),
+      backupPath: resolveStoragePath(process.env.BACKUP_PATH, "/app/data/backups", "gallery-data/backups"),
+      localModelsDir: resolveStoragePath(process.env.LOCAL_MODELS_DIR, "/app/data/local_models", "data/local_models"),
+      downloadsDir: resolveStoragePath(process.env.DOWNLOADS_DIR, "/downloads", "model-downloads"),
+      uploadedImagesDir: resolveStoragePath(process.env.UPLOADED_IMAGES_DIR, "/data/uploaded", "data/uploaded"),
+      logsDir: resolveStoragePath(process.env.LOGS_DIR, "/app/data/logs", "data/logs"),
+      civitaiApiKey: process.env.CIVITAI_API_KEY || "",
+      hfApiToken: process.env.HF_API_TOKEN || "",
+      scheduledBackupHours: 0
+    };
+  }
+});
+
+// src/server/logger.ts
+import fs2 from "fs";
+import path2 from "path";
+function formatDetailSuffix(details) {
+  if (details === void 0 || details === null) return "";
+  if (details instanceof Error) {
+    return ` | ${details.message}`;
+  }
+  if (typeof details === "string") {
+    return details.trim() ? ` | ${details.trim()}` : "";
+  }
+  try {
+    return ` | ${JSON.stringify(details)}`;
+  } catch {
+    return ` | ${String(details)}`;
+  }
+}
+function appendToRotatingFile(line) {
+  try {
+    fs2.mkdirSync(appConfig.logsDir, { recursive: true });
+    if (fs2.existsSync(LOG_FILE_PATH)) {
+      const stat = fs2.statSync(LOG_FILE_PATH);
+      if (stat.size >= MAX_LOG_BYTES) {
+        try {
+          if (fs2.existsSync(ROTATED_LOG_FILE_PATH)) {
+            fs2.unlinkSync(ROTATED_LOG_FILE_PATH);
+          }
+          fs2.renameSync(LOG_FILE_PATH, ROTATED_LOG_FILE_PATH);
+        } catch {
+        }
+      }
+    }
+    fs2.appendFileSync(LOG_FILE_PATH, `${line}
+`, "utf8");
+  } catch {
+  }
+}
+function writeLog(level, scope, message, details) {
+  const now = /* @__PURE__ */ new Date();
+  const timeShort = now.toTimeString().slice(0, 8);
+  const isoTimestamp = now.toISOString();
+  const detailSuffix = formatDetailSuffix(details);
+  const consoleLine = `[${timeShort}] [${level}] [${scope}] ${message}${detailSuffix}`;
+  if (level === "ERROR") {
+    console.error(consoleLine);
+  } else if (level === "WARN") {
+    console.warn(consoleLine);
+  } else {
+    console.log(consoleLine);
+  }
+  const fileLine = `[${isoTimestamp}] [${level}] [${scope}] ${message}${detailSuffix}`;
+  appendToRotatingFile(fileLine);
+}
+var MAX_LOG_BYTES, LOG_FILE_PATH, ROTATED_LOG_FILE_PATH, logger;
+var init_logger = __esm({
+  "src/server/logger.ts"() {
+    init_config();
+    MAX_LOG_BYTES = 5 * 1024 * 1024;
+    LOG_FILE_PATH = path2.join(appConfig.logsDir, "couchy.log");
+    ROTATED_LOG_FILE_PATH = path2.join(appConfig.logsDir, "couchy.log.1");
+    logger = {
+      logFilePath: LOG_FILE_PATH,
+      info: (scope, message, details) => writeLog("INFO", scope, message, details),
+      warn: (scope, message, details) => writeLog("WARN", scope, message, details),
+      error: (scope, message, details) => writeLog("ERROR", scope, message, details)
+    };
+  }
+});
+
+// src/server/db/migrationsCore.ts
+var migrationsCore;
+var init_migrationsCore = __esm({
+  "src/server/db/migrationsCore.ts"() {
+    migrationsCore = [
+      {
+        version: 1,
+        name: "initial_core_and_character_schema",
+        sql: `
+      -- 1. Images (content-hash identity independent of filenames)
+      CREATE TABLE IF NOT EXISTS images (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content_hash TEXT NOT NULL,
+        relative_path TEXT NOT NULL UNIQUE,
+        filename TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        width INTEGER NOT NULL DEFAULT 0,
+        height INTEGER NOT NULL DEFAULT 0,
+        format TEXT NOT NULL DEFAULT 'PNG',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        file_mtime TEXT NOT NULL,
+        is_missing INTEGER NOT NULL DEFAULT 0,
+        thumbnail_path TEXT,
+        dependency_status TEXT NOT NULL DEFAULT 'unknown'
+      );
+      CREATE INDEX IF NOT EXISTS idx_images_content_hash ON images(content_hash);
+      CREATE INDEX IF NOT EXISTS idx_images_filename ON images(filename);
+      CREATE INDEX IF NOT EXISTS idx_images_mtime ON images(file_mtime DESC);
+      CREATE INDEX IF NOT EXISTS idx_images_dep_status ON images(dependency_status);
+
+      -- 2. Machine-extracted generation metadata
+      CREATE TABLE IF NOT EXISTS image_metadata (
+        image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+        positive_prompt TEXT,
+        negative_prompt TEXT,
+        seed TEXT,
+        steps INTEGER,
+        cfg REAL,
+        sampler TEXT,
+        scheduler TEXT,
+        denoise REAL,
+        batch_size INTEGER,
+        batch_index INTEGER,
+        generation_date TEXT,
+        checkpoint_name TEXT,
+        checkpoint_hash TEXT,
+        vae_name TEXT,
+        missing_fields_json TEXT NOT NULL DEFAULT '[]',
+        provenance_json TEXT NOT NULL DEFAULT '{}',
+        raw_metadata_json TEXT NOT NULL DEFAULT '{}'
+      );
+      CREATE INDEX IF NOT EXISTS idx_metadata_checkpoint ON image_metadata(checkpoint_name);
+
+      -- 3. Known model inventory (ComfyUI API + filesystem + historical)
+      CREATE TABLE IF NOT EXISTS models (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        filename TEXT NOT NULL UNIQUE,
+        model_type TEXT NOT NULL DEFAULT 'other',
+        lora_category TEXT NOT NULL DEFAULT 'unclassified',
+        file_path TEXT,
+        file_size INTEGER,
+        sha256_hash TEXT,
+        autov2_hash TEXT,
+        is_installed INTEGER NOT NULL DEFAULT 0,
+        source_type TEXT NOT NULL DEFAULT 'historical',
+        download_url TEXT,
+        civitai_id TEXT,
+        hf_repo_id TEXT,
+        user_notes TEXT,
+        last_seen_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_models_type ON models(model_type);
+      CREATE INDEX IF NOT EXISTS idx_models_hash ON models(sha256_hash);
+      CREATE INDEX IF NOT EXISTS idx_models_autov2 ON models(autov2_hash);
+
+      -- 4. Image-to-LoRA extraction records
+      CREATE TABLE IF NOT EXISTS image_loras (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+        model_id INTEGER REFERENCES models(id) ON DELETE SET NULL,
+        lora_name TEXT NOT NULL,
+        lora_path TEXT,
+        lora_hash TEXT,
+        model_strength REAL NOT NULL DEFAULT 1.0,
+        clip_strength REAL NOT NULL DEFAULT 1.0,
+        node_id TEXT,
+        node_type TEXT,
+        provenance TEXT NOT NULL DEFAULT 'visual_workflow'
+      );
+      CREATE INDEX IF NOT EXISTS idx_image_loras_image ON image_loras(image_id);
+      CREATE INDEX IF NOT EXISTS idx_image_loras_name ON image_loras(lora_name);
+
+      -- 5. Image-to-Model dependency records
+      CREATE TABLE IF NOT EXISTS image_models (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+        model_id INTEGER REFERENCES models(id) ON DELETE SET NULL,
+        model_name TEXT NOT NULL,
+        model_type TEXT NOT NULL,
+        model_hash TEXT,
+        node_id TEXT,
+        node_type TEXT,
+        provenance TEXT NOT NULL DEFAULT 'visual_workflow',
+        status TEXT NOT NULL DEFAULT 'unknown'
+      );
+      CREATE INDEX IF NOT EXISTS idx_image_models_image ON image_models(image_id);
+      CREATE INDEX IF NOT EXISTS idx_image_models_name ON image_models(model_name);
+
+      -- 6. First-Class Characters
+      CREATE TABLE IF NOT EXISTS characters (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        description TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        portrait_image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+        portrait_content_hash TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      -- 7. Character Aliases
+      CREATE TABLE IF NOT EXISTS character_aliases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        alias TEXT NOT NULL COLLATE NOCASE,
+        UNIQUE(character_id, alias)
+      );
+      CREATE INDEX IF NOT EXISTS idx_char_aliases_alias ON character_aliases(alias);
+
+      -- 8. Character-to-LoRA many-to-many
+      CREATE TABLE IF NOT EXISTS character_loras (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        model_id INTEGER REFERENCES models(id) ON DELETE SET NULL,
+        lora_name TEXT NOT NULL COLLATE NOCASE,
+        lora_hash TEXT,
+        lora_category TEXT NOT NULL DEFAULT 'character',
+        appearance_label TEXT NOT NULL DEFAULT 'Default',
+        notes TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(character_id, lora_name)
+      );
+      CREATE INDEX IF NOT EXISTS idx_char_loras_name ON character_loras(lora_name);
+
+      -- 9. Image-to-Character associations (confirmed, suggested, rejected)
+      CREATE TABLE IF NOT EXISTS image_characters (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+        image_content_hash TEXT NOT NULL,
+        character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'confirmed',
+        source TEXT NOT NULL DEFAULT 'manual',
+        confidence REAL NOT NULL DEFAULT 1.0,
+        match_reason TEXT,
+        appearance_label TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(image_content_hash, character_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_img_chars_hash ON image_characters(image_content_hash);
+      CREATE INDEX IF NOT EXISTS idx_img_chars_char ON image_characters(character_id, status);
+
+      -- 10. User Tags
+      CREATE TABLE IF NOT EXISTS tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        color TEXT NOT NULL DEFAULT '#6366f1'
+      );
+
+      -- 11. Image-to-Tags (keyed by content_hash so rescans preserve tags)
+      CREATE TABLE IF NOT EXISTS image_tags (
+        image_content_hash TEXT NOT NULL,
+        image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+        tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+        PRIMARY KEY (image_content_hash, tag_id)
+      );
+
+      -- 12. Character-to-Tags
+      CREATE TABLE IF NOT EXISTS character_tags (
+        character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+        PRIMARY KEY (character_id, tag_id)
+      );
+
+      -- 13. Independent Workflows Library & Image Workflows
+      CREATE TABLE IF NOT EXISTS workflows (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        is_saved_library INTEGER NOT NULL DEFAULT 0,
+        visual_workflow_json TEXT,
+        api_workflow_json TEXT,
+        workflow_hash TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflows_hash ON workflows(workflow_hash);
+
+      -- 14. Image-to-Workflows
+      CREATE TABLE IF NOT EXISTS image_workflows (
+        image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+        image_content_hash TEXT NOT NULL,
+        workflow_id INTEGER NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+        PRIMARY KEY (image_id, workflow_id)
+      );
+
+      -- 15. Character-to-Workflows
+      CREATE TABLE IF NOT EXISTS character_workflows (
+        character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        workflow_id INTEGER NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+        role_label TEXT NOT NULL DEFAULT 'Standard Workflow',
+        PRIMARY KEY (character_id, workflow_id)
+      );
+
+      -- 16. Virtual Collections
+      CREATE TABLE IF NOT EXISTS collections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        description TEXT NOT NULL DEFAULT '',
+        cover_image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      -- 17. Collection Images (keyed by content_hash for permanence)
+      CREATE TABLE IF NOT EXISTS collection_images (
+        collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+        image_content_hash TEXT NOT NULL,
+        image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+        added_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (collection_id, image_content_hash)
+      );
+
+      -- 18. Character-to-Collections
+      CREATE TABLE IF NOT EXISTS character_collections (
+        character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+        PRIMARY KEY (character_id, collection_id)
+      );
+
+      -- 19. User Ratings, Favorites, Rejections & Notes (keyed by content_hash)
+      CREATE TABLE IF NOT EXISTS ratings (
+        content_hash TEXT PRIMARY KEY,
+        image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+        rating INTEGER NOT NULL DEFAULT 0,
+        is_favorite INTEGER NOT NULL DEFAULT 0,
+        is_rejected INTEGER NOT NULL DEFAULT 0,
+        is_archived INTEGER NOT NULL DEFAULT 0,
+        notes TEXT NOT NULL DEFAULT '',
+        favorited_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      -- 20. Saved Searches
+      CREATE TABLE IF NOT EXISTS saved_searches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        query_string TEXT NOT NULL DEFAULT '',
+        filter_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      -- 21. ComfyUI Instances & Reproduction Jobs
+      CREATE TABLE IF NOT EXISTS comfyui_instances (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL DEFAULT 'Primary ComfyUI',
+        base_url TEXT NOT NULL,
+        is_default INTEGER NOT NULL DEFAULT 1,
+        last_status TEXT NOT NULL DEFAULT 'unknown',
+        last_checked_at TEXT,
+        system_stats_json TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS reproduction_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+        workflow_id INTEGER REFERENCES workflows(id) ON DELETE SET NULL,
+        comfyui_prompt_id TEXT,
+        status TEXT NOT NULL DEFAULT 'queued',
+        readiness_status TEXT NOT NULL DEFAULT 'unknown',
+        missing_dependencies_json TEXT NOT NULL DEFAULT '[]',
+        execution_error TEXT,
+        output_image_ids_json TEXT NOT NULL DEFAULT '[]',
+        submitted_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT
+      );
+
+      -- 22. Scan Jobs & Download Jobs
+      CREATE TABLE IF NOT EXISTS scan_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        status TEXT NOT NULL DEFAULT 'running',
+        scan_type TEXT NOT NULL DEFAULT 'incremental',
+        total_files INTEGER NOT NULL DEFAULT 0,
+        processed_files INTEGER NOT NULL DEFAULT 0,
+        added_count INTEGER NOT NULL DEFAULT 0,
+        modified_count INTEGER NOT NULL DEFAULT 0,
+        deleted_count INTEGER NOT NULL DEFAULT 0,
+        error_log TEXT NOT NULL DEFAULT '[]',
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS download_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider TEXT NOT NULL,
+        model_name TEXT NOT NULL,
+        model_type TEXT NOT NULL,
+        source_url TEXT NOT NULL,
+        destination_path TEXT NOT NULL,
+        expected_hash TEXT,
+        actual_hash TEXT,
+        hash_verified INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'downloading',
+        bytes_downloaded INTEGER NOT NULL DEFAULT 0,
+        total_bytes INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT
+      );
+    `
+      }
+    ];
+  }
+});
+
+// src/server/db/migrationsV2ToV14.ts
+var migrationsV2ToV14;
+var init_migrationsV2ToV14 = __esm({
+  "src/server/db/migrationsV2ToV14.ts"() {
+    migrationsV2ToV14 = [
+      {
+        version: 2,
+        name: "generation_studio_schema",
+        sql: `
+      -- 23. Prompt Templates (stored in database with {character}, {lora}, {theme} placeholders)
+      CREATE TABLE IF NOT EXISTS prompt_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        positive_template TEXT NOT NULL,
+        negative_template TEXT NOT NULL DEFAULT '',
+        is_default INTEGER NOT NULL DEFAULT 0,
+        category TEXT NOT NULL DEFAULT 'character',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      -- 24. Workflow Node Mappings (auto-detected & user-overridable node slots)
+      CREATE TABLE IF NOT EXISTS workflow_mappings (
+        workflow_id INTEGER PRIMARY KEY REFERENCES workflows(id) ON DELETE CASCADE,
+        positive_prompt_node_id TEXT,
+        positive_prompt_field TEXT NOT NULL DEFAULT 'text',
+        negative_prompt_node_id TEXT,
+        negative_prompt_field TEXT NOT NULL DEFAULT 'text',
+        seed_node_id TEXT,
+        seed_field TEXT NOT NULL DEFAULT 'seed',
+        steps_node_id TEXT,
+        cfg_node_id TEXT,
+        sampler_node_id TEXT,
+        latent_node_id TEXT,
+        width_field TEXT NOT NULL DEFAULT 'width',
+        height_field TEXT NOT NULL DEFAULT 'height',
+        batch_size_field TEXT NOT NULL DEFAULT 'batch_size',
+        checkpoint_node_id TEXT,
+        lora_node_ids_json TEXT NOT NULL DEFAULT '[]',
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      -- 25. Generation Batches & Individual Prompt Items
+      CREATE TABLE IF NOT EXISTS generation_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        character_id INTEGER REFERENCES characters(id) ON DELETE SET NULL,
+        workflow_id INTEGER REFERENCES workflows(id) ON DELETE SET NULL,
+        theme_title TEXT,
+        mode TEXT NOT NULL DEFAULT 'single',
+        total_count INTEGER NOT NULL DEFAULT 1,
+        aspect_ratio TEXT NOT NULL DEFAULT '1:1',
+        width INTEGER NOT NULL DEFAULT 1024,
+        height INTEGER NOT NULL DEFAULT 1024,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS generation_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_id INTEGER NOT NULL REFERENCES generation_batches(id) ON DELETE CASCADE,
+        item_index INTEGER NOT NULL,
+        prompt TEXT NOT NULL,
+        negative_prompt TEXT NOT NULL DEFAULT '',
+        seed TEXT NOT NULL,
+        comfyui_prompt_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        error_message TEXT,
+        output_image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_gen_items_batch ON generation_items(batch_id);
+      CREATE INDEX IF NOT EXISTS idx_gen_items_prompt_id ON generation_items(comfyui_prompt_id);
+
+      -- 26. LM Studio Agent Settings
+      CREATE TABLE IF NOT EXISTS lm_studio_settings (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        base_url TEXT NOT NULL DEFAULT 'http://localhost:1234/v1',
+        selected_model TEXT NOT NULL DEFAULT '',
+        system_prompt TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `
+      },
+      {
+        version: 3,
+        name: "megapixel_resolution_and_lmstudio_guiding_templates",
+        sql: `
+      -- 27. Multiple saved LM Studio Guiding Prompt Templates
+      CREATE TABLE IF NOT EXISTS lm_studio_prompt_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        system_prompt TEXT NOT NULL,
+        user_prompt_template TEXT NOT NULL,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      -- Add aspect_ratio_field and megapixels_field to workflow_mappings
+      ALTER TABLE workflow_mappings ADD COLUMN aspect_ratio_field TEXT NOT NULL DEFAULT 'aspect_ratio';
+      ALTER TABLE workflow_mappings ADD COLUMN megapixels_field TEXT NOT NULL DEFAULT 'megapixels';
+
+      -- Add megapixels to generation_batches
+      ALTER TABLE generation_batches ADD COLUMN megapixels REAL NOT NULL DEFAULT 1.0;
+    `
+      },
+      {
+        version: 4,
+        name: "krea2_turbo_base_workflow_and_trigger_words",
+        sql: `
+      -- Add trigger_word to character_loras
+      ALTER TABLE character_loras ADD COLUMN trigger_word TEXT NOT NULL DEFAULT '';
+
+      -- Add trigger_word, enable_lora, and checkpoint_field mappings to workflow_mappings
+      ALTER TABLE workflow_mappings ADD COLUMN trigger_word_node_id TEXT;
+      ALTER TABLE workflow_mappings ADD COLUMN trigger_word_field TEXT NOT NULL DEFAULT 'string_b';
+      ALTER TABLE workflow_mappings ADD COLUMN enable_lora_node_id TEXT;
+      ALTER TABLE workflow_mappings ADD COLUMN enable_lora_field TEXT NOT NULL DEFAULT 'value';
+      ALTER TABLE workflow_mappings ADD COLUMN checkpoint_field TEXT NOT NULL DEFAULT 'unet_name';
+    `
+      },
+      {
+        version: 5,
+        name: "app_settings_and_high_scale_indexes",
+        sql: `
+      -- Application key-value settings table (UI preferences & one-time backfill flags)
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      -- High-scale indexes for 2,000+ image libraries
+      CREATE INDEX IF NOT EXISTS idx_models_filename_lower ON models(LOWER(filename));
+      CREATE INDEX IF NOT EXISTS idx_image_loras_name_lower ON image_loras(LOWER(lora_name));
+      CREATE INDEX IF NOT EXISTS idx_image_workflows_wf ON image_workflows(workflow_id);
+      CREATE INDEX IF NOT EXISTS idx_image_tags_hash ON image_tags(image_content_hash);
+      CREATE INDEX IF NOT EXISTS idx_collection_images_hash ON collection_images(image_content_hash);
+    `
+      },
+      {
+        version: 6,
+        name: "workflows_is_default_flag",
+        sql: `
+      ALTER TABLE workflows ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0;
+    `
+      },
+      {
+        version: 7,
+        name: "visual_keyword_tagger_schema",
+        sql: `
+      ALTER TABLE images ADD COLUMN visual_tags_scanned_at TEXT;
+
+      CREATE TABLE IF NOT EXISTS image_visual_tags (
+        image_content_hash TEXT NOT NULL,
+        image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+        tag TEXT NOT NULL COLLATE NOCASE,
+        confidence REAL NOT NULL DEFAULT 1.0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (image_content_hash, tag)
+      );
+      CREATE INDEX IF NOT EXISTS idx_img_visual_tags_hash ON image_visual_tags(image_content_hash);
+      CREATE INDEX IF NOT EXISTS idx_img_visual_tags_tag ON image_visual_tags(LOWER(tag));
+    `
+      },
+      {
+        version: 8,
+        name: "lora_mentions_and_nicknames",
+        sql: `
+      ALTER TABLE models ADD COLUMN nickname TEXT;
+      ALTER TABLE models ADD COLUMN mention_enabled INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE models ADD COLUMN default_model_strength REAL NOT NULL DEFAULT 1.0;
+      ALTER TABLE models ADD COLUMN default_clip_strength REAL NOT NULL DEFAULT 1.0;
+
+      CREATE INDEX IF NOT EXISTS idx_models_nickname ON models(LOWER(nickname));
+      CREATE INDEX IF NOT EXISTS idx_models_mention_enabled ON models(mention_enabled);
+    `
+      },
+      {
+        version: 9,
+        name: "generation_batch_ghost_metadata",
+        sql: `
+      ALTER TABLE generation_batches ADD COLUMN checkpoint_name TEXT;
+      ALTER TABLE generation_batches ADD COLUMN lora_count INTEGER NOT NULL DEFAULT 0;
+    `
+      },
+      {
+        version: 10,
+        name: "lm_studio_conversation_system_prompt",
+        sql: `
+      ALTER TABLE lm_studio_settings ADD COLUMN conversation_system_prompt TEXT NOT NULL DEFAULT '';
+    `
+      },
+      {
+        version: 11,
+        name: "image_series_and_conversation_history",
+        sql: `
+      CREATE TABLE IF NOT EXISTS image_series (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        poster_image_id INTEGER REFERENCES images(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS image_series_items (
+        series_id INTEGER NOT NULL REFERENCES image_series(id) ON DELETE CASCADE,
+        image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+        step_order INTEGER NOT NULL DEFAULT 0,
+        chat_snapshot_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (series_id, image_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_image_series_items_image ON image_series_items(image_id);
+      CREATE INDEX IF NOT EXISTS idx_image_series_items_series_step ON image_series_items(series_id, step_order);
+      ALTER TABLE generation_batches ADD COLUMN series_id INTEGER;
+      ALTER TABLE generation_batches ADD COLUMN branch_from_image_id INTEGER;
+      ALTER TABLE generation_batches ADD COLUMN chat_snapshot_json TEXT;
+    `
+      },
+      {
+        version: 12,
+        name: "lora_trigger_words_and_agent_descriptions",
+        sql: `
+      ALTER TABLE models ADD COLUMN trigger_word TEXT;
+      ALTER TABLE models ADD COLUMN llm_description TEXT;
+    `
+      },
+      {
+        version: 13,
+        name: "civitai_model_metadata_and_previews",
+        sql: `
+      ALTER TABLE models ADD COLUMN civitai_version_id TEXT;
+      ALTER TABLE models ADD COLUMN civitai_url TEXT;
+      ALTER TABLE models ADD COLUMN base_model TEXT;
+      ALTER TABLE models ADD COLUMN recommended_weight REAL;
+      ALTER TABLE models ADD COLUMN civitai_description TEXT;
+      ALTER TABLE models ADD COLUMN preview_images_json TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE models ADD COLUMN civitai_fetched_at TEXT;
+    `
+      },
+      {
+        version: 14,
+        name: "models_is_hidden_visibility",
+        sql: `
+      ALTER TABLE models ADD COLUMN is_hidden INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS idx_models_is_hidden ON models(is_hidden);
+    `
+      }
+    ];
+  }
+});
+
+// src/server/db/migrationsV15ToV28.ts
+var migrationsV15ToV28;
+var init_migrationsV15ToV28 = __esm({
+  "src/server/db/migrationsV15ToV28.ts"() {
+    migrationsV15ToV28 = [
+      {
+        version: 15,
+        name: "download_jobs_early_access_schedule",
+        sql: `
+      ALTER TABLE download_jobs ADD COLUMN scheduled_for TEXT;
+      ALTER TABLE download_jobs ADD COLUMN payload_json TEXT;
+      CREATE INDEX IF NOT EXISTS idx_download_jobs_status_scheduled ON download_jobs(status, scheduled_for);
+    `
+      },
+      {
+        version: 16,
+        name: "image_series_kind",
+        sql: `
+      ALTER TABLE image_series ADD COLUMN series_kind TEXT NOT NULL DEFAULT 'iterative';
+      UPDATE image_series
+      SET series_kind = 'multi_shot'
+      WHERE id IN (
+        SELECT gb.series_id
+        FROM generation_batches gb
+        WHERE gb.series_id IS NOT NULL
+          AND gb.total_count > 1
+          AND gb.branch_from_image_id IS NULL
+          AND (
+            SELECT COUNT(*)
+            FROM generation_batches gb2
+            WHERE gb2.series_id = gb.series_id
+          ) = 1
+      );
+    `
+      },
+      {
+        version: 17,
+        name: "downloaded_model_cleanup_tracking",
+        sql: `
+      CREATE TABLE IF NOT EXISTS downloaded_model_copies (
+        download_path TEXT PRIMARY KEY,
+        filename TEXT NOT NULL,
+        file_size INTEGER NOT NULL,
+        dl_mtime_ms INTEGER NOT NULL,
+        comfy_path TEXT,
+        comfy_mtime_ms INTEGER,
+        verified_sha256 TEXT,
+        verified_at TEXT,
+        last_checked_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_downloaded_model_copies_verified
+        ON downloaded_model_copies(verified_at);
+    `
+      },
+      {
+        version: 18,
+        name: "lm_studio_batch_expansion_prompt",
+        sql: `
+      ALTER TABLE lm_studio_settings ADD COLUMN batch_expansion_prompt TEXT NOT NULL DEFAULT '';
+    `
+      },
+      {
+        version: 19,
+        name: "character_physical_description",
+        sql: `
+      ALTER TABLE characters ADD COLUMN physical_description TEXT NOT NULL DEFAULT '';
+    `
+      },
+      {
+        version: 20,
+        name: "character_portrait_crop",
+        sql: `
+      ALTER TABLE characters ADD COLUMN portrait_crop_json TEXT DEFAULT NULL;
+    `
+      },
+      {
+        version: 21,
+        name: "model_comfyui_vs_download_paths",
+        sql: `
+      ALTER TABLE models ADD COLUMN comfyui_path TEXT;
+      ALTER TABLE models ADD COLUMN download_file_path TEXT;
+    `
+      },
+      {
+        version: 22,
+        name: "generation_batch_loras_json",
+        sql: `
+      ALTER TABLE generation_batches ADD COLUMN lora_names_json TEXT;
+    `
+      },
+      {
+        version: 23,
+        name: "uploaded_inspiration_reference_images",
+        sql: `
+      ALTER TABLE images ADD COLUMN is_uploaded_reference INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE generation_batches ADD COLUMN inspiration_image_id INTEGER;
+      CREATE INDEX IF NOT EXISTS idx_images_uploaded_ref ON images(is_uploaded_reference);
+    `
+      },
+      {
+        version: 24,
+        name: "pending_lora_character_headshot_tasks",
+        sql: `
+      CREATE TABLE IF NOT EXISTS pending_lora_character_tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        download_job_id INTEGER REFERENCES download_jobs(id) ON DELETE SET NULL,
+        lora_filename TEXT NOT NULL,
+        character_name TEXT NOT NULL,
+        trigger_word TEXT NOT NULL DEFAULT '',
+        recommended_weight REAL,
+        generate_headshot INTEGER NOT NULL DEFAULT 1,
+        character_id INTEGER REFERENCES characters(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'awaiting_comfy',
+        generation_item_id INTEGER,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_pending_lora_char_status
+        ON pending_lora_character_tasks(status);
+    `
+      },
+      {
+        version: 25,
+        name: "character_face_embeddings_cache",
+        sql: `
+      CREATE TABLE IF NOT EXISTS character_face_embeddings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        character_id INTEGER NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+        image_id INTEGER REFERENCES images(id) ON DELETE CASCADE,
+        image_content_hash TEXT NOT NULL,
+        source_kind TEXT NOT NULL DEFAULT 'portrait',
+        face_index INTEGER NOT NULL DEFAULT 0,
+        embedding_b64 TEXT NOT NULL,
+        det_score REAL NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(character_id, image_content_hash, face_index)
+      );
+      CREATE INDEX IF NOT EXISTS idx_char_face_embeddings_char
+        ON character_face_embeddings(character_id, source_kind);
+    `
+      },
+      {
+        version: 26,
+        name: "pin_existing_character_portraits",
+        sql: `
+      UPDATE characters
+      SET portrait_image_id = (
+            SELECT i.id
+            FROM image_characters ic
+            JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+            LEFT JOIN ratings r ON r.content_hash = i.content_hash
+            WHERE ic.character_id = characters.id
+              AND ic.status = 'confirmed'
+              AND COALESCE(i.is_uploaded_reference, 0) = 0
+            ORDER BY COALESCE(r.rating, 0) DESC, i.file_mtime DESC, i.id DESC
+            LIMIT 1
+          ),
+          portrait_content_hash = (
+            SELECT i.content_hash
+            FROM image_characters ic
+            JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+            LEFT JOIN ratings r ON r.content_hash = i.content_hash
+            WHERE ic.character_id = characters.id
+              AND ic.status = 'confirmed'
+              AND COALESCE(i.is_uploaded_reference, 0) = 0
+            ORDER BY COALESCE(r.rating, 0) DESC, i.file_mtime DESC, i.id DESC
+            LIMIT 1
+          )
+      WHERE portrait_image_id IS NULL
+        AND portrait_content_hash IS NULL
+        AND EXISTS (
+          SELECT 1
+          FROM image_characters ic
+          JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+          WHERE ic.character_id = characters.id
+            AND ic.status = 'confirmed'
+            AND COALESCE(i.is_uploaded_reference, 0) = 0
+        );
+    `
+      },
+      {
+        version: 27,
+        name: "lm_studio_follow_loaded_model",
+        sql: `
+      ALTER TABLE lm_studio_settings ADD COLUMN follow_loaded_model INTEGER NOT NULL DEFAULT 1;
+    `
+      },
+      {
+        version: 28,
+        name: "lora_presets",
+        sql: `
+      CREATE TABLE IF NOT EXISTS lora_presets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        nickname TEXT NOT NULL DEFAULT '',
+        user_description TEXT NOT NULL DEFAULT '',
+        agent_description TEXT NOT NULL DEFAULT '',
+        pill_color TEXT NOT NULL DEFAULT 'fuchsia',
+        checkpoint_name TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS lora_preset_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        preset_id INTEGER NOT NULL REFERENCES lora_presets(id) ON DELETE CASCADE,
+        lora_name TEXT NOT NULL,
+        model_strength REAL NOT NULL DEFAULT 1.0,
+        clip_strength REAL NOT NULL DEFAULT 1.0,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(preset_id, lora_name)
+      );
+    `
+      }
+    ];
+  }
+});
+
+// src/shared/agentPromptDefaults.ts
+var DEFAULT_CONVERSATION_SYSTEM_PROMPT, DEFAULT_BATCH_EXPANSION_PROMPT;
+var init_agentPromptDefaults = __esm({
+  "src/shared/agentPromptDefaults.ts"() {
+    DEFAULT_CONVERSATION_SYSTEM_PROMPT = `You are an interactive photography director and text-to-image prompt collaborator.
+Help the user develop and refine their image or photo-set concept through brief, natural conversation.
+
+## Guidelines
+
+1. Keep conversational replies concise (1\u20133 short sentences). If the user's idea is still vague, ask at most 1\u20132 focused questions about lighting, camera framing, setting, wardrobe, or mood.
+
+2. Proposal Tags by Mode:
+   - Single-Shot Mode: Wrap ready-to-generate image prompts in <proposed_prompt>...</proposed_prompt> alongside a brief reply.
+   - Batch Concept Mode (when active for multi-shot sets): Wrap the approved Set Concept in <proposed_concept>...</proposed_concept> instead of freezing a single static pose or camera angle.
+
+3. Prompt Structure & Sentence Order:
+   - Inside <proposed_prompt>, write one dense, concrete text-to-image paragraph (~80\u2013140 words; zero poetic filler) following this exact order:
+     1) Medium & Camera Framing/Angle: photographic or artistic medium, lens/film look, shot distance, and viewing angle.
+     2) Subject Action, Posture & Contact Points: observable body orientation, limb placement, facial expression, and physical contact with surfaces or others.
+     3) Wardrobe, Styling, Hairstyle & Makeup: exact garment cuts, fabrics, colors, straps/closures, footwear, accessories, and requested hairstyle or makeup.
+     4) Environment & Fixed Spatial Props: specific room or outdoor surfaces plus 3\u20135 fixed props with their spatial positions.
+     5) Lighting, Color Palette & Atmosphere: primary light sources, direction, color temperature, and palette.
+   - Inside <proposed_concept>, define the Visual Medium & Color Palette, Subject Styling/Wardrobe (preserving exact user-requested garments, state of undress/nudity, hairstyle, and facial expression/emotion verbatim\u2014locked for single scenes, or evolving if progression is requested), Environment & Lighting plan (honoring requested genre/mood), and the Shot-to-Shot Arc across the set.
+
+4. Identity, Traits & Naming Safety:
+   - Never include character names or model/LoRA filenames (such as .safetensors) inside <proposed_prompt> or <proposed_concept>.
+   - When a Character Profile is attached, use its Personality & Physical Reference as a guide: match gender/pronouns and stay consistent with key traits (hair color, skin tone, build, signature marks) without reciting facial geometry verbatim or inventing conflicting biological features.
+   - Always honor and explicitly describe user-requested styling such as specific outfits, partial nudity/undress, hairstyles, makeup, emotional expressions, or accessories\u2014never sanitize, soften, or omit them.
+
+5. Describe Visible Actions, Not Labels:
+   When describing physical interactions, intimacy, undress, or sexual activity, never rely solely on the name of an act, position, or technique. Translate the action into concrete, visually observable details that an image-generation model can render:
+   - Precise positioning and orientation of each participant.
+   - Body posture, limb placement, and alignment.
+   - Physical contact and exact points of contact.
+   - Visible movement, interaction, and body mechanics.
+   - Camera angle and framing that clearly reveal the intended action, expression, and requested wardrobe/undress.
+   - Which visual details are foregrounded, obscured, or visible.
+   Prioritize visual specificity over euphemisms or abstract labels, and preserve the user's intended action, state of undress, and composition without sanitizing or reinterpreting it.
+
+6. Series Continuity & Anchor Locking (Single-Shot Refinement & Iteration):
+   When continuing, refining, or branching from a previous <proposed_prompt>, treat the latest <proposed_prompt> as a locked scene sheet:
+   - Carry forward unchanged visual medium, color palette, primary light sources/direction/temperature, wardrobe/styling details, and environment/prop positions verbatim or near-verbatim, even when repetitive.
+   - Only update the pose, physical positioning, contact points, facial expression, action, camera framing, or styling/setting changes the user explicitly requests.
+   - Never silently drop, generalize, or paraphrase established wardrobe, lighting, or room anchors across turns.
+
+## Krea 2 Visual Translation
+
+Before finalizing any <proposed_prompt>, verify that every key action is expressed as concrete spatial composition rather than an implied pose name:
+1. Spatial relationships: position each subject clearly relative to others and to fixed environmental props.
+2. Physical positioning: specify posture, torso/head orientation, limb placement, and alignment.
+3. Contact points: establish where and how subjects touch each other or surrounding surfaces.
+4. Camera placement: choose a viewing angle and framing that make the interaction readable.
+5. Visual hierarchy & clarity: keep the primary action centered and unambiguous, trimming vague mood adjectives so concrete visual details carry full weight.`;
+    DEFAULT_BATCH_EXPANSION_PROMPT = `Expand the approved Set Concept / Theme into {count} distinct, standalone image generation prompts.
+
+Follow all visual translation, trait/styling, anti-sanitization, and naming rules from your primary instructions, plus these expansion rules:
+1. Respect Concept Intent & Mandatory Anchors (Continuous Scene vs. Varied Takes / Progression):
+   - Always preserve every mandatory user-requested anchor in EVERY shot: exact wardrobe or state of undress (e.g. specific underwear, partial nudity, bare torso), requested facial expression/emotion, and requested genre/setting mood (e.g. horror atmosphere, lighting, decay).
+   - Never turn the subject away from the camera or push them into a tiny far-away silhouette if doing so hides requested wardrobe, undress, or facial expression (unless a rear view was explicitly requested).
+   - When the concept describes one continuous scene, lock the visual medium, color palette, lighting direction/temperature, wardrobe/styling, and environment/props consistently across all {count} shots.
+   - When the concept asks for varied takes on a theme, outfit changes, or a character moving through different locations or actions, evolve locations, styling, or lighting naturally across shots while keeping permanent character traits and mandatory core anchors intact.
+2. Distinct Framing & Poses: Give every shot a distinct purpose. No two consecutive shots may share the same camera distance, viewing angle, or pose (rotate across medium-wide environmental, medium three-quarter, intimate close-up, three-quarter profile/over-the-shoulder, and low/high angles while keeping subject emotion and wardrobe clearly readable).
+3. Sentence Order & Density: Write each prompt as a self-contained ~80\u2013140 word paragraph using the 5-part order (Medium & Camera Framing -> Subject Action & Contact Points -> Wardrobe/Styling -> Environment & Props -> Lighting & Palette). Never use cross-references like "same outfit as shot 1".`;
+  }
+});
+
+// src/server/db/seedPromptsAndLlm.ts
+function seedPromptsAndLlmSettings(db2) {
+  const templateCount = db2.prepare("SELECT COUNT(*) as c FROM prompt_templates").get().c;
+  if (templateCount === 0) {
+    const insertTemplate = db2.prepare(`
+      INSERT INTO prompt_templates (name, positive_template, negative_template, is_default, category)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    insertTemplate.run(
+      "Default Character Portrait & Theme Set",
+      "masterpiece, best quality, ultra-detailed editorial photography of {character}, {lora}, {theme}, natural skin texture, sharp focus on eyes, cinematic rim lighting, shot on 85mm f/1.4 lens, shallow depth of field",
+      "worst quality, low quality, blurry, deformed, bad anatomy, extra limbs, mutated hands, watermark, text, signature, oversaturated",
+      1,
+      "character"
+    );
+    insertTemplate.run(
+      "Cinematic Environmental Full-Body",
+      "cinematic wide angle shot of {character}, {lora}, {theme}, dynamic posture, atmospheric volumetric lighting, detailed background environment, film grain, 35mm anamorphic lens, 8k resolution",
+      "worst quality, low quality, blurry, bad proportions, cropped feet, watermark, text, plastic skin",
+      0,
+      "cinematic"
+    );
+  }
+  const existingLm = db2.prepare(
+    "SELECT id, conversation_system_prompt, batch_expansion_prompt FROM lm_studio_settings WHERE id = 1"
+  ).get();
+  if (!existingLm) {
+    db2.prepare(`
+      INSERT INTO lm_studio_settings (id, base_url, selected_model, system_prompt, conversation_system_prompt, batch_expansion_prompt)
+      VALUES (1, ?, '', ?, ?, ?)
+    `).run(
+      appConfig.lmStudioUrl,
+      `You are a creative photography director and Stable Diffusion / Flux prompt engineer.
+Given a Photo Set Theme and Base Scene Style, generate an array of distinct, cohesive image generation prompts for a full photo set.
+Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or LoRA/model filenames.
+Vary the camera framing (close-up portrait, medium candid, wide environmental shot, over-the-shoulder, dynamic angle), poses, lighting nuances, and micro-actions within the theme.
+Return ONLY a JSON array of prompt strings.`,
+      DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+      DEFAULT_BATCH_EXPANSION_PROMPT
+    );
+  } else {
+    const curConv = existingLm.conversation_system_prompt || "";
+    const isPriorFactoryConversation = !curConv.trim() || curConv.includes("The final objective is a prompt that communicates exactly what the camera should capture") && !curConv.includes("Prompt Structure & Sentence Order:") || curConv.includes("stay faithful to its stated permanent biological traits without inventing conflicting permanent features") || curConv.includes("Prompt Structure & Sentence Order:") && !curConv.includes("state of undress/nudity");
+    if (isPriorFactoryConversation) {
+      db2.prepare(
+        "UPDATE lm_studio_settings SET conversation_system_prompt = ? WHERE id = 1"
+      ).run(DEFAULT_CONVERSATION_SYSTEM_PROMPT);
+    } else if (curConv.includes("Refer to the subject neutrally")) {
+      db2.prepare(`
+        UPDATE lm_studio_settings
+        SET conversation_system_prompt = REPLACE(
+              conversation_system_prompt,
+              '4. Refer to the subject neutrally (e.g., "the subject", "they", "a person") when a character is attached, and NEVER include character names or model/LoRA filenames (such as .safetensors).',
+              '4. Never include character names or model/LoRA filenames (such as .safetensors) in <proposed_prompt>. When a character profile is attached, use gender/pronouns matching their Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing a personal name.'
+            )
+        WHERE id = 1
+      `).run();
+    }
+    const curBatch = existingLm.batch_expansion_prompt || "";
+    const isPriorFactoryBatch = !curBatch.trim() || curBatch.startsWith("You are now expanding the approved Set Concept / Theme into {count} distinct") && !curBatch.includes("Respect Concept Intent") || curBatch.startsWith("Expand the approved Set Concept / Theme into {count} distinct, standalone image generation prompts.") && curBatch.includes("Wrap each prompt in <shot_1>...</shot_1>") && !curBatch.includes("Respect Concept Intent & Mandatory Anchors");
+    if (isPriorFactoryBatch) {
+      db2.prepare(
+        "UPDATE lm_studio_settings SET batch_expansion_prompt = ? WHERE id = 1"
+      ).run(DEFAULT_BATCH_EXPANSION_PROMPT);
+    }
+  }
+  const guidingCount = db2.prepare("SELECT COUNT(*) as c FROM lm_studio_prompt_templates").get().c;
+  if (guidingCount === 0) {
+    const insertGuiding = db2.prepare(`
+      INSERT INTO lm_studio_prompt_templates (name, system_prompt, user_prompt_template, is_default)
+      VALUES (?, ?, ?, ?)
+    `);
+    insertGuiding.run(
+      "Editorial Photo Set Director (Default)",
+      `You are a creative photography director and ComfyUI prompt engineer.
+Your job is to take a Photo Set Theme and Base Scene Style, and write {count} distinct, cohesive image generation prompts for a multi-photo set.
+Vary the camera framing across the set (e.g., intimate close-up portrait, medium three-quarter candid, wide full-body environmental shot, dramatic over-the-shoulder angle), vary poses and micro-expressions, and enrich the lighting and background details to match the theme.
+Use gender/pronouns matching the attached Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or model/LoRA filenames.
+Return ONLY a valid JSON array of {count} prompt strings (e.g. ["prompt 1", "prompt 2"]) with no markdown formatting or extra commentary.`,
+      `Generate {count} distinct image prompts for a cohesive photo set:
+Subject: The subject (match the attached Character Profile's pronouns and presentation if provided, or use natural singular phrasing)
+Photo Set Theme: {theme}
+Base Scene Style: {base_prompt}
+
+Rules:
+- Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing personal names.
+- Do NOT include character names, model filenames, or file extensions (e.g. no .safetensors).
+- Focus on setting, lighting, framing, poses, and clothing/mood.
+- Return ONLY a JSON array of {count} complete prompt strings.`,
+      1
+    );
+    insertGuiding.run(
+      "Cinematic Storyboard Sequence",
+      `You are a film director and cinematographer scripting a sequential {count}-shot storyboard for a character scene.
+Progress the scene chronologically across the {count} shots: start with an establishing atmospheric shot, move into medium action/interaction within the setting, then capture an emotional close-up and a dramatic climax angle.
+Use gender/pronouns matching the attached Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or LoRA filenames.
+Return ONLY a valid JSON array of {count} prompt strings.`,
+      `Create a {count}-shot sequential cinematic storyboard:
+Subject: The subject (match the attached Character Profile's pronouns and presentation if provided, or use natural singular phrasing)
+Scene / Theme: {theme}
+Visual Style Foundation: {base_prompt}
+
+Rules:
+- Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing personal names.
+- Do NOT include character names or model/LoRA filenames.
+- Return ONLY a JSON array of {count} complete prompt strings.`,
+      0
+    );
+    insertGuiding.run(
+      "Pose, Angle & Lighting Lookbook Variations",
+      `You are a studio fashion & portrait photographer directing a {count}-image lookbook session.
+Keep the setting and theme ({theme}) consistent, but systematically vary the pose, camera lens (35mm, 50mm, 85mm, 135mm), camera angle (eye-level, low angle, profile, three-quarter), and lighting mood across all {count} prompts.
+Use gender/pronouns matching the attached Character Profile (or natural singular phrasing) without hardcoding names or model filenames.
+Return ONLY a valid JSON array of {count} prompt strings.`,
+      `Generate {count} lookbook variation prompts:
+Subject: The subject (match the attached Character Profile's pronouns and presentation if provided, or use natural singular phrasing)
+Theme & Wardrobe Context: {theme}
+Base Prompt Template: {base_prompt}
+
+Rules:
+- Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing personal names.
+- Do NOT include character names or model/LoRA filenames.
+- Return ONLY a JSON array of {count} complete prompt strings.`,
+      0
+    );
+  }
+  try {
+    db2.prepare(`
+      UPDATE lm_studio_prompt_templates
+      SET system_prompt = REPLACE(
+            REPLACE(
+              REPLACE(
+                REPLACE(
+                  REPLACE(
+                    system_prompt,
+                    'Keep the character ({character}) and LoRA triggers ({lora}) consistent in every prompt.',
+                    'Use gender/pronouns matching the attached Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or LoRA filenames.'
+                  ),
+                  'a Character identity, and a Base Prompt Style',
+                  'and a Base Scene Style'
+                ),
+                'Refer to the subject neutrally (e.g., "they", "them", "the subject", "a person") without including specific character names or model/LoRA filenames.',
+                'Use gender/pronouns matching the attached Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or model/LoRA filenames.'
+              ),
+              'Refer to the subject neutrally (e.g. "they", "the subject") without including character names or LoRA filenames.',
+              'Use gender/pronouns matching the attached Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without including character names or LoRA filenames.'
+            ),
+            'Refer to the subject neutrally without hardcoding names or model filenames.',
+            'Use gender/pronouns matching the attached Character Profile (or natural singular phrasing) without hardcoding names or model filenames.'
+          ),
+          user_prompt_template = REPLACE(
+            REPLACE(
+              REPLACE(
+                REPLACE(
+                  REPLACE(
+                    REPLACE(
+                      REPLACE(
+                        user_prompt_template,
+                        'Character: {character}
+LoRA / Appearance Triggers: {lora}
+',
+                        'Subject: The subject (match the attached Character Profile''s pronouns and presentation if provided, or use natural singular phrasing)
+'
+                      ),
+                      'Character: {character}
+LoRA Triggers: {lora}
+',
+                      'Subject: The subject (match the attached Character Profile''s pronouns and presentation if provided, or use natural singular phrasing)
+'
+                    ),
+                    'Character: {character}
+',
+                    ''
+                  ),
+                  'Subject: The subject (refer to them using neutral terms like "they", "them", or "the subject")',
+                  'Subject: The subject (match the attached Character Profile''s pronouns and presentation if provided, or use natural singular phrasing)'
+                ),
+                'Subject: The subject (refer to them using neutral terms like "they" or "the subject")',
+                'Subject: The subject (match the attached Character Profile''s pronouns and presentation if provided, or use natural singular phrasing)'
+              ),
+              '- Refer to the subject neutrally (e.g. "they", "them", "the subject", "a person").',
+              '- Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing personal names.'
+            ),
+            '- Refer to the subject neutrally (e.g. "they", "the subject").',
+            '- Use gender/pronouns matching the Character Profile (or natural singular phrasing like "the subject", "a woman", or "a man") without inventing personal names.'
+          )
+      WHERE user_prompt_template LIKE '%{lora}%'
+         OR user_prompt_template LIKE '%{character}%'
+         OR system_prompt LIKE '%Refer to the subject neutrally%'
+         OR user_prompt_template LIKE '%Refer to the subject neutrally%'
+         OR user_prompt_template LIKE '%neutral terms like "they"%'
+    `).run();
+  } catch {
+  }
+}
+var init_seedPromptsAndLlm = __esm({
+  "src/server/db/seedPromptsAndLlm.ts"() {
+    init_config();
+    init_agentPromptDefaults();
+  }
+});
+
+// src/server/workflows/workflowPaths.ts
+import fs3 from "fs";
+import path3 from "path";
+import { fileURLToPath } from "url";
+function resolveServerWorkflowPath(filename) {
+  const candidates = [
+    path3.resolve(__dirname, filename),
+    path3.resolve(__dirname, "workflows", filename),
+    path3.resolve(__dirname, "../workflows", filename),
+    path3.resolve(process.cwd(), "src/server/workflows", filename),
+    path3.resolve(process.cwd(), "dist-server/workflows", filename)
+  ];
+  return candidates.find((candidate) => fs3.existsSync(candidate)) ?? candidates[0];
+}
+var __filename, __dirname;
+var init_workflowPaths = __esm({
+  "src/server/workflows/workflowPaths.ts"() {
+    __filename = fileURLToPath(import.meta.url);
+    __dirname = path3.dirname(__filename);
+  }
+});
+
+// src/server/db/seedWorkflowsAndInstances.ts
+import fs4 from "fs";
+function seedWorkflowsAndInstances(db2) {
+  const existingInstance = db2.prepare("SELECT id FROM comfyui_instances WHERE is_default = 1").get();
+  if (!existingInstance) {
+    db2.prepare("INSERT INTO comfyui_instances (name, base_url, is_default) VALUES (?, ?, 1)").run(
+      "Primary ComfyUI",
+      appConfig.comfyuiUrl
+    );
+  }
+  const krea2TurboApiWorkflow = JSON.parse(
+    fs4.readFileSync(PRIMARY_WORKFLOW_PATH, "utf-8")
+  );
+  const legacyDefault = db2.prepare("SELECT id FROM workflows WHERE workflow_hash = 'default-couchy-character-lora-workflow'").get();
+  const kreaDefault = db2.prepare("SELECT id, api_workflow_json FROM workflows WHERE workflow_hash = 'default-krea2-turbo-workflow'").get();
+  let kreaWorkflowId = kreaDefault?.id ?? null;
+  if (legacyDefault && !kreaDefault) {
+    db2.prepare(`
+      UPDATE workflows
+      SET name = ?, description = ?, api_workflow_json = ?, workflow_hash = 'default-krea2-turbo-workflow', updated_at = datetime('now')
+      WHERE id = ?
+    `).run(
+      "Krea2_turbo Studio Workflow (Default)",
+      "Primary Krea2_turbo workflow with conditional inline 4x-ESRGAN upscaling (>3.0 MP via Switch #51 & Scale #52), Power Lora Loader (#50), ResolutionSelector (#49), and KSampler (#30_3).",
+      JSON.stringify(krea2TurboApiWorkflow, null, 2),
+      legacyDefault.id
+    );
+    kreaWorkflowId = legacyDefault.id;
+  } else if (!kreaDefault) {
+    const info = db2.prepare(`
+      INSERT INTO workflows (name, description, is_saved_library, api_workflow_json, workflow_hash)
+      VALUES (?, ?, 1, ?, 'default-krea2-turbo-workflow')
+    `).run(
+      "Krea2_turbo Studio Workflow (Default)",
+      "Primary Krea2_turbo workflow with conditional inline 4x-ESRGAN upscaling (>3.0 MP via Switch #51 & Scale #52), Power Lora Loader (#50), ResolutionSelector (#49), and KSampler (#30_3).",
+      JSON.stringify(krea2TurboApiWorkflow, null, 2)
+    );
+    kreaWorkflowId = Number(info.lastInsertRowid);
+  } else if (kreaDefault.api_workflow_json) {
+    try {
+      const currentGraph = JSON.parse(kreaDefault.api_workflow_json);
+      if (!currentGraph["51"] || currentGraph["51"]?.class_type !== "ComfySwitchNode") {
+        const upgradedGraph = JSON.parse(JSON.stringify(krea2TurboApiWorkflow));
+        if (currentGraph["49"]?.inputs && upgradedGraph["49"]?.inputs) {
+          if (currentGraph["49"].inputs.aspect_ratio) {
+            upgradedGraph["49"].inputs.aspect_ratio = currentGraph["49"].inputs.aspect_ratio;
+          }
+          if (typeof currentGraph["49"].inputs.megapixels === "number") {
+            upgradedGraph["49"].inputs.megapixels = currentGraph["49"].inputs.megapixels;
+          }
+        }
+        if (currentGraph["30_10"]?.inputs?.unet_name && upgradedGraph["30_10"]?.inputs) {
+          upgradedGraph["30_10"].inputs.unet_name = currentGraph["30_10"].inputs.unet_name;
+        }
+        if (currentGraph["29"]?.inputs?.filename_prefix && upgradedGraph["29"]?.inputs) {
+          upgradedGraph["29"].inputs.filename_prefix = currentGraph["29"].inputs.filename_prefix;
+        }
+        db2.prepare(`
+          UPDATE workflows
+          SET description = ?, api_workflow_json = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(
+          "Primary Krea2_turbo workflow with conditional inline 4x-ESRGAN upscaling (>3.0 MP via Switch #51 & Scale #52), Power Lora Loader (#50), ResolutionSelector (#49), and KSampler (#30_3).",
+          JSON.stringify(upgradedGraph, null, 2),
+          kreaDefault.id
+        );
+      }
+    } catch {
+    }
+  }
+  if (kreaWorkflowId) {
+    const existingMap = db2.prepare("SELECT workflow_id FROM workflow_mappings WHERE workflow_id = ?").get(kreaWorkflowId);
+    if (!existingMap) {
+      db2.prepare(`
+        INSERT INTO workflow_mappings (
+          workflow_id,
+          positive_prompt_node_id, positive_prompt_field,
+          negative_prompt_node_id, negative_prompt_field,
+          trigger_word_node_id, trigger_word_field,
+          seed_node_id, seed_field,
+          steps_node_id, cfg_node_id, sampler_node_id,
+          latent_node_id, aspect_ratio_field, megapixels_field,
+          checkpoint_node_id, checkpoint_field,
+          enable_lora_node_id, enable_lora_field,
+          lora_node_ids_json
+        ) VALUES (?, '30_19', 'value', NULL, 'text', '30_27', 'string_b', '30_3', 'seed', '30_3', '30_3', '30_3', '49', 'aspect_ratio', 'megapixels', '30_10', 'unet_name', '30_23', 'value', '["50"]')
+      `).run(kreaWorkflowId);
+    }
+  }
+  const anyDefaultWf = db2.prepare("SELECT id FROM workflows WHERE is_default = 1 LIMIT 1").get();
+  if (!anyDefaultWf) {
+    const defaultWf = db2.prepare(
+      "SELECT id FROM workflows WHERE workflow_hash = 'default-krea2-turbo-workflow' OR id = 1 LIMIT 1"
+    ).get();
+    const targetDefaultId = defaultWf?.id ?? kreaWorkflowId ?? 1;
+    db2.prepare("UPDATE workflows SET is_default = 1 WHERE id = ?").run(targetDefaultId);
+  }
+}
+var PRIMARY_WORKFLOW_PATH;
+var init_seedWorkflowsAndInstances = __esm({
+  "src/server/db/seedWorkflowsAndInstances.ts"() {
+    init_config();
+    init_workflowPaths();
+    PRIMARY_WORKFLOW_PATH = resolveServerWorkflowPath("primary_workflow.json");
+  }
+});
+
+// src/server/db.ts
+var db_exports = {};
+__export(db_exports, {
+  db: () => db,
+  runMigrations: () => runMigrations
+});
+import Database from "better-sqlite3";
+function runMigrations(targetDb = db) {
+  targetDb.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  const applied = new Set(
+    targetDb.prepare("SELECT version FROM schema_migrations").all().map(
+      (r) => r.version
+    )
+  );
+  const insertMigration = targetDb.prepare(
+    "INSERT INTO schema_migrations (version, name) VALUES (?, ?)"
+  );
+  for (const migration of ALL_MIGRATIONS) {
+    if (!applied.has(migration.version)) {
+      const tx = targetDb.transaction(() => {
+        targetDb.exec(migration.sql);
+        insertMigration.run(migration.version, migration.name);
+      });
+      tx();
+    }
+  }
+  seedPromptsAndLlmSettings(targetDb);
+  seedWorkflowsAndInstances(targetDb);
+}
+var db, ALL_MIGRATIONS;
+var init_db = __esm({
+  "src/server/db.ts"() {
+    init_config();
+    init_migrationsCore();
+    init_migrationsV2ToV14();
+    init_migrationsV15ToV28();
+    init_seedPromptsAndLlm();
+    init_seedWorkflowsAndInstances();
+    db = new Database(appConfig.databasePath);
+    db.pragma("journal_mode = WAL");
+    db.pragma("foreign_keys = ON");
+    db.pragma("busy_timeout = 5000");
+    ALL_MIGRATIONS = [
+      ...migrationsCore,
+      ...migrationsV2ToV14,
+      ...migrationsV15ToV28
+    ];
+  }
+});
+
+// src/server/services/pngMetadataParser.ts
+import fs5 from "fs";
+import zlib from "zlib";
+function readPngTextChunks(filePath) {
+  const chunks = {};
+  try {
+    const buffer = fs5.readFileSync(filePath);
+    if (buffer.length < 8 || buffer.readUInt32BE(0) !== 2303741511) {
+      return chunks;
+    }
+    let offset = 8;
+    while (offset + 8 <= buffer.length) {
+      const length = buffer.readUInt32BE(offset);
+      const type = buffer.toString("ascii", offset + 4, offset + 8);
+      const dataStart = offset + 8;
+      const dataEnd = dataStart + length;
+      if (dataEnd > buffer.length) break;
+      const data = buffer.subarray(dataStart, dataEnd);
+      if (type === "tEXt") {
+        const nul = data.indexOf(0);
+        if (nul !== -1) {
+          const key = data.toString("latin1", 0, nul);
+          const val = data.toString("utf8", nul + 1);
+          chunks[key] = val;
+        }
+      } else if (type === "zTXt") {
+        const nul = data.indexOf(0);
+        if (nul !== -1 && nul + 2 <= data.length) {
+          const key = data.toString("latin1", 0, nul);
+          const compressed = data.subarray(nul + 2);
+          try {
+            chunks[key] = zlib.inflateSync(compressed).toString("utf8");
+          } catch {
+          }
+        }
+      } else if (type === "iTXt") {
+        const nul = data.indexOf(0);
+        if (nul !== -1 && nul + 3 <= data.length) {
+          const key = data.toString("latin1", 0, nul);
+          const compressionFlag = data[nul + 1];
+          let pos = nul + 3;
+          const langEnd = data.indexOf(0, pos);
+          if (langEnd !== -1) {
+            const transEnd = data.indexOf(0, langEnd + 1);
+            if (transEnd !== -1) {
+              pos = transEnd + 1;
+              const payload = data.subarray(pos);
+              try {
+                chunks[key] = compressionFlag === 1 ? zlib.inflateSync(payload).toString("utf8") : payload.toString("utf8");
+              } catch {
+              }
+            }
+          }
+        }
+      } else if (type === "IEND") {
+        break;
+      }
+      offset = dataEnd + 4;
+    }
+  } catch {
+  }
+  return chunks;
+}
+function cleanModelBasename(rawName) {
+  return rawName.trim().replace(/\\/g, "/").split("/").pop() || rawName.trim();
+}
+function parseImageMetadataFromChunks(rawChunks) {
+  const result = {
+    rawChunks,
+    visualWorkflowJson: null,
+    apiWorkflowJson: null,
+    positivePrompt: null,
+    negativePrompt: null,
+    seed: null,
+    steps: null,
+    cfg: null,
+    sampler: null,
+    scheduler: null,
+    denoise: null,
+    batchSize: null,
+    batchIndex: null,
+    generationDate: rawChunks["Creation Time"] || rawChunks["date:create"] || null,
+    checkpointName: null,
+    checkpointHash: null,
+    vaeName: null,
+    loras: [],
+    models: [],
+    missingFields: [],
+    provenance: {}
+  };
+  if (rawChunks.prompt) {
+    try {
+      const parsedPrompt = JSON.parse(rawChunks.prompt);
+      if (parsedPrompt && typeof parsedPrompt === "object") {
+        result.apiWorkflowJson = rawChunks.prompt;
+        extractFromApiGraph(parsedPrompt, result);
+      }
+    } catch {
+    }
+  }
+  if (rawChunks.workflow) {
+    try {
+      const parsedWorkflow = JSON.parse(rawChunks.workflow);
+      if (parsedWorkflow && typeof parsedWorkflow === "object") {
+        result.visualWorkflowJson = rawChunks.workflow;
+        extractFromVisualWorkflow(parsedWorkflow, result);
+      }
+    } catch {
+    }
+  }
+  if (rawChunks.parameters) {
+    extractFromParametersText(rawChunks.parameters, result);
+  }
+  const coreCheck = [
+    ["positivePrompt", "positive_prompt"],
+    ["seed", "seed"],
+    ["steps", "steps"],
+    ["cfg", "cfg"],
+    ["sampler", "sampler"],
+    ["checkpointName", "checkpoint"]
+  ];
+  for (const [prop, label] of coreCheck) {
+    if (result[prop] === null || result[prop] === void 0 || result[prop] === "") {
+      result.missingFields.push(label);
+    }
+  }
+  return result;
+}
+function parseImageMetadata(filePath) {
+  const rawChunks = readPngTextChunks(filePath);
+  return parseImageMetadataFromChunks(rawChunks);
+}
+function addLoraIfUnique(result, lora) {
+  if (!lora.loraName || lora.loraName === "None") return;
+  const basename = cleanModelBasename(lora.loraName);
+  const exists = result.loras.some(
+    (l) => cleanModelBasename(l.loraName).toLowerCase() === basename.toLowerCase() && l.nodeId === lora.nodeId
+  );
+  if (!exists) {
+    result.loras.push({
+      ...lora,
+      loraName: basename,
+      loraPath: lora.loraPath || lora.loraName
+    });
+    result.models.push({
+      modelName: basename,
+      modelType: "lora",
+      modelHash: lora.loraHash,
+      nodeId: lora.nodeId,
+      nodeType: lora.nodeType,
+      provenance: lora.provenance
+    });
+  }
+}
+function addModelIfUnique(result, model) {
+  if (!model.modelName || model.modelName === "None") return;
+  const basename = cleanModelBasename(model.modelName);
+  const exists = result.models.some(
+    (m) => cleanModelBasename(m.modelName).toLowerCase() === basename.toLowerCase() && m.modelType === model.modelType
+  );
+  if (!exists) {
+    result.models.push({
+      ...model,
+      modelName: basename
+    });
+  }
+}
+function resolvePromptTextFromNode(graph, nodeId, visited = /* @__PURE__ */ new Set()) {
+  if (!nodeId || visited.has(nodeId)) return null;
+  visited.add(nodeId);
+  const node = graph[nodeId];
+  if (!node || typeof node !== "object") return null;
+  const classType = String(node.class_type || "");
+  const title = String(node._meta?.title || "").toLowerCase();
+  const inputs = node.inputs || {};
+  if (/ConditioningZeroOut/i.test(classType)) {
+    return null;
+  }
+  if (title.includes("system prompt")) {
+    return null;
+  }
+  if (/Switch/i.test(classType) || "on_true" in inputs && "on_false" in inputs) {
+    let switchVal = null;
+    if (typeof inputs.switch === "boolean") {
+      switchVal = inputs.switch;
+    } else if (Array.isArray(inputs.switch) && inputs.switch.length > 0) {
+      const swNode = graph[String(inputs.switch[0])];
+      if (typeof swNode?.inputs?.value === "boolean") {
+        switchVal = swNode.inputs.value;
+      }
+    }
+    const branches = switchVal === false ? [inputs.on_false, inputs.on_true] : [inputs.on_true, inputs.on_false];
+    for (const branch of branches) {
+      if (typeof branch === "string" && branch.trim()) {
+        return branch.trim();
+      }
+      if (Array.isArray(branch) && branch.length > 0) {
+        const resolved = resolvePromptTextFromNode(graph, String(branch[0]), new Set(visited));
+        if (resolved && resolved.trim()) return resolved.trim();
+      }
+    }
+    return null;
+  }
+  if (/StringConcatenate|Concatenate/i.test(classType) || "string_a" in inputs && "string_b" in inputs) {
+    const resolveSide = (val) => {
+      if (typeof val === "string") return val.trim() || null;
+      if (Array.isArray(val) && val.length > 0) {
+        return resolvePromptTextFromNode(graph, String(val[0]), new Set(visited));
+      }
+      return null;
+    };
+    const partA = resolveSide(inputs.string_a);
+    const partB = resolveSide(inputs.string_b);
+    if (title.includes("trigger word") || title.includes("lora")) {
+      return partA || partB || null;
+    }
+    const nonEmpty = [partA, partB].filter((p) => Boolean(p && p.trim()));
+    if (nonEmpty.length === 0) return null;
+    if (nonEmpty.length === 1) return nonEmpty[0];
+    const delim = typeof inputs.delimiter === "string" ? inputs.delimiter : " ";
+    return nonEmpty.join(delim).trim();
+  }
+  for (const field of ["value", "text", "text_g", "text_l", "prompt", "positive", "string"]) {
+    if (typeof inputs[field] === "string" && inputs[field].trim().length > 0) {
+      return inputs[field].trim();
+    }
+  }
+  for (const linkField of [
+    "text",
+    "source",
+    "prompt",
+    "positive",
+    "conditioning",
+    "conditioning_1",
+    "conditioning_to",
+    "clip_text",
+    "string"
+  ]) {
+    const val = inputs[linkField];
+    if (Array.isArray(val) && val.length > 0) {
+      const resolved = resolvePromptTextFromNode(graph, String(val[0]), new Set(visited));
+      if (resolved && resolved.trim()) {
+        return resolved.trim();
+      }
+    }
+  }
+  return null;
+}
+function extractFromApiGraph(graph, result) {
+  const positiveNodeIds = /* @__PURE__ */ new Set();
+  const negativeNodeIds = /* @__PURE__ */ new Set();
+  for (const [nodeId, node] of Object.entries(graph)) {
+    if (!node || typeof node !== "object") continue;
+    const classType = String(node.class_type || "");
+    const inputs = node.inputs || {};
+    if (/KSampler|SamplerCustom|Efficient Loader/i.test(classType)) {
+      if (inputs.seed !== void 0 && result.seed === null) {
+        result.seed = String(inputs.seed);
+        result.provenance.seed = "embedded_api";
+      } else if (inputs.noise_seed !== void 0 && result.seed === null) {
+        result.seed = String(inputs.noise_seed);
+        result.provenance.seed = "embedded_api";
+      }
+      if (typeof inputs.steps === "number" && result.steps === null) {
+        result.steps = inputs.steps;
+        result.provenance.steps = "embedded_api";
+      }
+      if (typeof inputs.cfg === "number" && result.cfg === null) {
+        result.cfg = inputs.cfg;
+        result.provenance.cfg = "embedded_api";
+      }
+      if (typeof inputs.sampler_name === "string" && result.sampler === null) {
+        result.sampler = inputs.sampler_name;
+        result.provenance.sampler = "embedded_api";
+      }
+      if (typeof inputs.scheduler === "string" && result.scheduler === null) {
+        result.scheduler = inputs.scheduler;
+        result.provenance.scheduler = "embedded_api";
+      }
+      if (typeof inputs.denoise === "number" && result.denoise === null) {
+        result.denoise = inputs.denoise;
+        result.provenance.denoise = "embedded_api";
+      }
+      if (Array.isArray(inputs.positive) && inputs.positive.length > 0) {
+        positiveNodeIds.add(String(inputs.positive[0]));
+      }
+      if (Array.isArray(inputs.negative) && inputs.negative.length > 0) {
+        negativeNodeIds.add(String(inputs.negative[0]));
+      }
+    }
+    if (/EmptyLatentImage|EmptySD3LatentImage|Efficient Loader/i.test(classType)) {
+      if (typeof inputs.batch_size === "number" && result.batchSize === null) {
+        result.batchSize = inputs.batch_size;
+        result.provenance.batchSize = "embedded_api";
+      }
+    }
+    if (/CheckpointLoader|UNETLoader|Eff\. Loader/i.test(classType)) {
+      const ckpt = inputs.ckpt_name || inputs.unet_name || inputs.model_name;
+      if (typeof ckpt === "string" && ckpt !== "None" && ckpt.trim() !== "") {
+        if (!result.checkpointName) {
+          result.checkpointName = cleanModelBasename(ckpt);
+          result.provenance.checkpoint = "embedded_api";
+        }
+        addModelIfUnique(result, {
+          modelName: ckpt,
+          modelType: /UNET/i.test(classType) ? "diffusion" : "checkpoint",
+          modelHash: null,
+          nodeId,
+          nodeType: classType,
+          provenance: "embedded_api"
+        });
+      }
+    }
+    if (/VAELoader/i.test(classType) || typeof inputs.vae_name === "string") {
+      const vae = inputs.vae_name;
+      if (typeof vae === "string" && vae !== "None" && vae !== "Baked VAE" && vae.trim() !== "") {
+        if (!result.vaeName) {
+          result.vaeName = cleanModelBasename(vae);
+          result.provenance.vae = "embedded_api";
+        }
+        addModelIfUnique(result, {
+          modelName: vae,
+          modelType: "vae",
+          modelHash: null,
+          nodeId,
+          nodeType: classType,
+          provenance: "embedded_api"
+        });
+      }
+    }
+    if (/ControlNetLoader/i.test(classType) && typeof inputs.control_net_name === "string") {
+      addModelIfUnique(result, {
+        modelName: inputs.control_net_name,
+        modelType: "controlnet",
+        modelHash: null,
+        nodeId,
+        nodeType: classType,
+        provenance: "embedded_api"
+      });
+    }
+    if (/UpscaleModelLoader/i.test(classType) && typeof inputs.model_name === "string") {
+      addModelIfUnique(result, {
+        modelName: inputs.model_name,
+        modelType: "upscaler",
+        modelHash: null,
+        nodeId,
+        nodeType: classType,
+        provenance: "embedded_api"
+      });
+    }
+    if (/CLIPLoader|DualCLIPLoader/i.test(classType)) {
+      for (const k of ["clip_name", "clip_name1", "clip_name2"]) {
+        if (typeof inputs[k] === "string" && inputs[k].trim()) {
+          addModelIfUnique(result, {
+            modelName: inputs[k],
+            modelType: "clip",
+            modelHash: null,
+            nodeId,
+            nodeType: classType,
+            provenance: "embedded_api"
+          });
+        }
+      }
+    }
+    if (typeof inputs.lora_name === "string" && inputs.lora_name !== "None" && inputs.lora_name.trim()) {
+      const modelStr = typeof inputs.strength_model === "number" ? inputs.strength_model : 1;
+      const clipStr = typeof inputs.strength_clip === "number" ? inputs.strength_clip : modelStr;
+      addLoraIfUnique(result, {
+        loraName: inputs.lora_name,
+        loraPath: inputs.lora_name,
+        loraHash: null,
+        modelStrength: modelStr,
+        clipStrength: clipStr,
+        nodeId,
+        nodeType: classType,
+        provenance: "embedded_api"
+      });
+    }
+    for (const [inputKey, inputVal] of Object.entries(inputs)) {
+      if (/^lora_\d+$/i.test(inputKey) && inputVal && typeof inputVal === "object") {
+        const slot = inputVal;
+        if (slot.on !== false && typeof slot.lora === "string" && slot.lora !== "None" && slot.lora.trim()) {
+          const mStr = typeof slot.strength === "number" ? slot.strength : 1;
+          const cStr = typeof slot.strengthTwo === "number" ? slot.strengthTwo : mStr;
+          addLoraIfUnique(result, {
+            loraName: slot.lora,
+            loraPath: slot.lora,
+            loraHash: null,
+            modelStrength: mStr,
+            clipStrength: cStr,
+            nodeId,
+            nodeType: classType,
+            provenance: "embedded_api"
+          });
+        }
+      }
+      const matchIdx = inputKey.match(/^lora_name_(\d+)$/i);
+      if (matchIdx && typeof inputVal === "string" && inputVal !== "None" && inputVal.trim()) {
+        const idx = matchIdx[1];
+        const sw = inputs[`switch_${idx}`];
+        if (sw !== "Off" && sw !== false) {
+          const mStr = Number(inputs[`model_weight_${idx}`] ?? inputs[`lora_wt_${idx}`] ?? 1);
+          const cStr = Number(inputs[`clip_weight_${idx}`] ?? mStr);
+          addLoraIfUnique(result, {
+            loraName: inputVal,
+            loraPath: inputVal,
+            loraHash: null,
+            modelStrength: isNaN(mStr) ? 1 : mStr,
+            clipStrength: isNaN(cStr) ? 1 : cStr,
+            nodeId,
+            nodeType: classType,
+            provenance: "embedded_api"
+          });
+        }
+      }
+    }
+  }
+  for (const id of positiveNodeIds) {
+    const txt = resolvePromptTextFromNode(graph, id);
+    if (txt && !result.positivePrompt) {
+      result.positivePrompt = txt;
+      result.provenance.positivePrompt = "embedded_api";
+    }
+  }
+  for (const id of negativeNodeIds) {
+    const txt = resolvePromptTextFromNode(graph, id);
+    if (txt && !result.negativePrompt) {
+      result.negativePrompt = txt;
+      result.provenance.negativePrompt = "embedded_api";
+    }
+  }
+  if (!result.positivePrompt) {
+    for (const [, node] of Object.entries(graph)) {
+      if (!node || typeof node !== "object") continue;
+      const title = String(node._meta?.title || "").toLowerCase();
+      const val = node.inputs?.value ?? node.inputs?.text ?? node.inputs?.string;
+      if (title.includes("user prompt") && typeof val === "string" && val.trim().length > 0) {
+        result.positivePrompt = val.trim();
+        result.provenance.positivePrompt = "embedded_api";
+        break;
+      }
+    }
+  }
+  if (!result.positivePrompt) {
+    for (const [nodeId, node] of Object.entries(graph)) {
+      if (!node || typeof node !== "object") continue;
+      const classType = String(node.class_type || "");
+      const title = String(node._meta?.title || "").toLowerCase();
+      if (title.includes("system prompt")) continue;
+      if (/CLIPTextEncode|PrimitiveString/i.test(classType)) {
+        const resolved = resolvePromptTextFromNode(graph, nodeId);
+        if (resolved && resolved.trim().length > 0) {
+          if (!result.positivePrompt && !title.includes("negative")) {
+            result.positivePrompt = resolved.trim();
+            result.provenance.positivePrompt = "embedded_api";
+          } else if (!result.negativePrompt && resolved.trim() !== result.positivePrompt) {
+            result.negativePrompt = resolved.trim();
+            result.provenance.negativePrompt = "embedded_api";
+          }
+        }
+      }
+    }
+  }
+}
+function extractFromVisualWorkflow(workflow, result) {
+  const nodes = Array.isArray(workflow.nodes) ? workflow.nodes : [];
+  for (const node of nodes) {
+    if (!node || typeof node !== "object") continue;
+    const nodeId = String(node.id ?? "");
+    const nodeType = String(node.type || "");
+    const title = String(node.title || "").toLowerCase();
+    const widgets = Array.isArray(node.widgets_values) ? node.widgets_values : [];
+    if (/CheckpointLoaderSimple|CheckpointLoader|UNETLoader/i.test(nodeType) && typeof widgets[0] === "string") {
+      if (!result.checkpointName && widgets[0].trim()) {
+        result.checkpointName = cleanModelBasename(widgets[0]);
+        result.provenance.checkpoint = "visual_workflow";
+      }
+      addModelIfUnique(result, {
+        modelName: widgets[0],
+        modelType: /UNET/i.test(nodeType) ? "diffusion" : "checkpoint",
+        modelHash: null,
+        nodeId,
+        nodeType,
+        provenance: "visual_workflow"
+      });
+    }
+    if (/VAELoader/i.test(nodeType) && typeof widgets[0] === "string") {
+      if (!result.vaeName) {
+        result.vaeName = cleanModelBasename(widgets[0]);
+        result.provenance.vae = "visual_workflow";
+      }
+      addModelIfUnique(result, {
+        modelName: widgets[0],
+        modelType: "vae",
+        modelHash: null,
+        nodeId,
+        nodeType,
+        provenance: "visual_workflow"
+      });
+    }
+    if (/LoraLoader/i.test(nodeType) && typeof widgets[0] === "string") {
+      const mStr = typeof widgets[1] === "number" ? widgets[1] : 1;
+      const cStr = typeof widgets[2] === "number" ? widgets[2] : mStr;
+      addLoraIfUnique(result, {
+        loraName: widgets[0],
+        loraPath: widgets[0],
+        loraHash: null,
+        modelStrength: mStr,
+        clipStrength: cStr,
+        nodeId,
+        nodeType,
+        provenance: "visual_workflow"
+      });
+    }
+    if (/Power Lora Loader/i.test(nodeType)) {
+      for (const w of widgets) {
+        if (w && typeof w === "object" && w.on !== false && typeof w.lora === "string") {
+          const mStr = typeof w.strength === "number" ? w.strength : 1;
+          const cStr = typeof w.strengthTwo === "number" ? w.strengthTwo : mStr;
+          addLoraIfUnique(result, {
+            loraName: w.lora,
+            loraPath: w.lora,
+            loraHash: null,
+            modelStrength: mStr,
+            clipStrength: cStr,
+            nodeId,
+            nodeType,
+            provenance: "visual_workflow"
+          });
+        }
+      }
+    }
+    if (/KSampler/i.test(nodeType) && widgets.length >= 6) {
+      if (result.seed === null && (typeof widgets[0] === "number" || typeof widgets[0] === "string")) {
+        result.seed = String(widgets[0]);
+        result.provenance.seed = "visual_workflow";
+      }
+      if (result.steps === null && typeof widgets[2] === "number") {
+        result.steps = widgets[2];
+        result.provenance.steps = "visual_workflow";
+      }
+      if (result.cfg === null && typeof widgets[3] === "number") {
+        result.cfg = widgets[3];
+        result.provenance.cfg = "visual_workflow";
+      }
+      if (result.sampler === null && typeof widgets[4] === "string") {
+        result.sampler = widgets[4];
+        result.provenance.sampler = "visual_workflow";
+      }
+      if (result.scheduler === null && typeof widgets[5] === "string") {
+        result.scheduler = widgets[5];
+        result.provenance.scheduler = "visual_workflow";
+      }
+      if (result.denoise === null && typeof widgets[6] === "number") {
+        result.denoise = widgets[6];
+        result.provenance.denoise = "visual_workflow";
+      }
+    }
+    if (/PrimitiveString/i.test(nodeType) && typeof widgets[0] === "string" && widgets[0].trim()) {
+      if (title.includes("user prompt") && !result.positivePrompt) {
+        result.positivePrompt = widgets[0].trim();
+        result.provenance.positivePrompt = "visual_workflow";
+      }
+    }
+    if (/CLIPTextEncode/i.test(nodeType) && typeof widgets[0] === "string" && widgets[0].trim()) {
+      if (title.includes("neg") && !result.negativePrompt) {
+        result.negativePrompt = widgets[0];
+        result.provenance.negativePrompt = "visual_workflow";
+      } else if (!result.positivePrompt) {
+        result.positivePrompt = widgets[0];
+        result.provenance.positivePrompt = "visual_workflow";
+      } else if (!result.negativePrompt && widgets[0] !== result.positivePrompt) {
+        result.negativePrompt = widgets[0];
+        result.provenance.negativePrompt = "visual_workflow";
+      }
+    }
+  }
+}
+function extractFromParametersText(rawText, result) {
+  const lines = rawText.split("\n");
+  const negIdx = lines.findIndex((l) => l.startsWith("Negative prompt:"));
+  const stepsIdx = lines.findIndex((l) => /^Steps:\s*\d+/i.test(l));
+  if (!result.positivePrompt && (negIdx > 0 || stepsIdx > 0)) {
+    const endPos = negIdx !== -1 ? negIdx : stepsIdx;
+    result.positivePrompt = lines.slice(0, endPos).join("\n").trim();
+    result.provenance.positivePrompt = "a1111_parameters";
+  }
+  if (!result.negativePrompt && negIdx !== -1) {
+    const endNeg = stepsIdx !== -1 ? stepsIdx : lines.length;
+    result.negativePrompt = lines.slice(negIdx, endNeg).join("\n").replace(/^Negative prompt:\s*/i, "").trim();
+    result.provenance.negativePrompt = "a1111_parameters";
+  }
+  if (stepsIdx !== -1) {
+    const kvLine = lines.slice(stepsIdx).join(" ");
+    const stepsMatch = kvLine.match(/Steps:\s*(\d+)/i);
+    if (stepsMatch && result.steps === null) {
+      result.steps = Number(stepsMatch[1]);
+      result.provenance.steps = "a1111_parameters";
+    }
+    const samplerMatch = kvLine.match(/Sampler:\s*([^,]+)/i);
+    if (samplerMatch && result.sampler === null) {
+      result.sampler = samplerMatch[1].trim();
+      result.provenance.sampler = "a1111_parameters";
+    }
+    const cfgMatch = kvLine.match(/CFG scale:\s*([\d.]+)/i);
+    if (cfgMatch && result.cfg === null) {
+      result.cfg = Number(cfgMatch[1]);
+      result.provenance.cfg = "a1111_parameters";
+    }
+    const seedMatch = kvLine.match(/Seed:\s*(\d+)/i);
+    if (seedMatch && result.seed === null) {
+      result.seed = seedMatch[1];
+      result.provenance.seed = "a1111_parameters";
+    }
+    const modelMatch = kvLine.match(/Model:\s*([^,]+)/i);
+    if (modelMatch && result.checkpointName === null) {
+      result.checkpointName = cleanModelBasename(modelMatch[1]);
+      result.provenance.checkpoint = "a1111_parameters";
+    }
+    const hashMatch = kvLine.match(/Model hash:\s*([a-fA-F0-9]+)/i);
+    if (hashMatch && result.checkpointHash === null) {
+      result.checkpointHash = hashMatch[1];
+    }
+  }
+}
+var init_pngMetadataParser = __esm({
+  "src/server/services/pngMetadataParser.ts"() {
+  }
+});
+
+// src/shared/utils.ts
+function normalizeResolutionSelectorRatio(raw) {
+  const str = String(raw || "").trim();
+  if (!str) return "2:3 (Portrait Photo)";
+  const exact = ASPECT_RATIO_PRESETS.find(
+    (o) => o.value.toLowerCase() === str.toLowerCase()
+  );
+  if (exact) return exact.value;
+  const match = str.match(/(\d+(?:\.\d+)?)\s*[:\/x]\s*(\d+(?:\.\d+)?)/i);
+  if (match) {
+    const num = `${match[1]}:${match[2]}`;
+    const byShort = ASPECT_RATIO_PRESETS.find((o) => o.shortRatio === num);
+    if (byShort) return byShort.value;
+  }
+  const lower = str.toLowerCase();
+  if (lower.includes("square")) return "1:1 (Square)";
+  if (lower.includes("ultrawide") || lower.includes("21:9")) return "21:9 (Ultrawide)";
+  if (lower.includes("vertical") || lower.includes("9:16")) return "9:16 (Portrait Widescreen)";
+  if (lower.includes("widescreen") || lower.includes("16:9")) return "16:9 (Widescreen)";
+  if (lower.includes("golden") || lower.includes("portrait") && lower.includes("3:4")) return "3:4 (Portrait Standard)";
+  if (lower.includes("portrait")) return "2:3 (Portrait Photo)";
+  if (lower.includes("landscape") && lower.includes("3:2")) return "3:2 (Photo)";
+  if (lower.includes("classic") || lower.includes("tv") || lower.includes("4:3")) return "4:3 (Standard)";
+  return str;
+}
+function resolveClosestAspectRatio(width, height) {
+  if (!width || !height || width <= 0 || height <= 0) {
+    return "2:3 (Portrait Photo)";
+  }
+  const ratio = width / height;
+  const presets = [
+    { value: "1:1 (Square)", ratio: 1 },
+    { value: "2:3 (Portrait Photo)", ratio: 2 / 3 },
+    { value: "3:2 (Photo)", ratio: 3 / 2 },
+    { value: "3:4 (Portrait Standard)", ratio: 3 / 4 },
+    { value: "4:3 (Standard)", ratio: 4 / 3 },
+    { value: "9:16 (Portrait Widescreen)", ratio: 9 / 16 },
+    { value: "16:9 (Widescreen)", ratio: 16 / 9 },
+    { value: "21:9 (Ultrawide)", ratio: 21 / 9 }
+  ];
+  let bestMatch = "2:3 (Portrait Photo)";
+  let minDiff = Infinity;
+  for (const item of presets) {
+    const diff = Math.abs(Math.log(ratio / item.ratio));
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestMatch = item.value;
+    }
+  }
+  return bestMatch;
+}
+function interpolatePrompt(template, vars) {
+  let result = template;
+  result = result.replace(/\{character\}/gi, vars.characterName || "subject");
+  result = result.replace(/\{lora\}/gi, vars.loraSummary || "");
+  result = result.replace(/\{theme\}/gi, vars.theme || "");
+  if (vars.count !== void 0) {
+    result = result.replace(/\{count\}/gi, String(vars.count));
+  }
+  if (vars.basePrompt !== void 0) {
+    result = result.replace(/\{base_prompt\}/gi, vars.basePrompt);
+  }
+  return result.replace(/,\s*,/g, ",").replace(/\s{2,}/g, " ").replace(/^,\s*|\s*,\s*$/g, "").trim();
+}
+function normalizePortraitCrop(raw) {
+  if (!raw) return null;
+  let parsed = raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const rawX = Number(parsed.x);
+  const rawY = Number(parsed.y);
+  const rawZoom = Number(parsed.zoom);
+  if (!Number.isFinite(rawX) || !Number.isFinite(rawY) || !Number.isFinite(rawZoom)) {
+    return null;
+  }
+  return {
+    x: Math.round(Math.min(100, Math.max(0, rawX)) * 10) / 10,
+    y: Math.round(Math.min(100, Math.max(0, rawY)) * 10) / 10,
+    zoom: Math.round(Math.min(3, Math.max(1, rawZoom)) * 100) / 100
+  };
+}
+var ASPECT_RATIO_PRESETS;
+var init_utils = __esm({
+  "src/shared/utils.ts"() {
+    ASPECT_RATIO_PRESETS = [
+      { value: "1:1 (Square)", shortRatio: "1:1", short: "1:1", label: "Square", boxW: 18, boxH: 18 },
+      { value: "2:3 (Portrait Photo)", shortRatio: "2:3", short: "2:3", label: "Portrait Photo", boxW: 14, boxH: 21 },
+      { value: "3:2 (Photo)", shortRatio: "3:2", short: "3:2", label: "Photo", boxW: 21, boxH: 14 },
+      { value: "3:4 (Portrait Standard)", shortRatio: "3:4", short: "3:4", label: "Portrait Std", boxW: 15, boxH: 20 },
+      { value: "4:3 (Standard)", shortRatio: "4:3", short: "4:3", label: "Standard", boxW: 20, boxH: 15 },
+      { value: "9:16 (Portrait Widescreen)", shortRatio: "9:16", short: "9:16", label: "Vertical Wide", boxW: 12, boxH: 22 },
+      { value: "16:9 (Widescreen)", shortRatio: "16:9", short: "16:9", label: "Widescreen", boxW: 22, boxH: 12 },
+      { value: "21:9 (Ultrawide)", shortRatio: "21:9", short: "21:9", label: "Ultrawide", boxW: 24, boxH: 10 }
+    ];
+  }
+});
+
+// src/server/services/modelDownloadPaths.ts
+import path4 from "path";
+function inferSubfolderAndTypeFromPath(rfilename, repoTags = [], explicitCivitaiType, baseModel) {
+  const lowerPath = rfilename.toLowerCase().replace(/\\/g, "/");
+  const filename = path4.basename(lowerPath);
+  const ext = path4.extname(filename);
+  const tagsLower = repoTags.map((t) => t.toLowerCase());
+  if (explicitCivitaiType) {
+    const cType = explicitCivitaiType.toLowerCase();
+    if (cType === "lora" || cType === "locon" || cType === "dora") {
+      return { suggestedSubfolder: "loras", modelType: "lora" };
+    }
+    if (cType === "vae") {
+      return { suggestedSubfolder: "vae", modelType: "vae" };
+    }
+    if (cType === "controlnet") {
+      return { suggestedSubfolder: "controlnet", modelType: "controlnet" };
+    }
+    if (cType === "upscaler") {
+      return { suggestedSubfolder: "upscale_models", modelType: "upscaler" };
+    }
+    if (cType === "textualinversion" || cType === "embedding") {
+      return { suggestedSubfolder: "embeddings", modelType: "embedding" };
+    }
+    if (cType === "checkpoint") {
+      const bm = (baseModel || "").toLowerCase();
+      const isModernDiT = bm.includes("flux") || bm.includes("wan") || bm.includes("qwen") || bm.includes("chroma") || bm.includes("hidream") || bm.includes("hunyuan") || ext === ".gguf";
+      const looksLikeAio = /aio|all[-_ ]?in[-_ ]?one|checkpoint|ckpt/i.test(filename);
+      if (ext === ".gguf" || isModernDiT && !looksLikeAio) {
+        return {
+          suggestedSubfolder: "diffusion_models",
+          modelType: "diffusion",
+          subfolderHint: "Modern DiT / GGUF base models usually load via UNETLoader (diffusion_models) unless bundled as an All-in-One checkpoint."
+        };
+      }
+      return { suggestedSubfolder: "checkpoints", modelType: "checkpoint" };
+    }
+  }
+  if (lowerPath.includes("text_encoders/") || lowerPath.includes("/clip/") || /(^|[_/-])(clip_l|clip_g|t5xxl|umt5|llava|qwen_2\.5|text_encoder)/i.test(filename)) {
+    return { suggestedSubfolder: "text_encoders", modelType: "clip" };
+  }
+  if (lowerPath.includes("vae/") || /(^|[_/-])(vae|ae\.safetensors|sdxl_vae|flux_vae)/i.test(lowerPath)) {
+    return { suggestedSubfolder: "vae", modelType: "vae" };
+  }
+  if (lowerPath.includes("controlnet/") || lowerPath.includes("control_net") || tagsLower.includes("controlnet") || /controlnet|ip-adapter|ipadapter|t2i-adapter/i.test(lowerPath)) {
+    return { suggestedSubfolder: "controlnet", modelType: "controlnet" };
+  }
+  if (lowerPath.includes("upscale") || /esrgan|ultrasharp|remacri|4x[-_]|2x[-_]|swinir/i.test(lowerPath)) {
+    return { suggestedSubfolder: "upscale_models", modelType: "upscaler" };
+  }
+  if (lowerPath.includes("embeddings/") || lowerPath.includes("textual_inversion")) {
+    return { suggestedSubfolder: "embeddings", modelType: "embedding" };
+  }
+  if (lowerPath.includes("loras/") || lowerPath.includes("/lora/") || tagsLower.includes("lora") || /(^|[_/-])lora([_.-]|$)/i.test(filename)) {
+    return { suggestedSubfolder: "loras", modelType: "lora" };
+  }
+  if (lowerPath.includes("diffusion_models/") || lowerPath.includes("unet/") || ext === ".gguf" || /(^|[_/-])(flux1|wan2|qwen_image|chroma|hidream|z_image|unet)/i.test(filename)) {
+    return { suggestedSubfolder: "diffusion_models", modelType: "diffusion" };
+  }
+  return { suggestedSubfolder: "checkpoints", modelType: "checkpoint" };
+}
+var DOWNLOAD_WEIGHT_EXTS, SUBFOLDER_TO_MODEL_TYPE, MODEL_TYPE_TO_DEFAULT_SUBFOLDER;
+var init_modelDownloadPaths = __esm({
+  "src/server/services/modelDownloadPaths.ts"() {
+    DOWNLOAD_WEIGHT_EXTS = /* @__PURE__ */ new Set([
+      ".safetensors",
+      ".gguf",
+      ".ckpt",
+      ".pt",
+      ".pth",
+      ".bin",
+      ".sft"
+    ]);
+    SUBFOLDER_TO_MODEL_TYPE = {
+      loras: "lora",
+      checkpoints: "checkpoint",
+      diffusion_models: "diffusion",
+      unet: "diffusion",
+      text_encoders: "clip",
+      clip: "clip",
+      vae: "vae",
+      controlnet: "controlnet",
+      upscale_models: "upscaler",
+      embeddings: "embedding"
+    };
+    MODEL_TYPE_TO_DEFAULT_SUBFOLDER = {
+      lora: "loras",
+      checkpoint: "checkpoints",
+      diffusion: "diffusion_models",
+      clip: "text_encoders",
+      vae: "vae",
+      controlnet: "controlnet",
+      upscaler: "upscale_models",
+      embedding: "embeddings",
+      other: "checkpoints"
+    };
+  }
+});
+
+// src/server/services/huggingFaceMetadataService.ts
+import path5 from "path";
+function getHfHeaders() {
+  const headers = {};
+  if (appConfig.hfApiToken) {
+    headers.Authorization = `Bearer ${appConfig.hfApiToken}`;
+  }
+  return headers;
+}
+async function fetchWithTimeout(url, headers, timeoutMs = 7e3) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { headers, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function parseHfRepoId(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) {
+    const match = raw.match(/huggingface\.co\/([^/\s?#]+\/[^/\s?#]+)/i);
+    return match ? match[1].replace(/\.git$/i, "") : null;
+  }
+  const direct = raw.match(/^([^/\s]+\/[^/\s]+)$/);
+  return direct ? direct[1].replace(/\.git$/i, "") : null;
+}
+function stripYamlFrontmatter(markdown) {
+  const trimmed = markdown.replace(/^\uFEFF/, "");
+  const match = trimmed.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/);
+  const body = match ? match[1] : trimmed;
+  return body.replace(/\n{3,}/g, "\n\n").trim().slice(0, 16e3);
+}
+function parseBaseModelFromRepoMeta(repoMeta) {
+  const cardBase = repoMeta?.cardData?.base_model;
+  if (typeof cardBase === "string" && cardBase.trim()) {
+    return cardBase.trim().split("/").pop() || cardBase.trim();
+  }
+  if (Array.isArray(cardBase) && typeof cardBase[0] === "string" && cardBase[0].trim()) {
+    return cardBase[0].trim().split("/").pop() || cardBase[0].trim();
+  }
+  const tags = Array.isArray(repoMeta?.tags) ? repoMeta.tags : [];
+  for (const tag of tags) {
+    if (typeof tag === "string" && tag.startsWith("base_model:")) {
+      const val = tag.slice("base_model:".length).replace(/^(finetune|quantized|lora):/i, "").trim();
+      if (val) return val.split("/").pop() || val;
+    }
+  }
+  return null;
+}
+function isIgnorableBadgeUrl(url) {
+  const lower = url.toLowerCase();
+  return lower.includes("shields.io") || lower.includes("badge") || lower.includes("huggingface.co/datasets/huggingface/badges") || lower.endsWith(".svg");
+}
+function extractPreviewUrlsFromReadmeAndTree(readmeRaw, repoId, treeEntries) {
+  const candidates = [];
+  const seen = /* @__PURE__ */ new Set();
+  const pushCandidate = (url) => {
+    const clean = url.trim();
+    if (!clean || seen.has(clean) || isIgnorableBadgeUrl(clean)) return;
+    seen.add(clean);
+    candidates.push(clean);
+  };
+  const mdRegex = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+  const htmlRegex = /<img[^>]+src=["']([^"']+)["']/gi;
+  for (const regex of [mdRegex, htmlRegex]) {
+    let m;
+    while ((m = regex.exec(readmeRaw)) !== null) {
+      const ref = m[1].trim();
+      if (!ref) continue;
+      if (/^https?:\/\//i.test(ref)) {
+        const ext = path5.extname(ref.split("?")[0]).toLowerCase();
+        if (IMAGE_EXTS.has(ext) || ref.includes("huggingface.co")) {
+          pushCandidate(ref);
+        }
+      } else if (!ref.startsWith("data:")) {
+        const relPath = ref.replace(/^\.\//, "").replace(/^\/+/, "");
+        const ext = path5.extname(relPath.split("?")[0]).toLowerCase();
+        if (IMAGE_EXTS.has(ext)) {
+          const encoded = relPath.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+          pushCandidate(`https://huggingface.co/${repoId}/resolve/main/${encoded}`);
+        }
+      }
+      if (candidates.length >= 4) break;
+    }
+    if (candidates.length >= 4) break;
+  }
+  if (candidates.length < 4 && Array.isArray(treeEntries)) {
+    for (const entry of treeEntries) {
+      if (entry?.type !== "file" || typeof entry?.path !== "string") continue;
+      const ext = path5.extname(entry.path).toLowerCase();
+      if (!IMAGE_EXTS.has(ext)) continue;
+      const encoded = entry.path.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+      pushCandidate(`https://huggingface.co/${repoId}/resolve/main/${encoded}`);
+      if (candidates.length >= 4) break;
+    }
+  }
+  return candidates.slice(0, 4).map((url) => ({ url }));
+}
+function buildSearchQueries(filename, name) {
+  const stem = (filename || name || "").replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, "").trim();
+  if (!stem) return [];
+  const spaced = stem.replace(/[._-]+/g, " ").replace(/\s+/g, " ").trim();
+  const stripped = spaced.replace(/\b(fp8|fp16|bf16|int8|int4|q4|q5|q6|q8|k|s|m|convrot|scaled|pruned|ema|only|rank\d+|v\d+)\b/gi, " ").replace(/\s+/g, " ").trim();
+  const queries = [];
+  if (spaced) queries.push(spaced);
+  if (stripped && stripped.toLowerCase() !== spaced.toLowerCase()) {
+    queries.push(stripped);
+  }
+  const tokens = (stripped || spaced).split(" ").filter((t) => t.length >= 2);
+  if (tokens.length >= 2) {
+    const shortQuery = tokens.slice(0, 2).join(" ");
+    if (!queries.some((q) => q.toLowerCase() === shortQuery.toLowerCase())) {
+      queries.push(shortQuery);
+    }
+  }
+  return queries.slice(0, 2);
+}
+async function resolveHuggingFaceModelDetails(params) {
+  const headers = getHfHeaders();
+  const targetFilenameLower = params.filename.trim().toLowerCase();
+  const targetShaLower = params.sha256 ? params.sha256.trim().toLowerCase() : null;
+  let resolvedRepoId = parseHfRepoId(params.hfRepoId) || parseHfRepoId(params.downloadUrl);
+  let resolvedRepoMeta = null;
+  let resolvedTree = [];
+  let matchedBy = "repo_id";
+  let matchedDownloadUrl = null;
+  const fetchTree = async (repoId) => {
+    try {
+      const res = await fetchWithTimeout(
+        `https://huggingface.co/api/models/${repoId}/tree/main?recursive=true`,
+        headers,
+        7e3
+      );
+      if (res.ok) {
+        const parsed = await res.json();
+        return Array.isArray(parsed) ? parsed : [];
+      }
+    } catch {
+    }
+    return [];
+  };
+  if (resolvedRepoId) {
+    try {
+      const res = await fetchWithTimeout(
+        `https://huggingface.co/api/models/${resolvedRepoId}?blobs=true`,
+        headers,
+        7e3
+      );
+      if (res.ok) {
+        resolvedRepoMeta = await res.json();
+        resolvedTree = await fetchTree(resolvedRepoId);
+        const fileMatch = resolvedTree.find(
+          (e) => e?.type === "file" && typeof e.path === "string" && path5.basename(e.path).toLowerCase() === targetFilenameLower
+        );
+        if (fileMatch?.path) {
+          const encoded = fileMatch.path.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+          matchedDownloadUrl = `https://huggingface.co/${resolvedRepoId}/resolve/main/${encoded}`;
+        }
+      } else {
+        resolvedRepoId = null;
+      }
+    } catch {
+      resolvedRepoId = null;
+    }
+  }
+  if (!resolvedRepoId) {
+    const queries = buildSearchQueries(params.filename, params.name);
+    const inspectedRepos = /* @__PURE__ */ new Set();
+    for (const query of queries) {
+      let repos = [];
+      try {
+        const url = new URL("https://huggingface.co/api/models");
+        url.searchParams.set("search", query);
+        url.searchParams.set("limit", "8");
+        url.searchParams.set("full", "true");
+        const res = await fetchWithTimeout(url.toString(), headers, 7e3);
+        if (!res.ok) continue;
+        repos = await res.json();
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(repos)) continue;
+      for (const repo of repos) {
+        const repoId = String(repo?.id || "").trim();
+        if (!repoId || inspectedRepos.has(repoId.toLowerCase())) continue;
+        inspectedRepos.add(repoId.toLowerCase());
+        const siblings = Array.isArray(repo.siblings) ? repo.siblings : [];
+        const hasFilenameSibling = siblings.some(
+          (s) => typeof s?.rfilename === "string" && path5.basename(s.rfilename).toLowerCase() === targetFilenameLower
+        );
+        if (!hasFilenameSibling && (!targetShaLower || inspectedRepos.size > 3)) {
+          continue;
+        }
+        const tree = await fetchTree(repoId);
+        if (targetShaLower) {
+          const shaHit = tree.find(
+            (e) => e?.type === "file" && typeof e?.lfs?.oid === "string" && e.lfs.oid.toLowerCase() === targetShaLower
+          );
+          if (shaHit) {
+            resolvedRepoId = repoId;
+            resolvedRepoMeta = repo;
+            resolvedTree = tree;
+            matchedBy = "sha256";
+            const encoded = shaHit.path.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+            matchedDownloadUrl = `https://huggingface.co/${repoId}/resolve/main/${encoded}`;
+            break;
+          }
+        }
+        if (hasFilenameSibling && !resolvedRepoId) {
+          const fileEntry = tree.find(
+            (e) => e?.type === "file" && typeof e.path === "string" && path5.basename(e.path).toLowerCase() === targetFilenameLower
+          );
+          const siblingEntry = siblings.find(
+            (s) => typeof s?.rfilename === "string" && path5.basename(s.rfilename).toLowerCase() === targetFilenameLower
+          );
+          const relPath = String(fileEntry?.path || siblingEntry?.rfilename || "");
+          const encoded = relPath.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+          resolvedRepoId = repoId;
+          resolvedRepoMeta = repo;
+          resolvedTree = tree;
+          matchedBy = "filename";
+          matchedDownloadUrl = relPath ? `https://huggingface.co/${repoId}/resolve/main/${encoded}` : null;
+          break;
+        }
+      }
+      if (resolvedRepoId) break;
+    }
+  }
+  if (!resolvedRepoId) return null;
+  let readmeRaw = "";
+  try {
+    const readmeRes = await fetchWithTimeout(
+      `https://huggingface.co/${resolvedRepoId}/raw/main/README.md`,
+      headers,
+      6500
+    );
+    if (readmeRes.ok) {
+      readmeRaw = await readmeRes.text();
+    }
+  } catch {
+  }
+  const description = readmeRaw ? stripYamlFrontmatter(readmeRaw) || null : null;
+  const previewImages = extractPreviewUrlsFromReadmeAndTree(
+    readmeRaw,
+    resolvedRepoId,
+    resolvedTree
+  );
+  const baseModel = parseBaseModelFromRepoMeta(resolvedRepoMeta);
+  return {
+    hfRepoId: resolvedRepoId,
+    hfUrl: `https://huggingface.co/${resolvedRepoId}`,
+    downloadUrl: matchedDownloadUrl,
+    baseModel,
+    description,
+    previewImages,
+    matchedBy
+  };
+}
+function parseHuggingFaceRepoAndFile(input) {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  try {
+    if (/^https?:\/\/(www\.)?huggingface\.co\//i.test(trimmed)) {
+      const url = new URL(trimmed);
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (parts.length < 2) return null;
+      const repoId = `${parts[0]}/${parts[1]}`;
+      if (parts.length >= 4 && (parts[2] === "blob" || parts[2] === "resolve" || parts[2] === "tree")) {
+        const branch = parts[3] || "main";
+        const filePath = parts.length > 4 ? decodeURIComponent(parts.slice(4).join("/")) : null;
+        return { repoId, branch, filePath };
+      }
+      return { repoId, branch: "main", filePath: null };
+    }
+  } catch {
+    return null;
+  }
+  if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(trimmed)) {
+    return { repoId: trimmed, branch: "main", filePath: null };
+  }
+  return null;
+}
+async function listHuggingFaceRepoFiles(repoIdInput, branch = "main") {
+  const parsed = parseHuggingFaceRepoAndFile(repoIdInput);
+  const repoId = parsed ? parsed.repoId : repoIdInput.trim();
+  const targetBranch = parsed?.branch || branch || "main";
+  const headers = getHfHeaders();
+  const metaRes = await fetch(`https://huggingface.co/api/models/${repoId}`, { headers });
+  if (!metaRes.ok) {
+    throw new Error(`Hugging Face repository "${repoId}" not found (HTTP ${metaRes.status})`);
+  }
+  const repoMeta = await metaRes.json();
+  const tags = Array.isArray(repoMeta.tags) ? repoMeta.tags : [];
+  let treeEntries = [];
+  try {
+    const treeRes = await fetch(
+      `https://huggingface.co/api/models/${repoId}/tree/${encodeURIComponent(targetBranch)}?recursive=true`,
+      { headers }
+    );
+    if (treeRes.ok) {
+      treeEntries = await treeRes.json();
+    }
+  } catch {
+  }
+  const files = [];
+  if (treeEntries.length > 0) {
+    for (const entry of treeEntries) {
+      if (entry.type !== "file" || !entry.path) continue;
+      const rfilename = String(entry.path);
+      const ext = path5.extname(rfilename).toLowerCase();
+      if (!DOWNLOAD_WEIGHT_EXTS.has(ext)) continue;
+      const inferred = inferSubfolderAndTypeFromPath(rfilename, tags);
+      const encodedPath = rfilename.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+      files.push({
+        rfilename,
+        filename: path5.basename(rfilename),
+        fileSize: typeof entry.size === "number" ? entry.size : entry.lfs?.size ?? null,
+        sha256Hash: entry.lfs?.oid ? String(entry.lfs.oid).toUpperCase() : null,
+        downloadUrl: `https://huggingface.co/${repoId}/resolve/${encodeURIComponent(targetBranch)}/${encodedPath}`,
+        modelType: inferred.modelType,
+        suggestedSubfolder: inferred.suggestedSubfolder
+      });
+    }
+  } else {
+    const siblings = Array.isArray(repoMeta.siblings) ? repoMeta.siblings : [];
+    for (const s of siblings) {
+      const rfilename = String(s.rfilename || "");
+      const ext = path5.extname(rfilename).toLowerCase();
+      if (!DOWNLOAD_WEIGHT_EXTS.has(ext)) continue;
+      const inferred = inferSubfolderAndTypeFromPath(rfilename, tags);
+      const encodedPath = rfilename.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+      files.push({
+        rfilename,
+        filename: path5.basename(rfilename),
+        fileSize: typeof s.size === "number" ? s.size : s.lfs?.size ?? null,
+        sha256Hash: s.lfs?.oid ? String(s.lfs.oid).toUpperCase() : null,
+        downloadUrl: `https://huggingface.co/${repoId}/resolve/${encodeURIComponent(targetBranch)}/${encodedPath}`,
+        modelType: inferred.modelType,
+        suggestedSubfolder: inferred.suggestedSubfolder
+      });
+    }
+  }
+  return {
+    repoId,
+    tags,
+    downloads: Number(repoMeta.downloads || 0),
+    files
+  };
+}
+var IMAGE_EXTS;
+var init_huggingFaceMetadataService = __esm({
+  "src/server/services/huggingFaceMetadataService.ts"() {
+    init_config();
+    init_modelDownloadPaths();
+    IMAGE_EXTS = /* @__PURE__ */ new Set([".png", ".jpg", ".jpeg", ".webp"]);
+  }
+});
+
+// src/server/services/loraClassifierService.ts
+import fs6 from "fs";
+function normalizeIdentifierText(raw) {
+  if (!raw) return "";
+  return raw.replace(/\.(safetensors|ckpt|pt|pth|bin|sft|gguf)$/i, "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_/\\.-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function stripHtmlTags(raw) {
+  if (!raw) return "";
+  return raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+function classifyLoraFromMetadata(input) {
+  const scores = {
+    clothing: 0,
+    pose: 0,
+    style: 0,
+    character: 0,
+    object: 0,
+    concept: 0
+  };
+  const rawTags = Array.isArray(input.tags) ? input.tags : [];
+  for (const rawTag of rawTags) {
+    const tag = String(rawTag || "").trim().toLowerCase();
+    if (!tag) continue;
+    const direct = TAG_CATEGORY_SCORES[tag];
+    if (direct) {
+      scores[direct.category] += direct.weight;
+      continue;
+    }
+    if (/\b(outfit|clothing|clothes|costume|dress|uniform|lingerie|swimsuit)\b/i.test(tag)) {
+      scores.clothing += 9;
+    } else if (/\b(pose|poses|expression|expressions|action)\b/i.test(tag)) {
+      scores.pose += 9;
+    } else if (/\b(style|artstyle|aesthetic)\b/i.test(tag)) {
+      scores.style += 9;
+    } else if (/\b(character|celebrity|vtuber|person)\b/i.test(tag)) {
+      scores.character += 8;
+    } else if (/\b(weapon|vehicle|prop|object|furniture)\b/i.test(tag)) {
+      scores.object += 8;
+    } else if (/\b(concept|background|scenery|lighting|detailer|slider|effect)\b/i.test(tag)) {
+      scores.concept += 8;
+    }
+  }
+  const titleText = `${normalizeIdentifierText(input.name)} ${normalizeIdentifierText(input.filename)}`.trim();
+  if (titleText) {
+    for (const rule of TITLE_PATTERNS) {
+      if (rule.regex.test(titleText)) {
+        scores[rule.category] += rule.weight;
+      }
+    }
+  }
+  const cleanDesc = stripHtmlTags(input.description).slice(0, 1200);
+  if (cleanDesc) {
+    for (const rule of DESCRIPTION_PATTERNS) {
+      if (rule.regex.test(cleanDesc)) {
+        scores[rule.category] += rule.weight;
+      }
+    }
+  }
+  const triggerText = Array.isArray(input.trainedWords) ? input.trainedWords.map((w) => String(w || "").trim()).filter(Boolean).join(", ") : "";
+  if (triggerText) {
+    if (/\b(outfit|dress|costume|uniform|bikini|swimsuit|armor)\b/i.test(triggerText)) {
+      scores.clothing += 4;
+    }
+    if (/\b(pose|sitting|kneeling|standing|lying|expression)\b/i.test(triggerText)) {
+      scores.pose += 4;
+    }
+    if (/\b(style|artstyle|watercolor|lineart|pixel\s*art)\b/i.test(triggerText)) {
+      scores.style += 4;
+    }
+  }
+  let bestCategory = null;
+  let bestScore = 3;
+  for (const cat of CATEGORIES) {
+    if (scores[cat] > bestScore) {
+      bestScore = scores[cat];
+      bestCategory = cat;
+    }
+  }
+  return bestCategory ?? "unclassified";
+}
+function classifySafetensorsHeaderOnDisk(filePath, fallbackMeta = {}) {
+  try {
+    if (!filePath || !filePath.toLowerCase().endsWith(".safetensors")) {
+      return classifyLoraFromMetadata(fallbackMeta);
+    }
+    if (!fs6.existsSync(filePath)) {
+      return classifyLoraFromMetadata(fallbackMeta);
+    }
+    const fd = fs6.openSync(filePath, "r");
+    try {
+      const lenBuf = Buffer.alloc(8);
+      const readLen = fs6.readSync(fd, lenBuf, 0, 8, 0);
+      if (readLen < 8) return classifyLoraFromMetadata(fallbackMeta);
+      const headerLenBig = lenBuf.readBigUInt64LE(0);
+      if (headerLenBig <= 2n || headerLenBig > 4n * 1024n * 1024n) {
+        return classifyLoraFromMetadata(fallbackMeta);
+      }
+      const headerLen = Number(headerLenBig);
+      const headerBuf = Buffer.alloc(headerLen);
+      const bytesRead = fs6.readSync(fd, headerBuf, 0, headerLen, 8);
+      if (bytesRead < headerLen) return classifyLoraFromMetadata(fallbackMeta);
+      const parsed = JSON.parse(headerBuf.toString("utf8"));
+      const meta = parsed?.__metadata__;
+      if (!meta || typeof meta !== "object") {
+        return classifyLoraFromMetadata(fallbackMeta);
+      }
+      const headerTags = Array.isArray(fallbackMeta.tags) ? [...fallbackMeta.tags] : [];
+      if (typeof meta.ss_tag_frequency === "string") {
+        try {
+          const freqObj = JSON.parse(meta.ss_tag_frequency);
+          const tagCounts = [];
+          for (const bucket of Object.values(freqObj || {})) {
+            if (!bucket || typeof bucket !== "object") continue;
+            for (const [k, v] of Object.entries(bucket)) {
+              if (typeof v === "number") tagCounts.push([k.trim().toLowerCase(), v]);
+            }
+          }
+          tagCounts.sort((a, b) => b[1] - a[1]);
+          for (const [t] of tagCounts.slice(0, 12)) {
+            if (t) headerTags.push(t);
+          }
+        } catch {
+        }
+      }
+      const combinedName = [
+        fallbackMeta.name,
+        meta["modelspec.title"],
+        meta.ss_output_name
+      ].filter(Boolean).join(" ");
+      const combinedDesc = [
+        fallbackMeta.description,
+        meta["modelspec.description"],
+        meta.ss_training_comment
+      ].filter(Boolean).join(" ");
+      return classifyLoraFromMetadata({
+        name: combinedName || fallbackMeta.name,
+        filename: fallbackMeta.filename,
+        tags: headerTags,
+        trainedWords: fallbackMeta.trainedWords,
+        description: combinedDesc,
+        baseModel: fallbackMeta.baseModel || meta["modelspec.architecture"] || null
+      });
+    } finally {
+      fs6.closeSync(fd);
+    }
+  } catch {
+    return classifyLoraFromMetadata(fallbackMeta);
+  }
+}
+var CATEGORIES, TAG_CATEGORY_SCORES, TITLE_PATTERNS, DESCRIPTION_PATTERNS;
+var init_loraClassifierService = __esm({
+  "src/server/services/loraClassifierService.ts"() {
+    CATEGORIES = [
+      "clothing",
+      "pose",
+      "style",
+      "character",
+      "object",
+      "concept"
+    ];
+    TAG_CATEGORY_SCORES = {
+      // Clothing / Outfit (+12 so character-specific outfits resolve to clothing)
+      clothing: { category: "clothing", weight: 12 },
+      clothes: { category: "clothing", weight: 12 },
+      outfit: { category: "clothing", weight: 12 },
+      outfits: { category: "clothing", weight: 12 },
+      costume: { category: "clothing", weight: 12 },
+      costumes: { category: "clothing", weight: 12 },
+      fashion: { category: "clothing", weight: 11 },
+      apparel: { category: "clothing", weight: 11 },
+      attire: { category: "clothing", weight: 11 },
+      dress: { category: "clothing", weight: 10 },
+      lingerie: { category: "clothing", weight: 11 },
+      swimsuit: { category: "clothing", weight: 11 },
+      bikini: { category: "clothing", weight: 11 },
+      armor: { category: "clothing", weight: 10 },
+      armour: { category: "clothing", weight: 10 },
+      uniform: { category: "clothing", weight: 10 },
+      bodysuit: { category: "clothing", weight: 10 },
+      footwear: { category: "clothing", weight: 10 },
+      shoes: { category: "clothing", weight: 9 },
+      accessories: { category: "clothing", weight: 9 },
+      // Pose / Expression (+12)
+      pose: { category: "pose", weight: 12 },
+      poses: { category: "pose", weight: 12 },
+      action: { category: "pose", weight: 11 },
+      actions: { category: "pose", weight: 11 },
+      expression: { category: "pose", weight: 11 },
+      expressions: { category: "pose", weight: 11 },
+      "facial expression": { category: "pose", weight: 11 },
+      "facial expressions": { category: "pose", weight: 11 },
+      gesture: { category: "pose", weight: 10 },
+      gestures: { category: "pose", weight: 10 },
+      posture: { category: "pose", weight: 10 },
+      perspective: { category: "pose", weight: 9 },
+      "camera angle": { category: "pose", weight: 9 },
+      // Style / Aesthetic (+11)
+      style: { category: "style", weight: 11 },
+      styles: { category: "style", weight: 11 },
+      artstyle: { category: "style", weight: 11 },
+      "art style": { category: "style", weight: 11 },
+      "illustration style": { category: "style", weight: 11 },
+      "anime style": { category: "style", weight: 11 },
+      aesthetic: { category: "style", weight: 10 },
+      watercolor: { category: "style", weight: 10 },
+      "oil painting": { category: "style", weight: 10 },
+      "pixel art": { category: "style", weight: 10 },
+      lineart: { category: "style", weight: 10 },
+      "cel shading": { category: "style", weight: 10 },
+      photorealistic: { category: "style", weight: 8 },
+      sketch: { category: "style", weight: 8 },
+      comic: { category: "style", weight: 7 },
+      manga: { category: "style", weight: 7 },
+      // Character / Person (+9)
+      character: { category: "character", weight: 9 },
+      characters: { category: "character", weight: 9 },
+      celebrity: { category: "character", weight: 10 },
+      celebrities: { category: "character", weight: 10 },
+      person: { category: "character", weight: 9 },
+      people: { category: "character", weight: 8 },
+      "real person": { category: "character", weight: 10 },
+      "anime character": { category: "character", weight: 10 },
+      "game character": { category: "character", weight: 10 },
+      vtuber: { category: "character", weight: 10 },
+      "original character": { category: "character", weight: 10 },
+      oc: { category: "character", weight: 8 },
+      // Object / Prop (+10)
+      object: { category: "object", weight: 10 },
+      objects: { category: "object", weight: 10 },
+      prop: { category: "object", weight: 10 },
+      props: { category: "object", weight: 10 },
+      weapon: { category: "object", weight: 10 },
+      weapons: { category: "object", weight: 10 },
+      vehicle: { category: "object", weight: 10 },
+      vehicles: { category: "object", weight: 10 },
+      car: { category: "object", weight: 9 },
+      cars: { category: "object", weight: 9 },
+      motorcycle: { category: "object", weight: 9 },
+      furniture: { category: "object", weight: 9 },
+      food: { category: "object", weight: 9 },
+      item: { category: "object", weight: 8 },
+      sword: { category: "object", weight: 9 },
+      gun: { category: "object", weight: 9 },
+      // Concept / Environment / Effect / Helper (+10)
+      concept: { category: "concept", weight: 10 },
+      concepts: { category: "concept", weight: 10 },
+      background: { category: "concept", weight: 10 },
+      backgrounds: { category: "concept", weight: 10 },
+      environment: { category: "concept", weight: 10 },
+      environments: { category: "concept", weight: 10 },
+      scenery: { category: "concept", weight: 10 },
+      landscape: { category: "concept", weight: 9 },
+      lighting: { category: "concept", weight: 10 },
+      effect: { category: "concept", weight: 10 },
+      effects: { category: "concept", weight: 10 },
+      vfx: { category: "concept", weight: 10 },
+      anatomy: { category: "concept", weight: 9 },
+      helper: { category: "concept", weight: 9 },
+      detailer: { category: "concept", weight: 10 },
+      slider: { category: "concept", weight: 10 }
+    };
+    TITLE_PATTERNS = [
+      {
+        category: "clothing",
+        regex: /\b(outfit|clothing|clothes|costume|dress|gown|lingerie|bikini|swimsuit|uniform|armor|armour|jacket|hoodie|kimono|bodysuit|stockings|heels|boots|sneakers|apparel|attire|fashion|maid\s*outfit|school\s*uniform)\b/i,
+        weight: 6
+      },
+      {
+        category: "pose",
+        regex: /\b(pose|poses|expression|expressions|sitting|kneeling|lying|action|pov|hand\s*pose|camera\s*angle|standing\s*pose|fighting\s*pose)\b/i,
+        weight: 6
+      },
+      {
+        category: "style",
+        regex: /\b(style|artstyle|aesthetic|watercolor|oil\s*painting|pixel\s*art|lineart|cel\s*shad(?:ed|ing)|gouache|impasto|sketch\s*style|anime\s*style|retro\s*style|vintage\s*style|comic\s*style)\b/i,
+        weight: 6
+      },
+      {
+        category: "object",
+        regex: /\b(weapon|weapons|sword|katana|gun|rifle|pistol|vehicle|car|motorcycle|spaceship|furniture|chair|table|food|cake|potion|bottle|prop|props)\b/i,
+        weight: 6
+      },
+      {
+        category: "concept",
+        regex: /\b(concept|slider|detailer|helper|anatomy|background|scenery|landscape|environment|lighting|bokeh|vfx|effect|effects|magic\s*effect)\b/i,
+        weight: 6
+      },
+      {
+        category: "character",
+        regex: /\b(character|celebrity|likeness|vtuber|waifu|persona)\b/i,
+        weight: 5
+      }
+    ];
+    DESCRIPTION_PATTERNS = [
+      {
+        category: "clothing",
+        regex: /\b(outfit\s+lora|clothing\s+lora|costume\s+lora|dress\s+lora|trained\s+on\s+(?:the\s+)?(?:outfit|dress|costume|uniform))\b/i,
+        weight: 6
+      },
+      {
+        category: "pose",
+        regex: /\b(pose\s+lora|expression\s+lora|action\s+lora|triggers\s+(?:the|this)\s+pose)\b/i,
+        weight: 6
+      },
+      {
+        category: "style",
+        regex: /\b(style\s+lora|art\s*style\s+lora|in\s+the\s+style\s+of|mimics\s+the\s+style|illustration\s+style)\b/i,
+        weight: 6
+      },
+      {
+        category: "character",
+        regex: /\b(character\s+lora|lora\s+(?:of|for)\s+(?:the\s+)?character|celebrity\s+lora|likeness\s+of|original\s+character|vtuber)\b/i,
+        weight: 6
+      },
+      {
+        category: "object",
+        regex: /\b(object\s+lora|weapon\s+lora|prop\s+lora|vehicle\s+lora)\b/i,
+        weight: 6
+      },
+      {
+        category: "concept",
+        regex: /\b(concept\s+lora|background\s+lora|lighting\s+lora|detail\s+slider|lora\s+slider|detail\s+enhancer)\b/i,
+        weight: 6
+      }
+    ];
+  }
+});
+
+// src/server/services/civitai/civitaiHttpAndParse.ts
+import path6 from "path";
+function parsePreviewImagesJson(rawJson, modelId) {
+  if (!rawJson || !modelId) return [];
+  try {
+    const parsed = JSON.parse(rawJson);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((p) => p && typeof p.filename === "string" && p.filename.trim()).map((p) => ({
+      filename: p.filename,
+      url: `/api/models/${modelId}/preview/${encodeURIComponent(p.filename)}`,
+      width: typeof p.width === "number" ? p.width : null,
+      height: typeof p.height === "number" ? p.height : null,
+      sourceUrl: typeof p.sourceUrl === "string" ? p.sourceUrl : null
+    }));
+  } catch {
+    return [];
+  }
+}
+function getCivitaiHeaders() {
+  const headers = { "Content-Type": "application/json" };
+  if (appConfig.civitaiApiKey) {
+    headers.Authorization = `Bearer ${appConfig.civitaiApiKey}`;
+  }
+  return headers;
+}
+function buildCivitaiUrl(modelId, versionId, domain = "civitai.com") {
+  const mId = modelId ? String(modelId).trim() : "";
+  const vId = versionId ? String(versionId).trim() : "";
+  if (!mId) return null;
+  const host = domain === "civitai.red" ? "civitai.red" : "civitai.com";
+  return vId ? `https://${host}/models/${encodeURIComponent(mId)}?modelVersionId=${encodeURIComponent(vId)}` : `https://${host}/models/${encodeURIComponent(mId)}`;
+}
+function parseIdsFromCivitaiUrl(urlStr) {
+  if (!urlStr || !String(urlStr).trim()) {
+    return { modelId: null, versionId: null, domain: null };
+  }
+  try {
+    const u = new URL(String(urlStr).trim());
+    const host = u.hostname.toLowerCase();
+    const domain = host.endsWith("civitai.red") ? "civitai.red" : host.endsWith("civitai.com") ? "civitai.com" : null;
+    const dlMatch = u.pathname.match(/\/api\/download\/models\/(\d+)/i);
+    const mMatch = dlMatch ? null : u.pathname.match(/^\/models\/(\d+)/i);
+    const verParam = u.searchParams.get("modelVersionId");
+    return {
+      modelId: mMatch ? mMatch[1] : null,
+      versionId: verParam || (dlMatch ? dlMatch[1] : null),
+      domain
+    };
+  } catch {
+    return { modelId: null, versionId: null, domain: null };
+  }
+}
+function parseCivitaiShareUrl(rawUrl) {
+  const trimmed = String(rawUrl || "").trim();
+  if (!trimmed) return null;
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (!/^(www\.)?civitai\.(com|red)$/.test(host)) return null;
+  const match = parsed.pathname.match(/^\/(images|posts)\/(\d+)(?:\/|$)/i);
+  if (!match) return null;
+  const id = Number(match[2]);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  return {
+    kind: match[1].toLowerCase() === "posts" ? "post" : "image",
+    id,
+    domain: host.endsWith("civitai.red") ? "civitai.red" : "civitai.com",
+    cleanUrl: parsed.toString()
+  };
+}
+function isLoraResourceType(rawType) {
+  const t = String(rawType || "").trim().toLowerCase();
+  return t === "lora" || t === "locon" || t === "dora" || t === "lycoris";
+}
+function isBaseModelResourceType(rawType) {
+  const t = String(rawType || "").trim().toLowerCase();
+  return t === "checkpoint" || t === "model" || t === "diffusion";
+}
+function isKrea2BaseModel(rawBaseModel) {
+  const clean = String(rawBaseModel || "").trim().toLowerCase();
+  if (!clean || clean === "other") return false;
+  if (clean.includes("flux")) return false;
+  return clean === "krea" || /\bkrea\s*2\b/i.test(clean) || /^krea\b/i.test(clean);
+}
+function resolveCivitaiDomain(modelObj, versionObj, preferredDomain) {
+  if (preferredDomain === "civitai.red") return "civitai.red";
+  if (Boolean(modelObj?.nsfw) || Boolean(versionObj?.model?.nsfw) || Boolean(versionObj?.nsfw) || Boolean(modelObj?.poi) || Boolean(versionObj?.model?.poi)) {
+    return "civitai.red";
+  }
+  const maxNsfwLevel = Math.max(
+    Number(modelObj?.nsfwLevel || 0),
+    Number(versionObj?.model?.nsfwLevel || 0),
+    Number(versionObj?.nsfwLevel || 0)
+  );
+  if (maxNsfwLevel >= 4) {
+    return "civitai.red";
+  }
+  const images = Array.isArray(versionObj?.images) ? versionObj.images : [];
+  const hasRestrictedPreview = images.some((img) => {
+    if (!img) return false;
+    if (typeof img.nsfwLevel === "number" && img.nsfwLevel >= 4) return true;
+    if (img.nsfw === true) return true;
+    if (typeof img.nsfw === "string" && !["none", "false", ""].includes(img.nsfw.toLowerCase())) {
+      return true;
+    }
+    return false;
+  });
+  if (hasRestrictedPreview) {
+    return "civitai.red";
+  }
+  return "civitai.com";
+}
+function rewriteCivitaiDownloadUrl(downloadUrl, domain) {
+  const raw = String(downloadUrl || "").trim();
+  if (!raw) return "";
+  return raw.replace(/^https?:\/\/(www\.)?civitai\.(com|red)\//i, `https://${domain}/`);
+}
+function resolveDefaultCivitaiTtlMs(cleanPath) {
+  if (cleanPath.startsWith("/api/v1/models?") || cleanPath.startsWith("/api/v1/images?tag=")) {
+    return CIVITAI_SEARCH_TTL_MS;
+  }
+  return CIVITAI_DETAIL_TTL_MS;
+}
+function getCachedCivitaiJson(key) {
+  const entry = civitaiJsonCache.get(key);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    civitaiJsonCache.delete(key);
+    return null;
+  }
+  civitaiJsonCache.delete(key);
+  civitaiJsonCache.set(key, entry);
+  return entry.value;
+}
+function setCachedCivitaiJson(key, value, ttlMs) {
+  if (ttlMs <= 0) return;
+  if (civitaiJsonCache.has(key)) {
+    civitaiJsonCache.delete(key);
+  } else if (civitaiJsonCache.size >= CIVITAI_CACHE_MAX_ENTRIES) {
+    const oldestKey = civitaiJsonCache.keys().next().value;
+    if (oldestKey !== void 0) {
+      civitaiJsonCache.delete(oldestKey);
+    }
+  }
+  civitaiJsonCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+}
+async function fetchCivitaiJsonWithFallback(apiPath, headers = getCivitaiHeaders(), preferredDomain = "civitai.com", timeoutMs = 8e3, options) {
+  const cleanPath = apiPath.startsWith("/") ? apiPath : `/${apiPath}`;
+  const authTag = headers?.Authorization ? "auth" : "anon";
+  const cacheKey = `${authTag}:${preferredDomain}:${cleanPath}`;
+  const bypassCache = Boolean(options?.bypassCache);
+  const ttlMs = options?.ttlMs ?? resolveDefaultCivitaiTtlMs(cleanPath);
+  if (!bypassCache) {
+    const cached = getCachedCivitaiJson(cacheKey);
+    if (cached) return cached;
+    const pending = civitaiJsonInFlight.get(cacheKey);
+    if (pending) return pending;
+  }
+  const runFetch = async () => {
+    const domains = preferredDomain === "civitai.red" ? ["civitai.red", "civitai.com"] : ["civitai.com", "civitai.red"];
+    for (const domain of domains) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        const res = await fetch(`https://${domain}${cleanPath}`, {
+          headers,
+          signal: controller.signal
+        });
+        clearTimeout(timer);
+        if (res.ok) {
+          const data = await res.json();
+          const result = { data, domain };
+          if (!bypassCache) {
+            setCachedCivitaiJson(cacheKey, result, ttlMs);
+          }
+          return result;
+        }
+      } catch {
+      }
+    }
+    return null;
+  };
+  if (bypassCache) {
+    return runFetch();
+  }
+  const promise = runFetch().finally(() => {
+    civitaiJsonInFlight.delete(cacheKey);
+  });
+  civitaiJsonInFlight.set(cacheKey, promise);
+  return promise;
+}
+async function fetchCivitaiParentModelWithDomain(modelId, headers = getCivitaiHeaders(), preferredDomain = "civitai.com", options) {
+  const cleanId = encodeURIComponent(String(modelId));
+  const result = await fetchCivitaiJsonWithFallback(
+    `/api/v1/models/${cleanId}`,
+    headers,
+    preferredDomain,
+    8e3,
+    options
+  );
+  if (result) {
+    const resolvedDomain = resolveCivitaiDomain(result.data, null, result.domain);
+    return { model: result.data, domain: resolvedDomain };
+  }
+  return { model: null, domain: "civitai.red" };
+}
+async function probeCivitaiWebDomain(modelId, currentDomain, options) {
+  if (currentDomain === "civitai.red" || !modelId) return currentDomain;
+  const cacheKey = String(modelId).trim();
+  if (!cacheKey) return currentDomain;
+  if (!options?.bypassCache) {
+    const cached = civitaiDomainProbeCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.domain;
+    }
+    const pending = civitaiDomainProbeInFlight.get(cacheKey);
+    if (pending) return pending;
+  }
+  const runProbe = async () => {
+    let resolved = currentDomain;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3500);
+      const res = await fetch(`https://civitai.com/models/${encodeURIComponent(cacheKey)}`, {
+        method: "HEAD",
+        redirect: "manual",
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (res.status === 404 || res.status === 451 || res.status === 403) {
+        resolved = "civitai.red";
+      }
+      if (civitaiDomainProbeCache.size >= CIVITAI_PROBE_MAX_ENTRIES) {
+        const oldestKey = civitaiDomainProbeCache.keys().next().value;
+        if (oldestKey !== void 0) civitaiDomainProbeCache.delete(oldestKey);
+      }
+      civitaiDomainProbeCache.set(cacheKey, {
+        domain: resolved,
+        expiresAt: Date.now() + CIVITAI_PROBE_TTL_MS
+      });
+    } catch {
+    }
+    return resolved;
+  };
+  if (options?.bypassCache) {
+    return runProbe();
+  }
+  const promise = runProbe().finally(() => {
+    civitaiDomainProbeInFlight.delete(cacheKey);
+  });
+  civitaiDomainProbeInFlight.set(cacheKey, promise);
+  return promise;
+}
+function extractCivitaiEarlyAccessInfo(versionObj) {
+  const candidateDates = [
+    versionObj?.earlyAccessEndsAt,
+    versionObj?.earlyAccessDeadline,
+    versionObj?.paidAccess?.endsAt
+  ];
+  let earlyAccessEndsAt = null;
+  let endsAtMs = NaN;
+  for (const rawEnds of candidateDates) {
+    if (typeof rawEnds === "string" && rawEnds.trim()) {
+      const parsed = Date.parse(rawEnds.trim());
+      if (Number.isFinite(parsed)) {
+        endsAtMs = parsed;
+        earlyAccessEndsAt = new Date(parsed).toISOString();
+        break;
+      }
+    }
+  }
+  const availability = typeof versionObj?.availability === "string" && versionObj.availability.trim() ? versionObj.availability.trim() : null;
+  const rawConfig = versionObj?.earlyAccessConfig;
+  const rawPaid = versionObj?.paidAccess;
+  const downloadPrice = typeof rawConfig?.downloadPrice === "number" ? rawConfig.downloadPrice : typeof rawPaid?.price === "number" ? rawPaid.price : typeof rawPaid?.downloadPrice === "number" ? rawPaid.downloadPrice : null;
+  const timeframe = typeof rawConfig?.timeframe === "number" ? rawConfig.timeframe : typeof versionObj?.earlyAccessTimeFrame === "number" ? versionObj.earlyAccessTimeFrame : null;
+  const earlyAccessConfig = downloadPrice !== null || timeframe !== null ? { downloadPrice, timeframe } : null;
+  const isFutureEnd = Number.isFinite(endsAtMs) && endsAtMs > Date.now();
+  const isEarlyAccessActive = isFutureEnd || availability === "EarlyAccess";
+  return {
+    earlyAccessEndsAt,
+    isEarlyAccessActive,
+    availability,
+    earlyAccessConfig
+  };
+}
+function decodeHtmlEntities(input) {
+  const named = {
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#39;": "'",
+    "&apos;": "'",
+    "&nbsp;": " ",
+    "&ndash;": "\u2013",
+    "&mdash;": "\u2014"
+  };
+  return input.replace(/&(amp|lt|gt|quot|#39|apos|nbsp|ndash|mdash);/gi, (m) => named[m.toLowerCase()] ?? m).replace(/&#(\d+);/g, (_m, dec) => {
+    const code = Number(dec);
+    return Number.isFinite(code) && code > 0 ? String.fromCharCode(code) : "";
+  }).replace(/&#x([0-9a-f]+);/gi, (_m, hex) => {
+    const code = parseInt(hex, 16);
+    return Number.isFinite(code) && code > 0 ? String.fromCharCode(code) : "";
+  });
+}
+function formatCivitaiHtmlDescription(rawHtml) {
+  if (!rawHtml || !String(rawHtml).trim()) return null;
+  let text = String(rawHtml);
+  text = text.replace(/<script[\s\S]*?<\/script>/gi, "");
+  text = text.replace(/<style[\s\S]*?<\/style>/gi, "");
+  text = text.replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_m, href, inner) => {
+    const label = inner.replace(/<[^>]+>/g, "").trim();
+    const cleanHref = String(href || "").trim();
+    if (!cleanHref.startsWith("http")) return label;
+    if (!label || label === cleanHref) return cleanHref;
+    return `${label} (${cleanHref})`;
+  });
+  text = text.replace(/<li\b[^>]*>/gi, "\n\u2022 ");
+  text = text.replace(/<br\s*\/?>/gi, "\n");
+  text = text.replace(/<\/(p|div|h[1-6]|li|tr|blockquote|pre|ul|ol)>/gi, "\n\n");
+  text = text.replace(/<[^>]+>/g, "");
+  text = decodeHtmlEntities(text);
+  text = text.split("\n").map((line) => line.replace(/[ \t]+/g, " ").trim()).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return text || null;
+}
+function isStaticImageUrl(url, type) {
+  if (type && String(type).toLowerCase() === "video") return false;
+  const clean = url.split("?")[0].toLowerCase();
+  return !/\.(mp4|webm|mov|avi|mkv)$/.test(clean);
+}
+function extractStaticPreviewImages(versionObj, limit = 4) {
+  const imgs = Array.isArray(versionObj?.images) ? versionObj.images : [];
+  const out = [];
+  for (const img of imgs) {
+    if (!img || typeof img.url !== "string" || !img.url.trim()) continue;
+    if (!isStaticImageUrl(img.url, img.type)) continue;
+    out.push({
+      url: img.url.trim(),
+      width: typeof img.width === "number" ? img.width : null,
+      height: typeof img.height === "number" ? img.height : null
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+function clampRecommendedWeight(n) {
+  if (!Number.isFinite(n) || n < -10 || n > 10) return null;
+  return Number(n.toFixed(2));
+}
+function extractRecommendedWeight(versionObj, descriptionText, modelNameOrFile) {
+  const imgs = Array.isArray(versionObj?.images) ? versionObj.images : [];
+  const versionIdNum = versionObj?.id ? Number(versionObj.id) : null;
+  for (const img of imgs) {
+    const resources = img?.meta?.civitaiResources;
+    if (Array.isArray(resources)) {
+      for (const r of resources) {
+        if (versionIdNum && Number(r?.modelVersionId) === versionIdNum && typeof r?.weight === "number") {
+          const w = clampRecommendedWeight(r.weight);
+          if (w !== null) return w;
+        }
+      }
+      for (const r of resources) {
+        if (String(r?.type || "").toLowerCase() === "lora" && typeof r?.weight === "number") {
+          const w = clampRecommendedWeight(r.weight);
+          if (w !== null) return w;
+        }
+      }
+    }
+  }
+  const targetStem = (modelNameOrFile || "").toLowerCase().replace(/\.(safetensors|ckpt|pt|bin)$/i, "").replace(/[^a-z0-9]/g, "");
+  const fallbackPromptWeights = [];
+  for (const img of imgs) {
+    const prompt = typeof img?.meta?.prompt === "string" ? img.meta.prompt : "";
+    if (!prompt) continue;
+    const regex = /<lora:([^:>]+):([0-9]+(?:\.[0-9]+)?)>/gi;
+    let match;
+    while ((match = regex.exec(prompt)) !== null) {
+      const loraToken = match[1].toLowerCase().replace(/[^a-z0-9]/g, "");
+      const w = clampRecommendedWeight(Number(match[2]));
+      if (w === null) continue;
+      if (targetStem && (loraToken.includes(targetStem) || targetStem.includes(loraToken))) {
+        return w;
+      }
+      fallbackPromptWeights.push(w);
+    }
+  }
+  if (fallbackPromptWeights.length === 1) {
+    return fallbackPromptWeights[0];
+  }
+  const desc = descriptionText || "";
+  if (desc) {
+    const rangeMatch = desc.match(
+      /(?:recommended\s+)?(?:lora\s+)?(?:weight|strength)\s*(?:is|:|=|-|\bat\b)?\s*([01](?:\.[0-9]{1,2})?)\s*(?:[-–~]|to)\s*([01](?:\.[0-9]{1,2})?)/i
+    );
+    if (rangeMatch) {
+      const low = Number(rangeMatch[1]);
+      const high = Number(rangeMatch[2]);
+      const mid = clampRecommendedWeight((low + high) / 2);
+      if (mid !== null) return mid;
+    }
+    const singleMatch = desc.match(
+      /(?:recommended\s+)?(?:lora\s+)?(?:weight|strength)\s*(?:is|:|=|-|\bat\b)?\s*([01](?:\.[0-9]{1,2})?)/i
+    );
+    if (singleMatch) {
+      const w = clampRecommendedWeight(Number(singleMatch[1]));
+      if (w !== null) return w;
+    }
+  }
+  return null;
+}
+function normalizeCivitaiData(modelObj, versionObj, fallbackFilename, preferredDomain) {
+  const civitaiId = modelObj?.id ? String(modelObj.id) : versionObj?.modelId ? String(versionObj.modelId) : null;
+  const civitaiVersionId = versionObj?.id ? String(versionObj.id) : null;
+  const domain = resolveCivitaiDomain(modelObj, versionObj, preferredDomain);
+  const civitaiUrl = buildCivitaiUrl(civitaiId, civitaiVersionId, domain);
+  const baseModel = typeof versionObj?.baseModel === "string" && versionObj.baseModel.trim() ? versionObj.baseModel.trim() : null;
+  const rawWords = Array.isArray(versionObj?.trainedWords) ? versionObj.trainedWords : [];
+  const trainedWords = Array.from(
+    new Set(
+      rawWords.map((w) => String(w || "").trim()).filter((w) => w.length > 0)
+    )
+  );
+  const parentDesc = formatCivitaiHtmlDescription(modelObj?.description);
+  const versionDesc = formatCivitaiHtmlDescription(versionObj?.description);
+  let civitaiDescription = null;
+  if (parentDesc && versionDesc && !parentDesc.includes(versionDesc)) {
+    civitaiDescription = `${parentDesc}
+
+Version Notes:
+${versionDesc}`;
+  } else {
+    civitaiDescription = parentDesc || versionDesc || null;
+  }
+  const primaryFile = (versionObj?.files || [])[0];
+  const recommendedWeight = extractRecommendedWeight(
+    versionObj,
+    civitaiDescription,
+    primaryFile?.name || fallbackFilename || modelObj?.name
+  );
+  const previewImages = extractStaticPreviewImages(versionObj, 4);
+  return {
+    civitaiId,
+    civitaiVersionId,
+    civitaiUrl,
+    baseModel,
+    trainedWords,
+    recommendedWeight,
+    civitaiDescription,
+    previewImages
+  };
+}
+function extractCivitaiVersionFiles(ver, explicitCivitaiType, baseModel, domain = "civitai.com") {
+  const rawFiles = Array.isArray(ver?.files) ? ver.files : [];
+  const options = [];
+  for (const f of rawFiles) {
+    const name = String(f?.name || "").trim();
+    if (!name) continue;
+    const ext = path6.extname(name).toLowerCase();
+    if (!DOWNLOAD_WEIGHT_EXTS.has(ext) && rawFiles.length > 1) continue;
+    const inferred = inferSubfolderAndTypeFromPath(name, [], explicitCivitaiType, baseModel);
+    const rawDlUrl = f.downloadUrl || ver.downloadUrl;
+    options.push({
+      rfilename: name,
+      filename: path6.basename(name),
+      fileSize: f.sizeKB ? Math.round(Number(f.sizeKB) * 1024) : null,
+      sha256Hash: f.hashes?.SHA256 ? String(f.hashes.SHA256).toUpperCase() : null,
+      downloadUrl: rewriteCivitaiDownloadUrl(rawDlUrl, domain),
+      modelType: inferred.modelType,
+      suggestedSubfolder: inferred.suggestedSubfolder
+    });
+  }
+  return options;
+}
+function buildCivitaiVersionOption(parentModel, versionObj, rawType, domain) {
+  if (!versionObj) return null;
+  const verDomain = resolveCivitaiDomain(parentModel, versionObj, domain);
+  const availableFiles = extractCivitaiVersionFiles(
+    versionObj,
+    rawType,
+    versionObj.baseModel,
+    verDomain
+  );
+  const primaryFile = availableFiles[0];
+  if (!primaryFile) return null;
+  const meta = normalizeCivitaiData(
+    parentModel || { id: versionObj.modelId, ...versionObj.model },
+    versionObj,
+    primaryFile.filename,
+    verDomain
+  );
+  const earlyAccess = extractCivitaiEarlyAccessInfo(versionObj);
+  const inferred = inferSubfolderAndTypeFromPath(
+    primaryFile.filename,
+    [],
+    rawType,
+    meta.baseModel
+  );
+  const parentTags = Array.isArray(parentModel?.tags) ? parentModel.tags : Array.isArray(versionObj?.model?.tags) ? versionObj.model.tags : [];
+  const suggestedLoraCategory = inferred.modelType === "lora" ? classifyLoraFromMetadata({
+    name: parentModel?.name || versionObj?.model?.name || versionObj?.name,
+    filename: primaryFile.filename,
+    tags: parentTags,
+    trainedWords: meta.trainedWords,
+    description: meta.civitaiDescription,
+    baseModel: meta.baseModel
+  }) : null;
+  return {
+    versionId: meta.civitaiVersionId || String(versionObj.id),
+    versionName: versionObj.name || "Latest",
+    civitaiUrl: meta.civitaiUrl,
+    baseModel: meta.baseModel,
+    trainedWords: meta.trainedWords,
+    recommendedWeight: meta.recommendedWeight,
+    previewImageUrl: meta.previewImages[0]?.url || null,
+    previewImages: meta.previewImages,
+    civitaiDescription: meta.civitaiDescription,
+    filename: primaryFile.filename,
+    fileSize: primaryFile.fileSize,
+    sha256Hash: primaryFile.sha256Hash,
+    downloadUrl: primaryFile.downloadUrl,
+    modelType: inferred.modelType,
+    suggestedSubfolder: inferred.suggestedSubfolder,
+    suggestedLoraCategory,
+    subfolderHint: inferred.subfolderHint || null,
+    availableFiles,
+    ...earlyAccess
+  };
+}
+function extractCivitaiVersions(parentModel, primaryVersion, rawType, domain) {
+  const candidates = [];
+  if (primaryVersion) candidates.push(primaryVersion);
+  if (Array.isArray(parentModel?.modelVersions)) {
+    for (const v of parentModel.modelVersions) {
+      candidates.push(v);
+    }
+  }
+  const seenIds = /* @__PURE__ */ new Set();
+  const versions = [];
+  for (const cand of candidates) {
+    const built = buildCivitaiVersionOption(parentModel, cand, rawType, domain);
+    if (!built || seenIds.has(built.versionId)) continue;
+    seenIds.add(built.versionId);
+    versions.push(built);
+  }
+  return versions;
+}
+function buildCivitaiSearchResultCard(params) {
+  const { parentModel, targetVer, availableVersions, activeVersion, fallbackDescription } = params;
+  const resolvedModelId = parentModel?.id || targetVer?.modelId;
+  return {
+    provider: "civitai",
+    id: String(resolvedModelId || targetVer.id),
+    versionId: activeVersion.versionId,
+    civitaiUrl: activeVersion.civitaiUrl,
+    name: parentModel?.name || targetVer.model?.name || activeVersion.filename,
+    modelType: activeVersion.modelType,
+    suggestedSubfolder: activeVersion.suggestedSubfolder,
+    suggestedLoraCategory: activeVersion.suggestedLoraCategory ?? null,
+    subfolderHint: activeVersion.subfolderHint || null,
+    versionName: activeVersion.versionName,
+    baseModel: activeVersion.baseModel,
+    trainedWords: activeVersion.trainedWords,
+    recommendedWeight: activeVersion.recommendedWeight,
+    previewImageUrl: activeVersion.previewImageUrl,
+    previewImages: activeVersion.previewImages,
+    civitaiDescription: activeVersion.civitaiDescription,
+    filename: activeVersion.filename,
+    fileSize: activeVersion.fileSize,
+    sha256Hash: activeVersion.sha256Hash,
+    downloadUrl: activeVersion.downloadUrl,
+    creator: parentModel?.creator?.username || targetVer.model?.creator?.username || "Civitai Creator",
+    description: activeVersion.civitaiDescription?.slice(0, 220) || fallbackDescription,
+    availableFiles: activeVersion.availableFiles,
+    totalRepoFilesCount: activeVersion.availableFiles.length,
+    availableVersions,
+    earlyAccessEndsAt: activeVersion.earlyAccessEndsAt,
+    isEarlyAccessActive: activeVersion.isEarlyAccessActive,
+    availability: activeVersion.availability,
+    earlyAccessConfig: activeVersion.earlyAccessConfig
+  };
+}
+async function resolveCivitaiModelUrl(input) {
+  const url = new URL(input);
+  const initialDomain = url.hostname.toLowerCase().endsWith("civitai.red") ? "civitai.red" : "civitai.com";
+  let detectedDomain = initialDomain;
+  const headers = getCivitaiHeaders();
+  const verParam = url.searchParams.get("modelVersionId");
+  const apiDownloadMatch = url.pathname.match(/\/api\/download\/models\/(\d+)/i);
+  const modelPageMatch = url.pathname.match(/\/models\/(\d+)/i);
+  let parentModel = null;
+  let targetVer = null;
+  if (apiDownloadMatch || verParam && !modelPageMatch) {
+    const verId = apiDownloadMatch ? apiDownloadMatch[1] : verParam;
+    const verRes = await fetchCivitaiJsonWithFallback(
+      `/api/v1/model-versions/${verId}`,
+      headers,
+      initialDomain
+    );
+    if (!verRes?.data) {
+      throw new Error(`Civitai version ${verId} lookup failed on both civitai.com and civitai.red`);
+    }
+    targetVer = verRes.data;
+    if (verRes.domain === "civitai.red") detectedDomain = "civitai.red";
+    if (targetVer?.modelId) {
+      const parentRes = await fetchCivitaiParentModelWithDomain(
+        targetVer.modelId,
+        headers,
+        detectedDomain
+      );
+      parentModel = parentRes.model;
+      if (parentRes.domain === "civitai.red") detectedDomain = "civitai.red";
+    }
+  } else if (modelPageMatch) {
+    const modelId = modelPageMatch[1];
+    const parentRes = await fetchCivitaiParentModelWithDomain(modelId, headers, initialDomain);
+    parentModel = parentRes.model;
+    if (parentRes.domain === "civitai.red") detectedDomain = "civitai.red";
+    if (!parentModel) {
+      throw new Error(`Civitai model ${modelId} not found.`);
+    }
+    const versions = Array.isArray(parentModel.modelVersions) ? parentModel.modelVersions : [];
+    targetVer = (verParam ? versions.find((v) => String(v.id) === String(verParam)) : null) || versions[0];
+  }
+  if (!targetVer) {
+    throw new Error("Could not resolve a downloadable model version from that Civitai URL.");
+  }
+  const resolvedModelId = parentModel?.id || targetVer.modelId;
+  let finalDomain = resolveCivitaiDomain(parentModel, targetVer, detectedDomain);
+  if (finalDomain === "civitai.com" && resolvedModelId) {
+    finalDomain = await probeCivitaiWebDomain(resolvedModelId, finalDomain);
+  }
+  const rawType = String(parentModel?.type || targetVer?.model?.type || "Checkpoint");
+  const availableVersions = extractCivitaiVersions(
+    parentModel,
+    targetVer,
+    rawType,
+    finalDomain
+  );
+  const activeVersion = availableVersions.find((v) => v.versionId === String(targetVer.id)) || availableVersions[0];
+  if (!activeVersion) {
+    throw new Error("No downloadable weight files found on that Civitai model version.");
+  }
+  return buildCivitaiSearchResultCard({
+    parentModel,
+    targetVer,
+    availableVersions,
+    activeVersion,
+    fallbackDescription: "Resolved from Civitai URL"
+  });
+}
+var CIVITAI_CACHE_MAX_ENTRIES, CIVITAI_SEARCH_TTL_MS, CIVITAI_DETAIL_TTL_MS, CIVITAI_PROBE_MAX_ENTRIES, CIVITAI_PROBE_TTL_MS, civitaiJsonCache, civitaiJsonInFlight, civitaiDomainProbeCache, civitaiDomainProbeInFlight;
+var init_civitaiHttpAndParse = __esm({
+  "src/server/services/civitai/civitaiHttpAndParse.ts"() {
+    init_config();
+    init_modelDownloadPaths();
+    init_loraClassifierService();
+    CIVITAI_CACHE_MAX_ENTRIES = 250;
+    CIVITAI_SEARCH_TTL_MS = 2 * 6e4;
+    CIVITAI_DETAIL_TTL_MS = 10 * 6e4;
+    CIVITAI_PROBE_MAX_ENTRIES = 500;
+    CIVITAI_PROBE_TTL_MS = 10 * 6e4;
+    civitaiJsonCache = /* @__PURE__ */ new Map();
+    civitaiJsonInFlight = /* @__PURE__ */ new Map();
+    civitaiDomainProbeCache = /* @__PURE__ */ new Map();
+    civitaiDomainProbeInFlight = /* @__PURE__ */ new Map();
+  }
+});
+
+// src/server/services/civitai/civitaiModelEnrichmentService.ts
+import fs7 from "fs";
+import path7 from "path";
+import crypto from "crypto";
+import sharp from "sharp";
+function getModelsPreviewDir() {
+  const dir = path7.join(appConfig.thumbnailPath, "models");
+  fs7.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+function resolveSafeModelPreviewPath(filename) {
+  const safeName = path7.basename(String(filename || "").trim());
+  if (!safeName || safeName.startsWith(".")) return null;
+  const dir = path7.resolve(getModelsPreviewDir());
+  const target = path7.resolve(dir, safeName);
+  if (!target.startsWith(dir + path7.sep) && target !== dir) {
+    return null;
+  }
+  return target;
+}
+function toSizedCivitaiUrl(url) {
+  if (!url.includes("image.civitai.com")) return url;
+  if (/\/width=\d+/i.test(url)) {
+    return url.replace(/\/width=\d+/i, "/width=512");
+  }
+  return url;
+}
+async function cacheModelPreviewImages(cacheKey, sources) {
+  if (!sources || sources.length === 0) return [];
+  const dir = getModelsPreviewDir();
+  const safeKey = cacheKey.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "model";
+  const stored = [];
+  for (let i = 0; i < Math.min(MAX_PREVIEW_IMAGES, sources.length); i++) {
+    const src = sources[i];
+    if (!src?.url) continue;
+    const filename = `${safeKey}_${i}.webp`;
+    const destPath = path7.join(dir, filename);
+    if (fs7.existsSync(destPath)) {
+      try {
+        const stat = fs7.statSync(destPath);
+        if (stat.size > 0) {
+          stored.push({
+            filename,
+            width: src.width ?? null,
+            height: src.height ?? null,
+            sourceUrl: src.url
+          });
+          continue;
+        }
+      } catch {
+      }
+    }
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 9e3);
+      const res = await fetch(toSizedCivitaiUrl(src.url), { signal: controller.signal });
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.startsWith("video/")) continue;
+      const arrayBuf = await res.arrayBuffer();
+      const inputBuf = Buffer.from(arrayBuf);
+      if (inputBuf.length === 0) continue;
+      const outInfo = await sharp(inputBuf).rotate().resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true }).webp({ quality: 82 }).toFile(destPath);
+      stored.push({
+        filename,
+        width: outInfo.width || src.width || null,
+        height: outInfo.height || src.height || null,
+        sourceUrl: src.url
+      });
+    } catch {
+    }
+  }
+  return stored;
+}
+function applyCivitaiEnrichmentToModel(modelId, meta, cachedPreviews, extraMeta) {
+  const existing = db.prepare(
+    `SELECT id, trigger_word, default_model_strength, civitai_id, civitai_version_id,
+              civitai_url, base_model, recommended_weight, civitai_description, preview_images_json
+       FROM models WHERE id = ?`
+  ).get(modelId);
+  if (!existing) {
+    throw new Error("Model record not found");
+  }
+  let nextTriggerWord = existing.trigger_word || null;
+  let filledTriggerWord = false;
+  const joinedWords = meta.trainedWords.join(", ");
+  if ((!nextTriggerWord || !String(nextTriggerWord).trim()) && joinedWords) {
+    nextTriggerWord = joinedWords;
+    filledTriggerWord = true;
+  }
+  let nextModelStrength = existing.default_model_strength !== null && existing.default_model_strength !== void 0 ? Number(existing.default_model_strength) : 1;
+  let filledDefaultStrength = false;
+  if (Math.abs(nextModelStrength - 1) < 1e-3 && meta.recommendedWeight !== null && meta.recommendedWeight !== void 0) {
+    nextModelStrength = Math.max(-10, Math.min(10, Number(meta.recommendedWeight)));
+    filledDefaultStrength = true;
+  }
+  const nextPreviewsJson = cachedPreviews.length > 0 ? JSON.stringify(cachedPreviews) : existing.preview_images_json || "[]";
+  db.prepare(
+    `UPDATE models
+     SET civitai_id = COALESCE(?, civitai_id),
+         civitai_version_id = COALESCE(?, civitai_version_id),
+         civitai_url = COALESCE(?, civitai_url),
+         hf_repo_id = COALESCE(?, hf_repo_id),
+         download_url = COALESCE(download_url, ?),
+         base_model = COALESCE(?, base_model),
+         recommended_weight = COALESCE(?, recommended_weight),
+         civitai_description = COALESCE(?, civitai_description),
+         preview_images_json = ?,
+         trigger_word = ?,
+         default_model_strength = ?,
+         civitai_fetched_at = datetime('now')
+     WHERE id = ?`
+  ).run(
+    meta.civitaiId,
+    meta.civitaiVersionId,
+    meta.civitaiUrl,
+    extraMeta?.hfRepoId || null,
+    extraMeta?.downloadUrl || null,
+    meta.baseModel,
+    meta.recommendedWeight,
+    meta.civitaiDescription,
+    nextPreviewsJson,
+    nextTriggerWord,
+    nextModelStrength,
+    modelId
+  );
+  invalidateInstalledModelsCache();
+  return { filledTriggerWord, filledDefaultStrength };
+}
+function computeFileSha256Stream(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs7.createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", (err) => reject(err));
+    stream.on("end", () => {
+      const hex = hash.digest("hex").toLowerCase();
+      resolve({ sha256: hex, autov2: hex.slice(0, 10) });
+    });
+  });
+}
+async function fetchAndEnrichModelFromCivitai(modelId, options) {
+  const allowHfFallback = options?.allowHuggingFaceFallback !== false;
+  const row = db.prepare("SELECT * FROM models WHERE id = ?").get(modelId);
+  if (!row) {
+    const err = new Error("Model not found");
+    err.statusCode = 404;
+    throw err;
+  }
+  let sha256 = row.sha256_hash || null;
+  let autov2 = row.autov2_hash || null;
+  if (!sha256 && row.file_path && fs7.existsSync(row.file_path)) {
+    try {
+      const computed = await computeFileSha256Stream(row.file_path);
+      sha256 = computed.sha256;
+      autov2 = computed.autov2;
+      db.prepare("UPDATE models SET sha256_hash = ?, autov2_hash = ? WHERE id = ?").run(
+        sha256,
+        autov2,
+        row.id
+      );
+      invalidateInstalledModelsCache();
+    } catch {
+    }
+  }
+  const parsedFromUrl = parseIdsFromCivitaiUrl(row.civitai_url || row.download_url);
+  const storedCivitaiId = row.civitai_id || parsedFromUrl.modelId;
+  const storedVersionId = row.civitai_version_id || parsedFromUrl.versionId;
+  let detectedDomain = parsedFromUrl.domain || "civitai.com";
+  const headers = getCivitaiHeaders();
+  let versionObj = null;
+  let modelObj = null;
+  const hashesToTry = [sha256, autov2].filter((h) => Boolean(h && h.trim()));
+  for (const h of hashesToTry) {
+    const found = await fetchCivitaiJsonWithFallback(
+      `/api/v1/model-versions/by-hash/${encodeURIComponent(h.trim())}`,
+      headers,
+      detectedDomain,
+      9e3
+    );
+    if (found?.data) {
+      versionObj = found.data;
+      if (found.domain === "civitai.red") detectedDomain = "civitai.red";
+      break;
+    }
+  }
+  if (!versionObj && storedVersionId) {
+    const foundVer = await fetchCivitaiJsonWithFallback(
+      `/api/v1/model-versions/${encodeURIComponent(String(storedVersionId))}`,
+      headers,
+      detectedDomain
+    );
+    if (foundVer?.data) {
+      versionObj = foundVer.data;
+      if (foundVer.domain === "civitai.red") detectedDomain = "civitai.red";
+    }
+  }
+  if (!versionObj && storedCivitaiId) {
+    const parentRes = await fetchCivitaiParentModelWithDomain(
+      storedCivitaiId,
+      headers,
+      detectedDomain
+    );
+    modelObj = parentRes.model;
+    if (parentRes.domain === "civitai.red") detectedDomain = "civitai.red";
+    if (modelObj?.modelVersions?.length) {
+      versionObj = modelObj.modelVersions[0];
+    }
+  }
+  if (!versionObj) {
+    if (allowHfFallback) {
+      const hfMeta = await resolveHuggingFaceModelDetails({
+        filename: row.filename,
+        name: row.name,
+        sha256,
+        hfRepoId: row.hf_repo_id,
+        downloadUrl: row.download_url
+      });
+      if (hfMeta) {
+        const normalizedHf = {
+          civitaiId: null,
+          civitaiVersionId: null,
+          civitaiUrl: null,
+          baseModel: hfMeta.baseModel,
+          trainedWords: [],
+          recommendedWeight: null,
+          civitaiDescription: hfMeta.description,
+          previewImages: hfMeta.previewImages
+        };
+        const cacheKey2 = `m${row.id}_hf_${row.autov2_hash || "v"}`;
+        const cachedPreviews2 = await cacheModelPreviewImages(cacheKey2, normalizedHf.previewImages);
+        const { filledTriggerWord: filledTriggerWord2, filledDefaultStrength: filledDefaultStrength2 } = applyCivitaiEnrichmentToModel(
+          row.id,
+          normalizedHf,
+          cachedPreviews2,
+          { hfRepoId: hfMeta.hfRepoId, downloadUrl: hfMeta.downloadUrl }
+        );
+        return {
+          provider: "huggingface",
+          hfRepoId: hfMeta.hfRepoId,
+          meta: normalizedHf,
+          cachedPreviews: cachedPreviews2,
+          filledTriggerWord: filledTriggerWord2,
+          filledDefaultStrength: filledDefaultStrength2
+        };
+      }
+    }
+    const err = new Error(
+      hashesToTry.length > 0 || allowHfFallback ? "No matching model found on Civitai or Hugging Face for this file." : "Cannot look up model on Civitai: no local file hash or Civitai ID available."
+    );
+    err.statusCode = 404;
+    throw err;
+  }
+  const resolvedParentId = versionObj.modelId || storedCivitaiId;
+  if (!modelObj && resolvedParentId) {
+    const parentRes = await fetchCivitaiParentModelWithDomain(
+      resolvedParentId,
+      headers,
+      detectedDomain
+    );
+    modelObj = parentRes.model;
+    if (parentRes.domain === "civitai.red") detectedDomain = "civitai.red";
+  }
+  if (!modelObj && versionObj.model) {
+    modelObj = { id: resolvedParentId, ...versionObj.model };
+  }
+  let finalDomain = resolveCivitaiDomain(modelObj, versionObj, detectedDomain);
+  if (finalDomain === "civitai.com" && resolvedParentId) {
+    finalDomain = await probeCivitaiWebDomain(resolvedParentId, finalDomain);
+  }
+  const meta = normalizeCivitaiData(modelObj, versionObj, row.filename, finalDomain);
+  const cacheKey = `m${row.id}_${meta.civitaiVersionId || row.autov2_hash || "v"}`;
+  const cachedPreviews = await cacheModelPreviewImages(cacheKey, meta.previewImages);
+  const { filledTriggerWord, filledDefaultStrength } = applyCivitaiEnrichmentToModel(
+    row.id,
+    meta,
+    cachedPreviews
+  );
+  return {
+    provider: "civitai",
+    hfRepoId: row.hf_repo_id || null,
+    meta,
+    cachedPreviews,
+    filledTriggerWord,
+    filledDefaultStrength
+  };
+}
+async function healExistingCivitaiLinks() {
+  const rows = db.prepare(
+    `SELECT id, filename, file_path, sha256_hash, autov2_hash, civitai_id, civitai_version_id, civitai_url, download_url
+       FROM models
+       WHERE civitai_url IS NOT NULL
+          OR civitai_id IS NOT NULL
+          OR civitai_version_id IS NOT NULL
+          OR sha256_hash IS NOT NULL
+          OR autov2_hash IS NOT NULL
+          OR download_url LIKE '%civitai.%'`
+  ).all();
+  let checked = 0;
+  let healed = 0;
+  let redCount = 0;
+  for (const row of rows) {
+    checked++;
+    const previousUrl = row.civitai_url || null;
+    try {
+      const { meta } = await fetchAndEnrichModelFromCivitai(row.id, {
+        allowHuggingFaceFallback: false
+      });
+      if (meta.civitaiUrl?.includes("civitai.red")) {
+        redCount++;
+      }
+      if (meta.civitaiUrl && meta.civitaiUrl !== previousUrl) {
+        healed++;
+      }
+    } catch {
+      const parsed = parseIdsFromCivitaiUrl(row.civitai_url || row.download_url);
+      const mId = row.civitai_id || parsed.modelId;
+      const vId = row.civitai_version_id || parsed.versionId;
+      if (mId) {
+        const probedDomain = await probeCivitaiWebDomain(mId, parsed.domain || "civitai.com");
+        const nextUrl = buildCivitaiUrl(mId, vId, probedDomain);
+        if (probedDomain === "civitai.red") redCount++;
+        if (nextUrl && nextUrl !== previousUrl) {
+          db.prepare(
+            `UPDATE models
+             SET civitai_id = COALESCE(?, civitai_id),
+                 civitai_version_id = COALESCE(?, civitai_version_id),
+                 civitai_url = ?
+             WHERE id = ?`
+          ).run(String(mId), vId ? String(vId) : null, nextUrl, row.id);
+          invalidateInstalledModelsCache();
+          healed++;
+        }
+      }
+    }
+  }
+  return { checked, healed, redCount };
+}
+function triggerBackgroundCivitaiLinkHealOnce() {
+  if (initialHealTriggered) return;
+  initialHealTriggered = true;
+  setImmediate(() => {
+    healExistingCivitaiLinks().catch(() => {
+    });
+  });
+}
+function normalizeModelStem(raw) {
+  return String(raw || "").trim().replace(/\\/g, "/").split("/").pop().replace(/\.(safetensors|pt|ckpt|pth|bin|gguf|sft)$/i, "").toLowerCase();
+}
+function normalizeModelAlnum(raw) {
+  return normalizeModelStem(raw).replace(/[^a-z0-9]/g, "");
+}
+function invalidateInstalledModelsCache() {
+  cachedInstalledModelsIndex = null;
+}
+function getInstalledModelsIndex() {
+  if (cachedInstalledModelsIndex) {
+    return cachedInstalledModelsIndex;
+  }
+  const rawRows = db.prepare(
+    `SELECT id, name, filename, model_type, lora_category, sha256_hash, autov2_hash, civitai_version_id,
+              default_model_strength, default_clip_strength, trigger_word, nickname, is_hidden
+       FROM models
+       WHERE is_installed = 1`
+  ).all();
+  const allRows = [];
+  const visibleRows = [];
+  const visibleLoras = [];
+  const visibleBases = [];
+  const bySha256 = /* @__PURE__ */ new Map();
+  const byAutoV2 = /* @__PURE__ */ new Map();
+  const byVersionId = /* @__PURE__ */ new Map();
+  const byFilename = /* @__PURE__ */ new Map();
+  for (const r of rawRows) {
+    const indexed = {
+      id: r.id,
+      name: r.name,
+      filename: r.filename,
+      model_type: r.model_type,
+      lora_category: r.lora_category,
+      sha256_hash: r.sha256_hash,
+      autov2_hash: r.autov2_hash,
+      civitai_version_id: r.civitai_version_id,
+      default_model_strength: r.default_model_strength,
+      default_clip_strength: r.default_clip_strength,
+      trigger_word: r.trigger_word,
+      nickname: r.nickname,
+      stemFilename: normalizeModelStem(r.filename),
+      stemName: normalizeModelStem(r.name),
+      stemNickname: r.nickname ? normalizeModelStem(r.nickname) : null,
+      alnumFilename: normalizeModelAlnum(r.filename),
+      alnumName: normalizeModelAlnum(r.name)
+    };
+    allRows.push(indexed);
+    if (indexed.sha256_hash) bySha256.set(indexed.sha256_hash.trim().toUpperCase(), indexed);
+    if (indexed.autov2_hash) byAutoV2.set(indexed.autov2_hash.trim().toUpperCase(), indexed);
+    if (indexed.civitai_version_id) byVersionId.set(String(indexed.civitai_version_id).trim(), indexed);
+    if (indexed.filename) byFilename.set(path7.basename(indexed.filename).trim().toLowerCase(), indexed);
+    if (!r.is_hidden) {
+      visibleRows.push(indexed);
+      if (indexed.model_type === "lora") {
+        visibleLoras.push(indexed);
+      } else if (indexed.model_type === "diffusion" || indexed.model_type === "checkpoint") {
+        visibleBases.push(indexed);
+      }
+    }
+  }
+  cachedInstalledModelsIndex = {
+    allRows,
+    visibleRows,
+    visibleLoras,
+    visibleBases,
+    bySha256,
+    byAutoV2,
+    byVersionId,
+    byFilename
+  };
+  return cachedInstalledModelsIndex;
+}
+function getVisibleInstalledModelBuckets() {
+  const index = getInstalledModelsIndex();
+  return { loras: index.visibleLoras, bases: index.visibleBases };
+}
+function findInstalledModelMatch(candidate, installedRows) {
+  if (candidate.versionId) {
+    const byVer = installedRows.find(
+      (r) => r.civitai_version_id && String(r.civitai_version_id).trim() === candidate.versionId
+    );
+    if (byVer) return byVer;
+  }
+  if (candidate.hash) {
+    const h = candidate.hash.trim().toLowerCase();
+    const byHash = installedRows.find(
+      (r) => r.autov2_hash && r.autov2_hash.toLowerCase() === h || r.sha256_hash && r.sha256_hash.toLowerCase().startsWith(h)
+    );
+    if (byHash) return byHash;
+  }
+  const candStem = normalizeModelStem(candidate.name);
+  const candAlnum = normalizeModelAlnum(candidate.name);
+  if (!candStem && !candAlnum) return null;
+  const exactStem = installedRows.find((r) => {
+    const idx = r;
+    const fStem = idx.stemFilename ?? normalizeModelStem(r.filename);
+    const nStem = idx.stemName ?? normalizeModelStem(r.name);
+    const nickStem = idx.stemNickname !== void 0 ? idx.stemNickname : r.nickname ? normalizeModelStem(r.nickname) : null;
+    return fStem === candStem || nStem === candStem || nickStem === candStem;
+  });
+  if (exactStem) return exactStem;
+  if (candAlnum.length >= 4) {
+    return installedRows.find((r) => {
+      const idx = r;
+      const fAlnum = idx.alnumFilename ?? normalizeModelAlnum(r.filename);
+      const nAlnum = idx.alnumName ?? normalizeModelAlnum(r.name);
+      return fAlnum === candAlnum || nAlnum === candAlnum;
+    }) || null;
+  }
+  return null;
+}
+function matchSingleFileToIndex(file, index) {
+  if (file.sha256Hash) {
+    const h = file.sha256Hash.trim().toUpperCase();
+    const m = index.bySha256.get(h) || index.byAutoV2.get(h.slice(0, 10));
+    if (m) {
+      return {
+        isInstalled: true,
+        installedModelId: m.id,
+        installedFilename: m.filename,
+        installedModelType: m.model_type,
+        installedLoraCategory: m.lora_category || "unclassified",
+        installedMatchReason: "hash"
+      };
+    }
+  }
+  if (file.filename) {
+    const m = index.byFilename.get(path7.basename(file.filename).trim().toLowerCase());
+    if (m) {
+      return {
+        isInstalled: true,
+        installedModelId: m.id,
+        installedFilename: m.filename,
+        installedModelType: m.model_type,
+        installedLoraCategory: m.lora_category || "unclassified",
+        installedMatchReason: "filename"
+      };
+    }
+  }
+  return {
+    isInstalled: false,
+    installedModelId: null,
+    installedFilename: null,
+    installedModelType: null,
+    installedLoraCategory: null,
+    installedMatchReason: null
+  };
+}
+function annotateInstalledFileOptions(files) {
+  if (!files || files.length === 0) return files;
+  const index = getInstalledModelsIndex();
+  if (index.allRows.length === 0) return files;
+  return files.map((file) => ({
+    ...file,
+    ...matchSingleFileToIndex(file, index)
+  }));
+}
+function annotateInstalledSearchResults(items) {
+  if (!items || items.length === 0) return items;
+  const index = getInstalledModelsIndex();
+  const { allRows, bySha256, byAutoV2, byVersionId, byFilename } = index;
+  if (allRows.length === 0) return items;
+  const resolveMatch = (entry) => {
+    const annotatedFiles = entry.availableFiles ? entry.availableFiles.map((f) => ({ ...f, ...matchSingleFileToIndex(f, index) })) : void 0;
+    if (entry.provider === "huggingface" && annotatedFiles && annotatedFiles.length > 1) {
+      const installedMatches = annotatedFiles.filter((f) => f.isInstalled);
+      const installedFilesCount = installedMatches.length;
+      const totalFilesCount = annotatedFiles.length;
+      const firstMatch = installedMatches[0] || null;
+      const isFullyInstalled = installedFilesCount === totalFilesCount;
+      const isPartiallyInstalled = installedFilesCount > 0 && !isFullyInstalled;
+      return {
+        isInstalled: isFullyInstalled,
+        isPartiallyInstalled,
+        installedFilesCount,
+        totalFilesCount,
+        installedModelId: firstMatch?.installedModelId ?? null,
+        installedFilename: firstMatch?.installedFilename ?? null,
+        installedModelType: firstMatch?.installedModelType ?? null,
+        installedLoraCategory: firstMatch?.installedLoraCategory ?? null,
+        installedMatchReason: firstMatch?.installedMatchReason ?? null,
+        availableFiles: annotatedFiles
+      };
+    }
+    const hashes = /* @__PURE__ */ new Set();
+    if (entry.sha256Hash) hashes.add(entry.sha256Hash.trim().toUpperCase());
+    for (const f of annotatedFiles || []) {
+      if (f.sha256Hash) hashes.add(f.sha256Hash.trim().toUpperCase());
+    }
+    for (const h of hashes) {
+      const m = bySha256.get(h) || byAutoV2.get(h.slice(0, 10));
+      if (m) {
+        return {
+          isInstalled: true,
+          isPartiallyInstalled: false,
+          installedModelId: m.id,
+          installedFilename: m.filename,
+          installedModelType: m.model_type,
+          installedLoraCategory: m.lora_category || "unclassified",
+          installedMatchReason: "hash",
+          ...annotatedFiles ? { availableFiles: annotatedFiles } : {}
+        };
+      }
+    }
+    if (entry.versionId) {
+      const m = byVersionId.get(String(entry.versionId).trim());
+      if (m) {
+        return {
+          isInstalled: true,
+          isPartiallyInstalled: false,
+          installedModelId: m.id,
+          installedFilename: m.filename,
+          installedModelType: m.model_type,
+          installedLoraCategory: m.lora_category || "unclassified",
+          installedMatchReason: "version_id",
+          ...annotatedFiles ? { availableFiles: annotatedFiles } : {}
+        };
+      }
+    }
+    if (entry.filename) {
+      const m = byFilename.get(path7.basename(entry.filename).trim().toLowerCase());
+      if (m) {
+        return {
+          isInstalled: true,
+          isPartiallyInstalled: false,
+          installedModelId: m.id,
+          installedFilename: m.filename,
+          installedModelType: m.model_type,
+          installedLoraCategory: m.lora_category || "unclassified",
+          installedMatchReason: "filename",
+          ...annotatedFiles ? { availableFiles: annotatedFiles } : {}
+        };
+      }
+    }
+    return {
+      isInstalled: false,
+      isPartiallyInstalled: false,
+      installedModelId: null,
+      installedFilename: null,
+      installedModelType: null,
+      installedLoraCategory: null,
+      installedMatchReason: null,
+      ...annotatedFiles ? { availableFiles: annotatedFiles } : {}
+    };
+  };
+  return items.map((item) => {
+    const annotatedVersions = item.availableVersions?.map((v) => ({
+      ...v,
+      ...resolveMatch({
+        provider: item.provider,
+        sha256Hash: v.sha256Hash,
+        versionId: v.versionId,
+        filename: v.filename,
+        availableFiles: v.availableFiles
+      })
+    }));
+    return {
+      ...item,
+      ...resolveMatch(item),
+      ...annotatedVersions ? { availableVersions: annotatedVersions } : {}
+    };
+  });
+}
+var MAX_PREVIEW_IMAGES, initialHealTriggered, cachedInstalledModelsIndex;
+var init_civitaiModelEnrichmentService = __esm({
+  "src/server/services/civitai/civitaiModelEnrichmentService.ts"() {
+    init_db();
+    init_config();
+    init_huggingFaceMetadataService();
+    init_civitaiHttpAndParse();
+    MAX_PREVIEW_IMAGES = 4;
+    initialHealTriggered = false;
+    cachedInstalledModelsIndex = null;
+  }
+});
+
+// src/server/services/characterService.ts
+function listCharacterProfiles() {
+  const rows = db.prepare(
+    `
+      SELECT
+        c.*,
+        img.id AS resolved_portrait_id
+      FROM characters c
+      LEFT JOIN images img ON (c.portrait_content_hash IS NOT NULL AND img.content_hash = c.portrait_content_hash)
+        OR (c.portrait_image_id IS NOT NULL AND img.id = c.portrait_image_id)
+      ORDER BY c.name COLLATE NOCASE ASC
+    `
+  ).all();
+  return rows.map((row) => buildCharacterProfile(row));
+}
+function getCharacterProfileById(characterId) {
+  const row = db.prepare(
+    `
+      SELECT
+        c.*,
+        img.id AS resolved_portrait_id
+      FROM characters c
+      LEFT JOIN images img ON (c.portrait_content_hash IS NOT NULL AND img.content_hash = c.portrait_content_hash)
+        OR (c.portrait_image_id IS NOT NULL AND img.id = c.portrait_image_id)
+      WHERE c.id = ?
+    `
+  ).get(characterId);
+  if (!row) return null;
+  return buildCharacterProfile(row);
+}
+function resolveCharacterPortraitId(row) {
+  let portraitId = row.resolved_portrait_id || null;
+  const hasExplicitPortrait = Boolean(row.portrait_image_id || row.portrait_content_hash);
+  if (hasExplicitPortrait && !portraitId) {
+    if (row.portrait_content_hash) {
+      const imgByHash = db.prepare("SELECT id FROM images WHERE content_hash = ? AND is_missing = 0 LIMIT 1").get(row.portrait_content_hash);
+      if (imgByHash) portraitId = imgByHash.id;
+    }
+    if (!portraitId && row.portrait_image_id) {
+      const imgById = db.prepare("SELECT id FROM images WHERE id = ? LIMIT 1").get(row.portrait_image_id);
+      if (imgById) portraitId = imgById.id;
+    }
+  }
+  if (!portraitId && !hasExplicitPortrait) {
+    const fallbackImg = db.prepare(
+      `
+        SELECT i.id
+        FROM image_characters ic
+        JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+        LEFT JOIN ratings r ON r.content_hash = i.content_hash
+        WHERE ic.character_id = ?
+          AND ic.status = 'confirmed'
+          AND COALESCE(i.is_uploaded_reference, 0) = 0
+        ORDER BY COALESCE(r.rating, 0) DESC, i.file_mtime ASC, i.id ASC
+        LIMIT 1
+      `
+    ).get(row.id);
+    if (fallbackImg) portraitId = fallbackImg.id;
+  }
+  return portraitId;
+}
+function ensureCharacterPortraitIfUnset(characterId, imageId, contentHash) {
+  if (!characterId || !imageId) return false;
+  const img = db.prepare(
+    "SELECT content_hash, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ?"
+  ).get(imageId);
+  if (!img || img.is_uploaded_reference) return false;
+  const resolvedHash = contentHash || img.content_hash;
+  const info = db.prepare(
+    `UPDATE characters
+       SET portrait_image_id = ?,
+           portrait_content_hash = ?,
+           updated_at = datetime('now')
+       WHERE id = ?
+         AND portrait_image_id IS NULL
+         AND portrait_content_hash IS NULL`
+  ).run(imageId, resolvedHash, characterId);
+  return info.changes > 0;
+}
+function getCharacterPortraitMetadataMap() {
+  const rows = db.prepare(
+    `
+      SELECT
+        c.id,
+        c.portrait_image_id,
+        c.portrait_content_hash,
+        c.portrait_crop_json,
+        img.id AS resolved_portrait_id
+      FROM characters c
+      LEFT JOIN images img ON (c.portrait_content_hash IS NOT NULL AND img.content_hash = c.portrait_content_hash)
+        OR (c.portrait_image_id IS NOT NULL AND img.id = c.portrait_image_id)
+    `
+  ).all();
+  const map = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    const portraitId = resolveCharacterPortraitId(row);
+    map.set(row.id, {
+      url: portraitId ? `/api/images/${portraitId}/thumbnail` : null,
+      crop: normalizePortraitCrop(row.portrait_crop_json)
+    });
+  }
+  return map;
+}
+function buildCharacterProfile(row) {
+  const aliases = db.prepare("SELECT id, alias FROM character_aliases WHERE character_id = ? ORDER BY alias ASC").all(row.id);
+  const loras = db.prepare(
+    `
+      SELECT
+        cl.id,
+        cl.model_id AS modelId,
+        cl.lora_name AS loraName,
+        cl.lora_hash AS loraHash,
+        cl.lora_category AS loraCategory,
+        cl.appearance_label AS appearanceLabel,
+        COALESCE(cl.trigger_word, '') AS triggerWord,
+        cl.notes,
+        COALESCE(m.is_installed, 0) AS isInstalled,
+        m.download_file_path AS downloadFilePath
+      FROM character_loras cl
+      LEFT JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
+      WHERE cl.character_id = ?
+      GROUP BY cl.id
+      ORDER BY cl.lora_name ASC
+    `
+  ).all(row.id);
+  const workflows = db.prepare(
+    `
+      SELECT
+        cw.workflow_id AS workflowId,
+        w.name AS workflowName,
+        cw.role_label AS roleLabel
+      FROM character_workflows cw
+      JOIN workflows w ON w.id = cw.workflow_id
+      WHERE cw.character_id = ?
+    `
+  ).all(row.id);
+  const tags = db.prepare(
+    `
+      SELECT t.id, t.name, t.color
+      FROM character_tags ct
+      JOIN tags t ON t.id = ct.tag_id
+      WHERE ct.character_id = ?
+    `
+  ).all(row.id);
+  const collections = db.prepare(
+    `
+      SELECT col.id, col.name
+      FROM character_collections cc
+      JOIN collections col ON col.id = cc.collection_id
+      WHERE cc.character_id = ?
+    `
+  ).all(row.id);
+  const stats = db.prepare(
+    `
+      SELECT
+        SUM(CASE WHEN ic.status = 'confirmed' THEN 1 ELSE 0 END) AS confirmedCount,
+        SUM(CASE WHEN ic.status = 'suggested' THEN 1 ELSE 0 END) AS suggestedCount,
+        AVG(CASE WHEN ic.status = 'confirmed' AND r.rating > 0 THEN r.rating ELSE NULL END) AS avgRating,
+        MIN(CASE WHEN ic.status = 'confirmed' THEN i.file_mtime ELSE NULL END) AS firstGen,
+        MAX(CASE WHEN ic.status = 'confirmed' THEN i.file_mtime ELSE NULL END) AS latestGen
+      FROM image_characters ic
+      LEFT JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+      LEFT JOIN ratings r ON r.content_hash = ic.image_content_hash
+      WHERE ic.character_id = ?
+    `
+  ).get(row.id);
+  const portraitId = resolveCharacterPortraitId(row);
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description || "",
+    physicalDescription: row.physical_description || "",
+    notes: row.notes || "",
+    portraitImageId: portraitId,
+    portraitContentHash: row.portrait_content_hash || null,
+    portraitThumbnailUrl: portraitId ? `/api/images/${portraitId}/thumbnail` : null,
+    portraitCrop: normalizePortraitCrop(row.portrait_crop_json),
+    aliases,
+    loras: loras.map((l) => {
+      const isInstalled = Boolean(l.isInstalled);
+      return {
+        ...l,
+        isInstalled,
+        isDownloadedPendingImport: Boolean(!isInstalled && l.downloadFilePath)
+      };
+    }),
+    workflows,
+    tags,
+    collections,
+    confirmedImageCount: Number(stats?.confirmedCount || 0),
+    suggestedImageCount: Number(stats?.suggestedCount || 0),
+    averageRating: Number(stats?.avgRating ? Number(stats.avgRating).toFixed(2) : 0),
+    firstGenerationDate: stats?.firstGen || null,
+    latestGenerationDate: stats?.latestGen || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+function mergeCharacters(targetCharacterId, sourceCharacterId) {
+  if (targetCharacterId === sourceCharacterId) {
+    throw new Error("Cannot merge a character into itself.");
+  }
+  const target = db.prepare("SELECT * FROM characters WHERE id = ?").get(targetCharacterId);
+  const source = db.prepare("SELECT * FROM characters WHERE id = ?").get(sourceCharacterId);
+  if (!target || !source) {
+    throw new Error("One or both character records do not exist.");
+  }
+  const tx = db.transaction(() => {
+    db.prepare("INSERT OR IGNORE INTO character_aliases (character_id, alias) VALUES (?, ?)").run(
+      targetCharacterId,
+      source.name
+    );
+    const sourceAliases = db.prepare("SELECT alias FROM character_aliases WHERE character_id = ?").all(sourceCharacterId);
+    for (const a of sourceAliases) {
+      if (a.alias.toLowerCase() !== target.name.toLowerCase()) {
+        db.prepare("INSERT OR IGNORE INTO character_aliases (character_id, alias) VALUES (?, ?)").run(
+          targetCharacterId,
+          a.alias
+        );
+      }
+    }
+    const sourceLoras = db.prepare("SELECT * FROM character_loras WHERE character_id = ?").all(sourceCharacterId);
+    for (const l of sourceLoras) {
+      db.prepare(
+        `INSERT OR IGNORE INTO character_loras
+          (character_id, model_id, lora_name, lora_hash, lora_category, appearance_label, trigger_word, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        targetCharacterId,
+        l.model_id,
+        l.lora_name,
+        l.lora_hash,
+        l.lora_category,
+        l.appearance_label,
+        l.trigger_word || "",
+        l.notes
+      );
+    }
+    const sourceImgs = db.prepare("SELECT * FROM image_characters WHERE character_id = ?").all(sourceCharacterId);
+    for (const ic of sourceImgs) {
+      const existing = db.prepare("SELECT * FROM image_characters WHERE image_content_hash = ? AND character_id = ?").get(ic.image_content_hash, targetCharacterId);
+      if (!existing) {
+        db.prepare(
+          `INSERT INTO image_characters
+            (image_id, image_content_hash, character_id, status, source, confidence, match_reason, appearance_label)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          ic.image_id,
+          ic.image_content_hash,
+          targetCharacterId,
+          ic.status,
+          ic.source,
+          ic.confidence,
+          ic.match_reason,
+          ic.appearance_label
+        );
+      } else if (ic.status === "confirmed" && existing.status !== "confirmed") {
+        db.prepare(
+          `UPDATE image_characters
+           SET status = 'confirmed', source = ?, confidence = 1.0, updated_at = datetime('now')
+           WHERE id = ?`
+        ).run(ic.source, existing.id);
+      }
+    }
+    db.prepare(
+      "INSERT OR IGNORE INTO character_workflows (character_id, workflow_id, role_label) SELECT ?, workflow_id, role_label FROM character_workflows WHERE character_id = ?"
+    ).run(targetCharacterId, sourceCharacterId);
+    db.prepare(
+      "INSERT OR IGNORE INTO character_tags (character_id, tag_id) SELECT ?, tag_id FROM character_tags WHERE character_id = ?"
+    ).run(targetCharacterId, sourceCharacterId);
+    db.prepare(
+      "INSERT OR IGNORE INTO character_collections (character_id, collection_id) SELECT ?, collection_id FROM character_collections WHERE character_id = ?"
+    ).run(targetCharacterId, sourceCharacterId);
+    const mergedDesc = [target.description, source.description].filter(Boolean).join("\n\n");
+    const mergedPhysicalDesc = [target.physical_description, source.physical_description].filter(Boolean).join("\n\n");
+    const mergedNotes = [
+      target.notes,
+      source.notes ? `[Merged from ${source.name}]: ${source.notes}` : ""
+    ].filter(Boolean).join("\n\n");
+    const adoptSourcePortrait = !target.portrait_image_id && !target.portrait_content_hash;
+    db.prepare(
+      `UPDATE characters
+       SET description = ?, physical_description = ?, notes = ?,
+           portrait_image_id = COALESCE(portrait_image_id, ?),
+           portrait_content_hash = COALESCE(portrait_content_hash, ?),
+           portrait_crop_json = COALESCE(portrait_crop_json, ?),
+           updated_at = datetime('now')
+       WHERE id = ?`
+    ).run(
+      mergedDesc,
+      mergedPhysicalDesc,
+      mergedNotes,
+      source.portrait_image_id,
+      source.portrait_content_hash,
+      adoptSourcePortrait ? source.portrait_crop_json || null : null,
+      targetCharacterId
+    );
+    db.prepare("DELETE FROM characters WHERE id = ?").run(sourceCharacterId);
+  });
+  tx();
+  runAssistedCharacterIdentificationForAll();
+  return getCharacterProfileById(targetCharacterId);
+}
+function runAssistedCharacterIdentificationForImage(imageId) {
+  const img = db.prepare(
+    `SELECT i.id, i.content_hash, m.positive_prompt
+       FROM images i
+       LEFT JOIN image_metadata m ON m.image_id = i.id
+       WHERE i.id = ?`
+  ).get(imageId);
+  if (!img) return 0;
+  const characters = db.prepare("SELECT id, name FROM characters").all();
+  if (characters.length === 0) return 0;
+  const imageLoras = db.prepare("SELECT LOWER(lora_name) AS lname, lora_hash FROM image_loras WHERE image_id = ?").all(img.id);
+  const imageWorkflows = db.prepare("SELECT workflow_id FROM image_workflows WHERE image_id = ?").all(img.id);
+  const insertSuggestion = db.prepare(`
+    INSERT OR IGNORE INTO image_characters
+      (image_id, image_content_hash, character_id, status, source, confidence, match_reason, appearance_label)
+    VALUES (?, ?, ?, 'suggested', ?, ?, ?, ?)
+  `);
+  let createdCount = 0;
+  for (const char of characters) {
+    const existing = db.prepare("SELECT status FROM image_characters WHERE image_content_hash = ? AND character_id = ?").get(img.content_hash, char.id);
+    if (existing) continue;
+    const charLoras = db.prepare(
+      "SELECT LOWER(lora_name) AS lname, lora_hash, appearance_label FROM character_loras WHERE character_id = ?"
+    ).all(char.id);
+    let matched = false;
+    for (const cl of charLoras) {
+      const hit = imageLoras.find(
+        (il) => il.lname === cl.lname || il.lname.replace(/\.(safetensors|pt|ckpt)$/i, "") === cl.lname.replace(/\.(safetensors|pt|ckpt)$/i, "") || cl.lora_hash && il.lora_hash && cl.lora_hash === il.lora_hash
+      );
+      if (hit) {
+        const info = insertSuggestion.run(
+          img.id,
+          img.content_hash,
+          char.id,
+          "lora_match",
+          0.9,
+          `Matched linked character LoRA: ${hit.lname}`,
+          cl.appearance_label || "Default"
+        );
+        if (info.changes > 0) createdCount++;
+        matched = true;
+        break;
+      }
+    }
+    if (matched) continue;
+    if (img.positive_prompt && img.positive_prompt.trim().length > 0) {
+      const aliases = db.prepare("SELECT alias FROM character_aliases WHERE character_id = ?").all(char.id);
+      const terms = [char.name, ...aliases.map((a) => a.alias)].filter((t) => t.trim().length >= 3);
+      for (const term of terms) {
+        const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(`(^|[^a-zA-Z0-9_])${escaped}([^a-zA-Z0-9_]|$)`, "i");
+        if (regex.test(img.positive_prompt)) {
+          const info = insertSuggestion.run(
+            img.id,
+            img.content_hash,
+            char.id,
+            "prompt_alias",
+            0.75,
+            `Prompt text matched character name/alias: "${term}"`,
+            null
+          );
+          if (info.changes > 0) createdCount++;
+          matched = true;
+          break;
+        }
+      }
+    }
+    if (matched) continue;
+    if (imageWorkflows.length > 0) {
+      const charWfIds = new Set(
+        db.prepare("SELECT workflow_id FROM character_workflows WHERE character_id = ?").all(char.id).map((w) => w.workflow_id)
+      );
+      for (const iw of imageWorkflows) {
+        if (charWfIds.has(iw.workflow_id)) {
+          const info = insertSuggestion.run(
+            img.id,
+            img.content_hash,
+            char.id,
+            "workflow_match",
+            0.65,
+            "Generated using a workflow linked to this character",
+            null
+          );
+          if (info.changes > 0) createdCount++;
+          break;
+        }
+      }
+    }
+  }
+  return createdCount;
+}
+function runAssistedCharacterIdentificationForAll() {
+  const characters = db.prepare("SELECT id, name FROM characters").all();
+  if (characters.length === 0) return 0;
+  const allImages = db.prepare(
+    `SELECT i.id, i.content_hash, m.positive_prompt
+       FROM images i
+       LEFT JOIN image_metadata m ON m.image_id = i.id
+       WHERE i.is_missing = 0`
+  ).all();
+  if (allImages.length === 0) return 0;
+  const charLorasByChar = /* @__PURE__ */ new Map();
+  for (const cl of db.prepare(
+    "SELECT character_id, LOWER(lora_name) AS lname, lora_hash, appearance_label FROM character_loras"
+  ).all()) {
+    const arr = charLorasByChar.get(cl.character_id) || [];
+    arr.push({
+      lname: cl.lname,
+      baseName: cl.lname.replace(/\.(safetensors|pt|ckpt)$/i, ""),
+      lora_hash: cl.lora_hash,
+      appearance_label: cl.appearance_label || "Default"
+    });
+    charLorasByChar.set(cl.character_id, arr);
+  }
+  const charRegexesByChar = /* @__PURE__ */ new Map();
+  const aliasesByChar = /* @__PURE__ */ new Map();
+  for (const al of db.prepare("SELECT character_id, alias FROM character_aliases").all()) {
+    const arr = aliasesByChar.get(al.character_id) || [];
+    arr.push(al.alias);
+    aliasesByChar.set(al.character_id, arr);
+  }
+  for (const char of characters) {
+    const terms = [char.name, ...aliasesByChar.get(char.id) || []].filter(
+      (t) => t.trim().length >= 3
+    );
+    charRegexesByChar.set(
+      char.id,
+      terms.map((term) => {
+        const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return {
+          term,
+          regex: new RegExp(`(^|[^a-zA-Z0-9_])${escaped}([^a-zA-Z0-9_]|$)`, "i")
+        };
+      })
+    );
+  }
+  const charWfsByChar = /* @__PURE__ */ new Map();
+  for (const cw of db.prepare("SELECT character_id, workflow_id FROM character_workflows").all()) {
+    let set = charWfsByChar.get(cw.character_id);
+    if (!set) {
+      set = /* @__PURE__ */ new Set();
+      charWfsByChar.set(cw.character_id, set);
+    }
+    set.add(cw.workflow_id);
+  }
+  const existingAssocKeys = new Set(
+    db.prepare("SELECT image_content_hash, character_id FROM image_characters").all().map((r) => `${r.image_content_hash}:${r.character_id}`)
+  );
+  const lorasByImageId = /* @__PURE__ */ new Map();
+  for (const il of db.prepare("SELECT image_id, LOWER(lora_name) AS lname, lora_hash FROM image_loras").all()) {
+    const arr = lorasByImageId.get(il.image_id) || [];
+    arr.push({
+      lname: il.lname,
+      baseName: il.lname.replace(/\.(safetensors|pt|ckpt)$/i, ""),
+      lora_hash: il.lora_hash
+    });
+    lorasByImageId.set(il.image_id, arr);
+  }
+  const wfsByImageId = /* @__PURE__ */ new Map();
+  for (const iw of db.prepare("SELECT image_id, workflow_id FROM image_workflows").all()) {
+    const arr = wfsByImageId.get(iw.image_id) || [];
+    arr.push(iw.workflow_id);
+    wfsByImageId.set(iw.image_id, arr);
+  }
+  const insertSuggestion = db.prepare(`
+    INSERT OR IGNORE INTO image_characters
+      (image_id, image_content_hash, character_id, status, source, confidence, match_reason, appearance_label)
+    VALUES (?, ?, ?, 'suggested', ?, ?, ?, ?)
+  `);
+  let totalSuggested = 0;
+  const tx = db.transaction(() => {
+    for (const img of allImages) {
+      const imageLoras = lorasByImageId.get(img.id) || [];
+      const imageWorkflows = wfsByImageId.get(img.id) || [];
+      for (const char of characters) {
+        if (existingAssocKeys.has(`${img.content_hash}:${char.id}`)) continue;
+        const charLoras = charLorasByChar.get(char.id) || [];
+        let matched = false;
+        for (const cl of charLoras) {
+          const hit = imageLoras.find(
+            (il) => il.lname === cl.lname || il.baseName === cl.baseName || cl.lora_hash && il.lora_hash && cl.lora_hash === il.lora_hash
+          );
+          if (hit) {
+            const info = insertSuggestion.run(
+              img.id,
+              img.content_hash,
+              char.id,
+              "lora_match",
+              0.9,
+              `Matched linked character LoRA: ${hit.lname}`,
+              cl.appearance_label
+            );
+            if (info.changes > 0) totalSuggested++;
+            matched = true;
+            break;
+          }
+        }
+        if (matched) continue;
+        if (img.positive_prompt && img.positive_prompt.trim().length > 0) {
+          const regexes = charRegexesByChar.get(char.id) || [];
+          for (const { term, regex } of regexes) {
+            if (regex.test(img.positive_prompt)) {
+              const info = insertSuggestion.run(
+                img.id,
+                img.content_hash,
+                char.id,
+                "prompt_alias",
+                0.75,
+                `Prompt text matched character name/alias: "${term}"`,
+                null
+              );
+              if (info.changes > 0) totalSuggested++;
+              matched = true;
+              break;
+            }
+          }
+        }
+        if (matched) continue;
+        if (imageWorkflows.length > 0) {
+          const charWfIds = charWfsByChar.get(char.id);
+          if (charWfIds) {
+            for (const wfId of imageWorkflows) {
+              if (charWfIds.has(wfId)) {
+                const info = insertSuggestion.run(
+                  img.id,
+                  img.content_hash,
+                  char.id,
+                  "workflow_match",
+                  0.65,
+                  "Generated using a workflow linked to this character",
+                  null
+                );
+                if (info.changes > 0) totalSuggested++;
+                break;
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+  tx();
+  return totalSuggested;
+}
+function updateLoraCategory(loraName, category, notes) {
+  db.prepare(
+    `INSERT INTO models (name, filename, model_type, lora_category, user_notes)
+     VALUES (?, ?, 'lora', ?, ?)
+     ON CONFLICT(filename) DO UPDATE SET
+       lora_category = excluded.lora_category,
+       user_notes = COALESCE(excluded.user_notes, models.user_notes)`
+  ).run(loraName.replace(/\.(safetensors|pt|ckpt)$/i, ""), loraName, category, notes ?? null);
+  invalidateInstalledModelsCache();
+}
+var init_characterService = __esm({
+  "src/server/services/characterService.ts"() {
+    init_db();
+    init_utils();
+    init_civitaiModelEnrichmentService();
+  }
+});
+
+// src/server/services/fsWalkService.ts
+import fs8 from "fs";
+import path8 from "path";
+async function pathExistsAsync(targetPath) {
+  if (!targetPath) return false;
+  try {
+    await fs8.promises.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function walkDirectoryFilesAsync(rootDir, options = {}) {
+  if (!rootDir) return [];
+  const {
+    extensions,
+    skipHidden = false,
+    includeStat = true,
+    minSizeBytes,
+    initialModelType = "other",
+    modelTypeByDirName
+  } = options;
+  const walk = async (dir, currentType, categoryRoot) => {
+    let entries;
+    try {
+      entries = await fs8.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const filesHere = [];
+    const subdirTasks = [];
+    for (const entry of entries) {
+      if (skipHidden && entry.name.startsWith(".")) continue;
+      const fullPath = path8.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        const mappedType = modelTypeByDirName?.[entry.name.toLowerCase()];
+        const nextType = mappedType || currentType;
+        const nextCategoryRoot = mappedType ? fullPath : categoryRoot;
+        subdirTasks.push(walk(fullPath, nextType, nextCategoryRoot));
+      } else if (entry.isFile()) {
+        if (extensions && !extensions.has(path8.extname(entry.name).toLowerCase())) {
+          continue;
+        }
+        const relativeToCategory = categoryRoot ? path8.relative(categoryRoot, fullPath).replace(/\\/g, "/") || entry.name : entry.name;
+        filesHere.push({
+          fullPath,
+          filename: entry.name,
+          relativeToCategory,
+          modelType: currentType
+        });
+      }
+    }
+    if (subdirTasks.length === 0) {
+      return filesHere;
+    }
+    const nested = await Promise.all(subdirTasks);
+    return filesHere.concat(...nested);
+  };
+  const candidates = await walk(rootDir, initialModelType, null);
+  if (candidates.length === 0) return [];
+  if (!includeStat) {
+    return candidates.map((c) => ({
+      ...c,
+      size: 0,
+      mtimeMs: 0
+    }));
+  }
+  const results = [];
+  for (let i = 0; i < candidates.length; i += STAT_CONCURRENCY) {
+    const batch = candidates.slice(i, i + STAT_CONCURRENCY);
+    const batchResults = await Promise.all(
+      batch.map(async (c) => {
+        try {
+          const stat = await fs8.promises.stat(c.fullPath);
+          if (!stat.isFile()) return null;
+          if (minSizeBytes !== void 0 && stat.size < minSizeBytes) return null;
+          return {
+            ...c,
+            size: stat.size,
+            mtimeMs: Math.round(stat.mtimeMs)
+          };
+        } catch {
+          return null;
+        }
+      })
+    );
+    for (const item of batchResults) {
+      if (item) results.push(item);
+    }
+  }
+  return results;
+}
+var MODEL_EXTS, MODEL_DIR_TYPE_MAP, STAT_CONCURRENCY;
+var init_fsWalkService = __esm({
+  "src/server/services/fsWalkService.ts"() {
+    MODEL_EXTS = /* @__PURE__ */ new Set([
+      ".safetensors",
+      ".ckpt",
+      ".pt",
+      ".pth",
+      ".bin",
+      ".gguf",
+      ".sft"
+    ]);
+    MODEL_DIR_TYPE_MAP = {
+      checkpoints: "checkpoint",
+      loras: "lora",
+      vae: "vae",
+      controlnet: "controlnet",
+      upscale_models: "upscaler",
+      embeddings: "embedding",
+      clip: "clip",
+      text_encoders: "clip",
+      unet: "diffusion",
+      diffusion_models: "diffusion"
+    };
+    STAT_CONCURRENCY = 24;
+  }
+});
+
+// src/server/services/seriesService.ts
+function parseChatSnapshot(raw) {
+  if (!raw || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
+    ).map((m, idx) => ({
+      id: typeof m.id === "string" && m.id ? m.id : `msg-${idx}`,
+      role: m.role,
+      content: m.content,
+      proposedPrompt: typeof m.proposedPrompt === "string" ? m.proposedPrompt : null,
+      selectedLoras: Array.isArray(m.selectedLoras) ? m.selectedLoras.map(String).filter(Boolean) : void 0,
+      excludedLoras: Array.isArray(m.excludedLoras) ? m.excludedLoras.map(String).filter(Boolean) : void 0,
+      ...m.submitted === true ? { submitted: true } : {}
+    }));
+  } catch {
+    return [];
+  }
+}
+function buildSeedSnapshotFromImage(imageId) {
+  const row = db.prepare("SELECT positive_prompt FROM image_metadata WHERE image_id = ?").get(imageId);
+  const prompt = (row?.positive_prompt || "").trim();
+  if (!prompt) return null;
+  const seedMessages = [
+    {
+      id: `seed-${imageId}`,
+      role: "assistant",
+      content: "Starting prompt from original image:",
+      proposedPrompt: prompt,
+      submitted: true
+    }
+  ];
+  return JSON.stringify(seedMessages);
+}
+function attachGeneratedImageToSeries(params) {
+  const { imageId, seriesId, branchFromImageId, chatSnapshotJson, preferredStepOrder } = params;
+  if (!imageId || imageId <= 0) return null;
+  const tx = db.transaction(() => {
+    let targetSeriesId = seriesId && seriesId > 0 ? Number(seriesId) : null;
+    const sourceId = branchFromImageId && branchFromImageId > 0 && branchFromImageId !== imageId ? Number(branchFromImageId) : null;
+    if (!targetSeriesId && sourceId) {
+      const candidates = db.prepare(
+        `SELECT isi.series_id, isi.step_order,
+                  (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
+           FROM image_series_items isi
+           JOIN image_series s ON s.id = isi.series_id
+           WHERE isi.image_id = ?
+             AND COALESCE(s.series_kind, 'iterative') != 'multi_shot'
+           ORDER BY (isi.step_order = max_step) DESC, isi.series_id DESC`
+      ).all(sourceId);
+      if (candidates.length > 0) {
+        targetSeriesId = candidates[0].series_id;
+      }
+    }
+    if (targetSeriesId) {
+      const seriesRow = db.prepare(`SELECT id, series_kind FROM image_series WHERE id = ?`).get(targetSeriesId);
+      if (seriesRow?.series_kind === "multi_shot" && sourceId) {
+        targetSeriesId = null;
+      }
+    }
+    if (targetSeriesId) {
+      const seriesRow = db.prepare(`SELECT id FROM image_series WHERE id = ?`).get(targetSeriesId);
+      const existingItems = db.prepare(
+        `SELECT series_id, image_id, step_order, chat_snapshot_json
+           FROM image_series_items
+           WHERE series_id = ?
+           ORDER BY step_order ASC`
+      ).all(targetSeriesId);
+      if (seriesRow && existingItems.length === 0 && !sourceId) {
+        const initialStep = preferredStepOrder !== void 0 && preferredStepOrder !== null && preferredStepOrder >= 0 ? preferredStepOrder : 0;
+        db.prepare(
+          `INSERT OR REPLACE INTO image_series_items (series_id, image_id, step_order, chat_snapshot_json)
+           VALUES (?, ?, ?, ?)`
+        ).run(targetSeriesId, imageId, initialStep, chatSnapshotJson ?? null);
+        db.prepare(`UPDATE image_series SET updated_at = datetime('now') WHERE id = ?`).run(
+          targetSeriesId
+        );
+        return targetSeriesId;
+      }
+      if (existingItems.length > 0) {
+        if (existingItems.some((it) => it.image_id === imageId)) {
+          return targetSeriesId;
+        }
+        const branchIdx = sourceId ? existingItems.findIndex((it) => it.image_id === sourceId) : existingItems.length - 1;
+        if (branchIdx >= 0 && branchIdx < existingItems.length - 1) {
+          const existingSplit = db.prepare(
+            `SELECT a.series_id
+               FROM image_series_items a
+               JOIN image_series_items b ON b.series_id = a.series_id
+               WHERE a.image_id = ? AND b.image_id = ? AND b.step_order = a.step_order + 1
+               LIMIT 1`
+          ).get(sourceId, imageId);
+          if (existingSplit) {
+            return existingSplit.series_id;
+          }
+          const newSeriesInfo = db.prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (NULL, 'iterative')`).run();
+          const newSeriesId = Number(newSeriesInfo.lastInsertRowid);
+          const insertItem = db.prepare(
+            `INSERT INTO image_series_items (series_id, image_id, step_order, chat_snapshot_json)
+             VALUES (?, ?, ?, ?)`
+          );
+          for (let i = 0; i <= branchIdx; i++) {
+            const ancestor = existingItems[i];
+            insertItem.run(
+              newSeriesId,
+              ancestor.image_id,
+              i,
+              ancestor.chat_snapshot_json ?? null
+            );
+          }
+          insertItem.run(newSeriesId, imageId, branchIdx + 1, chatSnapshotJson ?? null);
+          return newSeriesId;
+        }
+        const maxStep = existingItems[existingItems.length - 1].step_order;
+        const canUsePreferredStep = !sourceId && preferredStepOrder !== void 0 && preferredStepOrder !== null && preferredStepOrder >= 0 && !existingItems.some((it) => it.step_order === preferredStepOrder);
+        const targetStep = canUsePreferredStep ? preferredStepOrder : maxStep + 1;
+        db.prepare(
+          `INSERT OR REPLACE INTO image_series_items (series_id, image_id, step_order, chat_snapshot_json)
+           VALUES (?, ?, ?, ?)`
+        ).run(targetSeriesId, imageId, targetStep, chatSnapshotJson ?? null);
+        db.prepare(`UPDATE image_series SET updated_at = datetime('now') WHERE id = ?`).run(
+          targetSeriesId
+        );
+        return targetSeriesId;
+      }
+    }
+    if (sourceId) {
+      const existingPair = db.prepare(
+        `SELECT a.series_id
+           FROM image_series_items a
+           JOIN image_series_items b ON b.series_id = a.series_id
+           WHERE a.image_id = ? AND b.image_id = ? AND b.step_order = a.step_order + 1
+           LIMIT 1`
+      ).get(sourceId, imageId);
+      if (existingPair) {
+        return existingPair.series_id;
+      }
+      const favRow = db.prepare(
+        `SELECT r.is_favorite
+           FROM images i
+           LEFT JOIN ratings r ON r.content_hash = i.content_hash
+           WHERE i.id = ?`
+      ).get(sourceId);
+      const initialPosterId = favRow?.is_favorite ? sourceId : null;
+      const newSeriesInfo = db.prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (?, 'iterative')`).run(initialPosterId);
+      const newSeriesId = Number(newSeriesInfo.lastInsertRowid);
+      const seedSnapshot = buildSeedSnapshotFromImage(sourceId);
+      const insertItem = db.prepare(
+        `INSERT OR REPLACE INTO image_series_items (series_id, image_id, step_order, chat_snapshot_json)
+         VALUES (?, ?, ?, ?)`
+      );
+      insertItem.run(newSeriesId, sourceId, 0, seedSnapshot);
+      insertItem.run(newSeriesId, imageId, 1, chatSnapshotJson ?? seedSnapshot);
+      return newSeriesId;
+    }
+    if (chatSnapshotJson && chatSnapshotJson.trim()) {
+      const existingStandaloneSeries = db.prepare(`SELECT series_id FROM image_series_items WHERE image_id = ? LIMIT 1`).get(imageId);
+      if (existingStandaloneSeries) {
+        return existingStandaloneSeries.series_id;
+      }
+      const newSeriesInfo = db.prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (NULL, 'iterative')`).run();
+      const newSeriesId = Number(newSeriesInfo.lastInsertRowid);
+      db.prepare(
+        `INSERT OR REPLACE INTO image_series_items (series_id, image_id, step_order, chat_snapshot_json)
+         VALUES (?, ?, 0, ?)`
+      ).run(newSeriesId, imageId, chatSnapshotJson);
+      return newSeriesId;
+    }
+    return null;
+  });
+  return tx();
+}
+function attachGenerationItemOutputToSeries(itemId, imageId) {
+  if (!itemId || !imageId || imageId <= 0) return null;
+  const batchMeta = db.prepare(
+    `SELECT gb.id AS batch_id, gi.item_index, gb.total_count, gb.series_id, gb.branch_from_image_id, gb.inspiration_image_id, gb.chat_snapshot_json
+       FROM generation_items gi
+       JOIN generation_batches gb ON gb.id = gi.batch_id
+       WHERE gi.id = ?`
+  ).get(itemId);
+  if (!batchMeta || !batchMeta.series_id && !batchMeta.branch_from_image_id && !batchMeta.inspiration_image_id && !(batchMeta.chat_snapshot_json && batchMeta.chat_snapshot_json.trim())) {
+    return null;
+  }
+  const preferredStepOrder = batchMeta.inspiration_image_id ? batchMeta.item_index >= 1 ? batchMeta.item_index : 1 : batchMeta.total_count > 1 && !batchMeta.branch_from_image_id && batchMeta.item_index >= 1 ? batchMeta.item_index - 1 : null;
+  const resolvedSeriesId = attachGeneratedImageToSeries({
+    imageId,
+    seriesId: batchMeta.series_id,
+    branchFromImageId: batchMeta.branch_from_image_id,
+    chatSnapshotJson: batchMeta.chat_snapshot_json,
+    preferredStepOrder
+  });
+  if (resolvedSeriesId && batchMeta.total_count > 1 && resolvedSeriesId !== batchMeta.series_id) {
+    db.prepare(
+      `UPDATE generation_batches SET series_id = ?, branch_from_image_id = NULL WHERE id = ?`
+    ).run(resolvedSeriesId, batchMeta.batch_id);
+  }
+  return resolvedSeriesId;
+}
+function preserveFailedGenerationConversation(itemId) {
+  if (!itemId || itemId <= 0) return null;
+  const row = db.prepare(
+    `SELECT
+         gi.prompt,
+         gb.character_id,
+         gb.aspect_ratio,
+         gb.megapixels,
+         gb.series_id,
+         gb.branch_from_image_id,
+         gb.chat_snapshot_json
+       FROM generation_items gi
+       JOIN generation_batches gb ON gb.id = gi.batch_id
+       WHERE gi.id = ?`
+  ).get(itemId);
+  if (!row) return null;
+  const chatMessages = parseChatSnapshot(row.chat_snapshot_json);
+  let resolvedSeriesId = row.series_id && row.series_id > 0 ? Number(row.series_id) : null;
+  const sourceImageId = row.branch_from_image_id && row.branch_from_image_id > 0 ? Number(row.branch_from_image_id) : null;
+  if (chatMessages.length > 0 && row.chat_snapshot_json) {
+    try {
+      const tx = db.transaction(() => {
+        if (!resolvedSeriesId && sourceImageId) {
+          const existingMembership = db.prepare(
+            `SELECT isi.series_id,
+                      (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
+               FROM image_series_items isi
+               JOIN image_series s ON s.id = isi.series_id
+               WHERE isi.image_id = ?
+                 AND COALESCE(s.series_kind, 'iterative') != 'multi_shot'
+               ORDER BY (isi.step_order = max_step) DESC, isi.series_id DESC
+               LIMIT 1`
+          ).get(sourceImageId);
+          if (existingMembership) {
+            resolvedSeriesId = existingMembership.series_id;
+          }
+        }
+        if (resolvedSeriesId) {
+          const targetImageId = sourceImageId || db.prepare(
+            `SELECT image_id FROM image_series_items WHERE series_id = ? ORDER BY step_order DESC LIMIT 1`
+          ).get(resolvedSeriesId)?.image_id;
+          if (targetImageId) {
+            db.prepare(
+              `UPDATE image_series_items
+               SET chat_snapshot_json = ?
+               WHERE series_id = ? AND image_id = ?`
+            ).run(row.chat_snapshot_json, resolvedSeriesId, targetImageId);
+            db.prepare(`UPDATE image_series SET updated_at = datetime('now') WHERE id = ?`).run(
+              resolvedSeriesId
+            );
+          }
+        } else if (sourceImageId) {
+          const newSeriesId = attachGeneratedImageToSeries({
+            imageId: sourceImageId,
+            chatSnapshotJson: row.chat_snapshot_json
+          });
+          if (newSeriesId) {
+            resolvedSeriesId = newSeriesId;
+          }
+        }
+      });
+      tx();
+    } catch (err) {
+      console.warn("Failed to persist failed batch conversation onto series:", err);
+    }
+  }
+  return {
+    prompt: row.prompt || "",
+    characterId: row.character_id ? Number(row.character_id) : null,
+    aspectRatio: row.aspect_ratio || "2:3 (Portrait Photo)",
+    megapixels: Number(row.megapixels || 3),
+    seriesId: resolvedSeriesId,
+    branchFromImageId: sourceImageId,
+    chatMessages
+  };
+}
+function attachUpscaledImageToSeries(sourceImageId, derivedImageId) {
+  if (!sourceImageId || !derivedImageId || sourceImageId === derivedImageId) return null;
+  const existingRow = db.prepare(
+    `SELECT isi.series_id, isi.step_order, isi.chat_snapshot_json,
+              (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
+       FROM image_series_items isi
+       JOIN image_series s ON s.id = isi.series_id
+       WHERE isi.image_id = ?
+         AND COALESCE(s.series_kind, 'iterative') != 'multi_shot'
+       ORDER BY (isi.step_order = max_step) DESC, isi.series_id DESC
+       LIMIT 1`
+  ).get(sourceImageId);
+  return attachGeneratedImageToSeries({
+    imageId: derivedImageId,
+    seriesId: existingRow?.series_id ?? null,
+    branchFromImageId: existingRow?.series_id ? null : sourceImageId,
+    chatSnapshotJson: existingRow?.chat_snapshot_json ?? null
+  });
+}
+function setExclusiveSeriesFavorite(imageId, isFavorite) {
+  const seriesRows = db.prepare(`SELECT DISTINCT series_id FROM image_series_items WHERE image_id = ?`).all(imageId);
+  if (seriesRows.length === 0) return;
+  const tx = db.transaction(() => {
+    if (isFavorite) {
+      for (const { series_id } of seriesRows) {
+        db.prepare(
+          `UPDATE image_series SET poster_image_id = ?, updated_at = datetime('now') WHERE id = ?`
+        ).run(imageId, series_id);
+        const siblingRows = db.prepare(
+          `SELECT i.id, i.content_hash
+             FROM image_series_items isi
+             JOIN images i ON i.id = isi.image_id
+             WHERE isi.series_id = ? AND isi.image_id != ?`
+        ).all(series_id, imageId);
+        for (const sib of siblingRows) {
+          db.prepare(
+            `UPDATE ratings SET is_favorite = 0, favorited_at = NULL WHERE content_hash = ?`
+          ).run(sib.content_hash);
+        }
+      }
+    } else {
+      db.prepare(
+        `UPDATE image_series SET poster_image_id = NULL, updated_at = datetime('now') WHERE poster_image_id = ?`
+      ).run(imageId);
+    }
+  });
+  tx();
+}
+function normalizeSeriesKind(raw) {
+  return raw === "multi_shot" ? "multi_shot" : "iterative";
+}
+function buildSeriesItemRecord(r) {
+  const hashParam = r.content_hash ? `?h=${String(r.content_hash).slice(0, 12)}` : "";
+  return {
+    seriesId: r.series_id,
+    imageId: r.image_id,
+    stepOrder: r.step_order,
+    filename: r.filename,
+    thumbnailUrl: `/api/images/${r.image_id}/thumbnail${hashParam}`,
+    originalUrl: `/api/images/${r.image_id}/file`,
+    width: r.width,
+    height: r.height,
+    isFavorite: Boolean(r.is_favorite),
+    rating: Number(r.rating || 0),
+    createdAt: r.item_created_at,
+    chatSnapshot: parseChatSnapshot(r.chat_snapshot_json),
+    isUploadedReference: Boolean(r.is_uploaded_reference)
+  };
+}
+function enrichSingleImageWithSeries(img, preferredSeriesId) {
+  const memberships = db.prepare(
+    `SELECT isi.series_id, isi.step_order, s.poster_image_id, s.series_kind,
+              (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
+       FROM image_series_items isi
+       JOIN image_series s ON s.id = isi.series_id
+       WHERE isi.image_id = ?
+       ORDER BY (isi.series_id = COALESCE(?, -1)) DESC,
+                (s.poster_image_id = ?) DESC,
+                (isi.step_order = max_step) DESC,
+                isi.series_id DESC`
+  ).all(img.id, preferredSeriesId ?? null, img.id);
+  if (memberships.length === 0) {
+    return {
+      ...img,
+      seriesId: null,
+      seriesKind: "iterative",
+      seriesCount: 1,
+      seriesItems: [],
+      chatSnapshot: []
+    };
+  }
+  const chosenSeriesId = memberships[0].series_id;
+  const chosenSeriesKind = normalizeSeriesKind(memberships[0].series_kind);
+  const memberRows = db.prepare(
+    `SELECT
+         isi.series_id, s.series_kind, s.poster_image_id, isi.image_id, isi.step_order,
+         isi.chat_snapshot_json, isi.created_at AS item_created_at,
+         i.filename, i.content_hash, i.width, i.height, i.is_missing,
+         COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference,
+         COALESCE(r.is_favorite, 0) AS is_favorite,
+         COALESCE(r.rating, 0) AS rating
+       FROM image_series_items isi
+       JOIN image_series s ON s.id = isi.series_id
+       JOIN images i ON i.id = isi.image_id
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE isi.series_id = ? AND i.is_missing = 0
+       ORDER BY isi.step_order ASC`
+  ).all(chosenSeriesId);
+  const seriesItems = memberRows.map(buildSeriesItemRecord);
+  const matchingItem = seriesItems.find((si) => si.imageId === img.id);
+  return {
+    ...img,
+    seriesId: chosenSeriesId,
+    seriesKind: chosenSeriesKind,
+    seriesCount: seriesItems.length,
+    seriesItems,
+    chatSnapshot: matchingItem?.chatSnapshot || []
+  };
+}
+function collapseSeriesInGalleryPool(pool) {
+  if (pool.length === 0) return [];
+  const allSeriesMemberRows = db.prepare(
+    `SELECT
+         isi.series_id, s.series_kind, s.poster_image_id, isi.image_id, isi.step_order,
+         isi.chat_snapshot_json, isi.created_at AS item_created_at,
+         i.filename, i.content_hash, i.width, i.height, i.is_missing,
+         COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference,
+         COALESCE(r.is_favorite, 0) AS is_favorite,
+         COALESCE(r.rating, 0) AS rating
+       FROM image_series_items isi
+       JOIN image_series s ON s.id = isi.series_id
+       JOIN images i ON i.id = isi.image_id
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE i.is_missing = 0
+       ORDER BY isi.series_id ASC, isi.step_order ASC`
+  ).all();
+  if (allSeriesMemberRows.length === 0) {
+    return pool;
+  }
+  const poolById = /* @__PURE__ */ new Map();
+  for (const img of pool) {
+    poolById.set(img.id, img);
+  }
+  const membersBySeries = /* @__PURE__ */ new Map();
+  const imageIdsInAnySeries = /* @__PURE__ */ new Set();
+  for (const row of allSeriesMemberRows) {
+    imageIdsInAnySeries.add(row.image_id);
+    const list = membersBySeries.get(row.series_id);
+    if (list) list.push(row);
+    else membersBySeries.set(row.series_id, [row]);
+  }
+  const result = [];
+  for (const img of pool) {
+    if (!imageIdsInAnySeries.has(img.id)) {
+      result.push({
+        ...img,
+        seriesId: null,
+        seriesCount: 1
+      });
+    }
+  }
+  for (const [seriesId, members] of membersBySeries.entries()) {
+    const visibleMembers = members.filter((m) => poolById.has(m.image_id));
+    if (visibleMembers.length === 0) continue;
+    const posterId = members[0]?.poster_image_id ?? null;
+    const posterMember = (posterId ? visibleMembers.find((m) => m.image_id === posterId && Boolean(m.is_favorite)) : void 0) || [...visibleMembers].reverse().find((m) => Boolean(m.is_favorite)) || visibleMembers[visibleMembers.length - 1];
+    const baseRecord = poolById.get(posterMember.image_id);
+    if (!baseRecord) continue;
+    const seriesItems = members.map(buildSeriesItemRecord);
+    const repItem = seriesItems.find((si) => si.imageId === posterMember.image_id);
+    const seriesKind = normalizeSeriesKind(members[0]?.series_kind);
+    result.push({
+      ...baseRecord,
+      seriesId,
+      seriesKind,
+      seriesCount: seriesItems.length,
+      seriesItems,
+      chatSnapshot: repItem?.chatSnapshot || []
+    });
+  }
+  return result;
+}
+var init_seriesService = __esm({
+  "src/server/services/seriesService.ts"() {
+    init_db();
+  }
+});
+
+// src/server/services/settingsService.ts
+function getSettingsMap(keys) {
+  if (keys && keys.length === 0) {
+    return /* @__PURE__ */ new Map();
+  }
+  const rows = keys ? db.prepare(
+    `SELECT key, value FROM app_settings WHERE key IN (${keys.map(() => "?").join(", ")})`
+  ).all(...keys) : db.prepare("SELECT key, value FROM app_settings").all();
+  return new Map(rows.map((r) => [r.key, r.value]));
+}
+function getSetting(key, defaultValue, prefetched) {
+  if (prefetched) {
+    return prefetched.has(key) ? prefetched.get(key) : defaultValue;
+  }
+  const row = db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key);
+  return row !== void 0 ? row.value : defaultValue;
+}
+function getBoolSetting(key, defaultValue = false, prefetched) {
+  const raw = getSetting(key, void 0, prefetched);
+  if (raw === void 0) return defaultValue;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "1" || normalized === "true") return true;
+  if (normalized === "0" || normalized === "false") return false;
+  return defaultValue;
+}
+function getNumberSetting(key, defaultValue, prefetched) {
+  const raw = getSetting(key, void 0, prefetched);
+  if (raw === void 0 || raw.trim() === "") return defaultValue;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+function getJsonSetting(key, defaultValue, prefetched) {
+  const raw = getSetting(key, void 0, prefetched);
+  if (!raw) return defaultValue;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return defaultValue;
+  }
+}
+function setSetting(key, value) {
+  db.prepare(UPSERT_SETTING_SQL).run(key, value);
+}
+function setBoolSetting(key, enabled, format = "1_0") {
+  const serialized = format === "true_false" ? enabled ? "true" : "false" : enabled ? "1" : "0";
+  setSetting(key, serialized);
+}
+function setSettings(entries) {
+  if (entries.length === 0) return;
+  const stmt = db.prepare(UPSERT_SETTING_SQL);
+  const tx = db.transaction((items) => {
+    for (const [key, value] of items) {
+      stmt.run(key, value);
+    }
+  });
+  tx(entries);
+}
+var UPSERT_SETTING_SQL;
+var init_settingsService = __esm({
+  "src/server/services/settingsService.ts"() {
+    init_db();
+    UPSERT_SETTING_SQL = `
+  INSERT INTO app_settings (key, value, updated_at)
+  VALUES (?, ?, datetime('now'))
+  ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+`;
+  }
+});
+
+// src/server/services/modelCleanupService.ts
+var modelCleanupService_exports = {};
+__export(modelCleanupService_exports, {
+  getModelCleanupSettings: () => getModelCleanupSettings,
+  getModelCleanupStatus: () => getModelCleanupStatus,
+  scanAndCleanCopiedDownloads: () => scanAndCleanCopiedDownloads,
+  startModelCleanupScheduler: () => startModelCleanupScheduler,
+  updateModelCleanupSettings: () => updateModelCleanupSettings
+});
+import fs9 from "fs";
+import path9 from "path";
+import crypto2 from "crypto";
+function isPathInsideDir(targetPath, rootDir) {
+  const resolvedTarget = path9.resolve(targetPath);
+  const resolvedRoot = path9.resolve(rootDir);
+  if (resolvedTarget === resolvedRoot) return false;
+  return resolvedTarget.startsWith(resolvedRoot + path9.sep);
+}
+function hasDirectoryOverlap(dirA, dirB) {
+  const a = path9.resolve(dirA);
+  const b = path9.resolve(dirB);
+  return a === b || a.startsWith(b + path9.sep) || b.startsWith(a + path9.sep);
+}
+function computeFileSha256Stream2(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto2.createHash("sha256");
+    const stream = fs9.createReadStream(filePath, { highWaterMark: 4 * 1024 * 1024 });
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex").toLowerCase()));
+  });
+}
+function getModelCleanupSettings() {
+  const map = getSettingsMap(["auto_clean_copied_models", "auto_clean_copied_models_hours"]);
+  const enabled = getBoolSetting("auto_clean_copied_models", false, map);
+  const parsedHours = getNumberSetting(
+    "auto_clean_copied_models_hours",
+    DEFAULT_RETENTION_HOURS,
+    map
+  );
+  const retentionHours = parsedHours >= 0 ? Math.min(8760, Math.round(parsedHours)) : DEFAULT_RETENTION_HOURS;
+  return { enabled, retentionHours };
+}
+function updateModelCleanupSettings(params) {
+  const updates = [];
+  if (params.enabled !== void 0) {
+    updates.push(["auto_clean_copied_models", params.enabled ? "1" : "0"]);
+  }
+  if (params.retentionHours !== void 0) {
+    const clamped = Number.isFinite(Number(params.retentionHours)) ? Math.max(0, Math.min(8760, Math.round(Number(params.retentionHours)))) : DEFAULT_RETENTION_HOURS;
+    updates.push(["auto_clean_copied_models_hours", String(clamped)]);
+  }
+  setSettings(updates);
+  invalidateStorageUsageStatsCache();
+  return getModelCleanupSettings();
+}
+function getModelCleanupStatus() {
+  const { enabled, retentionHours } = getModelCleanupSettings();
+  const sameDirectoryConflict = hasDirectoryOverlap(
+    appConfig.downloadsDir,
+    appConfig.comfyuiModelsDir
+  );
+  const rows = db.prepare(
+    `SELECT download_path, filename, file_size, comfy_path, verified_sha256, verified_at
+       FROM downloaded_model_copies
+       WHERE verified_at IS NOT NULL AND comfy_path IS NOT NULL AND verified_sha256 IS NOT NULL
+       ORDER BY verified_at ASC`
+  ).all();
+  const nowMs = Date.now();
+  const retentionMs = retentionHours * 36e5;
+  const candidates = [];
+  let totalReclaimableBytes = 0;
+  let eligibleCount = 0;
+  for (const row of rows) {
+    if (!fs9.existsSync(row.download_path)) continue;
+    const verifiedMs = Date.parse(row.verified_at);
+    if (!Number.isFinite(verifiedMs)) continue;
+    const eligibleMs = verifiedMs + retentionMs;
+    const msRemaining = Math.max(0, eligibleMs - nowMs);
+    const isEligible = nowMs >= eligibleMs;
+    if (isEligible) eligibleCount += 1;
+    totalReclaimableBytes += row.file_size;
+    candidates.push({
+      downloadPath: row.download_path,
+      comfyPath: row.comfy_path,
+      filename: row.filename,
+      fileSize: row.file_size,
+      verifiedSha256: row.verified_sha256,
+      verifiedAt: row.verified_at,
+      eligibleAt: new Date(eligibleMs).toISOString(),
+      hoursRemaining: Number((msRemaining / 36e5).toFixed(1)),
+      isEligible
+    });
+  }
+  return {
+    enabled,
+    retentionHours,
+    downloadsDir: appConfig.downloadsDir,
+    comfyuiModelsDir: appConfig.comfyuiModelsDir,
+    sameDirectoryConflict,
+    isScanning: isCleanupRunning,
+    lastScanAt,
+    lastDeletedCount,
+    lastDeletedBytes,
+    lastCleanupAt,
+    totalReclaimableBytes,
+    eligibleCount,
+    candidates
+  };
+}
+async function scanAndCleanCopiedDownloads(options) {
+  if (isCleanupRunning) {
+    return { status: getModelCleanupStatus(), deletedFiles: [], freedBytes: 0 };
+  }
+  const { enabled, retentionHours } = getModelCleanupSettings();
+  const shouldDelete = options?.deleteEligible ?? enabled;
+  const forceImmediate = Boolean(options?.forceImmediate);
+  if (hasDirectoryOverlap(appConfig.downloadsDir, appConfig.comfyuiModelsDir)) {
+    lastScanAt = (/* @__PURE__ */ new Date()).toISOString();
+    return { status: getModelCleanupStatus(), deletedFiles: [], freedBytes: 0 };
+  }
+  isCleanupRunning = true;
+  const deletedFiles = [];
+  let freedBytes = 0;
+  try {
+    const nowIso = (/* @__PURE__ */ new Date()).toISOString();
+    const nowMs = Date.now();
+    const [downloadFiles, comfyFiles] = await Promise.all([
+      walkDirectoryFilesAsync(appConfig.downloadsDir, {
+        extensions: MODEL_EXTS,
+        includeStat: true,
+        minSizeBytes: 1
+      }),
+      walkDirectoryFilesAsync(appConfig.comfyuiModelsDir, {
+        extensions: MODEL_EXTS,
+        includeStat: true,
+        minSizeBytes: 1
+      })
+    ]);
+    const activeJobPaths = new Set(
+      db.prepare(
+        `SELECT destination_path FROM download_jobs
+             WHERE status IN ('downloading', 'pending', 'scheduled')`
+      ).all().map((r) => path9.resolve(r.destination_path))
+    );
+    const comfyByLowerName = /* @__PURE__ */ new Map();
+    for (const cf of comfyFiles) {
+      const key = cf.filename.toLowerCase();
+      const list = comfyByLowerName.get(key);
+      if (list) list.push(cf);
+      else comfyByLowerName.set(key, [cf]);
+    }
+    const existingRows = /* @__PURE__ */ new Map();
+    for (const r of db.prepare("SELECT * FROM downloaded_model_copies").all()) {
+      existingRows.set(r.download_path, r);
+    }
+    const seenDownloadPaths = /* @__PURE__ */ new Set();
+    const upsertStmt = db.prepare(`
+      INSERT INTO downloaded_model_copies
+        (download_path, filename, file_size, dl_mtime_ms, comfy_path, comfy_mtime_ms, verified_sha256, verified_at, last_checked_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(download_path) DO UPDATE SET
+        filename = excluded.filename,
+        file_size = excluded.file_size,
+        dl_mtime_ms = excluded.dl_mtime_ms,
+        comfy_path = excluded.comfy_path,
+        comfy_mtime_ms = excluded.comfy_mtime_ms,
+        verified_sha256 = excluded.verified_sha256,
+        verified_at = excluded.verified_at,
+        last_checked_at = excluded.last_checked_at
+    `);
+    for (const dl of downloadFiles) {
+      const resolvedDl = path9.resolve(dl.fullPath);
+      if (!isPathInsideDir(resolvedDl, appConfig.downloadsDir)) continue;
+      if (activeJobPaths.has(resolvedDl)) continue;
+      seenDownloadPaths.add(dl.fullPath);
+      const cached = existingRows.get(dl.fullPath);
+      const sizeMatches = comfyFiles.length > 0 && comfyByLowerName.get(dl.filename.toLowerCase()) || [];
+      const candidates = sizeMatches.filter(
+        (cf) => cf.size === dl.size && nowMs - cf.mtimeMs >= COPY_STABILITY_MS
+      );
+      let matchedComfy = null;
+      let verifiedSha256 = null;
+      let verifiedAt = null;
+      if (candidates.length > 0) {
+        if (cached && cached.verified_at && cached.verified_sha256 && cached.file_size === dl.size && cached.dl_mtime_ms === dl.mtimeMs) {
+          const sameComfy = candidates.find(
+            (cf) => cf.fullPath === cached.comfy_path && cf.mtimeMs === cached.comfy_mtime_ms
+          );
+          if (sameComfy) {
+            matchedComfy = sameComfy;
+            verifiedSha256 = cached.verified_sha256;
+            verifiedAt = cached.verified_at;
+          }
+        }
+        if (!matchedComfy) {
+          const dlSha = await computeFileSha256Stream2(dl.fullPath);
+          for (const cf of candidates) {
+            const comfySha = await computeFileSha256Stream2(cf.fullPath);
+            if (comfySha === dlSha) {
+              matchedComfy = cf;
+              verifiedSha256 = dlSha;
+              verifiedAt = cached?.verified_sha256 === dlSha && cached?.verified_at ? cached.verified_at : nowIso;
+              break;
+            }
+          }
+        }
+      }
+      upsertStmt.run(
+        dl.fullPath,
+        dl.filename,
+        dl.size,
+        dl.mtimeMs,
+        matchedComfy?.fullPath ?? null,
+        matchedComfy?.mtimeMs ?? null,
+        verifiedSha256,
+        verifiedAt,
+        nowIso
+      );
+      if (shouldDelete && matchedComfy && verifiedAt && verifiedSha256) {
+        const verifiedMs = Date.parse(verifiedAt);
+        const retentionMs = retentionHours * 36e5;
+        const isDue = forceImmediate || Number.isFinite(verifiedMs) && nowMs - verifiedMs >= retentionMs;
+        if (isDue) {
+          try {
+            const [dlExists, comfyStat] = await Promise.all([
+              pathExistsAsync(dl.fullPath),
+              fs9.promises.stat(matchedComfy.fullPath).catch(() => null)
+            ]);
+            if (isPathInsideDir(dl.fullPath, appConfig.downloadsDir) && isPathInsideDir(matchedComfy.fullPath, appConfig.comfyuiModelsDir) && dlExists && comfyStat !== null && comfyStat.isFile() && comfyStat.size === dl.size && !activeJobPaths.has(resolvedDl)) {
+              await fs9.promises.unlink(dl.fullPath);
+              db.prepare("DELETE FROM downloaded_model_copies WHERE download_path = ?").run(dl.fullPath);
+              db.prepare(
+                `UPDATE models
+                 SET file_path = ?,
+                     download_file_path = NULL,
+                     comfyui_path = COALESCE(comfyui_path, ?),
+                     is_installed = 1,
+                     last_seen_at = datetime('now')
+                 WHERE LOWER(filename) = LOWER(?)`
+              ).run(matchedComfy.fullPath, dl.filename, dl.filename);
+              invalidateInstalledModelsCache();
+              deletedFiles.push(dl.filename);
+              freedBytes += dl.size;
+              logger.info(
+                "ModelCleanup",
+                `Deleted duplicate ${dl.filename} from ${appConfig.downloadsDir} (${(dl.size / (1024 * 1024)).toFixed(1)} MB freed; verified copy at ${matchedComfy.fullPath})`
+              );
+            }
+          } catch (err) {
+            logger.warn("ModelCleanup", `Failed to remove duplicate ${dl.fullPath}: ${err?.message}`);
+          }
+        }
+      }
+    }
+    for (const oldPath of existingRows.keys()) {
+      if (!seenDownloadPaths.has(oldPath)) {
+        db.prepare("DELETE FROM downloaded_model_copies WHERE download_path = ?").run(oldPath);
+      }
+    }
+    lastScanAt = nowIso;
+    if (deletedFiles.length > 0) {
+      lastDeletedCount = deletedFiles.length;
+      lastDeletedBytes = freedBytes;
+      lastCleanupAt = nowIso;
+    }
+  } catch (err) {
+    logger.error("ModelCleanup", "Model cleanup scan failed", err);
+  } finally {
+    isCleanupRunning = false;
+    invalidateStorageUsageStatsCache();
+  }
+  return { status: getModelCleanupStatus(), deletedFiles, freedBytes };
+}
+function startModelCleanupScheduler() {
+  if (cleanupTimer) return cleanupTimer;
+  cleanupTimer = setInterval(() => {
+    scanAndCleanCopiedDownloads().catch(() => {
+    });
+  }, CLEANUP_TICK_MS);
+  return cleanupTimer;
+}
+var COPY_STABILITY_MS, CLEANUP_TICK_MS, DEFAULT_RETENTION_HOURS, isCleanupRunning, cleanupTimer, lastScanAt, lastDeletedCount, lastDeletedBytes, lastCleanupAt;
+var init_modelCleanupService = __esm({
+  "src/server/services/modelCleanupService.ts"() {
+    init_db();
+    init_config();
+    init_logger();
+    init_fsWalkService();
+    init_civitaiModelEnrichmentService();
+    init_settingsService();
+    init_storageStatsService();
+    COPY_STABILITY_MS = 6e4;
+    CLEANUP_TICK_MS = 15 * 6e4;
+    DEFAULT_RETENTION_HOURS = 24;
+    isCleanupRunning = false;
+    cleanupTimer = null;
+    lastScanAt = null;
+    lastDeletedCount = 0;
+    lastDeletedBytes = 0;
+    lastCleanupAt = null;
+  }
+});
+
+// src/server/services/storageStatsService.ts
+function invalidateStorageUsageStatsCache() {
+  storageStatsGeneration += 1;
+  cachedStorageStats = null;
+  inFlightStorageStats = null;
+}
+async function measureDirectoryBytes(rootDir) {
+  if (!rootDir) return { count: 0, sizeBytes: 0 };
+  const files = await walkDirectoryFilesAsync(rootDir, {
+    skipHidden: true,
+    includeStat: true
+  });
+  let sizeBytes = 0;
+  for (const file of files) {
+    sizeBytes += file.size;
+  }
+  return { count: files.length, sizeBytes };
+}
+function queryModelCategoryStat(modelTypes) {
+  const placeholders = modelTypes.map(() => "?").join(", ");
+  const row = db.prepare(
+    `SELECT COUNT(*) AS count,
+              COALESCE(SUM(COALESCE(file_size, 0)), 0) AS sizeBytes,
+              COALESCE(SUM(CASE WHEN file_size IS NULL OR file_size <= 0 THEN 1 ELSE 0 END), 0) AS unsizedCount
+       FROM models
+       WHERE is_installed = 1
+         AND model_type IN (${placeholders})`
+  ).get(...modelTypes);
+  return {
+    count: Number(row?.count || 0),
+    sizeBytes: Number(row?.sizeBytes || 0),
+    unsizedCount: Number(row?.unsizedCount || 0)
+  };
+}
+async function computeStorageUsageStats() {
+  const loras = queryModelCategoryStat(["lora"]);
+  const baseModels = queryModelCategoryStat(["diffusion", "checkpoint"]);
+  const photosRow = db.prepare(
+    `SELECT COUNT(*) AS count,
+              COALESCE(SUM(COALESCE(file_size, 0)), 0) AS sizeBytes
+       FROM images
+       WHERE is_missing = 0
+         AND COALESCE(is_uploaded_reference, 0) = 0`
+  ).get();
+  const photos = {
+    count: Number(photosRow?.count || 0),
+    sizeBytes: Number(photosRow?.sizeBytes || 0)
+  };
+  const [importedImages, thumbnails] = await Promise.all([
+    measureDirectoryBytes(appConfig.uploadedImagesDir),
+    measureDirectoryBytes(appConfig.thumbnailPath)
+  ]);
+  const cleanupStatus = getModelCleanupStatus();
+  const pendingDeleteModels = {
+    count: cleanupStatus.candidates.length,
+    sizeBytes: cleanupStatus.totalReclaimableBytes,
+    eligibleCount: cleanupStatus.eligibleCount,
+    retentionHours: cleanupStatus.retentionHours,
+    lastScanAt: cleanupStatus.lastScanAt
+  };
+  const comfyTotalBytes = loras.sizeBytes + baseModels.sizeBytes + photos.sizeBytes;
+  const localTotalBytes = importedImages.sizeBytes + thumbnails.sizeBytes + pendingDeleteModels.sizeBytes;
+  return {
+    comfy: {
+      loras,
+      baseModels,
+      photos,
+      totalBytes: comfyTotalBytes
+    },
+    local: {
+      importedImages,
+      thumbnails,
+      pendingDeleteModels,
+      totalBytes: localTotalBytes
+    },
+    totalTrackedBytes: comfyTotalBytes + localTotalBytes,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+async function getStorageUsageStats(options) {
+  const now = Date.now();
+  if (!options?.bypassCache && cachedStorageStats && cachedStorageStats.expiresAt > now) {
+    return cachedStorageStats.value;
+  }
+  if (!options?.bypassCache && inFlightStorageStats) {
+    return inFlightStorageStats;
+  }
+  const startGeneration = storageStatsGeneration;
+  const promise = computeStorageUsageStats().then((result) => {
+    if (startGeneration === storageStatsGeneration) {
+      cachedStorageStats = {
+        value: result,
+        expiresAt: Date.now() + STORAGE_STATS_TTL_MS
+      };
+    }
+    return result;
+  }).finally(() => {
+    if (inFlightStorageStats === promise) {
+      inFlightStorageStats = null;
+    }
+  });
+  if (!options?.bypassCache) {
+    inFlightStorageStats = promise;
+  }
+  return promise;
+}
+var STORAGE_STATS_TTL_MS, cachedStorageStats, inFlightStorageStats, storageStatsGeneration;
+var init_storageStatsService = __esm({
+  "src/server/services/storageStatsService.ts"() {
+    init_db();
+    init_config();
+    init_fsWalkService();
+    init_modelCleanupService();
+    STORAGE_STATS_TTL_MS = 45e3;
+    cachedStorageStats = null;
+    inFlightStorageStats = null;
+    storageStatsGeneration = 0;
+  }
+});
+
+// src/server/services/liveMonitor/liveMonitorState.ts
+function recordComfyExecutionError(params) {
+  const { promptId, message, recovery = null } = params;
+  if (promptId && liveMonitorState.cancelledPromptIds.has(promptId)) {
+    return;
+  }
+  if (promptId) {
+    liveMonitorState.runningPromptIds.delete(promptId);
+    liveMonitorState.pendingPromptIds.delete(promptId);
+    liveMonitorState.promptProgressMap.delete(promptId);
+    liveMonitorState.finishedPromptIds.delete(promptId);
+  }
+  if (promptId && liveMonitorState.lastError?.promptId === promptId && Date.now() - liveMonitorState.lastError.timestamp < 15e3) {
+    if (recovery && !liveMonitorState.lastError.recovery) {
+      liveMonitorState.lastError = { ...liveMonitorState.lastError, recovery };
+    }
+    return;
+  }
+  liveMonitorState.lastError = {
+    id: `${promptId || "err"}-${Date.now()}`,
+    promptId,
+    message: message.trim() || "ComfyUI execution error",
+    timestamp: Date.now(),
+    recovery
+  };
+  logger.error(
+    "ComfyUI",
+    `Execution failed (${promptId || "unknown"}): ${liveMonitorState.lastError.message}`
+  );
+}
+function registerQueuedPromptSeriesTarget(promptId, meta) {
+  if (!promptId) return;
+  liveMonitorState.queuePromptSeriesMap.set(promptId, {
+    ...meta,
+    registeredAtMs: Date.now()
+  });
+}
+function invalidateComfyQueueCache() {
+  liveMonitorState.lastQueueFetchMs = 0;
+}
+function markPromptsCancelled(promptIds, batchId) {
+  const now = Date.now();
+  if (typeof batchId === "number" && batchId > 0) {
+    liveMonitorState.cancelledBatchIds.set(batchId, now);
+  }
+  for (const rawPid of promptIds) {
+    const pid = rawPid.trim();
+    if (!pid) continue;
+    liveMonitorState.cancelledPromptIds.set(pid, now);
+    liveMonitorState.runningPromptIds.delete(pid);
+    liveMonitorState.pendingPromptIds.delete(pid);
+    liveMonitorState.promptProgressMap.delete(pid);
+    liveMonitorState.finishedPromptIds.delete(pid);
+    liveMonitorState.queuePromptMetaMap.delete(pid);
+    liveMonitorState.queuePromptSeriesMap.delete(pid);
+    if (liveMonitorState.activePromptId === pid) {
+      liveMonitorState.activePromptId = null;
+      liveMonitorState.progressPercent = null;
+      liveMonitorState.step = null;
+      liveMonitorState.maxSteps = null;
+      liveMonitorState.currentNode = null;
+    }
+  }
+}
+function isPromptCancelled(promptId) {
+  return Boolean(promptId && liveMonitorState.cancelledPromptIds.has(promptId));
+}
+function isBatchCancelled(batchId) {
+  return Boolean(typeof batchId === "number" && liveMonitorState.cancelledBatchIds.has(batchId));
+}
+function syncRunJobCounts(totalRemaining) {
+  if (totalRemaining <= 0) {
+    liveMonitorState.runTotalJobs = 0;
+    liveMonitorState.prevTotalRemaining = 0;
+    return;
+  }
+  if (liveMonitorState.runTotalJobs === 0) {
+    liveMonitorState.runTotalJobs = totalRemaining;
+  } else if (totalRemaining > liveMonitorState.prevTotalRemaining) {
+    liveMonitorState.runTotalJobs += totalRemaining - liveMonitorState.prevTotalRemaining;
+  }
+  liveMonitorState.runTotalJobs = Math.max(liveMonitorState.runTotalJobs, totalRemaining);
+  liveMonitorState.prevTotalRemaining = totalRemaining;
+}
+function notifyWorkspaceDataChanged() {
+  liveMonitorState.workspaceVersion = Math.max(liveMonitorState.workspaceVersion + 1, Date.now());
+}
+function notifyImageIndexed() {
+  liveMonitorState.lastIndexedAt = Date.now();
+  notifyWorkspaceDataChanged();
+}
+function resolvePromptProgressState(pid, dbStatus, hasOutputImage, isFallbackActiveJob) {
+  if (dbStatus === "completed" || hasOutputImage || pid && liveMonitorState.finishedPromptIds.has(pid)) {
+    return { cardState: "indexing", progressPercent: 100 };
+  }
+  if (pid && liveMonitorState.promptProgressMap.has(pid)) {
+    const pct = liveMonitorState.promptProgressMap.get(pid);
+    return { cardState: "generating", progressPercent: pct };
+  }
+  if (isFallbackActiveJob && liveMonitorState.runningCount > 0 && liveMonitorState.progressPercent !== null) {
+    return { cardState: "generating", progressPercent: liveMonitorState.progressPercent };
+  }
+  return { cardState: "queued", progressPercent: null };
+}
+function pruneStaleMonitorEntries(now) {
+  for (const [pid, ts] of liveMonitorState.finishedPromptIds.entries()) {
+    if (now - ts > 6e4) {
+      liveMonitorState.finishedPromptIds.delete(pid);
+      liveMonitorState.promptProgressMap.delete(pid);
+      liveMonitorState.queuePromptMetaMap.delete(pid);
+      liveMonitorState.queuePromptSeriesMap.delete(pid);
+    }
+  }
+  for (const [pid, reg] of liveMonitorState.queuePromptSeriesMap.entries()) {
+    if (now - reg.registeredAtMs > 30 * 6e4) {
+      liveMonitorState.queuePromptSeriesMap.delete(pid);
+    }
+  }
+  for (const [pid, ts] of liveMonitorState.cancelledPromptIds.entries()) {
+    if (now - ts > 5 * 6e4) {
+      liveMonitorState.cancelledPromptIds.delete(pid);
+    }
+  }
+  for (const [bid, ts] of liveMonitorState.cancelledBatchIds.entries()) {
+    if (now - ts > 5 * 6e4) {
+      liveMonitorState.cancelledBatchIds.delete(bid);
+    }
+  }
+}
+var COUCHY_COMFY_CLIENT_ID, liveMonitorState;
+var init_liveMonitorState = __esm({
+  "src/server/services/liveMonitor/liveMonitorState.ts"() {
+    init_logger();
+    COUCHY_COMFY_CLIENT_ID = "couchy-studio-client";
+    liveMonitorState = {
+      online: false,
+      runningCount: 0,
+      queuedCount: 0,
+      progressPercent: null,
+      step: null,
+      maxSteps: null,
+      currentNode: null,
+      activePromptId: null,
+      runningPromptIds: /* @__PURE__ */ new Set(),
+      pendingPromptIds: /* @__PURE__ */ new Set(),
+      promptProgressMap: /* @__PURE__ */ new Map(),
+      finishedPromptIds: /* @__PURE__ */ new Map(),
+      queuePromptMetaMap: /* @__PURE__ */ new Map(),
+      queuePromptSeriesMap: /* @__PURE__ */ new Map(),
+      runTotalJobs: 0,
+      prevTotalRemaining: 0,
+      lastQueueFetchMs: 0,
+      lastIndexedAt: Date.now(),
+      workspaceVersion: Date.now(),
+      lastError: null,
+      cancelledPromptIds: /* @__PURE__ */ new Map(),
+      cancelledBatchIds: /* @__PURE__ */ new Map()
+    };
+  }
+});
+
+// src/server/services/liveMonitor/jobCancelService.ts
+function collectComfyQueuePromptStates(queueData) {
+  const running = /* @__PURE__ */ new Set();
+  const pending = /* @__PURE__ */ new Set();
+  const extract = (list, target) => {
+    if (!Array.isArray(list)) return;
+    for (const entry of list) {
+      if (Array.isArray(entry) && typeof entry[1] === "string" && entry[1].trim()) {
+        target.add(entry[1].trim());
+      }
+    }
+  };
+  extract(queueData?.queue_running, running);
+  extract(queueData?.queue_pending, pending);
+  return { running, pending };
+}
+async function fetchComfyJsonWithTimeout(url, init, timeoutMs = 2500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function cancelComfyUiJob(input) {
+  const itemId = typeof input.itemId === "number" && Number.isFinite(input.itemId) ? input.itemId : null;
+  const batchId = typeof input.batchId === "number" && Number.isFinite(input.batchId) ? input.batchId : null;
+  const incomingPromptId = typeof input.comfyuiPromptId === "string" && input.comfyuiPromptId.trim() ? input.comfyuiPromptId.trim() : null;
+  const targetPromptIds = /* @__PURE__ */ new Set();
+  if (incomingPromptId) targetPromptIds.add(incomingPromptId);
+  let kind = "queue_item";
+  let cancelledItems = 0;
+  let resolvedBatchId = batchId !== null && batchId > 0 && batchId < 1e6 ? batchId : null;
+  if (resolvedBatchId === null && itemId !== null && itemId > 0 && itemId < 1e6) {
+    const itemRow = db.prepare("SELECT batch_id FROM generation_items WHERE id = ?").get(itemId);
+    if (itemRow?.batch_id) resolvedBatchId = Number(itemRow.batch_id);
+  }
+  if (resolvedBatchId === null && incomingPromptId) {
+    const byPid = db.prepare("SELECT batch_id FROM generation_items WHERE comfyui_prompt_id = ? LIMIT 1").get(incomingPromptId);
+    if (byPid?.batch_id) resolvedBatchId = Number(byPid.batch_id);
+  }
+  if (resolvedBatchId !== null) {
+    const activeBatchRows = db.prepare(
+      `SELECT id, comfyui_prompt_id FROM generation_items
+         WHERE batch_id = ? AND status IN ('pending', 'submitted')`
+    ).all(resolvedBatchId);
+    for (const row of activeBatchRows) {
+      if (row.comfyui_prompt_id?.trim()) {
+        targetPromptIds.add(row.comfyui_prompt_id.trim());
+      }
+    }
+    const upd = db.prepare(
+      `UPDATE generation_items
+         SET status = 'cancelled', error_message = 'Cancelled by user', completed_at = datetime('now')
+         WHERE batch_id = ? AND status IN ('pending', 'submitted')`
+    ).run(resolvedBatchId);
+    if (upd.changes > 0) {
+      kind = "batch";
+      cancelledItems += upd.changes;
+    }
+  }
+  let reproJobId = itemId !== null && itemId >= 1e6 && itemId < 2e6 ? itemId - 1e6 : null;
+  if (reproJobId === null && incomingPromptId) {
+    const byPid = db.prepare(
+      `SELECT id FROM reproduction_jobs
+         WHERE comfyui_prompt_id = ? AND status IN ('queued', 'running') LIMIT 1`
+    ).get(incomingPromptId);
+    if (byPid?.id) reproJobId = Number(byPid.id);
+  }
+  if (reproJobId !== null && reproJobId > 0) {
+    const reproRow = db.prepare("SELECT comfyui_prompt_id FROM reproduction_jobs WHERE id = ?").get(reproJobId);
+    if (reproRow?.comfyui_prompt_id?.trim()) {
+      targetPromptIds.add(reproRow.comfyui_prompt_id.trim());
+    }
+    const upd = db.prepare(
+      `UPDATE reproduction_jobs
+         SET status = 'cancelled', execution_error = 'Cancelled by user', completed_at = datetime('now')
+         WHERE id = ? AND status IN ('queued', 'running')`
+    ).run(reproJobId);
+    if (upd.changes > 0) {
+      kind = "reproduction";
+      cancelledItems += upd.changes;
+    }
+  }
+  const promptList = Array.from(targetPromptIds);
+  if (promptList.length === 0 && cancelledItems === 0) {
+    throw new Error("No active generation job found to cancel.");
+  }
+  markPromptsCancelled(promptList, resolvedBatchId);
+  const baseUrl = appConfig.comfyuiUrl.replace(/\/+$/, "");
+  const runningTargets = /* @__PURE__ */ new Set();
+  for (const pid of promptList) {
+    if (liveMonitorState.runningPromptIds.has(pid) || liveMonitorState.activePromptId === pid) {
+      runningTargets.add(pid);
+    }
+  }
+  if (promptList.length > 0) {
+    const queueRes = await fetchComfyJsonWithTimeout(`${baseUrl}/queue`);
+    if (queueRes?.ok) {
+      try {
+        const queueData = await queueRes.json();
+        const liveQueue = collectComfyQueuePromptStates(queueData);
+        for (const pid of promptList) {
+          if (liveQueue.running.has(pid)) runningTargets.add(pid);
+        }
+      } catch {
+      }
+    }
+    await fetchComfyJsonWithTimeout(`${baseUrl}/queue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ delete: promptList })
+    });
+    if (runningTargets.size > 0) {
+      const activeTarget = Array.from(runningTargets)[0];
+      await fetchComfyJsonWithTimeout(`${baseUrl}/interrupt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt_id: activeTarget })
+      });
+    }
+  }
+  invalidateComfyQueueCache();
+  notifyWorkspaceDataChanged();
+  logger.info(
+    "ComfyUI",
+    `Cancelled ${kind} (batch=${resolvedBatchId ?? "none"}, items=${cancelledItems}, prompts=${promptList.length}, interrupted=${runningTargets.size > 0})`
+  );
+  return {
+    ok: true,
+    kind,
+    cancelledItems,
+    cancelledPrompts: promptList,
+    interrupted: runningTargets.size > 0
+  };
+}
+var init_jobCancelService = __esm({
+  "src/server/services/liveMonitor/jobCancelService.ts"() {
+    init_config();
+    init_db();
+    init_logger();
+    init_liveMonitorState();
+  }
+});
+
+// src/server/services/liveMonitor/promptGraphUtils.ts
+function extractPromptId(entry) {
+  if (Array.isArray(entry) && typeof entry[1] === "string") {
+    return entry[1];
+  }
+  if (entry && typeof entry === "object" && typeof entry.prompt_id === "string") {
+    return entry.prompt_id;
+  }
+  return null;
+}
+function toIsoUtc(raw) {
+  const s = (raw || "").trim();
+  if (!s) return (/* @__PURE__ */ new Date()).toISOString();
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(s)) {
+    return `${s.replace(" ", "T")}Z`;
+  }
+  return s;
+}
+function parseLoraNamesJson(rawJson) {
+  if (!rawJson) return void 0;
+  try {
+    const parsed = JSON.parse(rawJson);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const cleaned = parsed.map((n) => String(n || "").trim()).filter(Boolean);
+      return cleaned.length > 0 ? cleaned : void 0;
+    }
+  } catch {
+  }
+  return void 0;
+}
+function extractMetadataFromPromptGraph(graph) {
+  let prompt = "";
+  let width = 1024;
+  let height = 1536;
+  let checkpointName = null;
+  let loraCount = 0;
+  const loraNames = [];
+  if (graph && typeof graph === "object" && !Array.isArray(graph)) {
+    for (const node of Object.values(graph)) {
+      if (!node || typeof node !== "object") continue;
+      const ct = String(node.class_type || "");
+      const ctLower = ct.toLowerCase();
+      const inputs = node.inputs || {};
+      if (typeof inputs.width === "number" && inputs.width >= 64) {
+        width = Math.round(inputs.width);
+      }
+      if (typeof inputs.height === "number" && inputs.height >= 64) {
+        height = Math.round(inputs.height);
+      }
+      for (const ckptKey of ["ckpt_name", "unet_name", "model_name", "diffusion_model"]) {
+        if (!checkpointName && typeof inputs[ckptKey] === "string" && inputs[ckptKey].trim()) {
+          checkpointName = inputs[ckptKey].trim().replace(/\\/g, "/").split("/").pop() || inputs[ckptKey].trim();
+        }
+      }
+      if (ctLower.includes("lora")) {
+        if (typeof inputs.lora_name === "string" && inputs.lora_name !== "None" && inputs.lora_name.trim()) {
+          loraCount++;
+          loraNames.push(inputs.lora_name.trim());
+        }
+        for (const [k, v] of Object.entries(inputs)) {
+          if (k.startsWith("lora_") && v && typeof v === "object" && v.on && v.lora) {
+            loraCount++;
+            loraNames.push(String(v.lora).trim());
+          }
+        }
+      }
+      const titleLower = String(node._meta?.title || "").toLowerCase();
+      if (!titleLower.includes("negative")) {
+        for (const textKey of ["text", "value", "prompt", "positive", "string", "text_g"]) {
+          const val = inputs[textKey];
+          if (typeof val === "string" && val.trim().length > prompt.length) {
+            prompt = val.trim();
+          }
+        }
+      }
+    }
+  }
+  return { prompt, width, height, checkpointName, loraCount, loraNames };
+}
+var init_promptGraphUtils = __esm({
+  "src/server/services/liveMonitor/promptGraphUtils.ts"() {
+  }
+});
+
+// src/server/services/liveMonitor/seriesTargetResolver.ts
+function resolveSeriesTargetForJob(explicitSeriesId, branchFromImageId, outputImageId = null, isUpscale = false) {
+  let targetSeriesId = explicitSeriesId && explicitSeriesId > 0 ? Number(explicitSeriesId) : null;
+  const sourceId = branchFromImageId && branchFromImageId > 0 ? Number(branchFromImageId) : null;
+  if (!targetSeriesId && !sourceId) {
+    return { targetSeriesId: null, targetImageId: null, isBranchSplit: false };
+  }
+  if (!targetSeriesId && sourceId) {
+    const candidate = db.prepare(
+      `SELECT isi.series_id,
+                (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
+         FROM image_series_items isi
+         WHERE isi.image_id = ?
+         ORDER BY (isi.step_order = max_step) DESC, isi.series_id DESC
+         LIMIT 1`
+    ).get(sourceId);
+    if (candidate) {
+      targetSeriesId = candidate.series_id;
+    }
+  }
+  if (targetSeriesId) {
+    if (isUpscale) {
+      return {
+        targetSeriesId,
+        targetImageId: sourceId,
+        isBranchSplit: false
+      };
+    }
+    const existingItems = db.prepare(`SELECT image_id FROM image_series_items WHERE series_id = ? ORDER BY step_order ASC`).all(targetSeriesId).filter((it) => !outputImageId || it.image_id !== Number(outputImageId));
+    if (existingItems.length > 0) {
+      const branchIdx = sourceId ? existingItems.findIndex((it) => it.image_id === sourceId) : existingItems.length - 1;
+      const isMiddleBranch = branchIdx >= 0 && branchIdx < existingItems.length - 1;
+      if (isMiddleBranch) {
+        return {
+          targetSeriesId: null,
+          targetImageId: sourceId,
+          isBranchSplit: true
+        };
+      }
+      return {
+        targetSeriesId,
+        targetImageId: sourceId,
+        isBranchSplit: false
+      };
+    }
+  }
+  return {
+    targetSeriesId: null,
+    targetImageId: sourceId,
+    isBranchSplit: false
+  };
+}
+var init_seriesTargetResolver = __esm({
+  "src/server/services/liveMonitor/seriesTargetResolver.ts"() {
+    init_db();
+  }
+});
+
+// src/server/services/liveMonitor/ghostCardAggregator.ts
+function isPromptKnownInComfy(pid) {
+  return Boolean(
+    pid && (liveMonitorState.runningPromptIds.has(pid) || liveMonitorState.pendingPromptIds.has(pid) || liveMonitorState.finishedPromptIds.has(pid))
+  );
+}
+function isStaleOrphanedGhostRow(status, hasOutput, pid, ageSeconds) {
+  return status !== "completed" && !hasOutput && !isPromptKnownInComfy(pid) && ageSeconds > 45 && liveMonitorState.runningCount === 0 && liveMonitorState.queuedCount === 0;
+}
+function collectGenerationBatchGhosts(seenPromptIds) {
+  const rows = db.prepare(
+    `
+      SELECT
+        gi.id AS item_id,
+        gi.batch_id,
+        gi.item_index,
+        gi.prompt,
+        gi.comfyui_prompt_id,
+        gi.status,
+        gi.output_image_id,
+        gi.created_at,
+        gi.completed_at,
+        (strftime('%s', 'now') - strftime('%s', gi.created_at)) AS age_seconds,
+        gb.total_count,
+        gb.width,
+        gb.height,
+        gb.checkpoint_name,
+        gb.lora_count,
+        gb.lora_names_json,
+        gb.character_id,
+        gb.series_id,
+        gb.branch_from_image_id,
+        c.name AS character_name,
+        w.name AS workflow_name
+      FROM generation_items gi
+      JOIN generation_batches gb ON gb.id = gi.batch_id
+      LEFT JOIN characters c ON c.id = gb.character_id
+      LEFT JOIN workflows w ON w.id = gb.workflow_id
+      WHERE
+        (
+          gi.status IN ('pending', 'submitted')
+          AND gi.created_at >= datetime('now', '-30 minutes')
+        )
+        OR (
+          gi.status = 'completed'
+          AND gi.completed_at >= datetime('now', '-25 seconds')
+        )
+      ORDER BY gi.batch_id DESC, gi.item_index ASC
+    `
+  ).all();
+  const submittedRows = rows.filter((r) => r.status === "submitted");
+  const oldestSubmittedItemId = submittedRows.length > 0 ? [...submittedRows].sort(
+    (a, b) => a.batch_id !== b.batch_id ? a.batch_id - b.batch_id : a.item_index - b.item_index
+  )[0].item_id : null;
+  const validRowsByBatch = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const pid = r.comfyui_prompt_id || null;
+    if (isStaleOrphanedGhostRow(r.status, Boolean(r.output_image_id), pid, Number(r.age_seconds ?? 0))) {
+      continue;
+    }
+    if (pid) seenPromptIds.add(pid);
+    const bid = Number(r.batch_id);
+    const list = validRowsByBatch.get(bid);
+    if (list) list.push(r);
+    else validRowsByBatch.set(bid, [r]);
+  }
+  const finishedCountByBatch = /* @__PURE__ */ new Map();
+  const cancelledBatchSet = /* @__PURE__ */ new Set();
+  if (validRowsByBatch.size > 0) {
+    const batchIds = Array.from(validRowsByBatch.keys());
+    const placeholders = batchIds.map(() => "?").join(",");
+    const countRows = db.prepare(
+      `SELECT
+           batch_id,
+           SUM(CASE WHEN status IN ('completed', 'failed') THEN 1 ELSE 0 END) AS cnt,
+           SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_cnt
+         FROM generation_items
+         WHERE batch_id IN (${placeholders})
+         GROUP BY batch_id`
+    ).all(...batchIds);
+    for (const cr of countRows) {
+      const bId = Number(cr.batch_id);
+      finishedCountByBatch.set(bId, Number(cr.cnt || 0));
+      if (Number(cr.cancelled_cnt || 0) > 0) {
+        cancelledBatchSet.add(bId);
+      }
+    }
+  }
+  const items = [];
+  for (const [bid, batchRows] of validRowsByBatch.entries()) {
+    const activeRows = batchRows.filter((r) => r.status !== "completed" && !r.output_image_id);
+    if (activeRows.length === 0 && (isBatchCancelled(bid) || cancelledBatchSet.has(bid))) {
+      continue;
+    }
+    const chosen = activeRows.length > 0 ? activeRows.find((r) => {
+      const p = r.comfyui_prompt_id || null;
+      return Boolean(
+        p && (liveMonitorState.runningPromptIds.has(p) || liveMonitorState.promptProgressMap.has(p) || liveMonitorState.finishedPromptIds.has(p))
+      );
+    }) || activeRows[0] : batchRows[batchRows.length - 1];
+    const pid = chosen.comfyui_prompt_id || null;
+    const { cardState, progressPercent } = resolvePromptProgressState(
+      pid,
+      chosen.status,
+      Boolean(chosen.output_image_id),
+      chosen.item_id === oldestSubmittedItemId
+    );
+    const queueMeta = pid ? liveMonitorState.queuePromptMetaMap.get(pid) : void 0;
+    const outputImgId = chosen.output_image_id ? Number(chosen.output_image_id) : null;
+    const seriesTarget = resolveSeriesTargetForJob(
+      chosen.series_id ? Number(chosen.series_id) : null,
+      chosen.branch_from_image_id ? Number(chosen.branch_from_image_id) : null,
+      outputImgId
+    );
+    const batchTotalCount = Math.max(1, Number(chosen.total_count || 1));
+    const finishedInBatch = finishedCountByBatch.get(bid) ?? 0;
+    const batchCurrentNumber = batchTotalCount > 1 ? Math.min(batchTotalCount, activeRows.length > 0 ? finishedInBatch + 1 : batchTotalCount) : 1;
+    const batchLoraNames = parseLoraNamesJson(chosen.lora_names_json);
+    items.push({
+      itemId: Number(chosen.item_id),
+      batchId: bid,
+      itemIndex: Number(chosen.item_index),
+      comfyuiPromptId: pid,
+      prompt: chosen.prompt || "",
+      state: cardState,
+      progressPercent,
+      width: Number(chosen.width || 1024),
+      height: Number(chosen.height || 1536),
+      checkpointName: chosen.checkpoint_name || queueMeta?.checkpointName || null,
+      workflowName: chosen.workflow_name || null,
+      loraCount: Number(chosen.lora_count || batchLoraNames?.length || queueMeta?.loraCount || 0),
+      loraNames: batchLoraNames || queueMeta?.loraNames || void 0,
+      characterId: chosen.character_id ? Number(chosen.character_id) : null,
+      characterName: chosen.character_name || null,
+      outputImageId: outputImgId,
+      targetSeriesId: seriesTarget.targetSeriesId,
+      targetImageId: seriesTarget.targetImageId,
+      isBranchSplit: seriesTarget.isBranchSplit,
+      batchTotalCount,
+      batchCurrentNumber,
+      createdAt: toIsoUtc(chosen.created_at)
+    });
+  }
+  return items;
+}
+function collectReproductionJobGhosts(seenPromptIds, existingCount) {
+  const reproRows = db.prepare(
+    `
+      SELECT
+        rj.id AS job_id,
+        rj.source_image_id,
+        rj.workflow_id,
+        rj.comfyui_prompt_id,
+        rj.status,
+        rj.output_image_ids_json,
+        rj.submitted_at,
+        rj.completed_at,
+        (strftime('%s', 'now') - strftime('%s', rj.submitted_at)) AS age_seconds,
+        i.width AS img_width,
+        i.height AS img_height,
+        im.positive_prompt AS img_prompt,
+        im.checkpoint_name AS img_checkpoint,
+        w.name AS workflow_name,
+        (
+          SELECT COUNT(*) FROM image_models imod
+          WHERE imod.image_id = rj.source_image_id AND imod.model_type = 'lora'
+        ) AS img_lora_count,
+        (
+          SELECT json_group_array(imod.model_name) FROM image_models imod
+          WHERE imod.image_id = rj.source_image_id AND imod.model_type = 'lora'
+        ) AS img_lora_names_json,
+        (
+          SELECT ic.character_id FROM image_characters ic
+          WHERE ic.image_id = rj.source_image_id AND ic.status = 'confirmed'
+          LIMIT 1
+        ) AS char_id,
+        (
+          SELECT c.name FROM image_characters ic
+          JOIN characters c ON c.id = ic.character_id
+          WHERE ic.image_id = rj.source_image_id AND ic.status = 'confirmed'
+          LIMIT 1
+        ) AS char_name
+      FROM reproduction_jobs rj
+      LEFT JOIN images i ON i.id = rj.source_image_id
+      LEFT JOIN image_metadata im ON im.image_id = rj.source_image_id
+      LEFT JOIN workflows w ON w.id = rj.workflow_id
+      WHERE
+        (
+          rj.status IN ('queued', 'running')
+          AND rj.submitted_at >= datetime('now', '-30 minutes')
+        )
+        OR (
+          rj.status = 'completed'
+          AND rj.completed_at >= datetime('now', '-25 seconds')
+        )
+      ORDER BY rj.id DESC
+    `
+  ).all();
+  const items = [];
+  for (const rj of reproRows) {
+    const pid = rj.comfyui_prompt_id || null;
+    if (pid && seenPromptIds.has(pid)) continue;
+    if (isStaleOrphanedGhostRow(rj.status, false, pid, Number(rj.age_seconds ?? 0))) {
+      continue;
+    }
+    if (pid) seenPromptIds.add(pid);
+    let outputImageId = null;
+    try {
+      const parsedIds = JSON.parse(rj.output_image_ids_json || "[]");
+      if (Array.isArray(parsedIds) && parsedIds.length > 0) {
+        outputImageId = Number(parsedIds[0]);
+      }
+    } catch {
+      outputImageId = null;
+    }
+    const queueMeta = pid ? liveMonitorState.queuePromptMetaMap.get(pid) : void 0;
+    const { cardState, progressPercent } = resolvePromptProgressState(
+      pid,
+      rj.status,
+      Boolean(outputImageId),
+      existingCount + items.length === 0
+    );
+    const reproLoraNames = queueMeta?.loraNames || parseLoraNamesJson(rj.img_lora_names_json);
+    const seriesTarget = rj.source_image_id ? resolveSeriesTargetForJob(null, Number(rj.source_image_id), outputImageId, true) : { targetSeriesId: null, targetImageId: null, isBranchSplit: false };
+    items.push({
+      itemId: 1e6 + Number(rj.job_id),
+      batchId: 1e6 + Number(rj.job_id),
+      itemIndex: 1,
+      comfyuiPromptId: pid,
+      prompt: queueMeta?.prompt || rj.img_prompt || rj.workflow_name || `Workflow Run #${rj.job_id}`,
+      state: cardState,
+      progressPercent,
+      width: Number(queueMeta?.width || rj.img_width || 1024),
+      height: Number(queueMeta?.height || rj.img_height || 1536),
+      checkpointName: queueMeta?.checkpointName || rj.img_checkpoint || null,
+      workflowName: rj.workflow_name || null,
+      loraCount: Number(queueMeta?.loraCount ?? rj.img_lora_count ?? 0),
+      loraNames: reproLoraNames,
+      characterId: rj.char_id ? Number(rj.char_id) : null,
+      characterName: rj.char_name || null,
+      outputImageId,
+      targetSeriesId: seriesTarget.targetSeriesId,
+      targetImageId: seriesTarget.targetImageId,
+      isBranchSplit: seriesTarget.isBranchSplit,
+      createdAt: toIsoUtc(rj.submitted_at)
+    });
+  }
+  return items;
+}
+function collectExternalQueueGhosts(seenPromptIds, existingCount) {
+  const liveQueuePromptIds = [
+    ...Array.from(liveMonitorState.runningPromptIds),
+    ...Array.from(liveMonitorState.pendingPromptIds)
+  ];
+  const items = [];
+  let externalIdx = 1;
+  for (const pid of liveQueuePromptIds) {
+    if (seenPromptIds.has(pid)) continue;
+    seenPromptIds.add(pid);
+    const queueMeta = liveMonitorState.queuePromptMetaMap.get(pid);
+    const regMeta = liveMonitorState.queuePromptSeriesMap.get(pid);
+    const seriesTarget = regMeta ? resolveSeriesTargetForJob(
+      regMeta.targetSeriesId ?? null,
+      regMeta.sourceImageId,
+      null,
+      Boolean(regMeta.isUpscale)
+    ) : { targetSeriesId: null, targetImageId: null, isBranchSplit: false };
+    const { cardState, progressPercent } = resolvePromptProgressState(
+      pid,
+      "submitted",
+      false,
+      existingCount + items.length === 0 && liveMonitorState.runningPromptIds.has(pid)
+    );
+    let numericHash = 2e6 + externalIdx++;
+    for (let i = 0; i < pid.length; i++) {
+      numericHash = (numericHash * 31 + pid.charCodeAt(i)) % 9e8;
+    }
+    items.push({
+      itemId: numericHash,
+      batchId: numericHash,
+      itemIndex: externalIdx - 1,
+      comfyuiPromptId: pid,
+      prompt: regMeta?.prompt || queueMeta?.prompt || "ComfyUI Workflow Job",
+      state: cardState,
+      progressPercent,
+      width: regMeta?.width || queueMeta?.width || 1024,
+      height: regMeta?.height || queueMeta?.height || 1536,
+      checkpointName: queueMeta?.checkpointName || (regMeta ? "4x-ESRGAN Upscale" : "ComfyUI Workflow"),
+      workflowName: regMeta ? "4x-ESRGAN Upscale" : "ComfyUI Workflow",
+      loraCount: queueMeta?.loraCount || 0,
+      loraNames: queueMeta?.loraNames || void 0,
+      characterId: regMeta?.characterId ?? null,
+      characterName: regMeta?.characterName ?? null,
+      outputImageId: null,
+      targetSeriesId: seriesTarget.targetSeriesId,
+      targetImageId: seriesTarget.targetImageId,
+      isBranchSplit: seriesTarget.isBranchSplit,
+      createdAt: new Date(queueMeta?.firstSeenMs || regMeta?.registeredAtMs || Date.now()).toISOString()
+    });
+  }
+  return items;
+}
+function getActiveGhostItems() {
+  try {
+    const seenPromptIds = /* @__PURE__ */ new Set();
+    const ghostItems = collectGenerationBatchGhosts(seenPromptIds);
+    ghostItems.push(...collectReproductionJobGhosts(seenPromptIds, ghostItems.length));
+    ghostItems.push(...collectExternalQueueGhosts(seenPromptIds, ghostItems.length));
+    ghostItems.sort((a, b) => {
+      const ta = Date.parse(a.createdAt) || 0;
+      const tb = Date.parse(b.createdAt) || 0;
+      if (tb !== ta) return tb - ta;
+      if (b.batchId !== a.batchId) return b.batchId - a.batchId;
+      return b.itemIndex - a.itemIndex;
+    });
+    return ghostItems;
+  } catch {
+    return [];
+  }
+}
+var init_ghostCardAggregator = __esm({
+  "src/server/services/liveMonitor/ghostCardAggregator.ts"() {
+    init_db();
+    init_liveMonitorState();
+    init_promptGraphUtils();
+    init_seriesTargetResolver();
+  }
+});
+
+// src/server/services/liveMonitor/comfyuiTransportMonitor.ts
+function buildWsUrl(httpBaseUrl) {
+  const clean = httpBaseUrl.trim().replace(/\/+$/, "");
+  const wsBase = clean.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:");
+  return `${wsBase}/ws?clientId=${encodeURIComponent(COUCHY_COMFY_CLIENT_ID)}`;
+}
+function handleWsExecutionError(promptId, data) {
+  const excMsg = String(data?.exception_message || "").trim();
+  const nodeType = String(data?.node_type || "").trim();
+  const readableErr = excMsg && nodeType ? `${nodeType}: ${excMsg}` : excMsg || "ComfyUI execution error";
+  let recovery = null;
+  if (promptId) {
+    try {
+      const genRow = db.prepare("SELECT id FROM generation_items WHERE comfyui_prompt_id = ? LIMIT 1").get(promptId);
+      if (genRow) {
+        db.prepare(
+          `UPDATE generation_items
+           SET status = 'failed', error_message = ?, completed_at = datetime('now')
+           WHERE id = ?`
+        ).run(readableErr, genRow.id);
+        recovery = preserveFailedGenerationConversation(genRow.id);
+        notifyImageIndexed();
+      }
+    } catch {
+    }
+  }
+  recordComfyExecutionError({
+    promptId,
+    message: readableErr,
+    recovery
+  });
+}
+function collectQueuePromptIds(entries, now) {
+  const ids = /* @__PURE__ */ new Set();
+  for (const entry of entries) {
+    const pid = extractPromptId(entry);
+    if (!pid) continue;
+    ids.add(pid);
+    if (!liveMonitorState.queuePromptMetaMap.has(pid) && Array.isArray(entry) && entry[2]) {
+      liveMonitorState.queuePromptMetaMap.set(pid, {
+        ...extractMetadataFromPromptGraph(entry[2]),
+        firstSeenMs: now
+      });
+    }
+  }
+  return ids;
+}
+function ensureComfyUiWsMonitor() {
+  if (typeof WebSocket === "undefined") return;
+  const targetWsUrl = buildWsUrl(appConfig.comfyuiUrl);
+  if (wsInstance && connectedWsUrl === targetWsUrl && wsInstance.readyState <= 1) {
+    return;
+  }
+  if (wsInstance) {
+    try {
+      wsInstance.close();
+    } catch {
+    }
+    wsInstance = null;
+  }
+  connectedWsUrl = targetWsUrl;
+  try {
+    const ws = new WebSocket(targetWsUrl);
+    wsInstance = ws;
+    ws.addEventListener("open", () => {
+      liveMonitorState.online = true;
+    });
+    ws.addEventListener("message", (event) => {
+      if (typeof event.data !== "string") return;
+      try {
+        const msg = JSON.parse(event.data);
+        const type = msg?.type;
+        const data = msg?.data;
+        if (type === "progress" && data) {
+          const val = Number(data.value ?? 0);
+          const max = Number(data.max ?? 0);
+          const pid = typeof data.prompt_id === "string" && data.prompt_id ? data.prompt_id : liveMonitorState.activePromptId;
+          if (max > 1) {
+            liveMonitorState.step = val;
+            liveMonitorState.maxSteps = max;
+            const pct = Math.min(100, Math.max(0, Math.round(val / max * 100)));
+            liveMonitorState.progressPercent = pct;
+            if (pid) {
+              liveMonitorState.activePromptId = pid;
+              liveMonitorState.runningPromptIds.add(pid);
+              liveMonitorState.pendingPromptIds.delete(pid);
+              const prev = liveMonitorState.promptProgressMap.get(pid) ?? 0;
+              liveMonitorState.promptProgressMap.set(pid, Math.max(prev, pct));
+            }
+          }
+          if (data.node) {
+            liveMonitorState.currentNode = String(data.node);
+          }
+        } else if (type === "executing" && data) {
+          const pid = typeof data.prompt_id === "string" ? data.prompt_id : null;
+          if (data.node === null) {
+            const completedPid = pid || liveMonitorState.activePromptId;
+            if (completedPid) {
+              liveMonitorState.promptProgressMap.set(completedPid, 100);
+              liveMonitorState.finishedPromptIds.set(completedPid, Date.now());
+              liveMonitorState.runningPromptIds.delete(completedPid);
+              liveMonitorState.pendingPromptIds.delete(completedPid);
+            }
+            liveMonitorState.progressPercent = null;
+            liveMonitorState.step = null;
+            liveMonitorState.maxSteps = null;
+            liveMonitorState.currentNode = null;
+            liveMonitorState.activePromptId = null;
+          } else {
+            if (pid) {
+              if (liveMonitorState.activePromptId !== pid) {
+                liveMonitorState.progressPercent = liveMonitorState.promptProgressMap.get(pid) ?? null;
+                liveMonitorState.step = null;
+                liveMonitorState.maxSteps = null;
+              }
+              liveMonitorState.activePromptId = pid;
+              liveMonitorState.runningPromptIds.add(pid);
+              liveMonitorState.pendingPromptIds.delete(pid);
+            }
+            liveMonitorState.currentNode = String(data.node);
+          }
+        } else if (type === "execution_cached" || type === "executed") {
+          liveMonitorState.online = true;
+        } else if (type === "execution_error" || type === "execution_interrupted") {
+          const pid = typeof data?.prompt_id === "string" ? data.prompt_id : liveMonitorState.activePromptId;
+          if (pid) {
+            liveMonitorState.runningPromptIds.delete(pid);
+            liveMonitorState.pendingPromptIds.delete(pid);
+            liveMonitorState.promptProgressMap.delete(pid);
+            liveMonitorState.finishedPromptIds.delete(pid);
+          }
+          liveMonitorState.progressPercent = null;
+          if (type === "execution_error") {
+            handleWsExecutionError(pid, data);
+          }
+        } else if (type === "status" && data?.status?.exec_info) {
+          const totalRemaining = Number(data.status.exec_info.queue_remaining ?? 0);
+          syncRunJobCounts(totalRemaining);
+          if (totalRemaining === 0) {
+            if (liveMonitorState.activePromptId) {
+              liveMonitorState.promptProgressMap.set(liveMonitorState.activePromptId, 100);
+              liveMonitorState.finishedPromptIds.set(liveMonitorState.activePromptId, Date.now());
+            }
+            liveMonitorState.runningCount = 0;
+            liveMonitorState.queuedCount = 0;
+            liveMonitorState.progressPercent = null;
+            liveMonitorState.step = null;
+            liveMonitorState.maxSteps = null;
+            liveMonitorState.currentNode = null;
+            liveMonitorState.activePromptId = null;
+            liveMonitorState.runningPromptIds.clear();
+            liveMonitorState.pendingPromptIds.clear();
+          }
+        }
+      } catch {
+      }
+    });
+    ws.addEventListener("close", () => {
+      wsInstance = null;
+      if (!reconnectTimer) {
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          ensureComfyUiWsMonitor();
+        }, 5e3);
+      }
+    });
+    ws.addEventListener("error", () => {
+    });
+  } catch {
+  }
+}
+async function getComfyUiLiveStatus() {
+  ensureComfyUiWsMonitor();
+  const now = Date.now();
+  if (now - liveMonitorState.lastQueueFetchMs >= 800) {
+    liveMonitorState.lastQueueFetchMs = now;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 1500);
+      const res = await fetch(`${appConfig.comfyuiUrl}/queue`, {
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+      if (res.ok) {
+        const data = await res.json();
+        const runningArr = Array.isArray(data.queue_running) ? data.queue_running : [];
+        const pendingArr = Array.isArray(data.queue_pending) ? data.queue_pending : [];
+        const running = runningArr.length;
+        const pending = pendingArr.length;
+        const nextRunningIds = collectQueuePromptIds(runningArr, now);
+        const nextPendingIds = collectQueuePromptIds(pendingArr, now);
+        for (const prevRunningId of liveMonitorState.runningPromptIds) {
+          if (!nextRunningIds.has(prevRunningId) && !nextPendingIds.has(prevRunningId)) {
+            liveMonitorState.promptProgressMap.set(prevRunningId, 100);
+            liveMonitorState.finishedPromptIds.set(prevRunningId, now);
+          }
+        }
+        liveMonitorState.runningPromptIds = nextRunningIds;
+        liveMonitorState.pendingPromptIds = nextPendingIds;
+        if (nextRunningIds.size > 0) {
+          const firstRunning = Array.from(nextRunningIds)[0];
+          if (!liveMonitorState.activePromptId || !nextRunningIds.has(liveMonitorState.activePromptId)) {
+            liveMonitorState.activePromptId = firstRunning;
+            liveMonitorState.progressPercent = liveMonitorState.promptProgressMap.get(firstRunning) ?? null;
+          }
+        } else {
+          liveMonitorState.activePromptId = null;
+          liveMonitorState.progressPercent = null;
+        }
+        liveMonitorState.online = true;
+        liveMonitorState.runningCount = running;
+        liveMonitorState.queuedCount = pending;
+        syncRunJobCounts(running + pending);
+        if (running === 0) {
+          liveMonitorState.progressPercent = null;
+          liveMonitorState.step = null;
+          liveMonitorState.maxSteps = null;
+          liveMonitorState.currentNode = null;
+        }
+      } else {
+        liveMonitorState.online = false;
+        liveMonitorState.runningCount = 0;
+        liveMonitorState.queuedCount = 0;
+        syncRunJobCounts(0);
+      }
+    } catch {
+      liveMonitorState.online = false;
+      liveMonitorState.runningCount = 0;
+      liveMonitorState.queuedCount = 0;
+      liveMonitorState.progressPercent = null;
+      liveMonitorState.step = null;
+      liveMonitorState.maxSteps = null;
+      liveMonitorState.currentNode = null;
+      syncRunJobCounts(0);
+    }
+  }
+  pruneStaleMonitorEntries(now);
+  const totalRemaining = liveMonitorState.runningCount + liveMonitorState.queuedCount;
+  const totalRunJobs = totalRemaining > 0 ? Math.max(liveMonitorState.runTotalJobs, totalRemaining) : null;
+  const currentJobIndex = totalRemaining > 0 && totalRunJobs !== null ? Math.min(totalRunJobs, Math.max(1, totalRunJobs - totalRemaining + 1)) : null;
+  const ghostItems = getActiveGhostItems();
+  return {
+    online: liveMonitorState.online,
+    runningCount: liveMonitorState.runningCount,
+    queuedCount: liveMonitorState.queuedCount,
+    progressPercent: liveMonitorState.runningCount > 0 ? liveMonitorState.progressPercent : null,
+    step: liveMonitorState.runningCount > 0 ? liveMonitorState.step : null,
+    maxSteps: liveMonitorState.runningCount > 0 ? liveMonitorState.maxSteps : null,
+    currentNode: liveMonitorState.runningCount > 0 ? liveMonitorState.currentNode : null,
+    currentJobIndex,
+    totalRunJobs,
+    lastIndexedAt: liveMonitorState.lastIndexedAt,
+    workspaceVersion: liveMonitorState.workspaceVersion,
+    ghostItems,
+    lastError: liveMonitorState.lastError && now - liveMonitorState.lastError.timestamp < 3e4 ? liveMonitorState.lastError : null
+  };
+}
+var wsInstance, connectedWsUrl, reconnectTimer;
+var init_comfyuiTransportMonitor = __esm({
+  "src/server/services/liveMonitor/comfyuiTransportMonitor.ts"() {
+    init_config();
+    init_db();
+    init_seriesService();
+    init_ghostCardAggregator();
+    init_liveMonitorState();
+    init_promptGraphUtils();
+    wsInstance = null;
+    connectedWsUrl = "";
+    reconnectTimer = null;
+  }
+});
+
+// src/server/services/comfyuiLiveMonitor.ts
+var comfyuiLiveMonitor_exports = {};
+__export(comfyuiLiveMonitor_exports, {
+  COUCHY_COMFY_CLIENT_ID: () => COUCHY_COMFY_CLIENT_ID,
+  cancelComfyUiJob: () => cancelComfyUiJob,
+  ensureComfyUiWsMonitor: () => ensureComfyUiWsMonitor,
+  extractMetadataFromPromptGraph: () => extractMetadataFromPromptGraph,
+  getActiveGhostItems: () => getActiveGhostItems,
+  getComfyUiLiveStatus: () => getComfyUiLiveStatus,
+  invalidateComfyQueueCache: () => invalidateComfyQueueCache,
+  isBatchCancelled: () => isBatchCancelled,
+  isPromptCancelled: () => isPromptCancelled,
+  markPromptsCancelled: () => markPromptsCancelled,
+  notifyImageIndexed: () => notifyImageIndexed,
+  notifyWorkspaceDataChanged: () => notifyWorkspaceDataChanged,
+  recordComfyExecutionError: () => recordComfyExecutionError,
+  registerQueuedPromptSeriesTarget: () => registerQueuedPromptSeriesTarget
+});
+var init_comfyuiLiveMonitor = __esm({
+  "src/server/services/comfyuiLiveMonitor.ts"() {
+    init_liveMonitorState();
+    init_jobCancelService();
+    init_promptGraphUtils();
+    init_ghostCardAggregator();
+    init_comfyuiTransportMonitor();
+  }
+});
+
+// src/server/services/scanner/corruptRecordCleanup.ts
+function deleteCorruptImageRecord(imageId) {
+  try {
+    const row = db.prepare("SELECT id, content_hash FROM images WHERE id = ?").get(imageId);
+    if (!row) return;
+    const tx = db.transaction(() => {
+      db.prepare("UPDATE generation_items SET output_image_id = NULL WHERE output_image_id = ?").run(
+        row.id
+      );
+      db.prepare("DELETE FROM image_series_items WHERE image_id = ?").run(row.id);
+      db.prepare(
+        "DELETE FROM image_series WHERE id NOT IN (SELECT DISTINCT series_id FROM image_series_items)"
+      ).run();
+      db.prepare("DELETE FROM images WHERE id = ?").run(row.id);
+      const otherWithHash = db.prepare("SELECT 1 FROM images WHERE content_hash = ? LIMIT 1").get(row.content_hash);
+      if (!otherWithHash) {
+        db.prepare("DELETE FROM ratings WHERE content_hash = ? AND rating = 0 AND is_favorite = 0").run(
+          row.content_hash
+        );
+      }
+    });
+    tx();
+    invalidateStorageUsageStatsCache();
+  } catch (err) {
+    console.warn(`Failed to clean up corrupt image record #${imageId}:`, err);
+  }
+}
+function purgeCorruptZeroDimensionImages() {
+  try {
+    const corruptRows = db.prepare("SELECT id FROM images WHERE width <= 0 OR height <= 0 OR file_size <= 0").all();
+    if (corruptRows.length === 0) return 0;
+    for (const row of corruptRows) {
+      deleteCorruptImageRecord(row.id);
+    }
+    logger.warn("Scanner", `Purged ${corruptRows.length} corrupt 0x0/0-byte image record(s) from SQLite`);
+    notifyImageIndexed();
+    return corruptRows.length;
+  } catch (err) {
+    logger.warn("Scanner", "Failed to purge corrupt 0x0 image records", err);
+    return 0;
+  }
+}
+var init_corruptRecordCleanup = __esm({
+  "src/server/services/scanner/corruptRecordCleanup.ts"() {
+    init_db();
+    init_logger();
+    init_comfyuiLiveMonitor();
+    init_storageStatsService();
+  }
+});
+
+// src/server/services/scanner/scannerMediaUtils.ts
+import fs10 from "fs";
+import path10 from "path";
+import crypto3 from "crypto";
+import sharp2 from "sharp";
+function computeFileSha256(filePath) {
+  const hash = crypto3.createHash("sha256");
+  const data = fs10.readFileSync(filePath);
+  hash.update(data);
+  return hash.digest("hex");
+}
+async function ensureWebpThumbnail(sourceFile, contentHash, forceOverwrite = false) {
+  fs10.mkdirSync(appConfig.thumbnailPath, { recursive: true });
+  const thumbFile = path10.join(appConfig.thumbnailPath, `${contentHash}.webp`);
+  try {
+    const metadata = await sharp2(sourceFile).metadata();
+    const width = metadata.width || 0;
+    const height = metadata.height || 0;
+    if (width <= 0 || height <= 0) {
+      return { thumbPath: null, width: 0, height: 0, format: "PNG" };
+    }
+    const format = (metadata.format || path10.extname(sourceFile).slice(1)).toUpperCase();
+    const thumbExisted = await pathExistsAsync(thumbFile);
+    if (forceOverwrite || !thumbExisted) {
+      await sharp2(sourceFile).resize({ width: 384, height: 384, fit: "inside", withoutEnlargement: true }).webp({ quality: 80 }).toFile(thumbFile);
+      invalidateStorageUsageStatsCache();
+    }
+    return { thumbPath: thumbFile, width, height, format };
+  } catch {
+    return { thumbPath: null, width: 0, height: 0, format: "PNG" };
+  }
+}
+function resolveImageDiskPath(row) {
+  const rel = String(row.relative_path || "");
+  if (row.is_uploaded_reference || rel.startsWith("__uploaded__/")) {
+    return path10.resolve(appConfig.uploadedImagesDir, path10.basename(rel));
+  }
+  return path10.resolve(appConfig.comfyuiOutputDir, rel);
+}
+async function indexUploadedInspirationImage(filename, positivePrompt) {
+  const safeName = path10.basename(String(filename || "").trim());
+  if (!safeName) return null;
+  const fullPath = path10.resolve(appConfig.uploadedImagesDir, safeName);
+  const uploadedRoot = path10.resolve(appConfig.uploadedImagesDir);
+  if (!fullPath.startsWith(uploadedRoot + path10.sep)) {
+    return null;
+  }
+  const stat = await fs10.promises.stat(fullPath).catch(() => null);
+  if (!stat || !stat.isFile() || stat.size <= 0) return null;
+  const relativePath = `__uploaded__/${safeName}`;
+  const existing = db.prepare("SELECT id FROM images WHERE relative_path = ? LIMIT 1").get(relativePath);
+  if (existing) {
+    return existing.id;
+  }
+  const contentHash = computeFileSha256(fullPath);
+  const { thumbPath, width, height, format } = await ensureWebpThumbnail(fullPath, contentHash);
+  if (width <= 0 || height <= 0 || !thumbPath) {
+    return null;
+  }
+  const mtimeIso = stat.mtime.toISOString();
+  const cleanPrompt = (positivePrompt || "").trim() || null;
+  const imageId = db.transaction(() => {
+    const info = db.prepare(
+      `INSERT INTO images
+          (content_hash, relative_path, filename, file_size, width, height, format, file_mtime, is_missing, thumbnail_path, dependency_status, is_uploaded_reference)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'ready', 1)`
+    ).run(
+      contentHash,
+      relativePath,
+      safeName,
+      stat.size,
+      width,
+      height,
+      format,
+      mtimeIso,
+      thumbPath
+    );
+    const id = Number(info.lastInsertRowid);
+    db.prepare("INSERT OR IGNORE INTO ratings (content_hash, image_id) VALUES (?, ?)").run(
+      contentHash,
+      id
+    );
+    db.prepare(
+      `INSERT INTO image_metadata (
+        image_id, positive_prompt, missing_fields_json, provenance_json, raw_metadata_json
+      ) VALUES (?, ?, '[]', '{"source":"uploaded_inspiration"}', '{}')`
+    ).run(id, cleanPrompt);
+    return id;
+  })();
+  invalidateStorageUsageStatsCache();
+  return imageId;
+}
+async function runBackgroundThumbnailMigration() {
+  if (isThumbnailMigrationRunning) return;
+  isThumbnailMigrationRunning = true;
+  try {
+    const forceRebuildAll = !getBoolSetting("thumb_migration_384_v1", false);
+    const rows = db.prepare(
+      `SELECT id, content_hash, relative_path, thumbnail_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference
+         FROM images
+         WHERE is_missing = 0
+         ORDER BY id DESC`
+    ).all();
+    const updateStmt = db.prepare("UPDATE images SET thumbnail_path = ? WHERE id = ?");
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const expectedThumb = path10.join(appConfig.thumbnailPath, `${row.content_hash}.webp`);
+      const thumbExists = fs10.existsSync(expectedThumb);
+      if (forceRebuildAll || !thumbExists || row.thumbnail_path !== expectedThumb) {
+        const origPath = resolveImageDiskPath(row);
+        if (fs10.existsSync(origPath)) {
+          const { thumbPath } = await ensureWebpThumbnail(origPath, row.content_hash, forceRebuildAll);
+          if (thumbPath && row.thumbnail_path !== thumbPath) {
+            updateStmt.run(thumbPath, row.id);
+          }
+        }
+        await new Promise((resolve) => setImmediate(resolve));
+      } else if (i % 50 === 0) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
+    if (forceRebuildAll) {
+      setBoolSetting("thumb_migration_384_v1", true);
+    }
+  } catch (err) {
+    console.error("Background thumbnail migration error:", err);
+  } finally {
+    isThumbnailMigrationRunning = false;
+  }
+}
+var SUPPORTED_EXTENSIONS, isThumbnailMigrationRunning;
+var init_scannerMediaUtils = __esm({
+  "src/server/services/scanner/scannerMediaUtils.ts"() {
+    init_db();
+    init_config();
+    init_fsWalkService();
+    init_settingsService();
+    init_storageStatsService();
+    SUPPORTED_EXTENSIONS = /* @__PURE__ */ new Set([".png", ".jpg", ".jpeg", ".webp"]);
+    isThumbnailMigrationRunning = false;
+  }
+});
+
+// src/server/services/scanner/scannerPersistenceHelpers.ts
+function upsertImageMetadata(imageId, data) {
+  db.prepare(
+    `INSERT INTO image_metadata (
+      image_id, positive_prompt, negative_prompt, seed, steps, cfg, sampler, scheduler,
+      denoise, batch_size, batch_index, generation_date, checkpoint_name, checkpoint_hash,
+      vae_name, missing_fields_json, provenance_json, raw_metadata_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(image_id) DO UPDATE SET
+      positive_prompt = excluded.positive_prompt,
+      negative_prompt = excluded.negative_prompt,
+      seed = excluded.seed,
+      steps = excluded.steps,
+      cfg = excluded.cfg,
+      sampler = excluded.sampler,
+      scheduler = excluded.scheduler,
+      denoise = excluded.denoise,
+      batch_size = excluded.batch_size,
+      batch_index = excluded.batch_index,
+      generation_date = excluded.generation_date,
+      checkpoint_name = excluded.checkpoint_name,
+      checkpoint_hash = excluded.checkpoint_hash,
+      vae_name = excluded.vae_name,
+      missing_fields_json = excluded.missing_fields_json,
+      provenance_json = excluded.provenance_json,
+      raw_metadata_json = excluded.raw_metadata_json`
+  ).run(
+    imageId,
+    data.positivePrompt,
+    data.negativePrompt,
+    data.seed,
+    data.steps,
+    data.cfg,
+    data.sampler,
+    data.scheduler,
+    data.denoise,
+    data.batchSize,
+    data.batchIndex,
+    data.generationDate,
+    data.checkpointName,
+    data.checkpointHash,
+    data.vaeName,
+    data.missingFieldsJson,
+    data.provenanceJson,
+    data.rawMetadataJson
+  );
+}
+function confirmImageCharacterLink(input) {
+  const appearanceLabel = input.explicitAppearanceLabel ?? resolveAppearanceForCharacter(input.characterId, input.positivePrompt ?? null, input.loras ?? []);
+  db.prepare(
+    `INSERT INTO image_characters
+      (image_id, image_content_hash, character_id, status, source, confidence, match_reason, appearance_label)
+     VALUES (?, ?, ?, 'confirmed', ?, ?, ?, ?)
+     ON CONFLICT(image_content_hash, character_id) DO UPDATE SET
+      status = 'confirmed',
+      image_id = excluded.image_id,
+      appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
+      updated_at = datetime('now')`
+  ).run(
+    input.imageId,
+    input.contentHash,
+    input.characterId,
+    input.source ?? "manual",
+    input.confidence ?? 1,
+    input.matchReason ?? "Generated with character mention",
+    appearanceLabel
+  );
+  ensureCharacterPortraitIfUnset(input.characterId, input.imageId, input.contentHash);
+}
+function recomputeImageDependencyStatus(imageId) {
+  const deps = db.prepare("SELECT * FROM image_models WHERE image_id = ?").all(imageId);
+  const meta = db.prepare("SELECT positive_prompt, checkpoint_name FROM image_metadata WHERE image_id = ?").get(imageId);
+  if (deps.length === 0 && !meta?.checkpoint_name) {
+    db.prepare("UPDATE images SET dependency_status = ? WHERE id = ?").run("unknown", imageId);
+    return "unknown";
+  }
+  let allPresent = true;
+  let allHashesVerified = deps.length > 0;
+  for (const dep of deps) {
+    const modelRecord = db.prepare(
+      `SELECT * FROM models
+         WHERE LOWER(filename) = LOWER(?)
+            OR LOWER(name) = LOWER(?)
+            OR (sha256_hash IS NOT NULL AND sha256_hash = ?)
+            OR (autov2_hash IS NOT NULL AND autov2_hash = ?)
+         LIMIT 1`
+    ).get(dep.model_name, dep.model_name.replace(/\.(safetensors|ckpt|pt)$/i, ""), dep.model_hash, dep.model_hash);
+    if (!modelRecord || !modelRecord.is_installed) {
+      allPresent = false;
+      allHashesVerified = false;
+      db.prepare("UPDATE image_models SET status = ?, model_id = ? WHERE id = ?").run(
+        "missing",
+        modelRecord?.id ?? null,
+        dep.id
+      );
+    } else {
+      const hashVerified = Boolean(
+        dep.model_hash && (modelRecord.sha256_hash === dep.model_hash || modelRecord.autov2_hash === dep.model_hash)
+      );
+      if (!hashVerified) {
+        allHashesVerified = false;
+      }
+      db.prepare("UPDATE image_models SET status = ?, model_id = ? WHERE id = ?").run(
+        hashVerified ? "exact_match" : "available",
+        modelRecord.id,
+        dep.id
+      );
+      db.prepare("UPDATE image_loras SET model_id = ? WHERE image_id = ? AND LOWER(lora_name) = LOWER(?)").run(
+        modelRecord.id,
+        imageId,
+        dep.model_name
+      );
+    }
+  }
+  const finalStatus = !allPresent ? "incomplete" : allHashesVerified ? "exact_match" : "available";
+  db.prepare("UPDATE images SET dependency_status = ? WHERE id = ?").run(finalStatus, imageId);
+  return finalStatus;
+}
+function resolveAppearanceForCharacter(characterId, positivePrompt, loras = []) {
+  try {
+    const charLoras = db.prepare(
+      "SELECT lora_name, appearance_label FROM character_loras WHERE character_id = ?"
+    ).all(characterId);
+    const promptLower = (positivePrompt || "").toLowerCase();
+    for (const cl of charLoras) {
+      if (!cl.appearance_label || cl.appearance_label === "Default") continue;
+      const clName = cl.lora_name.toLowerCase().replace(/\.(safetensors|pt|ckpt)$/i, "");
+      const hitLora = loras.some(
+        (l) => l.loraName.toLowerCase().replace(/\.(safetensors|pt|ckpt)$/i, "") === clName
+      );
+      if (hitLora) {
+        return cl.appearance_label;
+      }
+    }
+    for (const cl of charLoras) {
+      if (!cl.appearance_label || cl.appearance_label === "Default") continue;
+      const appLower = cl.appearance_label.toLowerCase();
+      if (promptLower.includes(appLower)) {
+        return cl.appearance_label;
+      }
+    }
+    const tags = db.prepare(
+      "SELECT t.name FROM character_tags ct JOIN tags t ON t.id = ct.tag_id WHERE ct.character_id = ?"
+    ).all(characterId);
+    for (const tag of tags) {
+      if (tag.name && promptLower.includes(tag.name.toLowerCase())) {
+        return tag.name;
+      }
+    }
+    return "Default";
+  } catch {
+    return "Default";
+  }
+}
+var init_scannerPersistenceHelpers = __esm({
+  "src/server/services/scanner/scannerPersistenceHelpers.ts"() {
+    init_db();
+    init_characterService();
+  }
+});
+
+// src/server/services/scanner/imageIndexer.ts
+import fs11 from "fs";
+import path11 from "path";
+import crypto4 from "crypto";
+async function indexSingleImageFile(fullPath, rootDir, forceMetadataRebuild = false, characterId) {
+  try {
+    const stat = await fs11.promises.stat(fullPath);
+    if (!stat.isFile()) return { outcome: "unchanged", imageId: null, contentHash: null };
+    const ext = path11.extname(fullPath).toLowerCase();
+    if (!SUPPORTED_EXTENSIONS.has(ext)) return { outcome: "unchanged", imageId: null, contentHash: null };
+    const relativePath = path11.relative(rootDir, fullPath).replace(/\\/g, "/");
+    const filename = path11.basename(fullPath);
+    const mtimeIso = stat.mtime.toISOString();
+    const existingByPath = db.prepare(
+      "SELECT id, content_hash, file_size, width, height, file_mtime, is_missing, thumbnail_path FROM images WHERE relative_path = ?"
+    ).get(relativePath);
+    if (stat.size <= 0) {
+      if (existingByPath?.id) {
+        deleteCorruptImageRecord(existingByPath.id);
+      }
+      logger.warn("Scanner", `Rejected 0-byte image file: ${relativePath}`);
+      return { outcome: "error", imageId: null, contentHash: null };
+    }
+    if (existingByPath && !forceMetadataRebuild && existingByPath.file_size === stat.size && existingByPath.width > 0 && existingByPath.height > 0 && existingByPath.file_mtime === mtimeIso && existingByPath.is_missing === 0) {
+      const expectedThumb = path11.join(appConfig.thumbnailPath, `${existingByPath.content_hash}.webp`);
+      if (!await pathExistsAsync(expectedThumb) || existingByPath.thumbnail_path !== expectedThumb) {
+        const { thumbPath: thumbPath2 } = await ensureWebpThumbnail(fullPath, existingByPath.content_hash);
+        if (thumbPath2) {
+          db.prepare("UPDATE images SET thumbnail_path = ? WHERE id = ?").run(
+            thumbPath2,
+            existingByPath.id
+          );
+        }
+      }
+      if (characterId) {
+        const meta = db.prepare("SELECT positive_prompt FROM image_metadata WHERE image_id = ?").get(existingByPath.id);
+        const loras = db.prepare("SELECT lora_name AS loraName FROM image_loras WHERE image_id = ?").all(existingByPath.id);
+        confirmImageCharacterLink({
+          imageId: existingByPath.id,
+          contentHash: existingByPath.content_hash,
+          characterId,
+          positivePrompt: meta?.positive_prompt ?? null,
+          loras
+        });
+      }
+      return { outcome: "unchanged", imageId: existingByPath.id, contentHash: existingByPath.content_hash };
+    }
+    const contentHash = computeFileSha256(fullPath);
+    const { thumbPath, width, height, format } = await ensureWebpThumbnail(fullPath, contentHash);
+    if (width <= 0 || height <= 0 || !thumbPath) {
+      if (existingByPath?.id) {
+        deleteCorruptImageRecord(existingByPath.id);
+      }
+      logger.warn("Scanner", `Rejected corrupt or unreadable image file (${width}x${height}): ${relativePath}`);
+      return { outcome: "error", imageId: null, contentHash: null };
+    }
+    const parsed = parseImageMetadata(fullPath);
+    let imageId = 0;
+    let outcome = "added";
+    const existingByHash = db.prepare("SELECT id, relative_path FROM images WHERE content_hash = ? LIMIT 1").get(contentHash);
+    const tx = db.transaction(() => {
+      if (existingByPath) {
+        imageId = existingByPath.id;
+        outcome = "modified";
+        db.prepare(
+          `UPDATE images
+           SET content_hash = ?, filename = ?, file_size = ?, width = ?, height = ?,
+               format = ?, file_mtime = ?, is_missing = 0, thumbnail_path = ?
+           WHERE id = ?`
+        ).run(contentHash, filename, stat.size, width, height, format, mtimeIso, thumbPath, imageId);
+      } else if (existingByHash) {
+        imageId = existingByHash.id;
+        outcome = "modified";
+        db.prepare(
+          `UPDATE images
+           SET relative_path = ?, filename = ?, file_size = ?, width = ?, height = ?,
+               format = ?, file_mtime = ?, is_missing = 0, thumbnail_path = ?
+           WHERE id = ?`
+        ).run(relativePath, filename, stat.size, width, height, format, mtimeIso, thumbPath, imageId);
+      } else {
+        const info = db.prepare(
+          `INSERT INTO images
+              (content_hash, relative_path, filename, file_size, width, height, format, file_mtime, is_missing, thumbnail_path)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`
+        ).run(contentHash, relativePath, filename, stat.size, width, height, format, mtimeIso, thumbPath);
+        imageId = Number(info.lastInsertRowid);
+      }
+      db.prepare("INSERT OR IGNORE INTO ratings (content_hash, image_id) VALUES (?, ?)").run(
+        contentHash,
+        imageId
+      );
+      db.prepare("UPDATE ratings SET image_id = ? WHERE content_hash = ?").run(imageId, contentHash);
+      db.prepare("UPDATE image_tags SET image_id = ? WHERE image_content_hash = ?").run(imageId, contentHash);
+      db.prepare("UPDATE collection_images SET image_id = ? WHERE image_content_hash = ?").run(
+        imageId,
+        contentHash
+      );
+      db.prepare("UPDATE image_characters SET image_id = ? WHERE image_content_hash = ?").run(
+        imageId,
+        contentHash
+      );
+      db.prepare("UPDATE characters SET portrait_image_id = ? WHERE portrait_content_hash = ?").run(
+        imageId,
+        contentHash
+      );
+      upsertImageMetadata(imageId, {
+        positivePrompt: parsed.positivePrompt,
+        negativePrompt: parsed.negativePrompt,
+        seed: parsed.seed,
+        steps: parsed.steps,
+        cfg: parsed.cfg,
+        sampler: parsed.sampler,
+        scheduler: parsed.scheduler,
+        denoise: parsed.denoise,
+        batchSize: parsed.batchSize,
+        batchIndex: parsed.batchIndex,
+        generationDate: parsed.generationDate,
+        checkpointName: parsed.checkpointName,
+        checkpointHash: parsed.checkpointHash,
+        vaeName: parsed.vaeName,
+        missingFieldsJson: JSON.stringify(parsed.missingFields),
+        provenanceJson: JSON.stringify(parsed.provenance),
+        rawMetadataJson: JSON.stringify(parsed.rawChunks)
+      });
+      if (parsed.visualWorkflowJson || parsed.apiWorkflowJson) {
+        const wfDigest = crypto4.createHash("sha256").update((parsed.visualWorkflowJson || "") + "||" + (parsed.apiWorkflowJson || "")).digest("hex");
+        db.prepare(
+          `INSERT INTO workflows (name, visual_workflow_json, api_workflow_json, workflow_hash)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(workflow_hash) DO UPDATE SET
+             visual_workflow_json = COALESCE(workflows.visual_workflow_json, excluded.visual_workflow_json),
+             api_workflow_json = COALESCE(workflows.api_workflow_json, excluded.api_workflow_json)`
+        ).run(`Workflow ${wfDigest.slice(0, 8)}`, parsed.visualWorkflowJson, parsed.apiWorkflowJson, wfDigest);
+        const wfRow = db.prepare("SELECT id FROM workflows WHERE workflow_hash = ?").get(wfDigest);
+        if (wfRow) {
+          db.prepare(
+            "INSERT OR IGNORE INTO image_workflows (image_id, image_content_hash, workflow_id) VALUES (?, ?, ?)"
+          ).run(imageId, contentHash, wfRow.id);
+        }
+      }
+      db.prepare("DELETE FROM image_loras WHERE image_id = ?").run(imageId);
+      db.prepare("DELETE FROM image_models WHERE image_id = ?").run(imageId);
+      for (const lora of parsed.loras) {
+        db.prepare(
+          `INSERT INTO models (name, filename, model_type, is_installed, source_type)
+           VALUES (?, ?, 'lora', 0, 'historical')
+           ON CONFLICT(filename) DO NOTHING`
+        ).run(lora.loraName.replace(/\.(safetensors|pt|ckpt)$/i, ""), lora.loraName);
+        db.prepare(
+          `INSERT INTO image_loras
+            (image_id, lora_name, lora_path, lora_hash, model_strength, clip_strength, node_id, node_type, provenance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(
+          imageId,
+          lora.loraName,
+          lora.loraPath,
+          lora.loraHash,
+          lora.modelStrength,
+          lora.clipStrength,
+          lora.nodeId,
+          lora.nodeType,
+          lora.provenance
+        );
+      }
+      for (const dep of parsed.models) {
+        db.prepare(
+          `INSERT INTO models (name, filename, model_type, is_installed, source_type)
+           VALUES (?, ?, ?, 0, 'historical')
+           ON CONFLICT(filename) DO NOTHING`
+        ).run(dep.modelName.replace(/\.(safetensors|pt|ckpt)$/i, ""), dep.modelName, dep.modelType);
+        db.prepare(
+          `INSERT INTO image_models
+            (image_id, model_name, model_type, model_hash, node_id, node_type, provenance, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'unknown')`
+        ).run(
+          imageId,
+          dep.modelName,
+          dep.modelType,
+          dep.modelHash,
+          dep.nodeId,
+          dep.nodeType,
+          dep.provenance
+        );
+      }
+      let effectiveCharacterId = characterId || null;
+      let matchedGenItemId2 = null;
+      if (parsed.seed) {
+        const matchedGenItem = db.prepare(
+          `SELECT gi.id, gb.character_id
+             FROM generation_items gi
+             JOIN generation_batches gb ON gb.id = gi.batch_id
+             WHERE gi.output_image_id IS NULL
+               AND gi.status IN ('pending', 'submitted', 'completed')
+               AND gi.seed = ?
+             ORDER BY gi.id DESC
+             LIMIT 1`
+        ).get(String(parsed.seed));
+        if (matchedGenItem) {
+          matchedGenItemId2 = matchedGenItem.id;
+          db.prepare(
+            `UPDATE generation_items
+             SET status = 'completed', output_image_id = ?, completed_at = COALESCE(completed_at, datetime('now'))
+             WHERE id = ?`
+          ).run(imageId, matchedGenItem.id);
+          if (!effectiveCharacterId && matchedGenItem.character_id) {
+            effectiveCharacterId = matchedGenItem.character_id;
+          }
+        }
+      }
+      if (effectiveCharacterId) {
+        confirmImageCharacterLink({
+          imageId,
+          contentHash,
+          characterId: effectiveCharacterId,
+          positivePrompt: parsed.positivePrompt,
+          loras: parsed.loras
+        });
+      }
+      return matchedGenItemId2;
+    });
+    const matchedGenItemId = tx();
+    if (matchedGenItemId && imageId) {
+      try {
+        attachGenerationItemOutputToSeries(matchedGenItemId, imageId);
+      } catch (seriesErr) {
+        console.warn("Failed to attach scanned generation image to series:", seriesErr);
+      }
+    }
+    recomputeImageDependencyStatus(imageId);
+    runAssistedCharacterIdentificationForImage(imageId);
+    setImmediate(() => {
+      startVisualTaggerQueue().catch(() => {
+      });
+    });
+    invalidateStorageUsageStatsCache();
+    return { outcome, imageId, contentHash };
+  } catch (err) {
+    logger.error("Scanner", `Error indexing image file: ${fullPath}`, err);
+    return { outcome: "error", imageId: null, contentHash: null };
+  }
+}
+var init_imageIndexer = __esm({
+  "src/server/services/scanner/imageIndexer.ts"() {
+    init_db();
+    init_config();
+    init_logger();
+    init_pngMetadataParser();
+    init_characterService();
+    init_fsWalkService();
+    init_seriesService();
+    init_storageStatsService();
+    init_visualTaggerService();
+    init_corruptRecordCleanup();
+    init_scannerMediaUtils();
+    init_scannerPersistenceHelpers();
+  }
+});
+
+// src/server/services/scanner/derivedMetadataService.ts
+function backfillMissingImagePrompts(force = false) {
+  if (!force && getBoolSetting("prompt_backfill_v1_done", false)) {
+    return 0;
+  }
+  const rows = db.prepare(
+    `SELECT
+         m.image_id,
+         m.raw_metadata_json,
+         w.api_workflow_json,
+         w.visual_workflow_json
+       FROM image_metadata m
+       LEFT JOIN image_workflows iw ON iw.image_id = m.image_id
+       LEFT JOIN workflows w ON w.id = iw.workflow_id
+       WHERE m.positive_prompt IS NULL OR TRIM(m.positive_prompt) = ''`
+  ).all();
+  if (rows.length === 0) {
+    setBoolSetting("prompt_backfill_v1_done", true);
+    return 0;
+  }
+  let updatedCount = 0;
+  const updateStmt = db.prepare(
+    `UPDATE image_metadata
+     SET positive_prompt = COALESCE(?, positive_prompt),
+         negative_prompt = COALESCE(?, negative_prompt),
+         missing_fields_json = ?,
+         provenance_json = ?
+     WHERE image_id = ?`
+  );
+  for (const row of rows) {
+    let chunks = {};
+    if (row.raw_metadata_json) {
+      try {
+        const parsedRaw = JSON.parse(row.raw_metadata_json);
+        if (parsedRaw && typeof parsedRaw === "object") {
+          chunks = { ...parsedRaw };
+        }
+      } catch {
+      }
+    }
+    if (!chunks.prompt && row.api_workflow_json) {
+      chunks.prompt = row.api_workflow_json;
+    }
+    if (!chunks.workflow && row.visual_workflow_json) {
+      chunks.workflow = row.visual_workflow_json;
+    }
+    if (Object.keys(chunks).length === 0) continue;
+    const reparsed = parseImageMetadataFromChunks(chunks);
+    if (reparsed.positivePrompt) {
+      updateStmt.run(
+        reparsed.positivePrompt,
+        reparsed.negativePrompt,
+        JSON.stringify(reparsed.missingFields),
+        JSON.stringify(reparsed.provenance),
+        row.image_id
+      );
+      runAssistedCharacterIdentificationForImage(row.image_id);
+      updatedCount++;
+    }
+  }
+  setBoolSetting("prompt_backfill_v1_done", true);
+  return updatedCount;
+}
+function copyImageMetadataToDerivedImage(sourceImageId, derivedImageId) {
+  if (!sourceImageId || !derivedImageId || sourceImageId === derivedImageId) return;
+  try {
+    const baseImg = db.prepare("SELECT dependency_status FROM images WHERE id = ?").get(sourceImageId);
+    const derivedImg = db.prepare("SELECT content_hash FROM images WHERE id = ?").get(derivedImageId);
+    const baseMeta = db.prepare("SELECT * FROM image_metadata WHERE image_id = ?").get(sourceImageId);
+    const tx = db.transaction(() => {
+      if (baseImg?.dependency_status) {
+        db.prepare("UPDATE images SET dependency_status = ? WHERE id = ?").run(
+          baseImg.dependency_status,
+          derivedImageId
+        );
+      }
+      if (baseMeta) {
+        upsertImageMetadata(derivedImageId, {
+          positivePrompt: baseMeta.positive_prompt,
+          negativePrompt: baseMeta.negative_prompt,
+          seed: baseMeta.seed,
+          steps: baseMeta.steps,
+          cfg: baseMeta.cfg,
+          sampler: baseMeta.sampler,
+          scheduler: baseMeta.scheduler,
+          denoise: baseMeta.denoise,
+          batchSize: baseMeta.batch_size,
+          batchIndex: baseMeta.batch_index,
+          generationDate: baseMeta.generation_date,
+          checkpointName: baseMeta.checkpoint_name,
+          checkpointHash: baseMeta.checkpoint_hash,
+          vaeName: baseMeta.vae_name,
+          missingFieldsJson: baseMeta.missing_fields_json,
+          provenanceJson: baseMeta.provenance_json,
+          rawMetadataJson: baseMeta.raw_metadata_json
+        });
+      }
+      const baseLoras = db.prepare("SELECT * FROM image_loras WHERE image_id = ?").all(sourceImageId);
+      if (baseLoras.length > 0) {
+        db.prepare("DELETE FROM image_loras WHERE image_id = ?").run(derivedImageId);
+        const insLora = db.prepare(
+          `INSERT INTO image_loras
+            (image_id, model_id, lora_name, lora_path, lora_hash, model_strength, clip_strength, node_id, node_type, provenance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        for (const l of baseLoras) {
+          insLora.run(
+            derivedImageId,
+            l.model_id,
+            l.lora_name,
+            l.lora_path,
+            l.lora_hash,
+            l.model_strength,
+            l.clip_strength,
+            l.node_id,
+            l.node_type,
+            l.provenance
+          );
+        }
+      }
+      const baseModels = db.prepare("SELECT * FROM image_models WHERE image_id = ?").all(sourceImageId);
+      if (baseModels.length > 0) {
+        db.prepare("DELETE FROM image_models WHERE image_id = ?").run(derivedImageId);
+        const insModel = db.prepare(
+          `INSERT INTO image_models
+            (image_id, model_id, model_name, model_type, model_hash, status, node_id, node_type, provenance)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
+        for (const m of baseModels) {
+          insModel.run(
+            derivedImageId,
+            m.model_id,
+            m.model_name,
+            m.model_type,
+            m.model_hash,
+            m.status,
+            m.node_id,
+            m.node_type,
+            m.provenance
+          );
+        }
+      }
+      const baseWf = db.prepare("SELECT * FROM image_workflows WHERE image_id = ?").get(sourceImageId);
+      if (baseWf) {
+        db.prepare(
+          `INSERT INTO image_workflows (image_id, workflow_id, format_type)
+           VALUES (?, ?, ?)
+           ON CONFLICT(image_id) DO UPDATE SET
+             workflow_id = excluded.workflow_id,
+             format_type = excluded.format_type`
+        ).run(derivedImageId, baseWf.workflow_id, baseWf.format_type);
+      }
+      if (derivedImg?.content_hash) {
+        const baseChars = db.prepare("SELECT * FROM image_characters WHERE image_id = ? AND status = 'confirmed'").all(sourceImageId);
+        for (const ch of baseChars) {
+          confirmImageCharacterLink({
+            imageId: derivedImageId,
+            contentHash: derivedImg.content_hash,
+            characterId: ch.character_id,
+            source: ch.source || "upscale",
+            confidence: ch.confidence ?? 1,
+            matchReason: ch.match_reason || "Inherited from upscaled source image",
+            explicitAppearanceLabel: ch.appearance_label || "Default"
+          });
+        }
+      }
+    });
+    tx();
+  } catch (err) {
+    console.warn("Failed to copy source metadata to derived image:", err);
+  }
+}
+var init_derivedMetadataService = __esm({
+  "src/server/services/scanner/derivedMetadataService.ts"() {
+    init_db();
+    init_characterService();
+    init_pngMetadataParser();
+    init_settingsService();
+    init_scannerPersistenceHelpers();
+  }
+});
+
+// src/server/services/scanner/directoryScanService.ts
+import fs12 from "fs";
+import path12 from "path";
+import chokidar from "chokidar";
+function getActiveScanStatus() {
+  if (activeScanJobId) {
+    return db.prepare("SELECT * FROM scan_jobs WHERE id = ?").get(activeScanJobId);
+  }
+  return db.prepare("SELECT * FROM scan_jobs ORDER BY id DESC LIMIT 1").get() || null;
+}
+async function runDirectoryScan(scanType = "incremental") {
+  purgeCorruptZeroDimensionImages();
+  if (scanType === "rebuild_metadata") {
+    backfillMissingImagePrompts(true);
+  }
+  if (activeScanJobId !== null) {
+    return activeScanJobId;
+  }
+  const rootDir = appConfig.comfyuiOutputDir;
+  const walked = await walkDirectoryFilesAsync(rootDir, {
+    extensions: SUPPORTED_EXTENSIONS,
+    includeStat: false
+  });
+  const files = walked.map((entry) => entry.fullPath);
+  const info = db.prepare(
+    `INSERT INTO scan_jobs (status, scan_type, total_files, processed_files)
+       VALUES ('running', ?, ?, 0)`
+  ).run(scanType, files.length);
+  const jobId = Number(info.lastInsertRowid);
+  activeScanJobId = jobId;
+  setImmediate(async () => {
+    let added = 0;
+    let modified = 0;
+    let deleted = 0;
+    const errors = [];
+    const seenRelativePaths = /* @__PURE__ */ new Set();
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const filePath = files[i];
+        const rel = path12.relative(rootDir, filePath).replace(/\\/g, "/");
+        seenRelativePaths.add(rel);
+        const res = await indexSingleImageFile(
+          filePath,
+          rootDir,
+          scanType === "rebuild_metadata" || scanType === "full"
+        );
+        if (res.outcome === "added") added++;
+        else if (res.outcome === "modified") modified++;
+        else if (res.outcome === "error") errors.push(`Failed to index ${rel}`);
+        if ((i + 1) % 25 === 0 || i === files.length - 1) {
+          db.prepare(
+            `UPDATE scan_jobs
+             SET processed_files = ?, added_count = ?, modified_count = ?
+             WHERE id = ?`
+          ).run(i + 1, added, modified, jobId);
+        }
+        if (res.outcome !== "unchanged" || i % 20 === 0) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      }
+      const existingRows = db.prepare(
+        "SELECT id, relative_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE is_missing = 0"
+      ).all();
+      for (const row of existingRows) {
+        if (row.is_uploaded_reference) {
+          const uploadedPath = resolveImageDiskPath(row);
+          if (!fs12.existsSync(uploadedPath)) {
+            db.prepare("UPDATE images SET is_missing = 1 WHERE id = ?").run(row.id);
+            deleted++;
+          }
+          continue;
+        }
+        if (!seenRelativePaths.has(row.relative_path)) {
+          db.prepare("UPDATE images SET is_missing = 1 WHERE id = ?").run(row.id);
+          deleted++;
+        }
+      }
+      db.prepare(
+        `UPDATE scan_jobs
+         SET status = 'completed', processed_files = ?, added_count = ?,
+             modified_count = ?, deleted_count = ?, error_log = ?, completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(files.length, added, modified, deleted, JSON.stringify(errors), jobId);
+      if (added > 0 || modified > 0 || deleted > 0) {
+        logger.info(
+          "Scanner",
+          `Directory scan (${scanType}) completed: +${added} added, ~${modified} modified, -${deleted} missing`
+        );
+        invalidateStorageUsageStatsCache();
+        notifyImageIndexed();
+      }
+    } catch (err) {
+      logger.error("Scanner", `Directory scan (${scanType}) failed`, err);
+      errors.push(err?.message || "Unexpected scanner error");
+      db.prepare(
+        `UPDATE scan_jobs
+         SET status = 'failed', error_log = ?, completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(JSON.stringify(errors), jobId);
+    } finally {
+      activeScanJobId = null;
+    }
+  });
+  return jobId;
+}
+function startFilesystemWatcher() {
+  purgeCorruptZeroDimensionImages();
+  if (fsWatcher) {
+    fsWatcher.close();
+  }
+  const watchDir = appConfig.comfyuiOutputDir;
+  fs12.mkdirSync(watchDir, { recursive: true });
+  fsWatcher = chokidar.watch(watchDir, {
+    ignoreInitial: true,
+    persistent: true,
+    awaitWriteFinish: {
+      stabilityThreshold: 800,
+      pollInterval: 200
+    }
+  });
+  fsWatcher.on("add", async (filePath) => {
+    const res = await indexSingleImageFile(filePath, watchDir, false);
+    if (res.outcome === "added" || res.outcome === "modified") {
+      notifyImageIndexed();
+    }
+  });
+  fsWatcher.on("change", async (filePath) => {
+    const res = await indexSingleImageFile(filePath, watchDir, true);
+    if (res.outcome === "added" || res.outcome === "modified") {
+      notifyImageIndexed();
+    }
+  });
+  fsWatcher.on("unlink", (filePath) => {
+    const rel = path12.relative(watchDir, filePath).replace(/\\/g, "/");
+    db.prepare("UPDATE images SET is_missing = 1 WHERE relative_path = ?").run(rel);
+    invalidateStorageUsageStatsCache();
+  });
+}
+var activeScanJobId, fsWatcher;
+var init_directoryScanService = __esm({
+  "src/server/services/scanner/directoryScanService.ts"() {
+    init_db();
+    init_config();
+    init_logger();
+    init_comfyuiLiveMonitor();
+    init_fsWalkService();
+    init_storageStatsService();
+    init_corruptRecordCleanup();
+    init_derivedMetadataService();
+    init_imageIndexer();
+    init_scannerMediaUtils();
+    activeScanJobId = null;
+    fsWatcher = null;
+  }
+});
+
+// src/server/services/scannerService.ts
+var scannerService_exports = {};
+__export(scannerService_exports, {
+  backfillMissingImagePrompts: () => backfillMissingImagePrompts,
+  computeFileSha256: () => computeFileSha256,
+  copyImageMetadataToDerivedImage: () => copyImageMetadataToDerivedImage,
+  ensureWebpThumbnail: () => ensureWebpThumbnail,
+  getActiveScanStatus: () => getActiveScanStatus,
+  indexSingleImageFile: () => indexSingleImageFile,
+  indexUploadedInspirationImage: () => indexUploadedInspirationImage,
+  purgeCorruptZeroDimensionImages: () => purgeCorruptZeroDimensionImages,
+  recomputeImageDependencyStatus: () => recomputeImageDependencyStatus,
+  resolveAppearanceForCharacter: () => resolveAppearanceForCharacter,
+  resolveImageDiskPath: () => resolveImageDiskPath,
+  runBackgroundThumbnailMigration: () => runBackgroundThumbnailMigration,
+  runDirectoryScan: () => runDirectoryScan,
+  startFilesystemWatcher: () => startFilesystemWatcher
+});
+var init_scannerService = __esm({
+  "src/server/services/scannerService.ts"() {
+    init_imageIndexer();
+    init_corruptRecordCleanup();
+    init_scannerMediaUtils();
+    init_scannerPersistenceHelpers();
+    init_derivedMetadataService();
+    init_directoryScanService();
+  }
+});
+
+// src/server/services/visualTaggerService.ts
+var visualTaggerService_exports = {};
+__export(visualTaggerService_exports, {
+  controlVisualTaggerQueue: () => controlVisualTaggerQueue,
+  detectExposureCuesWithWd14: () => detectExposureCuesWithWd14,
+  ensureTaggerModelDownloaded: () => ensureTaggerModelDownloaded,
+  getTaggerSettings: () => getTaggerSettings,
+  getVisualTaggerStatus: () => getVisualTaggerStatus,
+  getVisualTagsForContentHash: () => getVisualTagsForContentHash,
+  interrogateImageBufferWithWd14: () => interrogateImageBufferWithWd14,
+  isTaggerModelDownloaded: () => isTaggerModelDownloaded,
+  removeVisualTagFromImage: () => removeVisualTagFromImage,
+  startVisualTaggerQueue: () => startVisualTaggerQueue,
+  tagSingleImageById: () => tagSingleImageById,
+  updateVisualTaggerConfig: () => updateVisualTaggerConfig
+});
+import fs13 from "fs";
+import path13 from "path";
+import { Readable } from "stream";
+import sharp3 from "sharp";
+import * as ort from "onnxruntime-node";
+function getTaggerModelDir() {
+  const dir = path13.join(appConfig.localModelsDir, "wd-vit-tagger-v3");
+  fs13.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+function getModelOnnxPath() {
+  return path13.join(getTaggerModelDir(), "model.onnx");
+}
+function getTagsCsvPath() {
+  return path13.join(getTaggerModelDir(), "selected_tags.csv");
+}
+function isTaggerModelDownloaded() {
+  try {
+    const onnxStat = fs13.statSync(getModelOnnxPath());
+    const csvStat = fs13.statSync(getTagsCsvPath());
+    return onnxStat.size > 1e7 && csvStat.size > 1e4;
+  } catch {
+    return false;
+  }
+}
+function getTaggerSettings() {
+  const map = getSettingsMap([
+    "visual_tagger_enabled",
+    "visual_tagger_threshold",
+    "visual_tagger_device"
+  ]);
+  const enabled = getBoolSetting("visual_tagger_enabled", false, map);
+  const rawThreshold = getNumberSetting("visual_tagger_threshold", 0.35, map);
+  const threshold = Math.max(0.1, Math.min(0.95, rawThreshold));
+  const device = getSetting("visual_tagger_device", "cpu", map) === "gpu" ? "gpu" : "cpu";
+  return { enabled, threshold, device };
+}
+async function downloadFileWithProgress(url, destPath, onBytes) {
+  const partPath = `${destPath}.part`;
+  const headers = {};
+  if (appConfig.hfApiToken) {
+    headers.Authorization = `Bearer ${appConfig.hfApiToken}`;
+  }
+  const res = await fetch(url, { headers, redirect: "follow" });
+  if (!res.ok || !res.body) {
+    throw new Error(`Failed to download ${path13.basename(destPath)} (HTTP ${res.status})`);
+  }
+  const contentLength = Number(res.headers.get("content-length") || 0);
+  const fileStream = fs13.createWriteStream(partPath);
+  const nodeStream = Readable.fromWeb(res.body);
+  await new Promise((resolve, reject) => {
+    nodeStream.on("data", (chunk) => {
+      onBytes(chunk.length, contentLength);
+    });
+    nodeStream.on("error", (err) => {
+      fileStream.destroy();
+      reject(err);
+    });
+    fileStream.on("error", reject);
+    fileStream.on("finish", resolve);
+    nodeStream.pipe(fileStream);
+  });
+  fs13.renameSync(partPath, destPath);
+}
+async function ensureTaggerModelDownloaded() {
+  if (isTaggerModelDownloaded()) return true;
+  if (isDownloading) return false;
+  isDownloading = true;
+  downloadedBytes = 0;
+  totalDownloadBytes = 365e6;
+  downloadError = null;
+  try {
+    const csvPath = getTagsCsvPath();
+    const onnxPath = getModelOnnxPath();
+    if (!fs13.existsSync(csvPath) || fs13.statSync(csvPath).size < 1e4) {
+      await downloadFileWithProgress(HF_TAGS_URL, csvPath, (chunk) => {
+        downloadedBytes += chunk;
+      });
+    }
+    if (!fs13.existsSync(onnxPath) || fs13.statSync(onnxPath).size < 1e7) {
+      let onnxExpectedSet = false;
+      await downloadFileWithProgress(HF_MODEL_URL, onnxPath, (chunk, total) => {
+        if (!onnxExpectedSet && total > 0) {
+          totalDownloadBytes = downloadedBytes + total;
+          onnxExpectedSet = true;
+        }
+        downloadedBytes += chunk;
+      });
+    }
+    tagDefinitions = null;
+    ortSession = null;
+    return true;
+  } catch (err) {
+    downloadError = err?.message || "Failed to download WD14 tagger model";
+    return false;
+  } finally {
+    isDownloading = false;
+  }
+}
+function loadTagDefinitions() {
+  if (tagDefinitions) return tagDefinitions;
+  const raw = fs13.readFileSync(getTagsCsvPath(), "utf-8");
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  const parsed = [];
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].split(",");
+    if (parts.length >= 3) {
+      const rawName = parts[1].trim().replace(/_/g, " ");
+      const category = parseInt(parts[2].trim(), 10) || 0;
+      parsed.push({ name: rawName, category });
+    }
+  }
+  tagDefinitions = parsed;
+  return parsed;
+}
+async function getOrCreateSession(device) {
+  if (ortSession && loadedSessionDevice === device) {
+    return ortSession;
+  }
+  const modelPath = getModelOnnxPath();
+  if (device === "gpu") {
+    try {
+      ortSession = await ort.InferenceSession.create(modelPath, {
+        executionProviders: ["cuda", "cpu"]
+      });
+      loadedSessionDevice = "gpu";
+      activeProvider = "cuda (with cpu fallback)";
+      return ortSession;
+    } catch {
+    }
+  }
+  ortSession = await ort.InferenceSession.create(modelPath, {
+    executionProviders: ["cpu"]
+  });
+  loadedSessionDevice = device;
+  activeProvider = "cpu";
+  return ortSession;
+}
+async function preprocessImageToTensor(imageInput) {
+  const { data } = await sharp3(imageInput).flatten({ background: { r: 255, g: 255, b: 255 } }).resize(INPUT_SIZE, INPUT_SIZE, {
+    fit: "contain",
+    background: { r: 255, g: 255, b: 255 }
+  }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const floatData = new Float32Array(INPUT_SIZE * INPUT_SIZE * 3);
+  const pixelCount = INPUT_SIZE * INPUT_SIZE;
+  for (let i = 0; i < pixelCount; i++) {
+    const offset = i * 3;
+    const r = data[offset];
+    const g = data[offset + 1];
+    const b = data[offset + 2];
+    floatData[offset] = b;
+    floatData[offset + 1] = g;
+    floatData[offset + 2] = r;
+  }
+  return new ort.Tensor("float32", floatData, [1, INPUT_SIZE, INPUT_SIZE, 3]);
+}
+async function runWd14RawInference(imageBuffer) {
+  if (!isTaggerModelDownloaded()) {
+    const ok = await ensureTaggerModelDownloaded();
+    if (!ok) {
+      throw new Error(downloadError || "Failed to download local WD14 ONNX tagger model.");
+    }
+  }
+  const settings = getTaggerSettings();
+  const session = await getOrCreateSession(settings.device);
+  const tagsList = loadTagDefinitions();
+  const inputTensor = await preprocessImageToTensor(imageBuffer);
+  const inputName = session.inputNames[0];
+  const outputName = session.outputNames[0];
+  const results = await session.run({ [inputName]: inputTensor });
+  return {
+    probs: results[outputName].data,
+    tagsList
+  };
+}
+async function detectExposureCuesWithWd14(imageBuffer) {
+  const { probs, tagsList } = await runWd14RawInference(imageBuffer);
+  const limit = Math.min(probs.length, tagsList.length);
+  let explicitScore = 0;
+  let questionableScore = 0;
+  let hasStrongTrigger = false;
+  const matchedAll = [];
+  for (let i = 0; i < limit; i++) {
+    const def = tagsList[i];
+    const score = probs[i];
+    if (def.category === 9) {
+      if (def.name === "explicit") explicitScore = score;
+      else if (def.name === "questionable") questionableScore = score;
+      continue;
+    }
+    if (score < 0.25) continue;
+    const cleanTag = def.name.replace(/_/g, " ");
+    if (STRONG_EXPOSURE_TRIGGER_REGEX.test(cleanTag) && score >= 0.28) {
+      hasStrongTrigger = true;
+    }
+    if (REPORTABLE_ANATOMY_EXPOSURE_REGEX.test(cleanTag)) {
+      matchedAll.push({ tag: cleanTag, score });
+    }
+  }
+  matchedAll.sort((a, b) => b.score - a.score);
+  const hasNudityOrExplicit = explicitScore >= 0.35 || questionableScore >= 0.45 || hasStrongTrigger;
+  const exposureTags = hasNudityOrExplicit ? matchedAll.slice(0, 14).map((m) => m.tag) : [];
+  const highConfidenceTags = hasNudityOrExplicit ? matchedAll.filter((m) => m.score >= 0.48 && STRONG_EXPOSURE_TRIGGER_REGEX.test(m.tag)).slice(0, 8).map((m) => m.tag) : [];
+  return {
+    hasNudityOrExplicit,
+    explicitScore: Math.round(explicitScore * 1e3) / 1e3,
+    questionableScore: Math.round(questionableScore * 1e3) / 1e3,
+    exposureTags,
+    highConfidenceTags
+  };
+}
+async function interrogateImageBufferWithWd14(imageBuffer, customThreshold) {
+  const settings = getTaggerSettings();
+  const threshold = customThreshold ?? Math.min(settings.threshold, 0.25);
+  const outfitColorThreshold = Math.min(threshold, 0.18);
+  const { probs, tagsList } = await runWd14RawInference(imageBuffer);
+  const matched = [];
+  const limit = Math.min(probs.length, tagsList.length);
+  for (let i = 0; i < limit; i++) {
+    const def = tagsList[i];
+    if (def.category === 9) continue;
+    const score = probs[i];
+    const cleanTagName = def.name.replace(/_/g, " ");
+    const effectiveThreshold = OUTFIT_COLOR_TAG_REGEX.test(cleanTagName) ? outfitColorThreshold : threshold;
+    if (score >= effectiveThreshold) {
+      matched.push({
+        tag: cleanTagName,
+        confidence: Math.round(score * 1e3) / 1e3
+      });
+    }
+  }
+  matched.sort((a, b) => b.confidence - a.confidence);
+  return matched.slice(0, 55);
+}
+function resolveReadableImagePath(imgRow) {
+  if (imgRow.thumbnail_path) {
+    const thumbAbs = path13.isAbsolute(imgRow.thumbnail_path) ? imgRow.thumbnail_path : path13.join(appConfig.thumbnailPath, path13.basename(imgRow.thumbnail_path));
+    if (fs13.existsSync(thumbAbs)) return thumbAbs;
+  }
+  const origAbs = resolveImageDiskPath(imgRow);
+  if (fs13.existsSync(origAbs)) return origAbs;
+  return null;
+}
+async function tagSingleImageById(imageId, forceEvenIfDisabled = false) {
+  const settings = getTaggerSettings();
+  if (!settings.enabled && !forceEvenIfDisabled) return [];
+  if (!isTaggerModelDownloaded()) {
+    const ok = await ensureTaggerModelDownloaded();
+    if (!ok) return [];
+  }
+  const imgRow = db.prepare(
+    "SELECT id, content_hash, relative_path, thumbnail_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ? AND is_missing = 0"
+  ).get(imageId);
+  if (!imgRow) return [];
+  const readablePath = resolveReadableImagePath(imgRow);
+  if (!readablePath) {
+    db.prepare("UPDATE images SET visual_tags_scanned_at = datetime('now') WHERE id = ?").run(
+      imgRow.id
+    );
+    return [];
+  }
+  const session = await getOrCreateSession(settings.device);
+  const tagsList = loadTagDefinitions();
+  const inputTensor = await preprocessImageToTensor(readablePath);
+  const inputName = session.inputNames[0];
+  const outputName = session.outputNames[0];
+  const results = await session.run({ [inputName]: inputTensor });
+  const probs = results[outputName].data;
+  const matched = [];
+  const limit = Math.min(probs.length, tagsList.length);
+  for (let i = 0; i < limit; i++) {
+    const def = tagsList[i];
+    if (def.category === 9) continue;
+    const score = probs[i];
+    if (score >= settings.threshold) {
+      matched.push({
+        tag: def.name,
+        confidence: Math.round(score * 1e3) / 1e3
+      });
+    }
+  }
+  matched.sort((a, b) => b.confidence - a.confidence);
+  const topTags = matched.slice(0, 45);
+  const saveTx = db.transaction(() => {
+    db.prepare("DELETE FROM image_visual_tags WHERE image_content_hash = ?").run(
+      imgRow.content_hash
+    );
+    const ins = db.prepare(`
+      INSERT INTO image_visual_tags (image_content_hash, image_id, tag, confidence)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(image_content_hash, tag) DO UPDATE SET
+        confidence = excluded.confidence,
+        image_id = excluded.image_id
+    `);
+    for (const item of topTags) {
+      ins.run(imgRow.content_hash, imgRow.id, item.tag, item.confidence);
+    }
+    db.prepare("UPDATE images SET visual_tags_scanned_at = datetime('now') WHERE id = ?").run(
+      imgRow.id
+    );
+  });
+  saveTx();
+  return topTags;
+}
+async function startVisualTaggerQueue() {
+  if (isScanning) return;
+  const settings = getTaggerSettings();
+  if (!settings.enabled) return;
+  isScanning = true;
+  isPaused = false;
+  lastError = null;
+  try {
+    if (!isTaggerModelDownloaded()) {
+      const ok = await ensureTaggerModelDownloaded();
+      if (!ok) {
+        isScanning = false;
+        return;
+      }
+    }
+    while (true) {
+      const currentSettings = getTaggerSettings();
+      if (!currentSettings.enabled || isPaused) {
+        break;
+      }
+      const nextRow = db.prepare(
+        "SELECT id FROM images WHERE visual_tags_scanned_at IS NULL AND is_missing = 0 ORDER BY id DESC LIMIT 1"
+      ).get();
+      if (!nextRow) {
+        break;
+      }
+      try {
+        await tagSingleImageById(nextRow.id);
+      } catch (err) {
+        lastError = err?.message || `Error tagging image #${nextRow.id}`;
+        db.prepare("UPDATE images SET visual_tags_scanned_at = datetime('now') WHERE id = ?").run(
+          nextRow.id
+        );
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  } finally {
+    isScanning = false;
+  }
+}
+function updateVisualTaggerConfig(params) {
+  if (params.enabled !== void 0) {
+    setBoolSetting("visual_tagger_enabled", Boolean(params.enabled), "true_false");
+    if (params.enabled) {
+      isPaused = false;
+      setTimeout(() => {
+        startVisualTaggerQueue().catch(() => {
+        });
+      }, 10);
+    } else {
+      isPaused = true;
+    }
+  }
+  if (params.threshold !== void 0 && !Number.isNaN(Number(params.threshold))) {
+    const clamped = Math.max(0.1, Math.min(0.95, Number(params.threshold)));
+    setSetting("visual_tagger_threshold", String(clamped));
+  }
+  if (params.device === "cpu" || params.device === "gpu") {
+    setSetting("visual_tagger_device", params.device);
+    ortSession = null;
+  }
+  return getVisualTaggerStatus();
+}
+function controlVisualTaggerQueue(action) {
+  if (action === "pause") {
+    isPaused = true;
+  } else if (action === "resume" || action === "scan_unindexed") {
+    isPaused = false;
+    setTimeout(() => {
+      startVisualTaggerQueue().catch(() => {
+      });
+    }, 10);
+  } else if (action === "rescan_all") {
+    db.prepare("UPDATE images SET visual_tags_scanned_at = NULL").run();
+    isPaused = false;
+    setTimeout(() => {
+      startVisualTaggerQueue().catch(() => {
+      });
+    }, 10);
+  }
+  return getVisualTaggerStatus();
+}
+function getVisualTaggerStatus() {
+  const settings = getTaggerSettings();
+  const totalImagesCount = db.prepare("SELECT COUNT(*) as c FROM images WHERE is_missing = 0").get().c;
+  const scannedCount = db.prepare(
+    "SELECT COUNT(*) as c FROM images WHERE is_missing = 0 AND visual_tags_scanned_at IS NOT NULL"
+  ).get().c;
+  const totalVisualTagsCount = db.prepare("SELECT COUNT(*) as c FROM image_visual_tags").get().c;
+  const progressPct = totalDownloadBytes > 0 ? Math.min(100, Math.round(downloadedBytes / totalDownloadBytes * 100)) : 0;
+  return {
+    enabled: settings.enabled,
+    threshold: settings.threshold,
+    device: settings.device,
+    activeProvider,
+    localModelsDir: getTaggerModelDir(),
+    modelDownloaded: isTaggerModelDownloaded(),
+    isDownloading,
+    downloadProgressPercent: progressPct,
+    downloadedBytes,
+    totalDownloadBytes,
+    downloadError,
+    isScanning,
+    isPaused,
+    scannedCount,
+    totalImagesCount,
+    pendingCount: Math.max(0, totalImagesCount - scannedCount),
+    totalVisualTagsCount,
+    lastError
+  };
+}
+function removeVisualTagFromImage(imageId, tag) {
+  const row = db.prepare("SELECT content_hash FROM images WHERE id = ?").get(imageId);
+  if (!row) return [];
+  db.prepare(
+    "DELETE FROM image_visual_tags WHERE image_content_hash = ? AND LOWER(tag) = LOWER(?)"
+  ).run(row.content_hash, tag.trim());
+  return getVisualTagsForContentHash(row.content_hash);
+}
+function getVisualTagsForContentHash(contentHash) {
+  return db.prepare(
+    "SELECT tag, confidence FROM image_visual_tags WHERE image_content_hash = ? ORDER BY confidence DESC"
+  ).all(contentHash);
+}
+var HF_MODEL_URL, HF_TAGS_URL, INPUT_SIZE, isDownloading, downloadedBytes, totalDownloadBytes, downloadError, isScanning, isPaused, lastError, activeProvider, ortSession, loadedSessionDevice, tagDefinitions, OUTFIT_COLOR_TAG_REGEX, STRONG_EXPOSURE_TRIGGER_REGEX, REPORTABLE_ANATOMY_EXPOSURE_REGEX;
+var init_visualTaggerService = __esm({
+  "src/server/services/visualTaggerService.ts"() {
+    init_db();
+    init_config();
+    init_scannerService();
+    init_settingsService();
+    HF_MODEL_URL = "https://huggingface.co/SmilingWolf/wd-vit-tagger-v3/resolve/main/model.onnx";
+    HF_TAGS_URL = "https://huggingface.co/SmilingWolf/wd-vit-tagger-v3/resolve/main/selected_tags.csv";
+    INPUT_SIZE = 448;
+    isDownloading = false;
+    downloadedBytes = 0;
+    totalDownloadBytes = 0;
+    downloadError = null;
+    isScanning = false;
+    isPaused = false;
+    lastError = null;
+    activeProvider = "cpu";
+    ortSession = null;
+    loadedSessionDevice = null;
+    tagDefinitions = null;
+    OUTFIT_COLOR_TAG_REGEX = /\b(?:red|blue|black|white|pink|green|yellow|purple|orange|brown|grey|gray|silver|gold|golden|aqua|cyan|teal|navy|maroon|burgundy|crimson|violet|lavender|beige|tan|cream|ivory|multicolored|two-tone|striped|plaid|polka dot|floral|checkered|camouflage|sheer|see-through|lace|leather|latex|denim|silk|satin)\s+(?:dress|shirt|T-shirt|blouse|top|crop top|tank top|sweater|hoodie|jacket|coat|blazer|cardigan|suit|vest|skirt|miniskirt|pants|jeans|shorts|trousers|leggings|bikini|swimsuit|one-piece swimsuit|swimwear|bra|panties|underwear|lingerie|bodysuit|leotard|corset|bustier|negligee|nightgown|pajamas|robe|kimono|yukata|cheongsam|apron|maid headdress|uniform|school uniform|serafuku|sailor collar|necktie|bowtie|ribbon|bow|scarf|choker|collar|gloves|sleeves|stockings|thighhighs|pantyhose|socks|kneehighs|footwear|shoes|heels|high heels|boots|sandals|sneakers|hat|cap|beret|headband|hairband|glasses|sunglasses|earrings|necklace|bracelet|belt|bag|handbag|umbrella|cape|cloak)\b/i;
+    STRONG_EXPOSURE_TRIGGER_REGEX = /^(?:nude|completely nude|naked|topless|bottomless|nipples|areolae|areola|pussy|vaginal|penis|testicles|anus|pubic hair|crotch|uncensored|no bra|no panties|no underwear|panties aside|clothes lift|shirt lift|skirt lift|dress lift|bra lift|clothing aside|undressing|underboob|sideboob|spread legs|see-through|bare breasts|erection)$/i;
+    REPORTABLE_ANATOMY_EXPOSURE_REGEX = /^(?:nude|completely nude|naked|topless|bottomless|nipples|areolae|areola|breasts|small breasts|medium breasts|large breasts|huge breasts|pussy|vaginal|penis|testicles|anus|ass|buttocks|pubic hair|crotch|uncensored|no bra|no panties|no underwear|panties aside|clothes lift|shirt lift|skirt lift|dress lift|bra lift|clothing aside|undressing|underboob|sideboob|spread legs|see-through|bare breasts|erection|cum|lactation)$/i;
+  }
+});
+
+// src/server/services/galleryQueryService.ts
+function hydrateImageRecords(rows) {
+  if (rows.length === 0) return [];
+  const visualTaggerEnabled = getTaggerSettings().enabled;
+  const modelRows = db.prepare(
+    "SELECT id, LOWER(filename) AS lowerFilename, lora_category, is_installed, download_file_path FROM models"
+  ).all();
+  const modelById = /* @__PURE__ */ new Map();
+  const modelByLowerName = /* @__PURE__ */ new Map();
+  for (const m of modelRows) {
+    modelById.set(m.id, m);
+    modelByLowerName.set(m.lowerFilename, m);
+  }
+  const lorasByImageId = /* @__PURE__ */ new Map();
+  const modelsByImageId = /* @__PURE__ */ new Map();
+  const charsByHash = /* @__PURE__ */ new Map();
+  const tagsByHash = /* @__PURE__ */ new Map();
+  const visualTagsByHash = /* @__PURE__ */ new Map();
+  const colsByHash = /* @__PURE__ */ new Map();
+  const wfByImageId = /* @__PURE__ */ new Map();
+  const randomRollImageIds = /* @__PURE__ */ new Set();
+  if (rows.length === 1) {
+    const single = rows[0];
+    const rawLoras = db.prepare(
+      `SELECT
+           id, image_id AS imageId, model_id AS modelId, lora_name AS loraName,
+           lora_path AS loraPath, lora_hash AS loraHash,
+           model_strength AS modelStrength, clip_strength AS clipStrength,
+           node_id AS nodeId, node_type AS nodeType, provenance
+         FROM image_loras
+         WHERE image_id = ?`
+    ).all(single.id);
+    lorasByImageId.set(
+      single.id,
+      rawLoras.map((l) => {
+        const m = (l.modelId ? modelById.get(l.modelId) : void 0) || modelByLowerName.get(String(l.loraName || "").toLowerCase());
+        const isInstalled = Boolean(m?.is_installed);
+        return {
+          ...l,
+          loraCategory: m?.lora_category || "unclassified",
+          isInstalled,
+          isDownloadedPendingImport: Boolean(!isInstalled && m?.download_file_path)
+        };
+      })
+    );
+    modelsByImageId.set(
+      single.id,
+      db.prepare(
+        `SELECT
+             id, image_id AS imageId, model_id AS modelId, model_name AS modelName,
+             model_type AS modelType, model_hash AS modelHash,
+             node_id AS nodeId, node_type AS nodeType, provenance, status
+           FROM image_models
+           WHERE image_id = ?`
+      ).all(single.id)
+    );
+    charsByHash.set(
+      single.content_hash,
+      db.prepare(
+        `SELECT
+             ic.id, ic.character_id AS characterId, c.name AS characterName,
+             ic.status, ic.source, ic.confidence, ic.match_reason AS matchReason,
+             ic.appearance_label AS appearanceLabel
+           FROM image_characters ic
+           JOIN characters c ON c.id = ic.character_id
+           WHERE ic.image_content_hash = ? AND ic.status != 'rejected'
+           ORDER BY CASE WHEN ic.status = 'confirmed' THEN 0 ELSE 1 END, c.name ASC`
+      ).all(single.content_hash)
+    );
+    tagsByHash.set(
+      single.content_hash,
+      db.prepare(
+        `SELECT t.id, t.name, t.color
+           FROM image_tags it
+           JOIN tags t ON t.id = it.tag_id
+           WHERE it.image_content_hash = ?
+           ORDER BY t.name ASC`
+      ).all(single.content_hash)
+    );
+    if (visualTaggerEnabled) {
+      visualTagsByHash.set(
+        single.content_hash,
+        db.prepare(
+          `SELECT tag, confidence
+             FROM image_visual_tags
+             WHERE image_content_hash = ?
+             ORDER BY confidence DESC`
+        ).all(single.content_hash)
+      );
+    }
+    colsByHash.set(
+      single.content_hash,
+      db.prepare(
+        `SELECT col.id, col.name
+           FROM collection_images ci
+           JOIN collections col ON col.id = ci.collection_id
+           WHERE ci.image_content_hash = ?
+           ORDER BY col.name ASC`
+      ).all(single.content_hash)
+    );
+    const wfRow = db.prepare(
+      `SELECT
+           w.id,
+           (w.visual_workflow_json IS NOT NULL AND w.visual_workflow_json != '') AS hasVisual,
+           (w.api_workflow_json IS NOT NULL AND w.api_workflow_json != '') AS hasApi
+         FROM image_workflows iw
+         JOIN workflows w ON w.id = iw.workflow_id
+         WHERE iw.image_id = ?
+         LIMIT 1`
+    ).get(single.id);
+    if (wfRow) {
+      wfByImageId.set(single.id, {
+        id: wfRow.id,
+        hasVisual: Boolean(wfRow.hasVisual),
+        hasApi: Boolean(wfRow.hasApi)
+      });
+    }
+    const rrRow = db.prepare(
+      `SELECT 1
+         FROM generation_items gi
+         JOIN generation_batches gb ON gb.id = gi.batch_id
+         WHERE gi.output_image_id = ? AND gb.theme_title = 'Random Roll'
+         LIMIT 1`
+    ).get(single.id);
+    if (rrRow) {
+      randomRollImageIds.add(single.id);
+    }
+  } else {
+    const allLoras = db.prepare(
+      `SELECT
+           id, image_id AS imageId, model_id AS modelId, lora_name AS loraName,
+           lora_path AS loraPath, lora_hash AS loraHash,
+           model_strength AS modelStrength, clip_strength AS clipStrength,
+           node_id AS nodeId, node_type AS nodeType, provenance
+         FROM image_loras`
+    ).all();
+    for (const l of allLoras) {
+      const m = (l.modelId ? modelById.get(l.modelId) : void 0) || modelByLowerName.get(String(l.loraName || "").toLowerCase());
+      const isInstalled = Boolean(m?.is_installed);
+      const enriched = {
+        ...l,
+        loraCategory: m?.lora_category || "unclassified",
+        isInstalled,
+        isDownloadedPendingImport: Boolean(!isInstalled && m?.download_file_path)
+      };
+      const arr = lorasByImageId.get(l.imageId);
+      if (arr) arr.push(enriched);
+      else lorasByImageId.set(l.imageId, [enriched]);
+    }
+    const allChars = db.prepare(
+      `SELECT
+           ic.image_content_hash AS contentHash,
+           ic.id, ic.character_id AS characterId, c.name AS characterName,
+           ic.status, ic.source, ic.confidence, ic.match_reason AS matchReason,
+           ic.appearance_label AS appearanceLabel
+         FROM image_characters ic
+         JOIN characters c ON c.id = ic.character_id
+         WHERE ic.status != 'rejected'
+         ORDER BY CASE WHEN ic.status = 'confirmed' THEN 0 ELSE 1 END, c.name ASC`
+    ).all();
+    for (const c of allChars) {
+      const { contentHash, ...rest } = c;
+      const arr = charsByHash.get(contentHash);
+      if (arr) arr.push(rest);
+      else charsByHash.set(contentHash, [rest]);
+    }
+    const allTags = db.prepare(
+      `SELECT it.image_content_hash AS contentHash, t.id, t.name, t.color
+         FROM image_tags it
+         JOIN tags t ON t.id = it.tag_id
+         ORDER BY t.name ASC`
+    ).all();
+    for (const t of allTags) {
+      const { contentHash, ...rest } = t;
+      const arr = tagsByHash.get(contentHash);
+      if (arr) arr.push(rest);
+      else tagsByHash.set(contentHash, [rest]);
+    }
+    const allCols = db.prepare(
+      `SELECT ci.image_content_hash AS contentHash, col.id, col.name
+         FROM collection_images ci
+         JOIN collections col ON col.id = ci.collection_id
+         ORDER BY col.name ASC`
+    ).all();
+    for (const col of allCols) {
+      const { contentHash, ...rest } = col;
+      const arr = colsByHash.get(contentHash);
+      if (arr) arr.push(rest);
+      else colsByHash.set(contentHash, [rest]);
+    }
+    const allWfs = db.prepare(
+      `SELECT
+           iw.image_id AS imageId,
+           w.id,
+           (w.visual_workflow_json IS NOT NULL AND w.visual_workflow_json != '') AS hasVisual,
+           (w.api_workflow_json IS NOT NULL AND w.api_workflow_json != '') AS hasApi
+         FROM image_workflows iw
+         JOIN workflows w ON w.id = iw.workflow_id`
+    ).all();
+    for (const w of allWfs) {
+      if (!wfByImageId.has(w.imageId)) {
+        wfByImageId.set(w.imageId, {
+          id: w.id,
+          hasVisual: Boolean(w.hasVisual),
+          hasApi: Boolean(w.hasApi)
+        });
+      }
+    }
+    if (visualTaggerEnabled) {
+      const allVTags = db.prepare(
+        `SELECT image_content_hash AS contentHash, tag, confidence
+           FROM image_visual_tags
+           ORDER BY confidence DESC`
+      ).all();
+      for (const vt of allVTags) {
+        const arr = visualTagsByHash.get(vt.contentHash);
+        const item = { tag: vt.tag, confidence: vt.confidence };
+        if (arr) arr.push(item);
+        else visualTagsByHash.set(vt.contentHash, [item]);
+      }
+    }
+    const allRandomRollRows = db.prepare(
+      `SELECT DISTINCT gi.output_image_id AS imageId
+         FROM generation_items gi
+         JOIN generation_batches gb ON gb.id = gi.batch_id
+         WHERE gi.output_image_id IS NOT NULL AND gb.theme_title = 'Random Roll'`
+    ).all();
+    for (const rr of allRandomRollRows) {
+      randomRollImageIds.add(Number(rr.imageId));
+    }
+  }
+  const isSingleDetail = rows.length === 1;
+  return rows.map((r) => {
+    const loras = lorasByImageId.get(r.id) || [];
+    const models = modelsByImageId.get(r.id) || [];
+    const characters = charsByHash.get(r.content_hash) || [];
+    const tags = tagsByHash.get(r.content_hash) || [];
+    const visualTags = visualTagsByHash.get(r.content_hash) || [];
+    const collections = colsByHash.get(r.content_hash) || [];
+    const wf = wfByImageId.get(r.id);
+    let missingFields = [];
+    let provenance = {};
+    if (isSingleDetail) {
+      try {
+        missingFields = r.missing_fields_json ? JSON.parse(r.missing_fields_json) : [];
+      } catch {
+        missingFields = [];
+      }
+      try {
+        provenance = r.provenance_json ? JSON.parse(r.provenance_json) : {};
+      } catch {
+        provenance = {};
+      }
+    }
+    const hashParam = r.content_hash ? `?h=${String(r.content_hash).slice(0, 12)}` : "";
+    return {
+      id: r.id,
+      contentHash: r.content_hash,
+      relativePath: r.relative_path,
+      filename: r.filename,
+      fileSize: r.file_size,
+      width: r.width,
+      height: r.height,
+      format: r.format,
+      createdAt: r.created_at,
+      fileMtime: r.file_mtime,
+      isMissing: Boolean(r.is_missing),
+      isUploadedReference: Boolean(r.is_uploaded_reference),
+      isRandomRoll: randomRollImageIds.has(r.id),
+      thumbnailUrl: `/api/images/${r.id}/thumbnail${hashParam}`,
+      originalUrl: `/api/images/${r.id}/file`,
+      dependencyStatus: r.dependency_status,
+      rating: Number(r.rating || 0),
+      isFavorite: Boolean(r.is_favorite),
+      isRejected: Boolean(r.is_rejected),
+      isArchived: Boolean(r.is_archived),
+      notes: r.notes || "",
+      favoritedAt: r.favorited_at || null,
+      positivePrompt: r.positive_prompt ?? null,
+      negativePrompt: r.negative_prompt ?? null,
+      seed: r.seed ?? null,
+      steps: r.steps ?? null,
+      cfg: r.cfg ?? null,
+      sampler: r.sampler ?? null,
+      scheduler: r.scheduler ?? null,
+      denoise: r.denoise ?? null,
+      batchSize: r.batch_size ?? null,
+      batchIndex: r.batch_index ?? null,
+      generationDate: r.generation_date ?? null,
+      checkpointName: r.checkpoint_name ?? null,
+      checkpointHash: r.checkpoint_hash ?? null,
+      vaeName: r.vae_name ?? null,
+      missingFields,
+      provenance,
+      hasVisualWorkflow: Boolean(wf?.hasVisual),
+      hasApiWorkflow: Boolean(wf?.hasApi),
+      workflowId: wf?.id ?? null,
+      loras,
+      models,
+      characters,
+      tags,
+      visualTags,
+      collections
+    };
+  }).map((img) => isSingleDetail ? enrichSingleImageWithSeries(img) : img);
+}
+function matchesBooleanQuery(img, rawQuery) {
+  const q = rawQuery.trim();
+  if (!q) return true;
+  if (/\s+OR\s+/i.test(q)) {
+    const branches = q.split(/\s+OR\s+/i);
+    return branches.some((b) => matchesBooleanQuery(img, b));
+  }
+  const clauses = /\s+AND\s+/i.test(q) ? q.split(/\s+AND\s+/i) : q.match(/(?:NOT\s+)?[a-zA-Z_]+\s*(?::|>=|<=|>|<|=)\s*"[^"]+"|(?:NOT\s+)?[a-zA-Z_]+\s*(?::|>=|<=|>|<|=)\s*\S+|"[^"]+"|\S+/g) || [q];
+  for (let clause of clauses) {
+    clause = clause.trim();
+    if (!clause) continue;
+    let negate = false;
+    if (/^NOT\s+/i.test(clause)) {
+      negate = true;
+      clause = clause.replace(/^NOT\s+/i, "").trim();
+    } else if (clause.startsWith("-")) {
+      negate = true;
+      clause = clause.slice(1).trim();
+    }
+    const matched = evaluateSinglePredicate(img, clause);
+    if (negate ? matched : !matched) {
+      return false;
+    }
+  }
+  return true;
+}
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function testWordMatch(text, term) {
+  if (!text || !term) return false;
+  try {
+    const re = new RegExp(
+      `(^|[\\s,;:.!?'"()\\[\\]/_-])` + escapeRegex(term) + `(?=[\\s,;:.!?'"()\\[\\]/_-]|$)`,
+      "i"
+    );
+    return re.test(text);
+  } catch {
+    return text.toLowerCase().includes(term.toLowerCase());
+  }
+}
+function evaluateSinglePredicate(img, predicate) {
+  const numMatch = predicate.match(/^(rating|steps|cfg|filesize)\s*(>=|<=|>|<|=)\s*([\d.]+)$/i);
+  if (numMatch) {
+    const field = numMatch[1].toLowerCase();
+    const op = numMatch[2];
+    const target = Number(numMatch[3]);
+    const actual = field === "rating" ? img.rating : field === "steps" ? img.steps ?? -1 : field === "cfg" ? img.cfg ?? -1 : img.fileSize;
+    if (op === ">=") return actual >= target;
+    if (op === "<=") return actual <= target;
+    if (op === ">") return actual > target;
+    if (op === "<") return actual < target;
+    return actual === target;
+  }
+  const kvMatch = predicate.match(/^([a-zA-Z_]+)\s*[:=]\s*"?([^"]+)"?$/);
+  if (kvMatch) {
+    const key = kvMatch[1].toLowerCase();
+    const val = kvMatch[2].toLowerCase().trim();
+    if (key === "character" || key === "char") {
+      return img.characters.some((c) => c.characterName.toLowerCase().includes(val));
+    }
+    if (key === "lora") {
+      return img.loras.some((l) => l.loraName.toLowerCase().includes(val));
+    }
+    if (key === "checkpoint" || key === "ckpt" || key === "model") {
+      return (img.checkpointName || "").toLowerCase().includes(val);
+    }
+    if (key === "tag") {
+      return img.tags.some((t) => t.name.toLowerCase().includes(val)) || (img.visualTags || []).some((vt) => vt.tag.toLowerCase().includes(val));
+    }
+    if (key === "visual" || key === "vtag" || key === "keyword") {
+      return (img.visualTags || []).some((vt) => vt.tag.toLowerCase().includes(val));
+    }
+    if (key === "collection") {
+      return img.collections.some((c) => c.name.toLowerCase().includes(val));
+    }
+    if (key === "hash") {
+      return img.contentHash.toLowerCase().includes(val) || (img.checkpointHash || "").toLowerCase().includes(val) || img.loras.some((l) => (l.loraHash || "").toLowerCase().includes(val));
+    }
+    if (key === "file" || key === "filename") {
+      return img.filename.toLowerCase().includes(val);
+    }
+    if (key === "prompt" || key === "pos") {
+      return (img.positivePrompt || "").toLowerCase().includes(val);
+    }
+    if (key === "negative" || key === "neg") {
+      return (img.negativePrompt || "").toLowerCase().includes(val);
+    }
+    if (key === "notes" || key === "note") {
+      return img.notes.toLowerCase().includes(val);
+    }
+  }
+  const isQuoted = predicate.startsWith('"') && predicate.endsWith('"') && predicate.length >= 2;
+  const needle = isQuoted ? predicate.slice(1, -1).trim() : predicate.trim();
+  if (!needle) return true;
+  if (isQuoted) {
+    const lower = needle.toLowerCase();
+    return (img.positivePrompt || "").toLowerCase().includes(lower) || img.loras.some((l) => l.loraName.toLowerCase().includes(lower)) || img.characters.some((c) => c.characterName.toLowerCase().includes(lower)) || img.tags.some((t) => t.name.toLowerCase().includes(lower)) || (img.visualTags || []).some(
+      (vt) => vt.tag.toLowerCase().includes(lower) || vt.tag.toLowerCase().replace(/_/g, " ").includes(lower)
+    );
+  }
+  return testWordMatch(img.positivePrompt || "", needle) || img.loras.some((l) => testWordMatch(l.loraName, needle)) || img.characters.some((c) => testWordMatch(c.characterName, needle)) || img.tags.some((t) => testWordMatch(t.name, needle)) || (img.visualTags || []).some(
+    (vt) => testWordMatch(vt.tag, needle) || testWordMatch(vt.tag.replace(/_/g, " "), needle)
+  );
+}
+function queryGalleryImages(filters) {
+  const rows = db.prepare(
+    `
+      SELECT
+        i.*,
+        r.rating, r.is_favorite, r.is_rejected, r.is_archived, r.notes, r.favorited_at,
+        m.positive_prompt, m.negative_prompt, m.seed, m.steps, m.cfg, m.sampler,
+        m.scheduler, m.denoise, m.batch_size, m.batch_index, m.generation_date,
+        m.checkpoint_name, m.checkpoint_hash, m.vae_name
+      FROM images i
+      LEFT JOIN ratings r ON r.content_hash = i.content_hash
+      LEFT JOIN image_metadata m ON m.image_id = i.id
+      WHERE i.is_missing = 0
+        AND COALESCE(i.is_uploaded_reference, 0) = 0
+    `
+  ).all();
+  let items = hydrateImageRecords(rows);
+  const rejectedMode = filters.rejectedMode || "exclude";
+  if (rejectedMode === "exclude") items = items.filter((i) => !i.isRejected);
+  else if (rejectedMode === "only") items = items.filter((i) => i.isRejected);
+  const archivedMode = filters.archivedMode || "exclude";
+  if (archivedMode === "exclude") items = items.filter((i) => !i.isArchived);
+  else if (archivedMode === "only") items = items.filter((i) => i.isArchived);
+  items = collapseSeriesInGalleryPool(items);
+  if (filters.favoritesOnly) {
+    items = items.filter((i) => i.isFavorite);
+  }
+  if (filters.minRating && filters.minRating > 0) {
+    items = items.filter((i) => i.rating >= filters.minRating);
+  }
+  if (filters.checkpoint) {
+    const ck = filters.checkpoint.toLowerCase();
+    items = items.filter((i) => (i.checkpointName || "").toLowerCase() === ck);
+  }
+  if (filters.dependencyStatus) {
+    items = items.filter((i) => i.dependencyStatus === filters.dependencyStatus);
+  }
+  if (filters.collectionId) {
+    items = items.filter((i) => i.collections.some((c) => c.id === filters.collectionId));
+  }
+  if (filters.tagIds && filters.tagIds.length > 0) {
+    items = items.filter(
+      (i) => filters.tagIds.every((tid) => i.tags.some((t) => t.id === tid))
+    );
+  }
+  if (filters.dateFrom) {
+    items = items.filter((i) => i.fileMtime >= filters.dateFrom);
+  }
+  if (filters.dateTo) {
+    items = items.filter((i) => i.fileMtime.slice(0, 10) <= filters.dateTo);
+  }
+  if (filters.loras && filters.loras.length > 0) {
+    const selectedLoras = filters.loras.map((l) => l.toLowerCase());
+    const mode = filters.loraMatchMode || "ALL";
+    items = items.filter((img) => {
+      const checkLora = (targetLora) => img.loras.some((il) => {
+        const nameMatches = il.loraName.toLowerCase() === targetLora;
+        if (!nameMatches) return false;
+        if (filters.minLoraStrength !== null && filters.minLoraStrength !== void 0) {
+          if (il.modelStrength < filters.minLoraStrength) return false;
+        }
+        if (filters.maxLoraStrength !== null && filters.maxLoraStrength !== void 0) {
+          if (il.modelStrength > filters.maxLoraStrength) return false;
+        }
+        return true;
+      });
+      return mode === "ALL" ? selectedLoras.every(checkLora) : selectedLoras.some(checkLora);
+    });
+  }
+  if (filters.characterIds && filters.characterIds.length > 0) {
+    const mode = filters.characterMatchMode || "ALL";
+    const includeSuggested = Boolean(filters.includeSuggestedCharacters);
+    items = items.filter((img) => {
+      const validCharIds = new Set(
+        img.characters.filter((c) => c.status === "confirmed" || includeSuggested && c.status === "suggested").map((c) => c.characterId)
+      );
+      return mode === "ALL" ? filters.characterIds.every((cid) => validCharIds.has(cid)) : filters.characterIds.some((cid) => validCharIds.has(cid));
+    });
+  }
+  if (filters.query && filters.query.trim()) {
+    items = items.filter((img) => matchesBooleanQuery(img, filters.query));
+  }
+  const sortBy = filters.sortBy || "newest";
+  items.sort((a, b) => {
+    switch (sortBy) {
+      case "oldest":
+        return a.fileMtime.localeCompare(b.fileMtime);
+      case "rating_desc":
+        return b.rating - a.rating || b.fileMtime.localeCompare(a.fileMtime);
+      case "rating_asc":
+        return a.rating - b.rating || b.fileMtime.localeCompare(a.fileMtime);
+      case "filename":
+        return a.filename.localeCompare(b.filename);
+      case "filesize":
+        return b.fileSize - a.fileSize;
+      case "checkpoint":
+        return (a.checkpointName || "zzz").localeCompare(b.checkpointName || "zzz");
+      case "most_used_lora":
+        return b.loras.length - a.loras.length || b.fileMtime.localeCompare(a.fileMtime);
+      case "recently_favorited":
+        return (b.favoritedAt || "").localeCompare(a.favoritedAt || "");
+      case "newest":
+      default:
+        return b.fileMtime.localeCompare(a.fileMtime);
+    }
+  });
+  return items;
+}
+function listLoraExplorerItems() {
+  const rows = db.prepare(
+    `
+      SELECT
+        COALESCE(m.filename, il.lora_name) AS filename,
+        COALESCE(m.name, REPLACE(il.lora_name, '.safetensors', '')) AS name,
+        m.id AS modelId,
+        m.file_path AS filePath,
+        m.file_size AS fileSize,
+        m.sha256_hash AS sha256Hash,
+        m.autov2_hash AS autov2Hash,
+        COALESCE(m.lora_category, 'unclassified') AS loraCategory,
+        COALESCE(m.is_installed, 0) AS isInstalled,
+        m.comfyui_path AS comfyuiPath,
+        m.download_file_path AS downloadFilePath,
+        COALESCE(m.is_hidden, 0) AS isHidden,
+        m.download_url AS downloadUrl,
+        m.civitai_id AS civitaiId,
+        m.civitai_version_id AS civitaiVersionId,
+        m.civitai_url AS civitaiUrl,
+        m.base_model AS baseModel,
+        m.recommended_weight AS recommendedWeight,
+        m.civitai_description AS civitaiDescription,
+        m.preview_images_json AS previewImagesJson,
+        m.civitai_fetched_at AS civitaiFetchedAt,
+        m.hf_repo_id AS hfRepoId,
+        m.user_notes AS userNotes,
+        m.nickname AS nickname,
+        COALESCE(m.mention_enabled, 0) AS mentionEnabled,
+        COALESCE(m.default_model_strength, 1.0) AS defaultModelStrength,
+        COALESCE(m.default_clip_strength, 1.0) AS defaultClipStrength,
+        m.trigger_word AS triggerWord,
+        m.llm_description AS llmDescription,
+        COUNT(DISTINCT il.image_id) AS imageCount,
+        COUNT(DISTINCT iw.workflow_id) AS workflowCount,
+        AVG(CASE WHEN r.rating > 0 THEN r.rating ELSE NULL END) AS avgRating,
+        MIN(il.model_strength) AS minModelStrength,
+        MAX(il.model_strength) AS maxModelStrength,
+        AVG(il.model_strength) AS avgModelStrength,
+        MIN(il.clip_strength) AS minClipStrength,
+        MAX(il.clip_strength) AS maxClipStrength
+      FROM models m
+      LEFT JOIN image_loras il ON LOWER(il.lora_name) = LOWER(m.filename)
+      LEFT JOIN images i ON i.id = il.image_id AND i.is_missing = 0
+      LEFT JOIN ratings r ON r.content_hash = i.content_hash
+      LEFT JOIN image_workflows iw ON iw.image_id = i.id
+      WHERE m.model_type = 'lora'
+      GROUP BY LOWER(m.filename)
+      ORDER BY imageCount DESC, m.filename COLLATE NOCASE ASC
+    `
+  ).all();
+  const portraitMap = getCharacterPortraitMetadataMap();
+  const getChars = db.prepare(`
+    SELECT c.id, c.name, cl.appearance_label AS appearanceLabel
+    FROM character_loras cl
+    JOIN characters c ON c.id = cl.character_id
+    WHERE LOWER(cl.lora_name) = LOWER(?)
+  `);
+  return rows.map((r) => {
+    const linkedChars = getChars.all(r.filename).map((c) => {
+      const portraitInfo = portraitMap.get(c.id);
+      return {
+        ...c,
+        portraitThumbnailUrl: portraitInfo?.url ?? null,
+        portraitCrop: portraitInfo?.crop ?? null
+      };
+    });
+    return {
+      name: r.name,
+      modelId: r.modelId ?? null,
+      filename: r.filename,
+      filePath: r.filePath ?? null,
+      fileSize: r.fileSize ?? null,
+      sha256Hash: r.sha256Hash ?? null,
+      autov2Hash: r.autov2Hash ?? null,
+      loraCategory: r.loraCategory || "unclassified",
+      isInstalled: Boolean(r.isInstalled),
+      isDownloadedPendingImport: Boolean(!r.isInstalled && r.downloadFilePath),
+      comfyuiPath: r.comfyuiPath ?? null,
+      downloadFilePath: r.downloadFilePath ?? null,
+      isHidden: Boolean(r.isHidden),
+      downloadUrl: r.downloadUrl ?? null,
+      civitaiId: r.civitaiId ?? null,
+      civitaiVersionId: r.civitaiVersionId ?? null,
+      civitaiUrl: r.civitaiUrl ?? null,
+      baseModel: r.baseModel ?? null,
+      recommendedWeight: r.recommendedWeight !== null && r.recommendedWeight !== void 0 ? Number(r.recommendedWeight) : null,
+      civitaiDescription: r.civitaiDescription ?? null,
+      previewImages: parsePreviewImagesJson(r.previewImagesJson, r.modelId),
+      civitaiFetchedAt: r.civitaiFetchedAt ?? null,
+      hfRepoId: r.hfRepoId ?? null,
+      userNotes: r.userNotes ?? null,
+      nickname: r.nickname || null,
+      mentionEnabled: Boolean(r.mentionEnabled),
+      defaultModelStrength: Number(r.defaultModelStrength ?? 1),
+      defaultClipStrength: Number(r.defaultClipStrength ?? 1),
+      triggerWord: r.triggerWord || null,
+      llmDescription: r.llmDescription || null,
+      imageCount: Number(r.imageCount || 0),
+      workflowCount: Number(r.workflowCount || 0),
+      averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
+      minModelStrength: r.minModelStrength !== null ? Number(Number(r.minModelStrength).toFixed(2)) : null,
+      maxModelStrength: r.maxModelStrength !== null ? Number(Number(r.maxModelStrength).toFixed(2)) : null,
+      avgModelStrength: r.avgModelStrength !== null ? Number(Number(r.avgModelStrength).toFixed(2)) : null,
+      minClipStrength: r.minClipStrength !== null ? Number(Number(r.minClipStrength).toFixed(2)) : null,
+      maxClipStrength: r.maxClipStrength !== null ? Number(Number(r.maxClipStrength).toFixed(2)) : null,
+      characters: linkedChars
+    };
+  });
+}
+var init_galleryQueryService = __esm({
+  "src/server/services/galleryQueryService.ts"() {
+    init_db();
+    init_visualTaggerService();
+    init_seriesService();
+    init_civitaiHttpAndParse();
+    init_characterService();
+  }
+});
+
+// src/shared/types.ts
+var init_types = __esm({
+  "src/shared/types.ts"() {
+    init_utils();
+  }
+});
+
+// src/server/services/workflowCompilerService.ts
+import fs14 from "fs";
+function computeDimensionsFromMegapixels(aspectRatio, megapixels) {
+  const mp = Math.max(0.1, Math.min(10, Number(megapixels) || 1));
+  const totalPixels = mp * 1e6;
+  let ratioW = 1;
+  let ratioH = 1;
+  const match = String(aspectRatio).match(/(\d+(?:\.\d+)?)\s*[:\/x]\s*(\d+(?:\.\d+)?)/i);
+  if (match) {
+    ratioW = Math.max(0.1, parseFloat(match[1]));
+    ratioH = Math.max(0.1, parseFloat(match[2]));
+  }
+  const rawWidth = Math.sqrt(totalPixels * (ratioW / ratioH));
+  const rawHeight = Math.sqrt(totalPixels * (ratioH / ratioW));
+  const width = Math.max(64, Math.round(rawWidth / 64) * 64);
+  const height = Math.max(64, Math.round(rawHeight / 64) * 64);
+  return { width, height };
+}
+function getExecutableApiGraph(workflowRow) {
+  if (!workflowRow) return null;
+  if (workflowRow.api_workflow_json) {
+    try {
+      const parsed = JSON.parse(workflowRow.api_workflow_json);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed.nodes)) {
+        return parsed;
+      }
+    } catch {
+    }
+  }
+  if (workflowRow.visual_workflow_json) {
+    try {
+      const parsed = JSON.parse(workflowRow.visual_workflow_json);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed.nodes)) {
+        return parsed;
+      }
+    } catch {
+    }
+  }
+  if (workflowRow.workflow_hash === "default-krea2-turbo-workflow" && fs14.existsSync(PRIMARY_WORKFLOW_PATH2)) {
+    try {
+      const parsed = JSON.parse(fs14.readFileSync(PRIMARY_WORKFLOW_PATH2, "utf-8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed.nodes)) {
+        return parsed;
+      }
+    } catch {
+    }
+  }
+  return null;
+}
+function getWorkflowDefaults(workflowId) {
+  const wfRow = db.prepare("SELECT * FROM workflows WHERE id = ?").get(workflowId);
+  const apiGraph = getExecutableApiGraph(wfRow);
+  if (!apiGraph) {
+    return {
+      defaultCheckpoint: null,
+      defaultMegapixels: null,
+      defaultAspectRatio: null,
+      defaultSteps: null
+    };
+  }
+  let defaultCheckpoint = null;
+  const ckptNode = apiGraph["30_10"] || Object.values(apiGraph).find(
+    (n) => n && typeof n === "object" && (String(n.class_type || "").includes("UNETLoader") || String(n.class_type || "").includes("CheckpointLoader"))
+  );
+  if (ckptNode?.inputs) {
+    const rawCkpt = ckptNode.inputs.unet_name ?? ckptNode.inputs.ckpt_name;
+    if (typeof rawCkpt === "string" && rawCkpt.trim()) {
+      defaultCheckpoint = rawCkpt.trim();
+    }
+  }
+  let defaultMegapixels = null;
+  let defaultAspectRatio = null;
+  const resNode = apiGraph["49"]?.class_type === "ResolutionSelector" ? apiGraph["49"] : Object.values(apiGraph).find(
+    (n) => n && typeof n === "object" && n.class_type === "ResolutionSelector"
+  );
+  if (resNode?.inputs) {
+    const rawMp = Number(resNode.inputs.megapixels);
+    if (Number.isFinite(rawMp) && rawMp > 0) {
+      defaultMegapixels = rawMp;
+    }
+    if (typeof resNode.inputs.aspect_ratio === "string" && resNode.inputs.aspect_ratio.trim()) {
+      defaultAspectRatio = normalizeResolutionSelectorRatio(resNode.inputs.aspect_ratio.trim());
+    }
+  }
+  let defaultSteps = null;
+  const samplerNode = apiGraph["30_3"]?.inputs ? apiGraph["30_3"] : Object.values(apiGraph).find(
+    (n) => n && typeof n === "object" && String(n.class_type || "").includes("KSampler")
+  );
+  if (samplerNode?.inputs) {
+    const rawSteps = Number(samplerNode.inputs.steps);
+    if (Number.isFinite(rawSteps) && rawSteps > 0) {
+      defaultSteps = Math.round(rawSteps);
+    }
+  }
+  return { defaultCheckpoint, defaultMegapixels, defaultAspectRatio, defaultSteps };
+}
+function findInlineUpscaleNodes(apiGraph) {
+  if (apiGraph["51"]?.class_type === "ComfySwitchNode" && apiGraph["52"]?.class_type === "ImageScaleToTotalPixels" && Array.isArray(apiGraph["51"]?.inputs?.on_true) && String(apiGraph["51"].inputs.on_true[0]) === "52") {
+    return { switchNodeId: "51", scaleNodeId: "52" };
+  }
+  for (const [nodeId, node] of Object.entries(apiGraph)) {
+    if (!node || typeof node !== "object" || node.class_type !== "ComfySwitchNode") continue;
+    const onTrue = node.inputs?.on_true;
+    if (!Array.isArray(onTrue) || onTrue.length < 1) continue;
+    const scaleId = String(onTrue[0]);
+    const scaleNode = apiGraph[scaleId];
+    if (scaleNode?.class_type !== "ImageScaleToTotalPixels") continue;
+    const upstreamImg = scaleNode.inputs?.image;
+    if (Array.isArray(upstreamImg) && apiGraph[String(upstreamImg[0])]?.class_type === "ImageUpscaleWithModel") {
+      return { switchNodeId: nodeId, scaleNodeId: scaleId };
+    }
+  }
+  return null;
+}
+function injectPositivePromptIntoGraph(graph, nextPrompt, originalPrompt) {
+  const cleanNext = nextPrompt.trim();
+  if (graph["30_19"]?.inputs && typeof graph["30_19"].inputs.value === "string") {
+    graph["30_19"].inputs.value = cleanNext;
+    return true;
+  }
+  const origTrimmed = (originalPrompt || "").trim();
+  if (origTrimmed) {
+    for (const node of Object.values(graph)) {
+      if (!node || typeof node !== "object" || !node.inputs) continue;
+      for (const field of ["value", "text", "text_g", "text_l", "prompt", "positive", "string"]) {
+        if (typeof node.inputs[field] === "string" && node.inputs[field].trim() === origTrimmed) {
+          node.inputs[field] = cleanNext;
+          return true;
+        }
+      }
+    }
+  }
+  for (const node of Object.values(graph)) {
+    if (!node || typeof node !== "object" || !node.inputs) continue;
+    const classType = String(node.class_type || "");
+    const title = String(node._meta?.title || "").toLowerCase();
+    if (classType.includes("CLIPTextEncode") && !title.includes("negative")) {
+      const field = typeof node.inputs.text === "string" ? "text" : "text_g";
+      if (typeof node.inputs[field] === "string") {
+        node.inputs[field] = cleanNext;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+function injectLorasIntoGraph(graph, loras) {
+  const activeLoras = (loras || []).filter((l) => Boolean(l.loraName?.trim()));
+  let modified = false;
+  const loraRowLookup = db.prepare(
+    `SELECT comfyui_path, filename, trigger_word FROM models
+     WHERE LOWER(filename) = LOWER(?) OR LOWER(comfyui_path) = LOWER(?)
+     LIMIT 1`
+  );
+  const normalizeStem = (name) => name.trim().replace(/\\/g, "/").split("/").pop().replace(/\.(safetensors|pt|ckpt|pth|bin|gguf|sft)$/i, "").toLowerCase();
+  const resolvedLoras = [];
+  const seenStems = /* @__PURE__ */ new Set();
+  for (const lora of activeLoras) {
+    const stem = normalizeStem(lora.loraName);
+    if (!stem || seenStems.has(stem)) continue;
+    seenStems.add(stem);
+    const row = loraRowLookup.get(lora.loraName, lora.loraName);
+    const modelStrength = Number.isFinite(Number(lora.modelStrength)) ? Number(lora.modelStrength) : 1;
+    const clipStrength = Number.isFinite(Number(lora.clipStrength)) ? Number(lora.clipStrength) : modelStrength;
+    resolvedLoras.push({
+      comfyPath: row?.comfyui_path || row?.filename || lora.loraName,
+      stem,
+      modelStrength,
+      clipStrength,
+      triggerWord: (row?.trigger_word || "").trim()
+    });
+  }
+  const powerLoraNode = graph["50"]?.inputs ? graph["50"] : Object.values(graph).find(
+    (n) => n && typeof n === "object" && (String(n.class_type || "").toLowerCase().includes("power lora loader") || Boolean(n.inputs?.PowerLoraLoaderHeaderWidget))
+  );
+  if (powerLoraNode?.inputs) {
+    const powerInputs = powerLoraNode.inputs;
+    for (const key of Object.keys(powerInputs)) {
+      if (/^lora_\d+$/i.test(key)) {
+        delete powerInputs[key];
+      }
+    }
+    resolvedLoras.forEach((entry, idx) => {
+      powerInputs[`lora_${idx + 1}`] = {
+        on: true,
+        lora: entry.comfyPath,
+        strength: entry.modelStrength
+      };
+    });
+    if (graph["30_23"]?.inputs && "value" in graph["30_23"].inputs) {
+      graph["30_23"].inputs.value = resolvedLoras.length > 0;
+    }
+    if (graph["30_27"]?.inputs && "string_b" in graph["30_27"].inputs) {
+      const triggers = resolvedLoras.map((l) => l.triggerWord).filter(Boolean);
+      if (triggers.length > 0 || resolvedLoras.length === 0) {
+        graph["30_27"].inputs.string_b = triggers.join(", ");
+      }
+    }
+    modified = true;
+  }
+  for (const node of Object.values(graph)) {
+    if (!node || typeof node !== "object" || !node.inputs) continue;
+    const classType = String(node.class_type || "");
+    if (classType === "LoraLoader" || classType === "LoraLoaderModelOnly") {
+      const nodeLoraName = String(node.inputs.lora_name || "");
+      const nodeStem = normalizeStem(nodeLoraName);
+      const match = resolvedLoras.find((l) => l.stem === nodeStem);
+      if (match) {
+        node.inputs.lora_name = match.comfyPath;
+        if ("strength_model" in node.inputs) {
+          node.inputs.strength_model = match.modelStrength;
+        }
+        if ("strength_clip" in node.inputs) {
+          node.inputs.strength_clip = match.clipStrength;
+        }
+      } else {
+        if ("strength_model" in node.inputs) {
+          node.inputs.strength_model = 0;
+        }
+        if ("strength_clip" in node.inputs) {
+          node.inputs.strength_clip = 0;
+        }
+      }
+      modified = true;
+    }
+  }
+  return modified;
+}
+function injectGenerationParamsIntoGraph(graph, params) {
+  let modified = false;
+  const modelPathLookup = db.prepare(
+    `SELECT comfyui_path, filename FROM models
+     WHERE LOWER(filename) = LOWER(?) OR LOWER(comfyui_path) = LOWER(?)
+     LIMIT 1`
+  );
+  if (typeof params.checkpointName === "string" && params.checkpointName.trim()) {
+    const rawCkpt = params.checkpointName.trim();
+    const row = modelPathLookup.get(rawCkpt, rawCkpt);
+    const resolvedCkpt = row?.comfyui_path || row?.filename || rawCkpt;
+    const ckptNode = graph["30_10"]?.inputs ? graph["30_10"] : Object.values(graph).find(
+      (n) => n && typeof n === "object" && (String(n.class_type || "").includes("UNETLoader") || String(n.class_type || "").includes("CheckpointLoader"))
+    );
+    if (ckptNode?.inputs) {
+      const ckptField = "unet_name" in ckptNode.inputs ? "unet_name" : "ckpt_name";
+      ckptNode.inputs[ckptField] = resolvedCkpt;
+      modified = true;
+    }
+  }
+  if (typeof params.vaeName === "string" && params.vaeName.trim()) {
+    const rawVae = params.vaeName.trim();
+    if (rawVae.toLowerCase() !== "baked / default") {
+      const row = modelPathLookup.get(rawVae, rawVae);
+      const resolvedVae = row?.comfyui_path || row?.filename || rawVae;
+      const vaeNode = Object.values(graph).find(
+        (n) => n && typeof n === "object" && (String(n.class_type || "").includes("VAELoader") || n.inputs && "vae_name" in n.inputs)
+      );
+      if (vaeNode?.inputs && "vae_name" in vaeNode.inputs) {
+        vaeNode.inputs.vae_name = resolvedVae;
+        modified = true;
+      }
+    }
+  }
+  const samplerNode = graph["30_3"]?.inputs ? graph["30_3"] : Object.values(graph).find(
+    (n) => n && typeof n === "object" && String(n.class_type || "").includes("KSampler")
+  );
+  if (samplerNode?.inputs) {
+    const sInputs = samplerNode.inputs;
+    if (params.seed !== void 0 && params.seed !== null && String(params.seed).trim() !== "") {
+      const parsedSeed = Number(String(params.seed).trim());
+      if (Number.isFinite(parsedSeed) && parsedSeed >= 0) {
+        const seedField = "noise_seed" in sInputs ? "noise_seed" : "seed";
+        sInputs[seedField] = Math.floor(parsedSeed);
+        modified = true;
+      }
+    }
+    if (params.steps !== void 0 && params.steps !== null) {
+      const parsedSteps = Number(params.steps);
+      if (Number.isFinite(parsedSteps) && parsedSteps > 0) {
+        sInputs.steps = Math.max(1, Math.min(200, Math.round(parsedSteps)));
+        modified = true;
+      }
+    }
+    if (params.cfg !== void 0 && params.cfg !== null) {
+      const parsedCfg = Number(params.cfg);
+      if (Number.isFinite(parsedCfg) && parsedCfg >= 0) {
+        sInputs.cfg = Number(parsedCfg.toFixed(2));
+        modified = true;
+      }
+    }
+    if (typeof params.sampler === "string" && params.sampler.trim()) {
+      if ("sampler_name" in sInputs) {
+        sInputs.sampler_name = params.sampler.trim();
+        modified = true;
+      } else if ("sampler" in sInputs) {
+        sInputs.sampler = params.sampler.trim();
+        modified = true;
+      }
+    }
+    if (typeof params.scheduler === "string" && params.scheduler.trim()) {
+      if ("scheduler" in sInputs) {
+        sInputs.scheduler = params.scheduler.trim();
+        modified = true;
+      }
+    }
+    if (params.denoise !== void 0 && params.denoise !== null) {
+      const parsedDenoise = Number(params.denoise);
+      if (Number.isFinite(parsedDenoise) && parsedDenoise >= 0) {
+        sInputs.denoise = Math.max(0, Math.min(1, Number(parsedDenoise.toFixed(3))));
+        modified = true;
+      }
+    }
+  }
+  if (params.batchSize !== void 0 && params.batchSize !== null) {
+    const parsedBatch = Number(params.batchSize);
+    if (Number.isFinite(parsedBatch) && parsedBatch >= 1) {
+      const clampedBatch = Math.max(1, Math.min(16, Math.round(parsedBatch)));
+      for (const node of Object.values(graph)) {
+        if (!node || typeof node !== "object" || !node.inputs) continue;
+        if ("batch_size" in node.inputs) {
+          node.inputs.batch_size = clampedBatch;
+          modified = true;
+        }
+      }
+    }
+  }
+  return modified;
+}
+function compileWorkflowForGeneration(params) {
+  const wfRow = db.prepare("SELECT * FROM workflows WHERE id = ?").get(params.workflowId);
+  const baseGraph = getExecutableApiGraph(wfRow);
+  if (!baseGraph) {
+    throw new Error("Selected workflow does not contain a valid ComfyUI API node graph.");
+  }
+  const graph = JSON.parse(JSON.stringify(baseGraph));
+  const cleanPositivePrompt = (params.positivePrompt || "").replace(/\b[\w\.\-]+\.(?:safetensors|ckpt|pt|bin)\b/gi, "").replace(/\s*,\s*,+/g, ",").replace(/^[\s,;:\-–—]+/, "").replace(/[\s,;:\-–—]+$/, "").trim();
+  injectPositivePromptIntoGraph(graph, cleanPositivePrompt || params.positivePrompt);
+  const activeLoras = (params.loras || []).filter((l) => Boolean(l.loraName?.trim()));
+  const resolvedTriggerWord = params.triggerWord !== void 0 ? String(params.triggerWord).trim() : activeLoras.map((l) => (l.triggerWord || "").trim()).filter(Boolean).join(", ");
+  if (graph["30_27"]?.inputs) {
+    graph["30_27"].inputs.string_b = resolvedTriggerWord;
+  }
+  const numericSeed = Number(params.seed) > 0 ? Math.floor(Number(params.seed)) : Math.floor(Math.random() * 1e15) + 1;
+  const samplerNode = graph["30_3"]?.inputs ? graph["30_3"] : Object.values(graph).find(
+    (n) => n && typeof n === "object" && String(n.class_type || "").includes("KSampler")
+  );
+  if (samplerNode?.inputs) {
+    const seedField = typeof samplerNode.inputs.noise_seed === "number" ? "noise_seed" : "seed";
+    samplerNode.inputs[seedField] = numericSeed;
+    if (params.steps !== void 0 && params.steps !== null) {
+      const requestedSteps = Number(params.steps);
+      if (Number.isFinite(requestedSteps) && requestedSteps > 0) {
+        samplerNode.inputs.steps = Math.max(1, Math.min(100, Math.round(requestedSteps)));
+      }
+    }
+  }
+  const requestedMp = Math.max(0.5, Math.min(10, Number(params.megapixels) || 3));
+  const shouldUpscale = requestedMp > 3;
+  const baseMp = Math.min(3, requestedMp);
+  const baseDims = shouldUpscale ? computeDimensionsFromMegapixels(params.aspectRatio, baseMp) : { width: params.width, height: params.height };
+  const resNode = graph["49"]?.class_type === "ResolutionSelector" ? graph["49"] : Object.values(graph).find(
+    (n) => n && typeof n === "object" && (n.class_type === "ResolutionSelector" || String(n.class_type || "").includes("EmptyLatent"))
+  );
+  if (resNode?.inputs) {
+    const resInputs = resNode.inputs;
+    if ("aspect_ratio" in resInputs || "megapixels" in resInputs) {
+      resInputs.aspect_ratio = normalizeResolutionSelectorRatio(params.aspectRatio);
+      resInputs.megapixels = Number(baseMp.toFixed(2));
+    }
+    if (typeof resInputs.width === "number") resInputs.width = baseDims.width;
+    if (typeof resInputs.height === "number") resInputs.height = baseDims.height;
+    if (typeof resInputs.batch_size === "number") resInputs.batch_size = 1;
+  }
+  const inlineUpscale = findInlineUpscaleNodes(graph);
+  if (inlineUpscale) {
+    graph[inlineUpscale.switchNodeId].inputs.switch = shouldUpscale;
+    if (shouldUpscale) {
+      graph[inlineUpscale.scaleNodeId].inputs.megapixels = Number(requestedMp.toFixed(2));
+    }
+  }
+  if (params.checkpointName) {
+    const ckptModelRow = db.prepare(
+      `SELECT comfyui_path FROM models
+         WHERE LOWER(filename) = LOWER(?) OR LOWER(comfyui_path) = LOWER(?)
+         LIMIT 1`
+    ).get(params.checkpointName, params.checkpointName);
+    const resolvedCkptName = ckptModelRow?.comfyui_path || params.checkpointName;
+    const ckptNode = graph["30_10"]?.inputs ? graph["30_10"] : Object.values(graph).find(
+      (n) => n && typeof n === "object" && (String(n.class_type || "").includes("UNETLoader") || String(n.class_type || "").includes("CheckpointLoader"))
+    );
+    if (ckptNode?.inputs) {
+      const ckptField = "unet_name" in ckptNode.inputs ? "unet_name" : "ckpt_name";
+      ckptNode.inputs[ckptField] = resolvedCkptName;
+    }
+  }
+  const powerLoraNode = graph["50"]?.inputs ? graph["50"] : Object.values(graph).find(
+    (n) => n && typeof n === "object" && (String(n.class_type || "").toLowerCase().includes("power lora loader") || Boolean(n.inputs?.PowerLoraLoaderHeaderWidget))
+  );
+  if (powerLoraNode?.inputs) {
+    const powerInputs = powerLoraNode.inputs;
+    for (const key of Object.keys(powerInputs)) {
+      if (/^lora_\d+$/i.test(key)) {
+        delete powerInputs[key];
+      }
+    }
+    const loraPathLookup = db.prepare(
+      `SELECT comfyui_path FROM models
+       WHERE LOWER(filename) = LOWER(?) OR LOWER(comfyui_path) = LOWER(?)
+       LIMIT 1`
+    );
+    const combinedLoras = [];
+    const seenLoraNames = /* @__PURE__ */ new Set();
+    for (const lora of activeLoras) {
+      const normalizedBasename = lora.loraName.trim().replace(/\\/g, "/").split("/").pop().toLowerCase();
+      if (!seenLoraNames.has(normalizedBasename)) {
+        seenLoraNames.add(normalizedBasename);
+        const loraRow = loraPathLookup.get(lora.loraName, lora.loraName);
+        combinedLoras.push({
+          on: true,
+          lora: loraRow?.comfyui_path || lora.loraName,
+          strength: Number(lora.modelStrength ?? 1)
+        });
+      }
+    }
+    combinedLoras.forEach((entry, idx) => {
+      powerInputs[`lora_${idx + 1}`] = {
+        on: entry.on,
+        lora: entry.lora,
+        strength: entry.strength
+      };
+    });
+    if (graph["30_23"]?.inputs && "value" in graph["30_23"].inputs) {
+      graph["30_23"].inputs.value = combinedLoras.length > 0;
+    }
+  }
+  return graph;
+}
+function compileUpscaleWorkflow(params) {
+  const rawJson = fs14.readFileSync(UPSCALE_WORKFLOW_PATH, "utf-8");
+  const graph = JSON.parse(rawJson);
+  const cleanSubfolder = (params.subfolder || "").trim().replace(/^\/+|\/+$/g, "");
+  const sourceSuffix = params.sourceType === "input" ? "[input]" : "[output]";
+  const annotatedImage = cleanSubfolder ? `${cleanSubfolder}/${params.imageFilename} ${sourceSuffix}` : `${params.imageFilename} ${sourceSuffix}`;
+  const targetMp = Math.max(0.5, Math.min(10, Number(params.targetMegapixels) || 5));
+  const upscaleModelNodeIds = /* @__PURE__ */ new Set();
+  const scaleNodeIds = [];
+  for (const [nodeId, node] of Object.entries(graph)) {
+    if (!node || typeof node !== "object") continue;
+    const classType = String(node.class_type || "");
+    if (classType === "ImageUpscaleWithModel") {
+      upscaleModelNodeIds.add(nodeId);
+    } else if (classType === "ImageScaleToTotalPixels") {
+      scaleNodeIds.push(nodeId);
+    }
+  }
+  const targetScaleNodeId = scaleNodeIds.find((id) => {
+    const imgInput = graph[id]?.inputs?.image;
+    return Array.isArray(imgInput) && upscaleModelNodeIds.has(String(imgInput[0]));
+  }) || scaleNodeIds.find((id) => Number(graph[id]?.inputs?.megapixels) !== 3) || scaleNodeIds[scaleNodeIds.length - 1] || null;
+  for (const [nodeId, node] of Object.entries(graph)) {
+    if (!node || typeof node !== "object") continue;
+    const classType = String(node.class_type || "");
+    const inputs = node.inputs && typeof node.inputs === "object" ? node.inputs : {};
+    if (classType === "LoadImage") {
+      inputs.image = annotatedImage;
+    } else if (nodeId === targetScaleNodeId || !targetScaleNodeId && classType !== "ImageScaleToTotalPixels" && "megapixels" in inputs) {
+      inputs.megapixels = Number(targetMp.toFixed(2));
+    } else if (classType === "PreviewImage" || classType === "SaveImage") {
+      node.class_type = "SaveImage";
+      inputs.filename_prefix = params.filenamePrefix || inputs.filename_prefix || "Krea2_turbo_upscaled";
+      if (node._meta && typeof node._meta === "object") {
+        node._meta.title = "Save Image";
+      }
+    }
+  }
+  return graph;
+}
+var UPSCALE_WORKFLOW_PATH, PRIMARY_WORKFLOW_PATH2;
+var init_workflowCompilerService = __esm({
+  "src/server/services/workflowCompilerService.ts"() {
+    init_db();
+    init_workflowPaths();
+    init_types();
+    UPSCALE_WORKFLOW_PATH = resolveServerWorkflowPath("upscale_workflow.json");
+    PRIMARY_WORKFLOW_PATH2 = resolveServerWorkflowPath("primary_workflow.json");
+  }
+});
+
+// src/server/services/comfyuiService.ts
+import fs15 from "fs";
+import path14 from "path";
+function formatComfyHistoryError(messages) {
+  if (Array.isArray(messages)) {
+    for (const msg of messages) {
+      if (Array.isArray(msg) && msg[0] === "execution_error" && msg[1] && typeof msg[1] === "object") {
+        const details = msg[1];
+        const excMsg = String(details.exception_message || "").trim();
+        const nodeType = String(details.node_type || "").trim();
+        if (excMsg && nodeType) return `${nodeType}: ${excMsg}`;
+        if (excMsg) return excMsg;
+      }
+    }
+  }
+  if (typeof messages === "string" && messages.trim()) {
+    return messages.trim();
+  }
+  return "ComfyUI execution error";
+}
+function pollComfyPromptCompletion(options) {
+  const {
+    promptId,
+    characterId = null,
+    maxAttempts = 480,
+    intervalMs = 2500,
+    onSuccess,
+    onError,
+    onTimeout
+  } = options;
+  const tick = (attempt) => {
+    if (isPromptCancelled(promptId)) {
+      return;
+    }
+    if (attempt > maxAttempts) {
+      Promise.resolve(onTimeout?.()).catch((err) => {
+        console.warn(`ComfyUI poller timeout handler failed for ${promptId}:`, err);
+      });
+      return;
+    }
+    setTimeout(async () => {
+      if (isPromptCancelled(promptId)) {
+        return;
+      }
+      try {
+        const res = await fetch(`${appConfig.comfyuiUrl}/history/${promptId}`);
+        if (isPromptCancelled(promptId)) {
+          return;
+        }
+        if (res.ok) {
+          const hist = await res.json();
+          const entry = hist[promptId];
+          if (entry) {
+            if (isPromptCancelled(promptId)) {
+              return;
+            }
+            if (entry.status?.status_str === "error") {
+              const errMsg = formatComfyHistoryError(entry.status?.messages);
+              await onError?.(errMsg);
+              return;
+            }
+            const outputImageIds = [];
+            let firstOutputSpec = null;
+            let anyIndexed = false;
+            const outputs = entry.outputs || {};
+            for (const nodeOut of Object.values(outputs)) {
+              if (!Array.isArray(nodeOut?.images) || nodeOut.images.length === 0) continue;
+              for (const imgSpec of nodeOut.images) {
+                if (imgSpec?.type === "temp") continue;
+                const filename = imgSpec?.filename;
+                const subfolder = imgSpec?.subfolder || "";
+                if (!filename) continue;
+                if (!firstOutputSpec) {
+                  firstOutputSpec = { filename, subfolder };
+                }
+                const fullPath = path14.join(appConfig.comfyuiOutputDir, subfolder, filename);
+                if (fs15.existsSync(fullPath)) {
+                  const resIndex = await indexSingleImageFile(
+                    fullPath,
+                    appConfig.comfyuiOutputDir,
+                    false,
+                    characterId
+                  );
+                  if (resIndex.imageId) {
+                    outputImageIds.push(resIndex.imageId);
+                    anyIndexed = true;
+                  }
+                } else {
+                  const imgRow = db.prepare("SELECT id FROM images WHERE filename = ? ORDER BY id DESC LIMIT 1").get(filename);
+                  if (imgRow) {
+                    outputImageIds.push(imgRow.id);
+                  }
+                }
+              }
+            }
+            await onSuccess({
+              outputImageIds,
+              firstImageId: outputImageIds[0] ?? null,
+              firstOutputSpec
+            });
+            if (anyIndexed || outputImageIds.length > 0) {
+              notifyImageIndexed();
+            } else {
+              runDirectoryScan("incremental");
+            }
+            return;
+          }
+        }
+        tick(attempt + 1);
+      } catch {
+        tick(attempt + 1);
+      }
+    }, intervalMs);
+  };
+  tick(0);
+}
+async function testComfyUiConnection(customUrl) {
+  const baseUrl = (customUrl || appConfig.comfyuiUrl).replace(/\/+$/, "");
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch(`${baseUrl}/system_stats`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} from ${baseUrl}/system_stats`);
+    }
+    const stats = await res.json();
+    db.prepare(
+      `UPDATE comfyui_instances
+       SET base_url = ?, last_status = 'online', last_checked_at = datetime('now'), system_stats_json = ?
+       WHERE is_default = 1`
+    ).run(baseUrl, JSON.stringify(stats));
+    appConfig.comfyuiUrl = baseUrl;
+    return { online: true, baseUrl, systemStats: stats, error: null };
+  } catch (err) {
+    db.prepare(
+      `UPDATE comfyui_instances
+       SET base_url = ?, last_status = 'offline', last_checked_at = datetime('now')
+       WHERE is_default = 1`
+    ).run(baseUrl);
+    return {
+      online: false,
+      baseUrl,
+      systemStats: null,
+      error: err?.message || "ComfyUI unreachable"
+    };
+  }
+}
+function convertVisualWorkflowToApi(visualJsonStr) {
+  try {
+    const visual = JSON.parse(visualJsonStr);
+    const nodes = Array.isArray(visual.nodes) ? visual.nodes : [];
+    const links = Array.isArray(visual.links) ? visual.links : [];
+    const linkMap = /* @__PURE__ */ new Map();
+    for (const l of links) {
+      if (Array.isArray(l) && l.length >= 5) {
+        linkMap.set(Number(l[0]), [String(l[1]), Number(l[2])]);
+      }
+    }
+    const widgetMap = {
+      CheckpointLoaderSimple: ["ckpt_name"],
+      VAELoader: ["vae_name"],
+      CLIPTextEncode: ["text"],
+      EmptyLatentImage: ["width", "height", "batch_size"],
+      LoraLoader: ["lora_name", "strength_model", "strength_clip"],
+      LoraLoaderModelOnly: ["lora_name", "strength_model"],
+      KSampler: ["seed", "_control_after_generate", "steps", "cfg", "sampler_name", "scheduler", "denoise"],
+      SaveImage: ["filename_prefix"]
+    };
+    const apiGraph = {};
+    const unconvertedNodes = [];
+    for (const node of nodes) {
+      const id = String(node.id);
+      const type = String(node.type || "");
+      if (type === "Note" || type === "Reroute") continue;
+      const inputs = {};
+      if (Array.isArray(node.inputs)) {
+        for (const inp of node.inputs) {
+          if (inp.link !== null && inp.link !== void 0 && linkMap.has(Number(inp.link))) {
+            inputs[inp.name] = linkMap.get(Number(inp.link));
+          }
+        }
+      }
+      const knownWidgets = widgetMap[type];
+      const values = Array.isArray(node.widgets_values) ? node.widgets_values : [];
+      if (knownWidgets) {
+        knownWidgets.forEach((wName, idx) => {
+          if (!wName.startsWith("_") && values[idx] !== void 0) {
+            inputs[wName] = values[idx];
+          }
+        });
+      } else if (values.length > 0) {
+        unconvertedNodes.push(type);
+      }
+      apiGraph[id] = {
+        class_type: type,
+        inputs
+      };
+    }
+    return {
+      apiGraph: Object.keys(apiGraph).length > 0 ? apiGraph : null,
+      unconvertedNodes
+    };
+  } catch {
+    return { apiGraph: null, unconvertedNodes: [] };
+  }
+}
+async function validateWorkflowReproduction(params) {
+  let wfRow = null;
+  let imageId = params.imageId ?? null;
+  if (params.workflowId) {
+    wfRow = db.prepare("SELECT * FROM workflows WHERE id = ?").get(params.workflowId);
+  } else if (params.imageId) {
+    wfRow = db.prepare(
+      `SELECT w.* FROM image_workflows iw
+         JOIN workflows w ON w.id = iw.workflow_id
+         WHERE iw.image_id = ? LIMIT 1`
+    ).get(params.imageId);
+  }
+  const conn = await testComfyUiConnection();
+  if (!wfRow) {
+    return {
+      imageId,
+      workflowId: 0,
+      workflowFormat: "missing",
+      canSubmit: false,
+      readinessStatus: "unknown",
+      comfyuiOnline: conn.online,
+      requiredModels: [],
+      requiredNodes: [],
+      warnings: ["No embedded visual or API workflow metadata was found for this record."],
+      apiPromptPayload: null
+    };
+  }
+  let workflowFormat = "visual_only";
+  let apiPromptPayload = null;
+  const warnings = [];
+  if (wfRow.api_workflow_json) {
+    try {
+      apiPromptPayload = JSON.parse(wfRow.api_workflow_json);
+      workflowFormat = "api";
+    } catch {
+      warnings.push("Stored API workflow JSON is malformed.");
+    }
+  }
+  if (!apiPromptPayload && wfRow.visual_workflow_json) {
+    const conv = convertVisualWorkflowToApi(wfRow.visual_workflow_json);
+    if (conv.apiGraph) {
+      apiPromptPayload = conv.apiGraph;
+      workflowFormat = "visual_converted";
+      if (conv.unconvertedNodes.length > 0) {
+        warnings.push(
+          `Visual workflow converted to API format, but custom nodes (${conv.unconvertedNodes.join(
+            ", "
+          )}) have unverified widget mappings.`
+        );
+      }
+    }
+  }
+  const requiredModels = [];
+  if (imageId) {
+    const deps = db.prepare("SELECT * FROM image_models WHERE image_id = ?").all(imageId);
+    for (const d of deps) {
+      const m = db.prepare("SELECT * FROM models WHERE LOWER(filename) = LOWER(?) LIMIT 1").get(d.model_name);
+      const isInstalled = Boolean(m?.is_installed);
+      const hashVerified = Boolean(
+        isInstalled && d.model_hash && (m.sha256_hash === d.model_hash || m.autov2_hash === d.model_hash)
+      );
+      const status = !isInstalled ? "missing" : hashVerified ? "exact_match" : "available";
+      requiredModels.push({
+        name: d.model_name,
+        modelType: d.model_type,
+        hash: d.model_hash || m?.autov2_hash || null,
+        status,
+        reason: status === "exact_match" ? "Installed and SHA-256/AutoV2 hash verified" : status === "available" ? "Model filename present; hash not historically embedded in image" : "Model file is missing from ComfyUI model inventory"
+      });
+    }
+  }
+  let availableNodeClasses = null;
+  if (conn.online) {
+    try {
+      const res = await fetch(`${appConfig.comfyuiUrl}/object_info`);
+      if (res.ok) {
+        const data = await res.json();
+        availableNodeClasses = new Set(Object.keys(data));
+      }
+    } catch {
+      availableNodeClasses = null;
+    }
+  }
+  const requiredNodes = [];
+  if (apiPromptPayload) {
+    const seenClasses = /* @__PURE__ */ new Set();
+    for (const node of Object.values(apiPromptPayload)) {
+      const ct = String(node?.class_type || "");
+      if (ct && !seenClasses.has(ct)) {
+        seenClasses.add(ct);
+        const isAvail = availableNodeClasses ? availableNodeClasses.has(ct) : null;
+        requiredNodes.push({ classType: ct, isAvailable: isAvail });
+        if (isAvail === false) {
+          warnings.push(`Required custom node "${ct}" is not installed in ComfyUI.`);
+        }
+      }
+    }
+  }
+  const hasMissingModels = requiredModels.some((m) => m.status === "missing");
+  const hasMissingNodes = requiredNodes.some((n) => n.isAvailable === false);
+  const allExact = requiredModels.length > 0 && requiredModels.every((m) => m.status === "exact_match");
+  const readinessStatus = hasMissingModels || hasMissingNodes ? "incomplete" : allExact ? "exact_match" : requiredModels.length > 0 ? "available" : "unknown";
+  if (hasMissingModels) {
+    warnings.push(
+      "One or more required models are missing. Couchy will never silently substitute missing models."
+    );
+  }
+  if (!conn.online) {
+    warnings.push(`ComfyUI instance at ${conn.baseUrl} is currently offline.`);
+  }
+  return {
+    imageId,
+    workflowId: wfRow.id,
+    workflowFormat,
+    canSubmit: Boolean(apiPromptPayload && conn.online && !hasMissingModels && !hasMissingNodes),
+    readinessStatus,
+    comfyuiOnline: conn.online,
+    requiredModels,
+    requiredNodes,
+    warnings,
+    apiPromptPayload
+  };
+}
+async function submitWorkflowReproduction(params) {
+  const validation = await validateWorkflowReproduction({
+    imageId: params.imageId,
+    workflowId: params.workflowId
+  });
+  if (!validation.apiPromptPayload) {
+    throw new Error("Workflow does not have a valid API prompt graph for execution.");
+  }
+  if (!validation.comfyuiOnline) {
+    throw new Error("ComfyUI is offline. Verify connection settings before submitting.");
+  }
+  const activeEditedLoraKeys = Array.isArray(params.loras) ? new Set(
+    params.loras.map((l) => (l.loraName || "").trim().toLowerCase()).filter(Boolean)
+  ) : null;
+  const hasCheckpointOverride = Boolean(params.generationParams?.checkpointName?.trim());
+  const hasVaeOverride = Boolean(params.generationParams?.vaeName?.trim());
+  const missingDeps = validation.requiredModels.filter((m) => {
+    if (m.status !== "missing") return false;
+    if (activeEditedLoraKeys && m.modelType === "lora") {
+      return activeEditedLoraKeys.has(m.name.trim().toLowerCase());
+    }
+    if (hasCheckpointOverride && (m.modelType === "checkpoint" || m.modelType === "diffusion")) {
+      return false;
+    }
+    if (hasVaeOverride && m.modelType === "vae") {
+      return false;
+    }
+    return true;
+  }).map((m) => m.name);
+  if (missingDeps.length > 0) {
+    throw new Error(`Cannot run workflow with missing models: ${missingDeps.join(", ")}`);
+  }
+  const promptPayload = JSON.parse(
+    JSON.stringify(validation.apiPromptPayload)
+  );
+  if (typeof params.positivePrompt === "string") {
+    let origPrompt = null;
+    if (params.imageId) {
+      const metaRow = db.prepare("SELECT positive_prompt FROM image_metadata WHERE image_id = ?").get(params.imageId);
+      origPrompt = metaRow?.positive_prompt ?? null;
+    }
+    injectPositivePromptIntoGraph(promptPayload, params.positivePrompt, origPrompt);
+  }
+  if (Array.isArray(params.loras)) {
+    injectLorasIntoGraph(promptPayload, params.loras);
+  }
+  if (params.generationParams && typeof params.generationParams === "object") {
+    injectGenerationParamsIntoGraph(promptPayload, params.generationParams);
+  }
+  const resolvedWorkflowId = validation.workflowId || params.workflowId || 0;
+  const info = db.prepare(
+    `INSERT INTO reproduction_jobs
+        (source_image_id, workflow_id, status, readiness_status, missing_dependencies_json)
+       VALUES (?, ?, 'queued', ?, ?)`
+  ).run(
+    params.imageId ?? null,
+    resolvedWorkflowId,
+    validation.readinessStatus,
+    JSON.stringify(missingDeps)
+  );
+  const jobId = Number(info.lastInsertRowid);
+  try {
+    const res = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt: promptPayload,
+        client_id: COUCHY_COMFY_CLIENT_ID
+      })
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`ComfyUI rejected prompt (${res.status}): ${errText}`);
+    }
+    const data = await res.json();
+    const promptId = data.prompt_id || `prompt-${Date.now()}`;
+    db.prepare(
+      `UPDATE reproduction_jobs
+       SET comfyui_prompt_id = ?, status = 'running'
+       WHERE id = ?`
+    ).run(promptId, jobId);
+    invalidateComfyQueueCache();
+    let sourceCharacterId = null;
+    let sourceCharacterName = null;
+    if (params.imageId) {
+      const charRow = db.prepare(
+        `SELECT ic.character_id, c.name AS character_name
+           FROM image_characters ic
+           JOIN characters c ON c.id = ic.character_id
+           WHERE ic.image_id = ? AND ic.status = 'confirmed' LIMIT 1`
+      ).get(params.imageId);
+      if (charRow?.character_id) {
+        sourceCharacterId = Number(charRow.character_id);
+        sourceCharacterName = charRow.character_name || null;
+      }
+      registerQueuedPromptSeriesTarget(promptId, {
+        sourceImageId: params.imageId,
+        characterId: sourceCharacterId,
+        characterName: sourceCharacterName,
+        prompt: typeof params.positivePrompt === "string" && params.positivePrompt.trim() ? params.positivePrompt.trim() : `Run Workflow from Image #${params.imageId}`,
+        isUpscale: true
+      });
+    }
+    pollComfyPromptCompletion({
+      promptId,
+      characterId: sourceCharacterId,
+      maxAttempts: 90,
+      onSuccess: ({ outputImageIds }) => {
+        if (params.imageId) {
+          for (const derivedId of outputImageIds) {
+            if (derivedId !== params.imageId) {
+              attachUpscaledImageToSeries(params.imageId, derivedId);
+            }
+          }
+          notifyImageIndexed();
+        }
+        db.prepare(
+          `UPDATE reproduction_jobs
+           SET status = 'completed',
+               output_image_ids_json = ?,
+               completed_at = datetime('now')
+           WHERE id = ?`
+        ).run(JSON.stringify(outputImageIds), jobId);
+      },
+      onError: (errMsg) => {
+        db.prepare(
+          `UPDATE reproduction_jobs
+           SET status = 'failed', execution_error = ?, completed_at = datetime('now')
+           WHERE id = ?`
+        ).run(errMsg, jobId);
+      }
+    });
+    return db.prepare("SELECT * FROM reproduction_jobs WHERE id = ?").get(jobId);
+  } catch (err) {
+    db.prepare(
+      `UPDATE reproduction_jobs
+       SET status = 'failed', execution_error = ?, completed_at = datetime('now')
+       WHERE id = ?`
+    ).run(err?.message || "Submission failed", jobId);
+    throw err;
+  }
+}
+async function submitImageUpscale(params) {
+  const imgRow = db.prepare(
+    "SELECT id, relative_path, filename, is_missing, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ?"
+  ).get(params.imageId);
+  if (!imgRow) {
+    throw new Error("Image not found.");
+  }
+  const origPath = resolveImageDiskPath(imgRow);
+  if (imgRow.is_missing || !fs15.existsSync(origPath)) {
+    throw new Error("Original image file is missing on disk.");
+  }
+  const conn = await testComfyUiConnection();
+  if (!conn.online) {
+    throw new Error("ComfyUI is offline. Verify connection settings before upscaling.");
+  }
+  const targetMp = Math.max(0.5, Math.min(10, Number(params.targetMegapixels) || 6));
+  let loadFilename = imgRow.filename;
+  let loadSubfolder = path14.dirname(imgRow.relative_path) === "." ? "" : path14.dirname(imgRow.relative_path);
+  let loadSourceType = "output";
+  try {
+    const fileBuf = fs15.readFileSync(origPath);
+    const form = new FormData();
+    form.append("image", new Blob([fileBuf]), path14.basename(origPath));
+    form.append("overwrite", "true");
+    form.append("type", "input");
+    const uploadRes = await fetch(`${appConfig.comfyuiUrl}/upload/image`, {
+      method: "POST",
+      body: form
+    });
+    if (uploadRes.ok) {
+      const upJson = await uploadRes.json();
+      if (upJson?.name) {
+        loadFilename = upJson.name;
+        loadSubfolder = upJson.subfolder || "";
+        loadSourceType = "input";
+      }
+    }
+  } catch {
+  }
+  const baseStem = path14.basename(imgRow.filename, path14.extname(imgRow.filename));
+  const upscalePayload = compileUpscaleWorkflow({
+    imageFilename: loadFilename,
+    subfolder: loadSubfolder,
+    sourceType: loadSourceType,
+    targetMegapixels: targetMp,
+    filenamePrefix: `${baseStem}_upscaled`
+  });
+  const promptRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prompt: upscalePayload,
+      client_id: COUCHY_COMFY_CLIENT_ID
+    })
+  });
+  if (!promptRes.ok) {
+    const errText = await promptRes.text();
+    throw new Error(`ComfyUI rejected upscale workflow (${promptRes.status}): ${errText}`);
+  }
+  const data = await promptRes.json();
+  const promptId = data.prompt_id || `upscale-${Date.now()}`;
+  const charRow = db.prepare(
+    `SELECT ic.character_id, c.name AS character_name
+       FROM image_characters ic
+       JOIN characters c ON c.id = ic.character_id
+       WHERE ic.image_id = ? AND ic.status = 'confirmed' LIMIT 1`
+  ).get(params.imageId);
+  const sourceCharacterId = charRow?.character_id ? Number(charRow.character_id) : null;
+  registerQueuedPromptSeriesTarget(promptId, {
+    sourceImageId: params.imageId,
+    characterId: sourceCharacterId,
+    characterName: charRow?.character_name || null,
+    prompt: `Upscale ${imgRow.filename} to ${targetMp.toFixed(1)} MP`,
+    isUpscale: true
+  });
+  invalidateComfyQueueCache();
+  pollComfyPromptCompletion({
+    promptId,
+    characterId: sourceCharacterId,
+    onSuccess: ({ outputImageIds }) => {
+      for (const derivedId of outputImageIds) {
+        if (derivedId !== params.imageId) {
+          copyImageMetadataToDerivedImage(params.imageId, derivedId);
+          attachUpscaledImageToSeries(params.imageId, derivedId);
+        }
+      }
+    },
+    onError: (errMsg) => {
+      console.warn(`Image upscale failed for image #${params.imageId}:`, errMsg);
+    }
+  });
+  return {
+    promptId,
+    targetMegapixels: targetMp,
+    sourceFilename: imgRow.filename
+  };
+}
+var init_comfyuiService = __esm({
+  "src/server/services/comfyuiService.ts"() {
+    init_db();
+    init_config();
+    init_scannerService();
+    init_comfyuiLiveMonitor();
+    init_workflowCompilerService();
+    init_seriesService();
+  }
+});
+
+// src/server/routes/imagesRoutes.ts
+var imagesRoutes_exports = {};
+__export(imagesRoutes_exports, {
+  imagesRouter: () => imagesRouter
+});
+import { Router } from "express";
+import fs16 from "fs";
+import path15 from "path";
+import * as archiverPkg from "archiver";
+var createZipArchive, imagesRouter;
+var init_imagesRoutes = __esm({
+  "src/server/routes/imagesRoutes.ts"() {
+    init_db();
+    init_config();
+    init_galleryQueryService();
+    init_seriesService();
+    init_characterService();
+    init_scannerService();
+    init_comfyuiService();
+    createZipArchive = archiverPkg.default || archiverPkg;
+    imagesRouter = Router();
+    imagesRouter.post("/query", (req, res) => {
+      try {
+        const filters = req.body || {};
+        const items = queryGalleryImages(filters);
+        res.json({ items, total: items.length });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to query images" });
+      }
+    });
+    imagesRouter.get("/:id", (req, res) => {
+      try {
+        const id = Number(req.params.id);
+        const row = db.prepare(
+          `
+        SELECT
+          i.*,
+          r.rating, r.is_favorite, r.is_rejected, r.is_archived, r.notes, r.favorited_at,
+          m.positive_prompt, m.negative_prompt, m.seed, m.steps, m.cfg, m.sampler,
+          m.scheduler, m.denoise, m.batch_size, m.batch_index, m.generation_date,
+          m.checkpoint_name, m.checkpoint_hash, m.vae_name, m.missing_fields_json,
+          m.provenance_json, m.raw_metadata_json
+        FROM images i
+        LEFT JOIN ratings r ON r.content_hash = i.content_hash
+        LEFT JOIN image_metadata m ON m.image_id = i.id
+        WHERE i.id = ?
+      `
+        ).get(id);
+        if (!row) {
+          res.status(404).json({ error: "Image not found" });
+          return;
+        }
+        const requestedSeriesId = req.query.seriesId ? Number(req.query.seriesId) : null;
+        const rawHydrated = hydrateImageRecords([row])[0];
+        const hydrated = enrichSingleImageWithSeries(rawHydrated, requestedSeriesId);
+        const wf = db.prepare(
+          `SELECT w.* FROM image_workflows iw
+         JOIN workflows w ON w.id = iw.workflow_id
+         WHERE iw.image_id = ? LIMIT 1`
+        ).get(id);
+        let rawMetadata = {};
+        try {
+          rawMetadata = JSON.parse(row.raw_metadata_json || "{}");
+        } catch {
+          rawMetadata = {};
+        }
+        res.json({
+          image: hydrated,
+          rawMetadata,
+          visualWorkflowJson: wf?.visual_workflow_json || null,
+          apiWorkflowJson: wf?.api_workflow_json || null
+        });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to load image details" });
+      }
+    });
+    imagesRouter.get("/:id/thumbnail", async (req, res) => {
+      const id = Number(req.params.id);
+      const row = db.prepare(
+        "SELECT id, content_hash, relative_path, thumbnail_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ?"
+      ).get(id);
+      if (!row) {
+        res.status(404).end();
+        return;
+      }
+      const expectedThumbPath = path15.join(appConfig.thumbnailPath, `${row.content_hash}.webp`);
+      if (fs16.existsSync(expectedThumbPath)) {
+        if (row.thumbnail_path !== expectedThumbPath) {
+          db.prepare("UPDATE images SET thumbnail_path = ? WHERE id = ?").run(expectedThumbPath, row.id);
+        }
+        res.setHeader("Content-Type", "image/webp");
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        res.sendFile(path15.resolve(expectedThumbPath));
+        return;
+      }
+      const origPath = resolveImageDiskPath(row);
+      if (fs16.existsSync(origPath)) {
+        const { thumbPath } = await ensureWebpThumbnail(origPath, row.content_hash);
+        if (thumbPath && fs16.existsSync(thumbPath)) {
+          db.prepare("UPDATE images SET thumbnail_path = ? WHERE id = ?").run(thumbPath, row.id);
+          res.setHeader("Content-Type", "image/webp");
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+          res.sendFile(path15.resolve(thumbPath));
+          return;
+        }
+        res.sendFile(origPath);
+        return;
+      }
+      res.status(404).end();
+    });
+    imagesRouter.get("/:id/file", (req, res) => {
+      const id = Number(req.params.id);
+      const row = db.prepare(
+        "SELECT relative_path, filename, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ?"
+      ).get(id);
+      if (!row) {
+        res.status(404).json({ error: "Image not found" });
+        return;
+      }
+      const origPath = resolveImageDiskPath(row);
+      if (!fs16.existsSync(origPath)) {
+        res.status(404).json({ error: "Original file missing on disk" });
+        return;
+      }
+      if (req.query.download === "1") {
+        res.download(origPath, row.filename);
+        return;
+      }
+      res.sendFile(origPath);
+    });
+    imagesRouter.patch("/:id/annotations", (req, res) => {
+      try {
+        const id = Number(req.params.id);
+        const img = db.prepare("SELECT id, content_hash FROM images WHERE id = ?").get(id);
+        if (!img) {
+          res.status(404).json({ error: "Image not found" });
+          return;
+        }
+        const { rating, isFavorite, isRejected, isArchived, notes } = req.body || {};
+        db.prepare("INSERT OR IGNORE INTO ratings (content_hash, image_id) VALUES (?, ?)").run(
+          img.content_hash,
+          img.id
+        );
+        const current = db.prepare("SELECT * FROM ratings WHERE content_hash = ?").get(img.content_hash);
+        const nextRating = rating !== void 0 ? Number(rating) : current.rating;
+        const nextFav = isFavorite !== void 0 ? isFavorite ? 1 : 0 : current.is_favorite;
+        const nextRej = isRejected !== void 0 ? isRejected ? 1 : 0 : current.is_rejected;
+        const nextArch = isArchived !== void 0 ? isArchived ? 1 : 0 : current.is_archived;
+        const nextNotes = notes !== void 0 ? String(notes) : current.notes;
+        const favAt = isFavorite === true ? (/* @__PURE__ */ new Date()).toISOString() : isFavorite === false ? null : current.favorited_at;
+        db.prepare(
+          `UPDATE ratings
+       SET rating = ?, is_favorite = ?, is_rejected = ?, is_archived = ?,
+           notes = ?, favorited_at = ?, updated_at = datetime('now')
+       WHERE content_hash = ?`
+        ).run(nextRating, nextFav, nextRej, nextArch, nextNotes, favAt, img.content_hash);
+        if (isFavorite !== void 0) {
+          setExclusiveSeriesFavorite(img.id, Boolean(isFavorite));
+        }
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to update annotations" });
+      }
+    });
+    imagesRouter.post("/bulk", (req, res) => {
+      try {
+        const {
+          imageIds,
+          rating,
+          isFavorite,
+          isRejected,
+          isArchived,
+          addTagName,
+          removeTagId,
+          addCollectionId,
+          removeCollectionId,
+          addCharacterId,
+          appearanceLabel
+        } = req.body || {};
+        if (!Array.isArray(imageIds) || imageIds.length === 0) {
+          res.status(400).json({ error: "No imageIds provided" });
+          return;
+        }
+        const tx = db.transaction(() => {
+          let tagIdToUse = null;
+          if (addTagName && String(addTagName).trim()) {
+            const cleanTag = String(addTagName).trim();
+            db.prepare("INSERT OR IGNORE INTO tags (name) VALUES (?)").run(cleanTag);
+            const tRow = db.prepare("SELECT id FROM tags WHERE LOWER(name) = LOWER(?)").get(cleanTag);
+            tagIdToUse = tRow.id;
+          }
+          for (const rawId of imageIds) {
+            const id = Number(rawId);
+            const img = db.prepare("SELECT id, content_hash FROM images WHERE id = ?").get(id);
+            if (!img) continue;
+            db.prepare("INSERT OR IGNORE INTO ratings (content_hash, image_id) VALUES (?, ?)").run(
+              img.content_hash,
+              img.id
+            );
+            if (rating !== void 0) {
+              db.prepare("UPDATE ratings SET rating = ?, updated_at = datetime('now') WHERE content_hash = ?").run(
+                Number(rating),
+                img.content_hash
+              );
+            }
+            if (isFavorite !== void 0) {
+              db.prepare(
+                "UPDATE ratings SET is_favorite = ?, favorited_at = CASE WHEN ? = 1 THEN datetime('now') ELSE NULL END WHERE content_hash = ?"
+              ).run(isFavorite ? 1 : 0, isFavorite ? 1 : 0, img.content_hash);
+              setExclusiveSeriesFavorite(img.id, Boolean(isFavorite));
+            }
+            if (isRejected !== void 0) {
+              db.prepare("UPDATE ratings SET is_rejected = ? WHERE content_hash = ?").run(
+                isRejected ? 1 : 0,
+                img.content_hash
+              );
+            }
+            if (isArchived !== void 0) {
+              db.prepare("UPDATE ratings SET is_archived = ? WHERE content_hash = ?").run(
+                isArchived ? 1 : 0,
+                img.content_hash
+              );
+            }
+            if (tagIdToUse !== null) {
+              db.prepare(
+                "INSERT OR IGNORE INTO image_tags (image_content_hash, image_id, tag_id) VALUES (?, ?, ?)"
+              ).run(img.content_hash, img.id, tagIdToUse);
+            }
+            if (removeTagId !== void 0) {
+              db.prepare("DELETE FROM image_tags WHERE image_content_hash = ? AND tag_id = ?").run(
+                img.content_hash,
+                Number(removeTagId)
+              );
+            }
+            if (addCollectionId !== void 0) {
+              db.prepare(
+                "INSERT OR IGNORE INTO collection_images (collection_id, image_content_hash, image_id) VALUES (?, ?, ?)"
+              ).run(Number(addCollectionId), img.content_hash, img.id);
+            }
+            if (removeCollectionId !== void 0) {
+              db.prepare(
+                "DELETE FROM collection_images WHERE collection_id = ? AND image_content_hash = ?"
+              ).run(Number(removeCollectionId), img.content_hash);
+            }
+            if (addCharacterId !== void 0) {
+              db.prepare(
+                `INSERT INTO image_characters
+              (image_id, image_content_hash, character_id, status, source, confidence, match_reason, appearance_label)
+             VALUES (?, ?, ?, 'confirmed', 'bulk', 1.0, 'Manually assigned', ?)
+             ON CONFLICT(image_content_hash, character_id) DO UPDATE SET
+               status = 'confirmed',
+               source = 'bulk',
+               confidence = 1.0,
+               appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
+               updated_at = datetime('now')`
+              ).run(img.id, img.content_hash, Number(addCharacterId), appearanceLabel || null);
+              ensureCharacterPortraitIfUnset(Number(addCharacterId), img.id, img.content_hash);
+            }
+          }
+        });
+        tx();
+        res.json({ ok: true, count: imageIds.length });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Bulk operation failed" });
+      }
+    });
+    imagesRouter.post("/export-zip", (req, res) => {
+      try {
+        const { imageIds, filters, archiveName } = req.body || {};
+        let targetIds = [];
+        if (Array.isArray(imageIds) && imageIds.length > 0) {
+          targetIds = imageIds.map((n) => Number(n));
+        } else if (filters) {
+          targetIds = queryGalleryImages(filters).map((i) => i.id);
+        }
+        if (targetIds.length === 0) {
+          res.status(400).json({ error: "No matching images to export" });
+          return;
+        }
+        const zipFilename = `${(archiveName || "couchy-export").replace(/[^a-zA-Z0-9_-]/g, "_")}.zip`;
+        res.setHeader("Content-Type", "application/zip");
+        res.setHeader("Content-Disposition", `attachment; filename="${zipFilename}"`);
+        const archive = createZipArchive("zip", { zlib: { level: 5 } });
+        archive.on("error", (err) => {
+          if (!res.headersSent) {
+            res.status(500).json({ error: err.message });
+          }
+        });
+        archive.pipe(res);
+        const usedNames = /* @__PURE__ */ new Set();
+        for (const id of targetIds) {
+          const row = db.prepare(
+            "SELECT relative_path, filename, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ? AND is_missing = 0"
+          ).get(id);
+          if (!row) continue;
+          const absPath = resolveImageDiskPath(row);
+          if (!fs16.existsSync(absPath)) continue;
+          let entryName = row.filename;
+          if (usedNames.has(entryName)) {
+            entryName = `${id}_${row.filename}`;
+          }
+          usedNames.add(entryName);
+          archive.file(absPath, { name: entryName });
+        }
+        archive.finalize();
+      } catch (err) {
+        if (!res.headersSent) {
+          res.status(500).json({ error: err?.message || "Failed to export ZIP" });
+        }
+      }
+    });
+    imagesRouter.post("/:id/visual-tags/rescan", async (req, res) => {
+      try {
+        const { tagSingleImageById: tagSingleImageById2 } = await Promise.resolve().then(() => (init_visualTaggerService(), visualTaggerService_exports));
+        const visualTags = await tagSingleImageById2(Number(req.params.id), true);
+        res.json({ ok: true, visualTags });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to run visual tagger on image" });
+      }
+    });
+    imagesRouter.delete("/:id/visual-tags/:tag", async (req, res) => {
+      try {
+        const { removeVisualTagFromImage: removeVisualTagFromImage2 } = await Promise.resolve().then(() => (init_visualTaggerService(), visualTaggerService_exports));
+        const visualTags = removeVisualTagFromImage2(
+          Number(req.params.id),
+          decodeURIComponent(req.params.tag)
+        );
+        res.json({ ok: true, visualTags });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to remove visual keyword" });
+      }
+    });
+    imagesRouter.post("/:id/upscale", async (req, res) => {
+      try {
+        const imageId = Number(req.params.id);
+        const targetMegapixels = Number(req.body?.targetMegapixels) || 6;
+        const result = await submitImageUpscale({ imageId, targetMegapixels });
+        res.json({ ok: true, ...result });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to queue image upscale" });
+      }
+    });
+  }
+});
+
+// src/server/services/llm/llmClientService.ts
+function mapGuidingRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    systemPrompt: row.system_prompt,
+    userPromptTemplate: row.user_prompt_template,
+    isDefault: Boolean(row.is_default),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+function listLmStudioGuidingTemplates() {
+  const rows = db.prepare("SELECT * FROM lm_studio_prompt_templates ORDER BY is_default DESC, id ASC").all();
+  return rows.map(mapGuidingRow);
+}
+function saveLmStudioGuidingTemplate(payload) {
+  if (!payload.name?.trim() || !payload.systemPrompt?.trim()) {
+    throw new Error("Template name and system prompt are required.");
+  }
+  const tx = db.transaction(() => {
+    if (payload.isDefault) {
+      db.prepare("UPDATE lm_studio_prompt_templates SET is_default = 0").run();
+    }
+    if (payload.id) {
+      db.prepare(
+        `UPDATE lm_studio_prompt_templates
+         SET name = ?, system_prompt = ?, user_prompt_template = ?,
+             is_default = CASE WHEN ? = 1 THEN 1 ELSE is_default END,
+             updated_at = datetime('now')
+         WHERE id = ?`
+      ).run(
+        payload.name.trim(),
+        payload.systemPrompt.trim(),
+        (payload.userPromptTemplate || "").trim(),
+        payload.isDefault ? 1 : 0,
+        Number(payload.id)
+      );
+      return Number(payload.id);
+    }
+    const info = db.prepare(
+      `INSERT INTO lm_studio_prompt_templates (name, system_prompt, user_prompt_template, is_default)
+         VALUES (?, ?, ?, ?)`
+    ).run(
+      payload.name.trim(),
+      payload.systemPrompt.trim(),
+      (payload.userPromptTemplate || "").trim(),
+      payload.isDefault ? 1 : 0
+    );
+    return Number(info.lastInsertRowid);
+  });
+  const savedId = tx();
+  const savedRow = db.prepare("SELECT * FROM lm_studio_prompt_templates WHERE id = ?").get(savedId);
+  return {
+    template: mapGuidingRow(savedRow),
+    items: listLmStudioGuidingTemplates()
+  };
+}
+function deleteLmStudioGuidingTemplate(id) {
+  db.prepare("DELETE FROM lm_studio_prompt_templates WHERE id = ?").run(id);
+  const def = db.prepare("SELECT id FROM lm_studio_prompt_templates WHERE is_default = 1").get();
+  if (!def) {
+    const first = db.prepare("SELECT id FROM lm_studio_prompt_templates ORDER BY id ASC LIMIT 1").get();
+    if (first) {
+      db.prepare("UPDATE lm_studio_prompt_templates SET is_default = 1 WHERE id = ?").run(first.id);
+    }
+  }
+  return listLmStudioGuidingTemplates();
+}
+function getLmStudioSettings() {
+  const row = db.prepare("SELECT * FROM lm_studio_settings WHERE id = 1").get();
+  if (!row) {
+    return {
+      baseUrl: appConfig.lmStudioUrl,
+      selectedModel: "",
+      followLoadedModel: true,
+      systemPrompt: "You are a creative photography director and Stable Diffusion / Flux prompt engineer.",
+      conversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+      batchExpansionPrompt: DEFAULT_BATCH_EXPANSION_PROMPT
+    };
+  }
+  return {
+    baseUrl: row.base_url || appConfig.lmStudioUrl,
+    selectedModel: row.selected_model || "",
+    followLoadedModel: row.follow_loaded_model !== void 0 ? Boolean(row.follow_loaded_model) : true,
+    systemPrompt: row.system_prompt || "",
+    conversationSystemPrompt: row.conversation_system_prompt?.trim() || DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+    batchExpansionPrompt: row.batch_expansion_prompt?.trim() || DEFAULT_BATCH_EXPANSION_PROMPT
+  };
+}
+function updateLmStudioSettings(payload) {
+  const current = getLmStudioSettings();
+  const nextUrl = (payload.baseUrl ?? current.baseUrl).replace(/\/+$/, "");
+  const nextModel = payload.selectedModel ?? current.selectedModel;
+  const nextFollowLoaded = payload.followLoadedModel !== void 0 ? Boolean(payload.followLoadedModel) : current.followLoadedModel;
+  const nextPrompt = payload.systemPrompt ?? current.systemPrompt;
+  const nextConversationPrompt = payload.conversationSystemPrompt !== void 0 ? payload.conversationSystemPrompt.trim() || DEFAULT_CONVERSATION_SYSTEM_PROMPT : current.conversationSystemPrompt;
+  const nextBatchExpansionPrompt = payload.batchExpansionPrompt !== void 0 ? payload.batchExpansionPrompt.trim() || DEFAULT_BATCH_EXPANSION_PROMPT : current.batchExpansionPrompt;
+  db.prepare(
+    `UPDATE lm_studio_settings
+     SET base_url = ?, selected_model = ?, follow_loaded_model = ?, system_prompt = ?, conversation_system_prompt = ?, batch_expansion_prompt = ?, updated_at = datetime('now')
+     WHERE id = 1`
+  ).run(
+    nextUrl,
+    nextModel,
+    nextFollowLoaded ? 1 : 0,
+    nextPrompt,
+    nextConversationPrompt,
+    nextBatchExpansionPrompt
+  );
+  appConfig.lmStudioUrl = nextUrl;
+  return {
+    baseUrl: nextUrl,
+    selectedModel: nextModel,
+    followLoadedModel: nextFollowLoaded,
+    systemPrompt: nextPrompt,
+    conversationSystemPrompt: nextConversationPrompt,
+    batchExpansionPrompt: nextBatchExpansionPrompt
+  };
+}
+function getLocalLlmHeaders(includeJsonContentType = false) {
+  const headers = {};
+  if (includeJsonContentType) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (appConfig.localLlmApiKey) {
+    headers.Authorization = `Bearer ${appConfig.localLlmApiKey}`;
+  }
+  return headers;
+}
+function resolveChatCompletionsUrl(rawBaseUrl) {
+  const baseUrl = rawBaseUrl.replace(/\/+$/, "");
+  return baseUrl.endsWith("/v1") ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`;
+}
+async function postChatCompletion(params) {
+  const chatEndpoint = resolveChatCompletionsUrl(params.baseUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), params.timeoutMs);
+  try {
+    const res = await fetch(chatEndpoint, {
+      method: "POST",
+      headers: getLocalLlmHeaders(true),
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: params.model,
+        messages: params.messages,
+        temperature: params.temperature,
+        max_tokens: params.maxTokens
+      })
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      const err = new Error(`Local LLM returned HTTP ${res.status}: ${errText}`);
+      err.httpStatus = res.status;
+      err.errBody = errText;
+      throw err;
+    }
+    const data = await res.json();
+    const rawContent = data?.choices?.[0]?.message?.content?.trim() || "";
+    const content = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+    return {
+      content,
+      modelUsed: data?.model || params.model
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function detectLoadedServerModels(baseUrl, availableModels) {
+  const rootUrl = baseUrl.replace(/\/v1\/?$/, "");
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(`${rootUrl}/api/v0/models`, {
+      headers: getLocalLlmHeaders(false),
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const payload = await res.json();
+      if (Array.isArray(payload?.data)) {
+        const loadedModels = payload.data.filter(
+          (m) => Boolean(m?.id) && m?.state === "loaded" && String(m?.type || "").toLowerCase() !== "embeddings"
+        ).map((m) => String(m.id));
+        return {
+          loadedModels: Array.from(new Set(loadedModels)),
+          detectedProvider: "lmstudio"
+        };
+      }
+    }
+  } catch {
+  }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(`${rootUrl}/api/ps`, {
+      headers: getLocalLlmHeaders(false),
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (res.ok) {
+      const payload = await res.json();
+      if (Array.isArray(payload?.models)) {
+        const loadedModels = payload.models.map((m) => (m?.model || m?.name || "").trim()).filter(Boolean);
+        return {
+          loadedModels: Array.from(new Set(loadedModels)),
+          detectedProvider: "ollama"
+        };
+      }
+    }
+  } catch {
+  }
+  if (availableModels.length === 1) {
+    return {
+      loadedModels: [availableModels[0]],
+      detectedProvider: "openai_single"
+    };
+  }
+  return {
+    loadedModels: [],
+    detectedProvider: "openai_multi"
+  };
+}
+async function checkLmStudioStatus(customBaseUrl) {
+  const settings = getLmStudioSettings();
+  const guidingTemplates = listLmStudioGuidingTemplates();
+  const baseUrl = (customBaseUrl || settings.baseUrl).replace(/\/+$/, "");
+  const modelsEndpoint = baseUrl.endsWith("/v1") ? `${baseUrl}/models` : `${baseUrl}/v1/models`;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch(modelsEndpoint, {
+      headers: getLocalLlmHeaders(false),
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} from ${modelsEndpoint}`);
+    }
+    const data = await res.json();
+    const availableModels = Array.isArray(data?.data) ? data.data.map((m) => m.id).filter(Boolean) : [];
+    const { loadedModels, detectedProvider } = await detectLoadedServerModels(
+      baseUrl,
+      availableModels
+    );
+    const savedIsAvailable = Boolean(settings.selectedModel) && availableModels.includes(settings.selectedModel);
+    const savedIsLoaded = Boolean(settings.selectedModel) && loadedModels.includes(settings.selectedModel);
+    let selectedModel;
+    if (settings.followLoadedModel && loadedModels.length > 0) {
+      selectedModel = savedIsLoaded ? settings.selectedModel : loadedModels[0];
+    } else if (savedIsAvailable) {
+      selectedModel = settings.selectedModel;
+    } else if (loadedModels.length > 0) {
+      selectedModel = loadedModels[0];
+    } else {
+      selectedModel = availableModels[0] || settings.selectedModel || "local-model";
+    }
+    const isDefaultUrl = !customBaseUrl || baseUrl === settings.baseUrl.replace(/\/+$/, "");
+    if (isDefaultUrl && selectedModel !== settings.selectedModel && (loadedModels.length > 0 || availableModels.length > 0)) {
+      updateLmStudioSettings({ baseUrl, selectedModel });
+    }
+    return {
+      online: true,
+      baseUrl,
+      selectedModel,
+      followLoadedModel: settings.followLoadedModel,
+      loadedModels,
+      detectedProvider,
+      systemPrompt: settings.systemPrompt,
+      conversationSystemPrompt: settings.conversationSystemPrompt,
+      defaultConversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+      batchExpansionPrompt: settings.batchExpansionPrompt,
+      defaultBatchExpansionPrompt: DEFAULT_BATCH_EXPANSION_PROMPT,
+      availableModels,
+      guidingTemplates,
+      apiKeyConfigured: Boolean(appConfig.localLlmApiKey),
+      error: null
+    };
+  } catch (err) {
+    return {
+      online: false,
+      baseUrl,
+      selectedModel: settings.selectedModel,
+      followLoadedModel: settings.followLoadedModel,
+      loadedModels: [],
+      systemPrompt: settings.systemPrompt,
+      conversationSystemPrompt: settings.conversationSystemPrompt,
+      defaultConversationSystemPrompt: DEFAULT_CONVERSATION_SYSTEM_PROMPT,
+      batchExpansionPrompt: settings.batchExpansionPrompt,
+      defaultBatchExpansionPrompt: DEFAULT_BATCH_EXPANSION_PROMPT,
+      availableModels: [],
+      guidingTemplates,
+      apiKeyConfigured: Boolean(appConfig.localLlmApiKey),
+      error: err?.message || "Local LLM server unreachable at " + baseUrl
+    };
+  }
+}
+function isLikelyVisionModelId(modelId) {
+  return /(?:\b|_|-)(?:vl|vlm|vision|llava|joycaption|pixtral|minicpm|moondream|florence|internvl|molmo|bakllava|cogvlm|idefics|paligemma|gemma-?[34]|gemma4|supergemma|qwen[\w.-]*vl|smolvlm|ovis|glm-?4v|llama-?4|omni)(?:\b|_|-)/i.test(
+    modelId
+  );
+}
+async function checkLmStudioVisionSupport(baseUrl, modelId) {
+  if (isLikelyVisionModelId(modelId)) return true;
+  try {
+    const rootUrl = baseUrl.replace(/\/v1\/?$/, "");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(`${rootUrl}/api/v0/models`, {
+      headers: getLocalLlmHeaders(false),
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!res.ok) return false;
+    const payload = await res.json();
+    const matched = payload?.data?.find((m) => m?.id === modelId);
+    if (!matched) return false;
+    return matched.type === "vlm" || Boolean(matched.vision) || Boolean(matched.capabilities?.vision);
+  } catch {
+    return false;
+  }
+}
+var init_llmClientService = __esm({
+  "src/server/services/llm/llmClientService.ts"() {
+    init_db();
+    init_config();
+    init_agentPromptDefaults();
+  }
+});
+
+// src/server/services/llm/llmPromptUtils.ts
+function sanitizeAgentPrompt(prompt, characterName) {
+  let cleaned = prompt;
+  cleaned = cleaned.replace(/\b[\w.-]+\.(?:safetensors|ckpt|pt|bin)\b/gi, "");
+  if (characterName?.trim()) {
+    const rawName = characterName.trim();
+    const escaped = rawName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const leadingNameRegex = new RegExp(`^\\s*${escaped}\\s*(?:[,:;\\-\u2013\u2014]|\\s+)\\s*`, "i");
+    cleaned = cleaned.replace(leadingNameRegex, "");
+    const inlineNameRegex = new RegExp(`\\b${escaped}\\b`, "gi");
+    cleaned = cleaned.replace(inlineNameRegex, "the subject");
+  }
+  cleaned = cleaned.replace(/\s*,\s*,+/g, ",").replace(/^[\s,;:\-–—]+/, "").replace(/[\s,;:\-–—]+$/, "").replace(/\s{2,}/g, " ").trim();
+  if (cleaned.length > 0) {
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }
+  return cleaned;
+}
+function normalizeLoraMatchKey(value) {
+  return value.trim().replace(/^@+/, "").replace(/\\/g, "/").split("/").pop().replace(/\.(?:safetensors|ckpt|pt|bin)$/i, "").toLowerCase();
+}
+function clampContextText(text, maxLen) {
+  if (!text) return "";
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (!collapsed) return "";
+  if (collapsed.length <= maxLen) return collapsed;
+  return `${collapsed.slice(0, maxLen - 1).trimEnd()}\u2026`;
+}
+function buildLlmCharacterAndLoraContext(params) {
+  const attachedKeys = (params.loraNames || []).map((l) => ({ raw: l, key: normalizeLoraMatchKey(l) })).filter((entry) => Boolean(entry.key));
+  const modelRows = attachedKeys.length > 0 ? db.prepare(
+    `SELECT name, filename, lora_category, nickname, llm_description
+             FROM models
+             WHERE model_type = 'lora'`
+  ).all() : [];
+  const charLoraRows = attachedKeys.length > 0 ? db.prepare(
+    `SELECT cl.lora_name, cl.appearance_label, cl.lora_category, c.name AS character_name, c.description AS character_description, c.physical_description AS character_physical_description
+             FROM character_loras cl
+             JOIN characters c ON c.id = cl.character_id`
+  ).all() : [];
+  const appearanceLabels = [];
+  let fallbackDbCharDescription = "";
+  let fallbackDbCharPhysical = "";
+  const attachedLines = [];
+  const nonCharacterLines = [];
+  const seenKeys = /* @__PURE__ */ new Set();
+  for (const { raw, key } of attachedKeys) {
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    const matchedModel = modelRows.find(
+      (m) => normalizeLoraMatchKey(m.filename) === key || normalizeLoraMatchKey(m.name) === key || m.nickname && normalizeLoraMatchKey(m.nickname) === key
+    );
+    const matchedCharLora = charLoraRows.find(
+      (cl) => normalizeLoraMatchKey(cl.lora_name) === key
+    );
+    if (matchedCharLora) {
+      if (matchedCharLora.appearance_label?.trim()) {
+        appearanceLabels.push(matchedCharLora.appearance_label.trim());
+      }
+      if (!fallbackDbCharDescription && matchedCharLora.character_description?.trim()) {
+        fallbackDbCharDescription = matchedCharLora.character_description.trim();
+      }
+      if (!fallbackDbCharPhysical && matchedCharLora.character_physical_description?.trim()) {
+        fallbackDbCharPhysical = matchedCharLora.character_physical_description.trim();
+      }
+    }
+    const label = (matchedModel?.nickname || "").trim().replace(/^@+/, "") || matchedModel?.name?.trim() || raw.replace(/^.*[\\/]/, "").replace(/\.(?:safetensors|ckpt|pt|bin)$/i, "").trim();
+    const rawCategory = matchedModel?.lora_category || matchedCharLora?.lora_category || "unclassified";
+    const catTag = rawCategory && rawCategory !== "unclassified" ? ` [${rawCategory}]` : "";
+    const desc = clampContextText(matchedModel?.llm_description, 480);
+    const variantNote = matchedCharLora?.appearance_label?.trim() ? `Variant: ${matchedCharLora.appearance_label.trim()}` : "";
+    const detailParts = [variantNote, desc].filter(Boolean);
+    const formattedLine = detailParts.length > 0 ? `- ${label}${catTag}: ${detailParts.join(" \u2014 ")}` : `- ${label}${catTag}`;
+    attachedLines.push(formattedLine);
+    const isCharCategory = Boolean(matchedCharLora) || rawCategory.trim().toLowerCase() === "character";
+    if (!isCharCategory) {
+      nonCharacterLines.push(formattedLine);
+    }
+  }
+  let charDesc = clampContextText(params.characterDescription, 450);
+  let charPhysical = clampContextText(params.characterPhysicalDescription, 500);
+  if ((!charDesc || !charPhysical) && (fallbackDbCharDescription || fallbackDbCharPhysical)) {
+    if (!charDesc && fallbackDbCharDescription) {
+      charDesc = clampContextText(fallbackDbCharDescription, 450);
+    }
+    if (!charPhysical && fallbackDbCharPhysical) {
+      charPhysical = clampContextText(fallbackDbCharPhysical, 500);
+    }
+  }
+  if ((!charDesc || !charPhysical) && params.characterName?.trim()) {
+    const dbChar = db.prepare(
+      "SELECT description, physical_description FROM characters WHERE LOWER(name) = LOWER(?) LIMIT 1"
+    ).get(params.characterName.trim());
+    if (!charDesc) charDesc = clampContextText(dbChar?.description, 450);
+    if (!charPhysical) charPhysical = clampContextText(dbChar?.physical_description, 500);
+  }
+  let characterBlock = null;
+  if (params.characterName?.trim() || charDesc || charPhysical) {
+    const parts = [
+      `Active character LoRA handles their facial identity automatically; treat the Character Profile below as a guiding reference (not text to copy verbatim), always honoring user-requested outfits, hairstyles, makeup, or accessories.`
+    ];
+    if (appearanceLabels.length > 0) {
+      parts.push(`Active Character Variant: ${Array.from(new Set(appearanceLabels)).join(", ")}`);
+    }
+    if (charDesc) {
+      parts.push(`Character Personality & Bio: ${charDesc}`);
+    }
+    if (charPhysical) {
+      parts.push(
+        `Physical Reference Guide (use for accurate pronouns, skin tone, natural hair color, build, and signature marks\u2014weave only helpful cues naturally instead of repeating every anatomical detail verbatim): ${charPhysical}`
+      );
+    }
+    characterBlock = parts.join("\n");
+  }
+  const attachedLoraBlock = attachedLines.length > 0 ? [
+    `Attached LoRAs (active in workflow\u2014complement them in the scene without writing @handles or trigger words inside the prompt):`,
+    ...attachedLines
+  ].join("\n") : null;
+  const nonCharacterLoraBlock = nonCharacterLines.length > 0 ? [
+    `Active Non-Character LoRAs (reflect their concrete visual elements in the scene):`,
+    ...nonCharacterLines
+  ].join("\n") : null;
+  return {
+    characterBlock,
+    attachedLoraBlock,
+    nonCharacterLoraBlock,
+    hasNonCharacterLoras: nonCharacterLines.length > 0
+  };
+}
+function extractLoraCheckBlock(llmContent) {
+  const match = llmContent.match(
+    /<lora_check>([\s\S]*?)(?:<\/lora_check>|(?=<selected_base>)|(?=<selected_preset>)|(?=<selected_loras>)|(?=<proposed_prompt>)|(?=<proposed_concept>)|(?=<shot_1>)|(?=<shot>))/i
+  );
+  if (!match || !match[1]) return null;
+  const cleaned = match[1].trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+function verifyPromptReflectsLoraCheck(prompt, loraCheck, fallbackLoraBlock) {
+  const rawLines = (loraCheck || fallbackLoraBlock || "").split(/\r?\n/);
+  const sourceLines = rawLines.filter(
+    (line) => !/\b(?:drop|dropped|discard|discarded|ignore|ignored|remove|removed|skip|skipped|user\s+pivot|overridden)\s*:/i.test(
+      line
+    ) && !/^attached\s+loras\b/i.test(line.trim()) && !/^active\s+non-character\s+loras\b/i.test(line.trim())
+  ).map(
+    (line) => line.replace(/^(?:[-*•]\s*)?[^:\n]{1,50}:\s*/, "").replace(/\[(?:concept|clothing|style|pose|lighting|character|unclassified)\]/gi, " ")
+  );
+  const rawWords = sourceLines.join(" ").toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).map((w) => w.replace(/^-+|-+$/g, "")).filter((w) => w.length >= 4 && !VERIFICATION_STOPWORDS.has(w) && !/^\d+$/.test(w));
+  const expectedKeywords = Array.from(new Set(rawWords));
+  if (expectedKeywords.length < 2) {
+    return { passed: true, expectedKeywords, matchedKeywords: expectedKeywords };
+  }
+  const promptLower = prompt.toLowerCase();
+  const matchedKeywords = expectedKeywords.filter((kw) => {
+    const stem = kw.length >= 6 ? kw.replace(/(?:ing|ed|es|s)$/, "") : kw;
+    return promptLower.includes(kw) || stem.length >= 4 && promptLower.includes(stem);
+  });
+  return {
+    passed: matchedKeywords.length >= 1,
+    expectedKeywords,
+    matchedKeywords
+  };
+}
+function extractCharacterIdentityTags(tags) {
+  const identityRegex = /^(?:1girl|1boy|solo|woman|man|mature female|mature male|girl|boy)$|\b(?:hair|eyes|skin|freckles|mole|scar|tattoo|fangs|pointy ears|elf ears|heterochromia|glasses|eyebrows|lips|eyelashes|cheek|jawline|bust|breasts|chest|hips|waist|thighs|build|slender|curvy|voluptuous|petite|athletic|muscular|plump|toned|abs|tall|short|tan|tanlines|caucasian|asian|latina|ebony)\b/i;
+  const excludeTemporaryRegex = /\b(?:looking at|smile|smiling|blush|open mouth|closed eyes|winking|parted lips|sitting|standing|lying|kneeling|shirt|dress|skirt|jacket|bikini|lingerie|bra|panties|stockings|shoes|boots|hat|background|indoors|outdoors|lighting|shadow)\b/i;
+  return tags.filter((tag) => identityRegex.test(tag) && !excludeTemporaryRegex.test(tag));
+}
+function filterCharacterIdentityTags(tags) {
+  const hairColorRegex = /\b(?:blonde|blond|brown|dark[\s_]brown|light[\s_]brown|black|red|pink|blue|dark[\s_]blue|light[\s_]blue|green|purple|light[\s_]purple|orange|silver|grey|gray|white|aqua|platinum|auburn|chestnut|ginger|multicolored|two-tone|streaked|colored|gradient|bleached)[\s_]+hair\b/i;
+  const eyeColorRegex = /\b(?:blue|brown|green|red|yellow|purple|aqua|amber|grey|gray|pink|orange|black|golden|hazel|multicolored)[\s_]+eyes\b|\bheterochromia\b/i;
+  return tags.filter((tag) => !hairColorRegex.test(tag) && !eyeColorRegex.test(tag));
+}
+function stripCharacterPhysicalTraits(prompt) {
+  let cleaned = prompt;
+  const hairColors = "(?:platinum\\s+blonde|strawberry\\s+blonde|dirty\\s+blonde|ash\\s+blonde|golden\\s+blonde|light\\s+brown|dark\\s+brown|jet[\\s-]black|raven[\\s-]black|fiery\\s+red|chestnut\\s+brown|copper|ginger|auburn|chestnut|mahogany|brunette|blonde|blond|brown|black|red|pink|blue|green|purple|teal|cyan|orange|lavender|silver|grey|gray|white|pastel|dyed|bleached)";
+  const hairNouns = "(?:hair|locks|tresses|curls|waves|strands|ponytail|twintails|braid|braids|bun|bangs)";
+  const hairStyleMid = "(?:(?:long|short|medium|shoulder-length|waist-length|wavy|curly|straight|messy|tousled|braided|flowing|sleek|layered|cropped|shoulder\\s+length)\\s+){0,2}";
+  cleaned = cleaned.replace(
+    new RegExp(`\\b${hairColors}\\s+(?=${hairStyleMid}${hairNouns}\\b)`, "gi"),
+    ""
+  );
+  cleaned = cleaned.replace(
+    /\b(?:blonde-haired|blond-haired|brown-haired|dark-haired|black-haired|red-haired|silver-haired|white-haired|pink-haired|blue-haired|raven-haired|ginger-haired|auburn-haired)\b/gi,
+    ""
+  );
+  cleaned = cleaned.replace(
+    /\b(?:blonde|blond|brunette|redhead)\s+(?=(?:woman|man|girl|boy|person|subject|female|male|model|figure)\b)/gi,
+    ""
+  );
+  cleaned = cleaned.replace(/\bwith\s+hair\b/gi, "");
+  cleaned = cleaned.replace(
+    /\b(?:and\s+)?(?:with\s+)?(?:piercing\s+|bright\s+|deep\s+|warm\s+|dark\s+|light\s+|striking\s+|vivid\s+|pale\s+|glowing\s+)?(?:blue|brown|green|hazel|amber|grey|gray|violet|purple|crimson|red|golden|yellow|aqua|emerald|sapphire)\s+eyes\b/gi,
+    ""
+  );
+  cleaned = cleaned.replace(
+    /\b(?:blue-eyed|brown-eyed|green-eyed|hazel-eyed|dark-eyed|amber-eyed|grey-eyed|gray-eyed|violet-eyed|red-eyed|heterochromia)\b/gi,
+    ""
+  );
+  cleaned = cleaned.replace(/\bwith\s+(?:and|in|on|at|wearing|dressed)\b/gi, (m) => m.replace(/^with\s+/i, "")).replace(/\bwith\s*[,.;:]/gi, ",").replace(/,\s*and\s*,/gi, ",").replace(/\band\s*[,.;:]/gi, ",").replace(/\(\s*\)/g, "").replace(/\s*,\s*,+/g, ",").replace(/\s{2,}/g, " ").trim();
+  return cleaned;
+}
+function mergeMissedExposureCues(prompt, cues) {
+  if (!cues?.hasNudityOrExplicit || cues.highConfidenceTags.length === 0) {
+    return prompt;
+  }
+  const tags = new Set(cues.highConfidenceTags.map((t) => t.toLowerCase()));
+  const additions = [];
+  if (tags.has("completely nude")) {
+    if (!/\b(?:completely\s+nude|fully\s+nude|entirely\s+nude|fully\s+naked)\b/i.test(prompt)) {
+      if (!/\b(?:nude|naked)\b/i.test(prompt)) additions.push("completely nude");
+    }
+  } else if (tags.has("nude") || tags.has("naked")) {
+    if (!/\b(?:nude|naked|unclothed|fully\s+undressed)\b/i.test(prompt)) {
+      additions.push("nude");
+    }
+  }
+  if (tags.has("topless") && !/\b(?:topless|bare\s+breasts?|exposed\s+breasts?|shirtless)\b/i.test(prompt)) {
+    additions.push("topless");
+  }
+  if (tags.has("bottomless") && !/\b(?:bottomless|no\s+pants|pantiless|exposed\s+(?:genitals?|vulva|pussy|penis))\b/i.test(
+    prompt
+  )) {
+    additions.push("bottomless");
+  }
+  if ((tags.has("nipples") || tags.has("areolae") || tags.has("areola")) && !/\b(?:nipples?|areolae?)\b/i.test(prompt)) {
+    additions.push("exposed breasts and nipples");
+  }
+  if ((tags.has("pussy") || tags.has("vaginal")) && !/\b(?:pussy|vulva|vagina|vaginal|labia|exposed\s+genitals?)\b/i.test(prompt)) {
+    additions.push("exposed vulva");
+  }
+  if ((tags.has("penis") || tags.has("testicles") || tags.has("erection")) && !/\b(?:penis|cock|shaft|testicles|scrotum|erection|exposed\s+genitals?)\b/i.test(prompt)) {
+    additions.push("exposed penis");
+  }
+  if (tags.has("pubic hair") && !/\b(?:pubic\s+hair|pubic|trimmed\s+hair|bush)\b/i.test(prompt)) {
+    additions.push("visible pubic hair");
+  }
+  if (tags.has("spread legs") && !/\b(?:spread(?:ing)?\s+(?:her|his|their)?\s*legs|legs\s+(?:spread|apart|parted|wide))\b/i.test(
+    prompt
+  )) {
+    additions.push("legs spread wide");
+  }
+  if ((tags.has("panties aside") || tags.has("clothing aside")) && !/\b(?:pulled\s+aside|pushed\s+aside|shifted\s+aside|aside)\b/i.test(prompt)) {
+    additions.push("clothing pulled aside");
+  }
+  if ((tags.has("no panties") || tags.has("no underwear")) && !/\b(?:no\s+panties|no\s+underwear|pantiless|without\s+(?:panties|underwear))\b/i.test(prompt)) {
+    additions.push("no underwear");
+  }
+  if (tags.has("no bra") && !/\b(?:no\s+bra|braless|without\s+(?:a\s+)?bra)\b/i.test(prompt)) {
+    additions.push("no bra");
+  }
+  if (tags.has("see-through") && !/\b(?:see-through|sheer|transparent|translucent)\b/i.test(prompt)) {
+    additions.push("sheer see-through fabric");
+  }
+  if (additions.length === 0) return prompt;
+  const trimmed = prompt.trim().replace(/[.,;:\s]+$/, "");
+  return `${trimmed}, ${additions.join(", ")}`;
+}
+var interpolatePromptTemplate, VERIFICATION_STOPWORDS;
+var init_llmPromptUtils = __esm({
+  "src/server/services/llm/llmPromptUtils.ts"() {
+    init_db();
+    init_utils();
+    interpolatePromptTemplate = interpolatePrompt;
+    VERIFICATION_STOPWORDS = /* @__PURE__ */ new Set([
+      "about",
+      "above",
+      "across",
+      "active",
+      "added",
+      "after",
+      "again",
+      "against",
+      "along",
+      "also",
+      "always",
+      "among",
+      "around",
+      "attached",
+      "avoid",
+      "background",
+      "because",
+      "before",
+      "behind",
+      "being",
+      "below",
+      "between",
+      "blend",
+      "both",
+      "bring",
+      "build",
+      "camera",
+      "category",
+      "character",
+      "check",
+      "clear",
+      "clearly",
+      "close",
+      "color",
+      "colors",
+      "combine",
+      "complement",
+      "composition",
+      "concept",
+      "conflict",
+      "conflicting",
+      "create",
+      "depict",
+      "describe",
+      "description",
+      "design",
+      "detail",
+      "details",
+      "discard",
+      "drop",
+      "dropped",
+      "during",
+      "effect",
+      "element",
+      "elements",
+      "emphasis",
+      "ensure",
+      "environment",
+      "every",
+      "feature",
+      "features",
+      "female",
+      "figure",
+      "filter",
+      "first",
+      "focus",
+      "frame",
+      "framing",
+      "front",
+      "general",
+      "generic",
+      "girl",
+      "given",
+      "great",
+      "handle",
+      "having",
+      "heavy",
+      "highlight",
+      "image",
+      "include",
+      "including",
+      "incorporate",
+      "instead",
+      "into",
+      "keep",
+      "keeping",
+      "krea2",
+      "light",
+      "lighting",
+      "like",
+      "lora",
+      "loras",
+      "looks",
+      "make",
+      "making",
+      "match",
+      "matching",
+      "medium",
+      "mention",
+      "model",
+      "models",
+      "motif",
+      "motifs",
+      "must",
+      "natural",
+      "never",
+      "notes",
+      "object",
+      "optional",
+      "other",
+      "outfit",
+      "overall",
+      "person",
+      "photo",
+      "photograph",
+      "photography",
+      "place",
+      "play",
+      "point",
+      "portrait",
+      "pose",
+      "present",
+      "primary",
+      "priority",
+      "profile",
+      "prompt",
+      "quality",
+      "random",
+      "rather",
+      "realistic",
+      "render",
+      "require",
+      "required",
+      "retain",
+      "rolled",
+      "rules",
+      "scene",
+      "second",
+      "select",
+      "selected",
+      "setting",
+      "setup",
+      "sharp",
+      "shoot",
+      "short",
+      "should",
+      "show",
+      "showcase",
+      "showing",
+      "shows",
+      "single",
+      "small",
+      "specific",
+      "strong",
+      "style",
+      "styled",
+      "styling",
+      "subject",
+      "subtle",
+      "suited",
+      "support",
+      "tags",
+      "tailor",
+      "theme",
+      "their",
+      "there",
+      "these",
+      "they",
+      "thing",
+      "things",
+      "think",
+      "third",
+      "this",
+      "those",
+      "three",
+      "through",
+      "together",
+      "token",
+      "tokens",
+      "toward",
+      "trait",
+      "traits",
+      "trigger",
+      "turbo",
+      "under",
+      "using",
+      "value",
+      "values",
+      "visual",
+      "vivid",
+      "wardrobe",
+      "where",
+      "which",
+      "while",
+      "without",
+      "woman",
+      "words",
+      "workflow",
+      "world",
+      "would",
+      "write"
+    ]);
+  }
+});
+
+// src/server/services/llm/llmImageAnalysisService.ts
+import crypto5 from "crypto";
+import fs17 from "fs";
+import path16 from "path";
+function archiveUploadedPromptImage1Mp(imageBuffer, mimeHeader) {
+  if (!getBoolSetting("save_uploaded_prompt_images", false)) return null;
+  try {
+    fs17.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
+    const hashPrefix = crypto5.createHash("sha256").update(imageBuffer).digest("hex").slice(0, 10);
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+    const mimeLower = mimeHeader.toLowerCase();
+    const ext = mimeLower.includes("png") ? "png" : mimeLower.includes("webp") ? "webp" : "jpg";
+    const generatedName = `prompt-1mp-${timestamp}-${hashPrefix}.${ext}`;
+    fs17.writeFileSync(path16.join(appConfig.uploadedImagesDir, generatedName), imageBuffer);
+    invalidateStorageUsageStatsCache();
+    return generatedName;
+  } catch (err) {
+    console.error("Failed to save 1MP uploaded prompt image:", err);
+    return null;
+  }
+}
+async function interrogateImageToPrompt(params) {
+  const status = await checkLmStudioStatus();
+  if (!status.online) {
+    throw new Error("Local LLM is offline. Connect a Local LLM to interrogate images.");
+  }
+  const rawDataUrl = (params.imageBase64DataUrl || "").trim();
+  const base64Match = rawDataUrl.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+  const base64Payload = base64Match ? base64Match[1] : rawDataUrl;
+  if (!base64Payload) {
+    throw new Error("Invalid or empty image payload.");
+  }
+  const imageBuffer = Buffer.from(base64Payload, "base64");
+  const fullDataUrl = base64Match ? rawDataUrl : `data:image/jpeg;base64,${base64Payload}`;
+  const savedFilename = archiveUploadedPromptImage1Mp(imageBuffer, base64Match?.[0] || "");
+  const settings = getLmStudioSettings();
+  const baseUrl = settings.baseUrl.replace(/\/+$/, "");
+  const modelToUse = status.selectedModel || settings.selectedModel || "local-model";
+  const hasCharacter = Boolean(params.characterName?.trim());
+  const cleanUserHint = (params.userHint || "").trim();
+  const characterConstraintBlock = hasCharacter ? `
+CHARACTER LORA RULE:
+A character LoRA defines hair color and eye color.
+- DO NOT mention the subject's hair color or eye color.
+- DO keep hairstyle shape/length (without hair color), facial expression, pose, actions, physical interactions with surrounding objects, clothing/colors, AND full nudity or anatomical exposure details (never omit nudity when a character is attached).` : "";
+  const userHintBlock = cleanUserHint ? `
+USER FOCUS / CONTEXT HINT:
+"${cleanUserHint}"
+Prioritize and accurately incorporate the objects, action, or focus mentioned in this hint while faithfully describing the image.` : "";
+  const systemInstruction = `You are an uncensored, clinical Stable Diffusion and Flux image captioning specialist.
+Describe the entire scene accurately in one cohesive, vivid image generation prompt covering ALL four pillars with balanced detail:
+1. Core Action & Spatial Interaction: What the subject is physically doing and how they interact with surrounding objects or surfaces (e.g., climbing into, sitting on, leaning against, holding).
+2. Prominent Objects, Machinery & Props: Name specific appliances, machines, furniture, vehicles, structures, and props using concrete nouns, scale, colors, and materials (never collapse notable props into vague words like "indoors", "equipment", or "room").
+3. Setting, Lighting & Framing: Specific environment/location, background elements, lighting mood, and camera angle/shot framing.
+4. Subject Details & Exposure State: Transient facial expression, pose, ${hasCharacter ? "hairstyle shape (without hair color), and exact clothing/coverage state" : "appearance, hairstyle, and exact clothing/coverage state"}. Whenever nudity, partial undress, or sheer fabric is present, explicitly state the exact state of undress (completely nude, topless, bottomless, underwear-only, pulled-aside clothing, or see-through fabric) and name every visible exposed anatomical detail directly in plain clinical terms (bare breasts, exposed nipples/areolae, vulva/genitals, penis, pubic hair, bare buttocks) without softening, euphemisms, or omitting lower/upper body exposure.${characterConstraintBlock}${userHintBlock}
+Rules:
+- Refer to the subject descriptively ("a woman", "the subject", "a man", etc.) without inventing personal names.
+- Never mention LoRA or checkpoint filenames.
+- Never gloss over or lightly summarize nudity\u2014if skin, breasts, nipples, buttocks, or genitals are exposed, describe them explicitly and completely.
+- Output ONLY the final image generation prompt text with no preamble, no quotes, and no markdown.`;
+  const finalizePrompt = (rawText) => {
+    const stripped = hasCharacter ? stripCharacterPhysicalTraits(rawText) : rawText;
+    return sanitizeAgentPrompt(stripped, params.characterName);
+  };
+  if (await checkLmStudioVisionSupport(baseUrl, modelToUse)) {
+    let exposureCues = null;
+    try {
+      exposureCues = await detectExposureCuesWithWd14(imageBuffer);
+    } catch {
+    }
+    const exposureAuditBlock = exposureCues?.hasNudityOrExplicit && exposureCues.exposureTags.length > 0 ? `
+
+MANDATORY EXPOSURE & ANATOMY AUDIT: An uncensored visual check detected explicit/undress cues (${exposureCues.exposureTags.join(
+      ", "
+    )}). Verify what is visible and explicitly describe the exact state of undress and every exposed anatomical feature\u2014do not soften, imply lightly, or omit nudity.` : "";
+    try {
+      const visionUserPrompt = `${hasCharacter ? "Analyze this image and write a detailed image generation prompt capturing: (1) the exact action and spatial interaction between the subject and any objects/machinery/props, (2) specific concrete objects, appliances, furniture, or props in the foreground/midground with their colors and materials, (3) camera framing, lighting, and setting, and (4) the subject\u2019s expression, pose, hairstyle shape, and complete clothing/nudity state (explicitly naming any exposed breasts, nipples, buttocks, pubic hair, or genitals\u2014never omit or soften nudity). Only omit hair color and eye color." : "Analyze this image and write a detailed image generation prompt capturing: (1) the exact action and spatial interaction between the subject and any objects/machinery/props, (2) specific concrete objects, appliances, furniture, or props in the foreground/midground with their colors and materials, (3) camera framing, lighting, and setting, and (4) the subject\u2019s appearance, expression, pose, and complete clothing/nudity state (explicitly naming any exposed breasts, nipples, buttocks, pubic hair, or genitals\u2014never omit or soften nudity)."}${exposureAuditBlock}${cleanUserHint ? `
+
+User focus hint: ${cleanUserHint}` : ""}`;
+      const res = await postChatCompletion({
+        baseUrl,
+        model: modelToUse,
+        messages: [
+          { role: "system", content: systemInstruction },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: visionUserPrompt },
+              { type: "image_url", image_url: { url: fullDataUrl } }
+            ]
+          }
+        ],
+        temperature: 0.4,
+        maxTokens: 550,
+        timeoutMs: 9e4
+      });
+      const cleaned2 = res.content.replace(/^["']|["']$/g, "").trim();
+      const looksLikeRefusal = /cannot see|can't see|unable to view|as a text-based|i cannot fulfill|i'm sorry, but i can't/i.test(
+        cleaned2
+      );
+      if (cleaned2.length > 10 && !looksLikeRefusal) {
+        const withExposure = mergeMissedExposureCues(cleaned2, exposureCues);
+        return {
+          prompt: finalizePrompt(withExposure),
+          pipelineUsed: "vision",
+          tags: [],
+          modelUsed: res.modelUsed,
+          savedFilename
+        };
+      }
+    } catch {
+    }
+  }
+  const tagItems = await interrogateImageBufferWithWd14(imageBuffer, 0.22);
+  const rawTags = tagItems.map((t) => t.tag);
+  const extractedTags = hasCharacter ? filterCharacterIdentityTags(rawTags) : rawTags;
+  if (extractedTags.length === 0) {
+    throw new Error("Could not extract visual features from the uploaded image.");
+  }
+  const textUserPrompt = `${hasCharacter ? `Convert the following ordered visual tags into a single cohesive image generation prompt preserving the action, pose, any scene objects/props, setting, lighting, camera framing, facial expressions, hairstyle shape, clothing colors/materials, and ALL nudity/anatomical exposure tags (nude, topless, bottomless, nipples, vulva/genitals, pubic hair, etc.) in full explicit detail without softening. Only omit hair color and eye color:
+
+Visual Tags: ${extractedTags.join(", ")}` : `Convert the following ordered visual tags (from highest confidence to lowest) into a single cohesive image generation prompt preserving subject, action, pose, scene objects/props, clothing colors/materials, lighting, setting, and ALL nudity/anatomical exposure tags (nude, topless, bottomless, nipples, vulva/genitals, pubic hair, etc.) in full explicit detail without softening:
+
+Visual Tags: ${extractedTags.join(", ")}`}${cleanUserHint ? `
+
+User focus hint: ${cleanUserHint}` : ""}
+
+Output ONLY the prompt text:`;
+  const textRes = await postChatCompletion({
+    baseUrl,
+    model: modelToUse,
+    messages: [
+      { role: "system", content: systemInstruction },
+      { role: "user", content: textUserPrompt }
+    ],
+    temperature: 0.5,
+    maxTokens: 550,
+    timeoutMs: 3e4
+  });
+  const cleaned = textRes.content.replace(/^["']|["']$/g, "").trim();
+  const finalPrompt = cleaned.length > 10 && !/i cannot fulfill|i'm sorry, but i can't/i.test(cleaned) ? finalizePrompt(cleaned) : extractedTags.join(", ");
+  return {
+    prompt: finalPrompt,
+    pipelineUsed: "wd14_text",
+    tags: extractedTags,
+    modelUsed: textRes.modelUsed,
+    savedFilename
+  };
+}
+async function analyzeCharacterPortraitPhysicalTraits(params) {
+  const status = await checkLmStudioStatus();
+  const settings = getLmStudioSettings();
+  const baseUrl = settings.baseUrl.replace(/\/+$/, "");
+  const modelToUse = status.selectedModel || settings.selectedModel || "local-model";
+  const systemInstruction = `You are a character casting and visual reference specialist.
+Analyze the subject's permanent physical traits in this portrait to write a concise ~35\u201370 word physical reference summary for future image generation consistency.
+Include:
+- Gender presentation and approximate adult age range
+- Build, frame, and natural proportions
+- Skin tone and complexion
+- Face shape, eye color/shape, eyebrow/lip shape
+- Natural hair color, texture, and typical length
+- Distinctive permanent marks (freckles, moles, scars, tattoos, signature glasses, or non-human ears)
+Explicitly IGNORE: clothing, outfits, accessories, poses, temporary facial expressions, lighting, camera angle, and background setting.
+Rules:
+- Never mention personal names or filenames.
+- Output ONLY the concise plain-text physical description with no preamble, quotes, or markdown.`;
+  if (status.online && isLikelyVisionModelId(modelToUse)) {
+    try {
+      const res = await postChatCompletion({
+        baseUrl,
+        model: modelToUse,
+        messages: [
+          { role: "system", content: systemInstruction },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "Summarize only this character\u2019s permanent physical traits (gender presentation, approximate age, build, skin tone, eye color, facial structure, natural hair color/texture, and any permanent marks). Ignore their outfit, pose, expression, lighting, and background."
+              },
+              { type: "image_url", image_url: { url: params.imageBase64DataUrl } }
+            ]
+          }
+        ],
+        temperature: 0.3,
+        maxTokens: 260,
+        timeoutMs: 6e4
+      });
+      const cleaned = res.content.replace(/^["']|["']$/g, "").trim();
+      const looksLikeRefusal = /cannot see|can't see|unable to view|as a text-based|i cannot fulfill|i'm sorry, but i can't/i.test(
+        cleaned
+      );
+      if (cleaned.length > 10 && !looksLikeRefusal) {
+        return {
+          physicalDescription: sanitizeAgentPrompt(cleaned, params.characterName),
+          pipelineUsed: "vision",
+          tags: [],
+          modelUsed: res.modelUsed
+        };
+      }
+    } catch {
+    }
+  }
+  const tagItems = await interrogateImageBufferWithWd14(params.imageBuffer, 0.22);
+  const rawTags = tagItems.map((t) => t.tag);
+  const identityTags = extractCharacterIdentityTags(rawTags);
+  const effectiveTags = identityTags.length > 0 ? identityTags : rawTags.slice(0, 20);
+  if (effectiveTags.length === 0) {
+    throw new Error(
+      "Could not extract physical traits from portrait. Ensure a Vision LLM is connected or WD14 model is downloaded."
+    );
+  }
+  if (status.online) {
+    try {
+      const textRes = await postChatCompletion({
+        baseUrl,
+        model: modelToUse,
+        messages: [
+          { role: "system", content: systemInstruction },
+          {
+            role: "user",
+            content: `Turn these portrait physical tags into one concise ~35\u201370 word physical reference summary covering only permanent traits (gender presentation, build, skin tone, hair color/texture, eye color, facial structure, and signature marks). Ignore any clothing, pose, or background tags:
+
+Physical Tags: ${effectiveTags.join(", ")}
+
+Output ONLY the physical reference summary:`
+          }
+        ],
+        temperature: 0.35,
+        maxTokens: 260,
+        timeoutMs: 45e3
+      });
+      const cleaned = textRes.content.replace(/^["']|["']$/g, "").trim();
+      const looksLikeRefusal = /i cannot fulfill|i'm sorry, but i can't/i.test(cleaned);
+      if (cleaned.length > 10 && !looksLikeRefusal) {
+        return {
+          physicalDescription: sanitizeAgentPrompt(cleaned, params.characterName),
+          pipelineUsed: "wd14_text",
+          tags: effectiveTags,
+          modelUsed: textRes.modelUsed
+        };
+      }
+    } catch {
+    }
+  }
+  return {
+    physicalDescription: effectiveTags.join(", "),
+    pipelineUsed: "wd14_only",
+    tags: effectiveTags,
+    modelUsed: "WD14 v3 Local Tagger"
+  };
+}
+var init_llmImageAnalysisService = __esm({
+  "src/server/services/llm/llmImageAnalysisService.ts"() {
+    init_config();
+    init_settingsService();
+    init_storageStatsService();
+    init_visualTaggerService();
+    init_llmClientService();
+    init_llmPromptUtils();
+  }
+});
+
+// src/server/services/faceAlignmentUtils.ts
+function applyFaceNms(boxes, iouThreshold = 0.4) {
+  const sorted = [...boxes].sort((a, b) => b.score - a.score);
+  const selected = [];
+  const suppressed = new Uint8Array(sorted.length);
+  for (let i = 0; i < sorted.length; i++) {
+    if (suppressed[i]) continue;
+    const a = sorted[i];
+    selected.push(a);
+    const areaA = Math.max(0, a.x2 - a.x1) * Math.max(0, a.y2 - a.y1);
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (suppressed[j]) continue;
+      const b = sorted[j];
+      const ix1 = Math.max(a.x1, b.x1);
+      const iy1 = Math.max(a.y1, b.y1);
+      const ix2 = Math.min(a.x2, b.x2);
+      const iy2 = Math.min(a.y2, b.y2);
+      const inter = Math.max(0, ix2 - ix1) * Math.max(0, iy2 - iy1);
+      if (inter <= 0) continue;
+      const areaB = Math.max(0, b.x2 - b.x1) * Math.max(0, b.y2 - b.y1);
+      const union = areaA + areaB - inter;
+      if (union > 0 && inter / union > iouThreshold) {
+        suppressed[j] = 1;
+      }
+    }
+  }
+  return selected;
+}
+function solveInverseSimilarity(srcPts, dstPts) {
+  const n = Math.min(srcPts.length, dstPts.length);
+  if (n < 2) return null;
+  let meanU = 0;
+  let meanV = 0;
+  let meanX = 0;
+  let meanY = 0;
+  for (let i = 0; i < n; i++) {
+    meanU += dstPts[i][0];
+    meanV += dstPts[i][1];
+    meanX += srcPts[i][0];
+    meanY += srcPts[i][1];
+  }
+  meanU /= n;
+  meanV /= n;
+  meanX /= n;
+  meanY /= n;
+  let denom = 0;
+  let numA = 0;
+  let numB = 0;
+  for (let i = 0; i < n; i++) {
+    const du = dstPts[i][0] - meanU;
+    const dv = dstPts[i][1] - meanV;
+    const dx = srcPts[i][0] - meanX;
+    const dy = srcPts[i][1] - meanY;
+    denom += du * du + dv * dv;
+    numA += du * dx + dv * dy;
+    numB += du * dy - dv * dx;
+  }
+  if (denom < 1e-8) return null;
+  const a = numA / denom;
+  const b = numB / denom;
+  const tx = meanX - a * meanU + b * meanV;
+  const ty = meanY - b * meanU - a * meanV;
+  return { a, b, tx, ty };
+}
+function warpAlignedFace112(rgbData, srcWidth, srcHeight, landmarks) {
+  const outSize = 112;
+  const out = new Uint8Array(outSize * outSize * 3);
+  const xform = solveInverseSimilarity(landmarks, ARCFACE_DST_112);
+  if (!xform) return out;
+  const { a, b, tx, ty } = xform;
+  for (let v = 0; v < outSize; v++) {
+    for (let u = 0; u < outSize; u++) {
+      const sx = a * u - b * v + tx;
+      const sy = b * u + a * v + ty;
+      const outIdx = (v * outSize + u) * 3;
+      if (sx < 0 || sy < 0 || sx >= srcWidth - 1 || sy >= srcHeight - 1) {
+        const cx = Math.max(0, Math.min(srcWidth - 1, Math.round(sx)));
+        const cy = Math.max(0, Math.min(srcHeight - 1, Math.round(sy)));
+        const srcIdx = (cy * srcWidth + cx) * 3;
+        out[outIdx] = rgbData[srcIdx];
+        out[outIdx + 1] = rgbData[srcIdx + 1];
+        out[outIdx + 2] = rgbData[srcIdx + 2];
+        continue;
+      }
+      const x0 = Math.floor(sx);
+      const y0 = Math.floor(sy);
+      const fx = sx - x0;
+      const fy = sy - y0;
+      const w00 = (1 - fx) * (1 - fy);
+      const w10 = fx * (1 - fy);
+      const w01 = (1 - fx) * fy;
+      const w11 = fx * fy;
+      const i00 = (y0 * srcWidth + x0) * 3;
+      const i10 = i00 + 3;
+      const i01 = ((y0 + 1) * srcWidth + x0) * 3;
+      const i11 = i01 + 3;
+      out[outIdx] = Math.round(
+        rgbData[i00] * w00 + rgbData[i10] * w10 + rgbData[i01] * w01 + rgbData[i11] * w11
+      );
+      out[outIdx + 1] = Math.round(
+        rgbData[i00 + 1] * w00 + rgbData[i10 + 1] * w10 + rgbData[i01 + 1] * w01 + rgbData[i11 + 1] * w11
+      );
+      out[outIdx + 2] = Math.round(
+        rgbData[i00 + 2] * w00 + rgbData[i10 + 2] * w10 + rgbData[i01 + 2] * w01 + rgbData[i11 + 2] * w11
+      );
+    }
+  }
+  return out;
+}
+function l2Normalize(vec) {
+  let sumSq = 0;
+  for (let i = 0; i < vec.length; i++) {
+    sumSq += vec[i] * vec[i];
+  }
+  const norm = Math.sqrt(sumSq);
+  const out = new Float32Array(vec.length);
+  if (norm <= 1e-12) return out;
+  for (let i = 0; i < vec.length; i++) {
+    out[i] = vec[i] / norm;
+  }
+  return out;
+}
+function cosineSimilarity(a, b) {
+  const len = Math.min(a.length, b.length);
+  let dot = 0;
+  for (let i = 0; i < len; i++) {
+    dot += a[i] * b[i];
+  }
+  return dot;
+}
+function encodeEmbeddingBase64(vec) {
+  return Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength).toString("base64");
+}
+function decodeEmbeddingBase64(b64) {
+  const buf = Buffer.from(b64, "base64");
+  return new Float32Array(
+    buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+  );
+}
+var ARCFACE_DST_112;
+var init_faceAlignmentUtils = __esm({
+  "src/server/services/faceAlignmentUtils.ts"() {
+    ARCFACE_DST_112 = [
+      [38.2946, 51.6963],
+      [73.5318, 51.5014],
+      [56.0252, 71.7366],
+      [41.5493, 92.3655],
+      [70.7299, 92.2041]
+    ];
+  }
+});
+
+// src/server/services/faceRecognitionService.ts
+import fs18 from "fs";
+import path17 from "path";
+import { Readable as Readable2 } from "stream";
+import sharp4 from "sharp";
+import * as ort2 from "onnxruntime-node";
+function getFaceModelDir() {
+  const dir = path17.join(appConfig.localModelsDir, "insightface-buffalo-l");
+  fs18.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+function getDetModelPath() {
+  return path17.join(getFaceModelDir(), "det_10g.onnx");
+}
+function getRecModelPath() {
+  return path17.join(getFaceModelDir(), "w600k_r50.onnx");
+}
+function areFaceModelsDownloaded() {
+  try {
+    const detStat = fs18.statSync(getDetModelPath());
+    const recStat = fs18.statSync(getRecModelPath());
+    return detStat.size > 5e6 && recStat.size > 5e7;
+  } catch {
+    return false;
+  }
+}
+async function downloadFileAtomic(urls, destPath) {
+  const partPath = `${destPath}.part`;
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      const headers = {};
+      if (appConfig.hfApiToken) {
+        headers.Authorization = `Bearer ${appConfig.hfApiToken}`;
+      }
+      const res = await fetch(url, { headers, redirect: "follow" });
+      if (!res.ok || !res.body) {
+        throw new Error(`HTTP ${res.status} downloading ${path17.basename(destPath)}`);
+      }
+      const fileStream = fs18.createWriteStream(partPath);
+      const nodeStream = Readable2.fromWeb(res.body);
+      await new Promise((resolve, reject) => {
+        nodeStream.on("error", (err) => {
+          fileStream.destroy();
+          reject(err);
+        });
+        fileStream.on("error", reject);
+        fileStream.on("finish", resolve);
+        nodeStream.pipe(fileStream);
+      });
+      fs18.renameSync(partPath, destPath);
+      return;
+    } catch (err) {
+      lastErr = err;
+      try {
+        if (fs18.existsSync(partPath)) fs18.unlinkSync(partPath);
+      } catch {
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(`Failed to download ${path17.basename(destPath)}`);
+}
+async function ensureFaceModelsReady() {
+  if (areFaceModelsDownloaded() && detSession && recSession) return;
+  if (ensureModelsPromise) return ensureModelsPromise;
+  ensureModelsPromise = (async () => {
+    try {
+      if (!fs18.existsSync(getDetModelPath()) || fs18.statSync(getDetModelPath()).size < 5e6) {
+        await downloadFileAtomic(MODEL_DOWNLOAD_MIRRORS["det_10g.onnx"], getDetModelPath());
+      }
+      if (!fs18.existsSync(getRecModelPath()) || fs18.statSync(getRecModelPath()).size < 5e7) {
+        await downloadFileAtomic(MODEL_DOWNLOAD_MIRRORS["w600k_r50.onnx"], getRecModelPath());
+      }
+      if (!detSession) {
+        detSession = await ort2.InferenceSession.create(getDetModelPath(), {
+          executionProviders: ["cpu"]
+        });
+      }
+      if (!recSession) {
+        recSession = await ort2.InferenceSession.create(getRecModelPath(), {
+          executionProviders: ["cpu"]
+        });
+      }
+    } finally {
+      ensureModelsPromise = null;
+    }
+  })();
+  return ensureModelsPromise;
+}
+function decodeScrfdOutputs(outputs, scale, imgW, imgH, scoreThreshold = 0.45) {
+  const strides = [8, 16, 32];
+  const numAnchors = 2;
+  const tensorList = Object.values(outputs);
+  const candidates = [];
+  for (const stride of strides) {
+    const gridSize = DET_INPUT_SIZE / stride;
+    const expectedRows = gridSize * gridSize * numAnchors;
+    const findByCols = (cols) => tensorList.find((t) => {
+      const dims = t.dims;
+      if (dims.length === 2) return dims[0] === expectedRows && dims[1] === cols;
+      if (dims.length === 3) return dims[1] === expectedRows && dims[2] === cols;
+      return false;
+    });
+    const scoresTensor = findByCols(1);
+    const bboxesTensor = findByCols(4);
+    const kpsTensor = findByCols(10);
+    if (!scoresTensor || !bboxesTensor || !kpsTensor) continue;
+    const scores = scoresTensor.data;
+    const bboxes = bboxesTensor.data;
+    const kps = kpsTensor.data;
+    let idx = 0;
+    for (let row = 0; row < gridSize; row++) {
+      for (let col = 0; col < gridSize; col++) {
+        const cx = col * stride;
+        const cy = row * stride;
+        for (let a = 0; a < numAnchors; a++) {
+          const score = scores[idx];
+          if (score >= scoreThreshold) {
+            const bOff = idx * 4;
+            const x1 = Math.max(0, (cx - bboxes[bOff] * stride) / scale);
+            const y1 = Math.max(0, (cy - bboxes[bOff + 1] * stride) / scale);
+            const x2 = Math.min(imgW, (cx + bboxes[bOff + 2] * stride) / scale);
+            const y2 = Math.min(imgH, (cy + bboxes[bOff + 3] * stride) / scale);
+            const kOff = idx * 10;
+            const landmarks = [];
+            for (let k = 0; k < 5; k++) {
+              landmarks.push([
+                (cx + kps[kOff + k * 2] * stride) / scale,
+                (cy + kps[kOff + k * 2 + 1] * stride) / scale
+              ]);
+            }
+            if (x2 - x1 >= 12 && y2 - y1 >= 12) {
+              candidates.push({ x1, y1, x2, y2, score, landmarks });
+            }
+          }
+          idx++;
+        }
+      }
+    }
+  }
+  return applyFaceNms(candidates, 0.4);
+}
+async function extractFaceEmbeddings(imageInput, maxFaces = 5) {
+  await ensureFaceModelsReady();
+  if (!detSession || !recSession) {
+    throw new Error("Face recognition models could not be initialized.");
+  }
+  const { data: rgbBuffer, info } = await sharp4(imageInput).rotate().flatten({ background: { r: 0, g: 0, b: 0 } }).resize(1600, 1600, { fit: "inside", withoutEnlargement: true }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const srcW = info.width;
+  const srcH = info.height;
+  const scale = Math.min(DET_INPUT_SIZE / srcW, DET_INPUT_SIZE / srcH);
+  const resizedW = Math.max(1, Math.round(srcW * scale));
+  const resizedH = Math.max(1, Math.round(srcH * scale));
+  const { data: detRgb } = await sharp4(rgbBuffer, {
+    raw: { width: srcW, height: srcH, channels: 3 }
+  }).resize(resizedW, resizedH).extend({
+    top: 0,
+    left: 0,
+    bottom: Math.max(0, DET_INPUT_SIZE - resizedH),
+    right: Math.max(0, DET_INPUT_SIZE - resizedW),
+    background: { r: 0, g: 0, b: 0 }
+  }).raw().toBuffer({ resolveWithObject: true });
+  const detPixels = DET_INPUT_SIZE * DET_INPUT_SIZE;
+  const detTensorData = new Float32Array(3 * detPixels);
+  for (let i = 0; i < detPixels; i++) {
+    const p = i * 3;
+    detTensorData[i] = (detRgb[p] - 127.5) / 128;
+    detTensorData[detPixels + i] = (detRgb[p + 1] - 127.5) / 128;
+    detTensorData[detPixels * 2 + i] = (detRgb[p + 2] - 127.5) / 128;
+  }
+  const detOutputs = await detSession.run({
+    [detSession.inputNames[0]]: new ort2.Tensor("float32", detTensorData, [
+      1,
+      3,
+      DET_INPUT_SIZE,
+      DET_INPUT_SIZE
+    ])
+  });
+  const boxes = decodeScrfdOutputs(detOutputs, scale, srcW, srcH, 0.45);
+  if (boxes.length === 0) return [];
+  boxes.sort((a, b) => {
+    const scoreA = a.score * Math.sqrt((a.x2 - a.x1) * (a.y2 - a.y1));
+    const scoreB = b.score * Math.sqrt((b.x2 - b.x1) * (b.y2 - b.y1));
+    return scoreB - scoreA;
+  });
+  const results = [];
+  const recPixels = REC_INPUT_SIZE * REC_INPUT_SIZE;
+  const recInputName = recSession.inputNames[0];
+  const recOutputName = recSession.outputNames[0];
+  for (const box of boxes.slice(0, maxFaces)) {
+    const alignedRgb = warpAlignedFace112(rgbBuffer, srcW, srcH, box.landmarks);
+    const recTensorData = new Float32Array(3 * recPixels);
+    for (let i = 0; i < recPixels; i++) {
+      const p = i * 3;
+      recTensorData[i] = (alignedRgb[p] - 127.5) / 127.5;
+      recTensorData[recPixels + i] = (alignedRgb[p + 1] - 127.5) / 127.5;
+      recTensorData[recPixels * 2 + i] = (alignedRgb[p + 2] - 127.5) / 127.5;
+    }
+    const recOut = await recSession.run({
+      [recInputName]: new ort2.Tensor("float32", recTensorData, [
+        1,
+        3,
+        REC_INPUT_SIZE,
+        REC_INPUT_SIZE
+      ])
+    });
+    const rawVec = recOut[recOutputName].data;
+    results.push({ box, embedding: l2Normalize(rawVec) });
+  }
+  return results;
+}
+async function syncCharacterFaceEmbeddings() {
+  const charRows = db.prepare("SELECT id, name, portrait_image_id, portrait_content_hash FROM characters").all();
+  if (charRows.length === 0) return 0;
+  const upsertStmt = db.prepare(`
+    INSERT INTO character_face_embeddings
+      (character_id, image_id, image_content_hash, source_kind, face_index, embedding_b64, det_score)
+    VALUES (?, ?, ?, ?, 0, ?, ?)
+    ON CONFLICT(character_id, image_content_hash, face_index) DO UPDATE SET
+      image_id = excluded.image_id,
+      source_kind = excluded.source_kind,
+      embedding_b64 = excluded.embedding_b64,
+      det_score = excluded.det_score
+  `);
+  const hasExistingHashStmt = db.prepare(
+    "SELECT 1 FROM character_face_embeddings WHERE character_id = ? AND image_content_hash = ? LIMIT 1"
+  );
+  for (const charRow of charRows) {
+    const candidateSources = [];
+    const portraitId = resolveCharacterPortraitId(charRow);
+    if (portraitId) {
+      const pImg = db.prepare(
+        "SELECT id, content_hash, relative_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ? AND is_missing = 0"
+      ).get(portraitId);
+      if (pImg) {
+        db.prepare(
+          `DELETE FROM character_face_embeddings
+           WHERE character_id = ? AND source_kind = 'portrait' AND image_content_hash != ?`
+        ).run(charRow.id, pImg.content_hash);
+        candidateSources.push({
+          imageId: pImg.id,
+          contentHash: pImg.content_hash,
+          relativePath: pImg.relative_path,
+          isUploadedRef: pImg.is_uploaded_reference,
+          sourceKind: "portrait"
+        });
+      }
+    }
+    const confirmedRows = db.prepare(
+      `SELECT i.id, i.content_hash, i.relative_path, COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference
+         FROM image_characters ic
+         JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+         LEFT JOIN ratings r ON r.content_hash = i.content_hash
+         WHERE ic.character_id = ? AND ic.status = 'confirmed'
+         ORDER BY i.id = ? DESC, COALESCE(r.rating, 0) DESC, i.file_mtime DESC
+         LIMIT 4`
+    ).all(charRow.id, portraitId || -1);
+    let extraCount = 0;
+    for (const cImg of confirmedRows) {
+      if (candidateSources.some((cs) => cs.contentHash === cImg.content_hash)) continue;
+      if (extraCount >= 2) break;
+      candidateSources.push({
+        imageId: cImg.id,
+        contentHash: cImg.content_hash,
+        relativePath: cImg.relative_path,
+        isUploadedRef: cImg.is_uploaded_reference,
+        sourceKind: "confirmed"
+      });
+      extraCount++;
+    }
+    for (const src of candidateSources) {
+      const alreadyCached = hasExistingHashStmt.get(charRow.id, src.contentHash);
+      if (alreadyCached) continue;
+      const diskPath = resolveImageDiskPath({
+        relative_path: src.relativePath,
+        is_uploaded_reference: src.isUploadedRef
+      });
+      if (!fs18.existsSync(diskPath)) continue;
+      try {
+        const faces = await extractFaceEmbeddings(diskPath, src.sourceKind === "portrait" ? 2 : 3);
+        if (faces.length === 0) continue;
+        if (src.sourceKind === "confirmed" && faces.length > 1) continue;
+        const bestFace = faces[0];
+        upsertStmt.run(
+          charRow.id,
+          src.imageId,
+          src.contentHash,
+          src.sourceKind,
+          encodeEmbeddingBase64(bestFace.embedding),
+          bestFace.box.score
+        );
+      } catch (err) {
+        console.warn(`Failed to extract face embedding for character #${charRow.id}:`, err);
+      }
+    }
+  }
+  const indexedCount = db.prepare("SELECT COUNT(DISTINCT character_id) AS c FROM character_face_embeddings").get().c;
+  return indexedCount;
+}
+async function matchFaceToCharacter(imageBuffer, minSimilarity = DEFAULT_MIN_SIMILARITY) {
+  const indexedCharactersCount = await syncCharacterFaceEmbeddings();
+  if (indexedCharactersCount === 0) {
+    return {
+      matched: false,
+      characterId: null,
+      characterName: null,
+      similarity: null,
+      facesDetected: 0,
+      indexedCharactersCount: 0,
+      bestCandidate: null
+    };
+  }
+  const probeFaces = await extractFaceEmbeddings(imageBuffer, 5);
+  if (probeFaces.length === 0) {
+    return {
+      matched: false,
+      characterId: null,
+      characterName: null,
+      similarity: null,
+      facesDetected: 0,
+      indexedCharactersCount,
+      bestCandidate: null
+    };
+  }
+  const refRows = db.prepare(
+    `SELECT e.character_id, c.name AS character_name, e.embedding_b64
+       FROM character_face_embeddings e
+       JOIN characters c ON c.id = e.character_id`
+  ).all();
+  const refsByChar = /* @__PURE__ */ new Map();
+  for (const row of refRows) {
+    let entry = refsByChar.get(row.character_id);
+    if (!entry) {
+      entry = { name: row.character_name, vectors: [] };
+      refsByChar.set(row.character_id, entry);
+    }
+    entry.vectors.push(decodeEmbeddingBase64(row.embedding_b64));
+  }
+  let bestCandidate = null;
+  for (const probe of probeFaces) {
+    for (const [charId, refEntry] of refsByChar.entries()) {
+      let charBestSim = -1;
+      for (const refVec of refEntry.vectors) {
+        const sim = cosineSimilarity(probe.embedding, refVec);
+        if (sim > charBestSim) charBestSim = sim;
+      }
+      if (!bestCandidate || charBestSim > bestCandidate.similarity) {
+        bestCandidate = {
+          characterId: charId,
+          characterName: refEntry.name,
+          similarity: Math.round(charBestSim * 1e3) / 1e3
+        };
+      }
+    }
+  }
+  const matched = Boolean(bestCandidate && bestCandidate.similarity >= minSimilarity);
+  return {
+    matched,
+    characterId: matched && bestCandidate ? bestCandidate.characterId : null,
+    characterName: matched && bestCandidate ? bestCandidate.characterName : null,
+    similarity: bestCandidate ? bestCandidate.similarity : null,
+    facesDetected: probeFaces.length,
+    indexedCharactersCount,
+    bestCandidate
+  };
+}
+var DET_INPUT_SIZE, REC_INPUT_SIZE, DEFAULT_MIN_SIMILARITY, MODEL_DOWNLOAD_MIRRORS, detSession, recSession, ensureModelsPromise;
+var init_faceRecognitionService = __esm({
+  "src/server/services/faceRecognitionService.ts"() {
+    init_db();
+    init_config();
+    init_characterService();
+    init_scannerService();
+    init_faceAlignmentUtils();
+    DET_INPUT_SIZE = 640;
+    REC_INPUT_SIZE = 112;
+    DEFAULT_MIN_SIMILARITY = 0.38;
+    MODEL_DOWNLOAD_MIRRORS = {
+      "det_10g.onnx": [
+        "https://huggingface.co/PcZerokey/insightface/resolve/main/buffalo_l/det_10g.onnx",
+        "https://huggingface.co/LPDoctor/insightface/resolve/main/models/buffalo_l/det_10g.onnx"
+      ],
+      "w600k_r50.onnx": [
+        "https://huggingface.co/PcZerokey/insightface/resolve/main/buffalo_l/w600k_r50.onnx",
+        "https://huggingface.co/LPDoctor/insightface/resolve/main/models/buffalo_l/w600k_r50.onnx"
+      ]
+    };
+    detSession = null;
+    recSession = null;
+    ensureModelsPromise = null;
+  }
+});
+
+// src/server/utils/httpError.ts
+function getErrorMessage(err, fallback) {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message;
+  }
+  if (typeof err === "object" && err !== null && "message" in err) {
+    const msg = err.message;
+    if (typeof msg === "string" && msg.trim()) {
+      return msg;
+    }
+  }
+  return fallback;
+}
+function getErrorCode(err) {
+  if (typeof err === "object" && err !== null && "code" in err) {
+    const code = err.code;
+    return typeof code === "string" ? code : void 0;
+  }
+  return void 0;
+}
+var init_httpError = __esm({
+  "src/server/utils/httpError.ts"() {
+  }
+});
+
+// src/server/routes/charactersRoutes.ts
+var charactersRoutes_exports = {};
+__export(charactersRoutes_exports, {
+  charactersRouter: () => charactersRouter
+});
+import { Router as Router2 } from "express";
+import fs19 from "fs";
+import sharp5 from "sharp";
+var charactersRouter, updateCharacterHandler;
+var init_charactersRoutes = __esm({
+  "src/server/routes/charactersRoutes.ts"() {
+    init_db();
+    init_characterService();
+    init_llmImageAnalysisService();
+    init_faceRecognitionService();
+    init_scannerService();
+    init_civitaiModelEnrichmentService();
+    init_utils();
+    init_httpError();
+    charactersRouter = Router2();
+    charactersRouter.get("/", (_req, res) => {
+      try {
+        res.json({ items: listCharacterProfiles() });
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Failed to list characters") });
+      }
+    });
+    charactersRouter.get("/:id", (req, res) => {
+      try {
+        const profile = getCharacterProfileById(Number(req.params.id));
+        if (!profile) {
+          res.status(404).json({ error: "Character not found" });
+          return;
+        }
+        res.json({ character: profile });
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Failed to load character profile") });
+      }
+    });
+    charactersRouter.post("/", (req, res) => {
+      try {
+        const { name, description, physicalDescription, notes, aliases, portraitImageId } = req.body || {};
+        if (!name || !String(name).trim()) {
+          res.status(400).json({ error: "Character name is required" });
+          return;
+        }
+        let portraitHash = null;
+        if (portraitImageId) {
+          const img = db.prepare("SELECT content_hash FROM images WHERE id = ?").get(Number(portraitImageId));
+          portraitHash = img?.content_hash || null;
+        }
+        const info = db.prepare(
+          `INSERT INTO characters (name, description, physical_description, notes, portrait_image_id, portrait_content_hash)
+         VALUES (?, ?, ?, ?, ?, ?)`
+        ).run(
+          String(name).trim(),
+          String(description || ""),
+          String(physicalDescription || ""),
+          String(notes || ""),
+          portraitImageId ? Number(portraitImageId) : null,
+          portraitHash
+        );
+        const charId = Number(info.lastInsertRowid);
+        if (Array.isArray(aliases)) {
+          for (const a of aliases) {
+            if (String(a).trim()) {
+              db.prepare("INSERT OR IGNORE INTO character_aliases (character_id, alias) VALUES (?, ?)").run(
+                charId,
+                String(a).trim()
+              );
+            }
+          }
+        }
+        runAssistedCharacterIdentificationForAll();
+        res.json({ character: getCharacterProfileById(charId) });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to create character") });
+      }
+    });
+    updateCharacterHandler = (req, res) => {
+      try {
+        const charId = Number(req.params.id);
+        const existing = db.prepare("SELECT * FROM characters WHERE id = ?").get(charId);
+        if (!existing) {
+          res.status(404).json({ error: "Character not found" });
+          return;
+        }
+        const {
+          name,
+          description,
+          physicalDescription,
+          notes,
+          portraitImageId,
+          portraitCrop,
+          aliases,
+          tagIds,
+          collectionIds
+        } = req.body || {};
+        let portraitId = existing.portrait_image_id;
+        let portraitHash = existing.portrait_content_hash;
+        let portraitChanged = false;
+        if (portraitImageId !== void 0) {
+          if (portraitImageId === null) {
+            portraitChanged = existing.portrait_image_id !== null || existing.portrait_content_hash !== null;
+            portraitId = null;
+            portraitHash = null;
+          } else {
+            portraitId = Number(portraitImageId);
+            portraitChanged = portraitId !== existing.portrait_image_id;
+            const img = db.prepare("SELECT content_hash FROM images WHERE id = ?").get(portraitId);
+            portraitHash = img?.content_hash || null;
+            if (portraitHash) {
+              db.prepare(
+                `INSERT INTO image_characters
+              (image_id, image_content_hash, character_id, status, source, confidence)
+             VALUES (?, ?, ?, 'confirmed', 'manual', 1.0)
+             ON CONFLICT(image_content_hash, character_id) DO UPDATE SET
+              status = 'confirmed',
+              image_id = excluded.image_id,
+              updated_at = datetime('now')`
+              ).run(portraitId, portraitHash, charId);
+            }
+          }
+        }
+        let nextPortraitCropJson = existing.portrait_crop_json ?? null;
+        if (portraitCrop !== void 0) {
+          if (portraitCrop === null) {
+            nextPortraitCropJson = null;
+          } else {
+            const normalized = normalizePortraitCrop(portraitCrop);
+            nextPortraitCropJson = normalized ? JSON.stringify(normalized) : null;
+          }
+          if (!portraitId && !portraitHash) {
+            const fallbackId = resolveCharacterPortraitId(existing);
+            if (fallbackId) {
+              const fallbackImg = db.prepare("SELECT content_hash FROM images WHERE id = ?").get(fallbackId);
+              portraitId = fallbackId;
+              portraitHash = fallbackImg?.content_hash || null;
+            }
+          }
+        } else if (portraitChanged) {
+          nextPortraitCropJson = null;
+        }
+        if (name !== void 0 && !String(name).trim()) {
+          res.status(400).json({ error: "Character name cannot be empty." });
+          return;
+        }
+        db.prepare(
+          `UPDATE characters
+       SET name = ?, description = ?, physical_description = ?, notes = ?, portrait_image_id = ?, portrait_content_hash = ?, portrait_crop_json = ?,
+           updated_at = datetime('now')
+       WHERE id = ?`
+        ).run(
+          name !== void 0 ? String(name).trim() : existing.name,
+          description !== void 0 ? String(description) : existing.description,
+          physicalDescription !== void 0 ? String(physicalDescription) : existing.physical_description || "",
+          notes !== void 0 ? String(notes) : existing.notes,
+          portraitId,
+          portraitHash,
+          nextPortraitCropJson,
+          charId
+        );
+        if (Array.isArray(aliases)) {
+          db.prepare("DELETE FROM character_aliases WHERE character_id = ?").run(charId);
+          for (const a of aliases) {
+            if (String(a).trim()) {
+              db.prepare("INSERT OR IGNORE INTO character_aliases (character_id, alias) VALUES (?, ?)").run(
+                charId,
+                String(a).trim()
+              );
+            }
+          }
+        }
+        if (Array.isArray(tagIds)) {
+          db.prepare("DELETE FROM character_tags WHERE character_id = ?").run(charId);
+          for (const tid of tagIds) {
+            db.prepare("INSERT OR IGNORE INTO character_tags (character_id, tag_id) VALUES (?, ?)").run(
+              charId,
+              Number(tid)
+            );
+          }
+        }
+        if (Array.isArray(collectionIds)) {
+          db.prepare("DELETE FROM character_collections WHERE character_id = ?").run(charId);
+          for (const cid of collectionIds) {
+            db.prepare(
+              "INSERT OR IGNORE INTO character_collections (character_id, collection_id) VALUES (?, ?)"
+            ).run(charId, Number(cid));
+          }
+        }
+        runAssistedCharacterIdentificationForAll();
+        res.json({ character: getCharacterProfileById(charId) });
+      } catch (err) {
+        if (getErrorCode(err) === "SQLITE_CONSTRAINT_UNIQUE") {
+          res.status(400).json({ error: "A character with that name already exists." });
+          return;
+        }
+        res.status(400).json({ error: getErrorMessage(err, "Failed to update character") });
+      }
+    };
+    charactersRouter.patch("/:id", updateCharacterHandler);
+    charactersRouter.put("/:id", updateCharacterHandler);
+    charactersRouter.post("/:id/analyze-portrait", async (req, res) => {
+      try {
+        const charId = Number(req.params.id);
+        const charRow = db.prepare("SELECT id, name, portrait_image_id, portrait_content_hash FROM characters WHERE id = ?").get(charId);
+        if (!charRow) {
+          res.status(404).json({ error: "Character not found" });
+          return;
+        }
+        const portraitId = req.body?.imageId ? Number(req.body.imageId) : resolveCharacterPortraitId(charRow);
+        if (!portraitId) {
+          res.status(400).json({
+            error: "Set a character portrait image (or confirm an image) before running portrait analysis."
+          });
+          return;
+        }
+        const imgRow = db.prepare(
+          "SELECT id, relative_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ?"
+        ).get(portraitId);
+        if (!imgRow) {
+          res.status(404).json({ error: "Portrait image record not found." });
+          return;
+        }
+        const origPath = resolveImageDiskPath(imgRow);
+        if (!fs19.existsSync(origPath)) {
+          res.status(404).json({ error: "Portrait image file is missing on disk." });
+          return;
+        }
+        const resizedBuffer = await sharp5(origPath).rotate().resize(1024, 1024, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
+        const dataUrl = `data:image/jpeg;base64,${resizedBuffer.toString("base64")}`;
+        const analysis = await analyzeCharacterPortraitPhysicalTraits({
+          imageBuffer: resizedBuffer,
+          imageBase64DataUrl: dataUrl,
+          characterName: charRow.name
+        });
+        if (req.body?.save !== false) {
+          db.prepare(
+            `UPDATE characters
+         SET physical_description = ?, updated_at = datetime('now')
+         WHERE id = ?`
+          ).run(analysis.physicalDescription, charId);
+        }
+        res.json({
+          physicalDescription: analysis.physicalDescription,
+          pipelineUsed: analysis.pipelineUsed,
+          tags: analysis.tags,
+          modelUsed: analysis.modelUsed,
+          character: getCharacterProfileById(charId)
+        });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to analyze character portrait") });
+      }
+    });
+    charactersRouter.delete("/:id", (req, res) => {
+      try {
+        db.prepare("DELETE FROM characters WHERE id = ?").run(Number(req.params.id));
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Failed to delete character") });
+      }
+    });
+    charactersRouter.post("/:id/merge", (req, res) => {
+      try {
+        const targetId = Number(req.params.id);
+        const sourceId = Number(req.body?.sourceCharacterId);
+        const merged = mergeCharacters(targetId, sourceId);
+        res.json({ character: merged });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Character merge failed") });
+      }
+    });
+    charactersRouter.post("/:id/loras", (req, res) => {
+      try {
+        const charId = Number(req.params.id);
+        const { loraName, appearanceLabel, triggerWord, loraCategory, notes } = req.body || {};
+        if (!loraName || !String(loraName).trim()) {
+          res.status(400).json({ error: "loraName is required" });
+          return;
+        }
+        if (loraCategory !== void 0 && loraCategory !== null && String(loraCategory) !== "character") {
+          res.status(400).json({ error: 'Linked character LoRAs must use the "character" classification.' });
+          return;
+        }
+        const cleanName = String(loraName).trim();
+        const modelRow = db.prepare("SELECT id, sha256_hash, lora_category FROM models WHERE LOWER(filename) = LOWER(?) LIMIT 1").get(cleanName);
+        let resolvedModelId = modelRow?.id ?? null;
+        if (modelRow) {
+          const upd = db.prepare(
+            `UPDATE models
+         SET lora_category = 'character'
+         WHERE id = ?
+           AND COALESCE(NULLIF(TRIM(lora_category), ''), 'unclassified') = 'unclassified'`
+          ).run(modelRow.id);
+          if (upd.changes > 0) invalidateInstalledModelsCache();
+        } else {
+          const insertModel = db.prepare(
+            `INSERT INTO models (name, filename, model_type, lora_category, is_installed)
+           VALUES (?, ?, 'lora', 'character', 0)`
+          ).run(cleanName.replace(/\.(safetensors|pt|ckpt)$/i, ""), cleanName);
+          resolvedModelId = Number(insertModel.lastInsertRowid);
+          invalidateInstalledModelsCache();
+        }
+        db.prepare(
+          `INSERT INTO character_loras
+        (character_id, model_id, lora_name, lora_hash, lora_category, appearance_label, trigger_word, notes)
+       VALUES (?, ?, ?, ?, 'character', ?, ?, ?)
+       ON CONFLICT(character_id, lora_name) DO UPDATE SET
+         model_id = COALESCE(character_loras.model_id, excluded.model_id),
+         lora_category = 'character',
+         appearance_label = excluded.appearance_label,
+         trigger_word = excluded.trigger_word,
+         notes = excluded.notes`
+        ).run(
+          charId,
+          resolvedModelId,
+          cleanName,
+          modelRow?.sha256_hash ?? null,
+          appearanceLabel || "Default",
+          triggerWord !== void 0 ? String(triggerWord).trim() : "",
+          notes || ""
+        );
+        runAssistedCharacterIdentificationForAll();
+        res.json({ character: getCharacterProfileById(charId) });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to associate LoRA with character") });
+      }
+    });
+    charactersRouter.delete("/:id/loras/:linkId", (req, res) => {
+      try {
+        const charId = Number(req.params.id);
+        db.prepare("DELETE FROM character_loras WHERE id = ? AND character_id = ?").run(
+          Number(req.params.linkId),
+          charId
+        );
+        res.json({ character: getCharacterProfileById(charId) });
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Failed to unlink LoRA") });
+      }
+    });
+    charactersRouter.post("/:id/workflows", (req, res) => {
+      try {
+        const charId = Number(req.params.id);
+        const { workflowId, roleLabel } = req.body || {};
+        db.prepare(
+          `INSERT INTO character_workflows (character_id, workflow_id, role_label)
+       VALUES (?, ?, ?)
+       ON CONFLICT(character_id, workflow_id) DO UPDATE SET role_label = excluded.role_label`
+        ).run(charId, Number(workflowId), roleLabel || "Standard Workflow");
+        runAssistedCharacterIdentificationForAll();
+        res.json({ character: getCharacterProfileById(charId) });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to link workflow") });
+      }
+    });
+    charactersRouter.post("/associations/status", (req, res) => {
+      try {
+        const { imageId, characterId, status, appearanceLabel } = req.body || {};
+        const img = db.prepare("SELECT id, content_hash FROM images WHERE id = ?").get(Number(imageId));
+        if (!img) {
+          res.status(404).json({ error: "Image not found" });
+          return;
+        }
+        if (status === "remove") {
+          db.prepare(
+            "DELETE FROM image_characters WHERE image_content_hash = ? AND character_id = ?"
+          ).run(img.content_hash, Number(characterId));
+        } else {
+          db.prepare(
+            `INSERT INTO image_characters
+          (image_id, image_content_hash, character_id, status, source, confidence, appearance_label, updated_at)
+         VALUES (?, ?, ?, ?, 'manual', 1.0, ?, datetime('now'))
+         ON CONFLICT(image_content_hash, character_id) DO UPDATE SET
+           status = excluded.status,
+           appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
+           updated_at = datetime('now')`
+          ).run(
+            img.id,
+            img.content_hash,
+            Number(characterId),
+            status,
+            appearanceLabel || null
+          );
+          if (status === "confirmed") {
+            ensureCharacterPortraitIfUnset(Number(characterId), img.id, img.content_hash);
+          }
+        }
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to update character association") });
+      }
+    });
+    charactersRouter.post("/associations/bulk-status", (req, res) => {
+      try {
+        const { imageIds, characterId, status, appearanceLabel } = req.body || {};
+        if (!Array.isArray(imageIds) || imageIds.length === 0 || !characterId) {
+          res.status(400).json({ error: "imageIds array and characterId are required" });
+          return;
+        }
+        const charIdNum = Number(characterId);
+        const getImg = db.prepare("SELECT id, content_hash FROM images WHERE id = ?");
+        const delStmt = db.prepare(
+          "DELETE FROM image_characters WHERE image_content_hash = ? AND character_id = ?"
+        );
+        const upsertStmt = db.prepare(
+          `INSERT INTO image_characters
+        (image_id, image_content_hash, character_id, status, source, confidence, appearance_label, updated_at)
+       VALUES (?, ?, ?, ?, 'bulk', 1.0, ?, datetime('now'))
+       ON CONFLICT(image_content_hash, character_id) DO UPDATE SET
+         status = excluded.status,
+         appearance_label = COALESCE(excluded.appearance_label, image_characters.appearance_label),
+         updated_at = datetime('now')`
+        );
+        let updatedCount = 0;
+        const tx = db.transaction(() => {
+          for (const rawId of imageIds) {
+            const img = getImg.get(Number(rawId));
+            if (!img) continue;
+            if (status === "remove") {
+              delStmt.run(img.content_hash, charIdNum);
+            } else {
+              upsertStmt.run(img.id, img.content_hash, charIdNum, status, appearanceLabel || null);
+              if (status === "confirmed") {
+                ensureCharacterPortraitIfUnset(charIdNum, img.id, img.content_hash);
+              }
+            }
+            updatedCount++;
+          }
+        });
+        tx();
+        res.json({ ok: true, count: updatedCount });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to bulk update character associations") });
+      }
+    });
+    charactersRouter.post("/match-face", async (req, res) => {
+      try {
+        const { imageBase64DataUrl, minSimilarity } = req.body || {};
+        if (!imageBase64DataUrl || typeof imageBase64DataUrl !== "string") {
+          res.status(400).json({ error: "imageBase64DataUrl is required" });
+          return;
+        }
+        const raw = imageBase64DataUrl.trim();
+        const match = raw.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+        const b64 = match ? match[1] : raw;
+        if (!b64) {
+          res.status(400).json({ error: "Invalid or empty image payload" });
+          return;
+        }
+        const imageBuffer = Buffer.from(b64, "base64");
+        const threshold = typeof minSimilarity === "number" && Number.isFinite(minSimilarity) ? Math.max(0.1, Math.min(0.95, minSimilarity)) : void 0;
+        const result = await matchFaceToCharacter(imageBuffer, threshold);
+        const character = result.characterId ? getCharacterProfileById(result.characterId) : null;
+        res.json({
+          matched: Boolean(result.matched && character),
+          character,
+          similarity: result.similarity,
+          facesDetected: result.facesDetected,
+          indexedCharactersCount: result.indexedCharactersCount,
+          bestCandidate: result.bestCandidate
+        });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Face matching failed") });
+      }
+    });
+    charactersRouter.post("/run-suggestions", (_req, res) => {
+      try {
+        const newSuggestions = runAssistedCharacterIdentificationForAll();
+        res.json({ ok: true, newSuggestions });
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Suggestion pass failed") });
+      }
+    });
+  }
+});
+
+// src/server/services/modelInventoryService.ts
+var modelInventoryService_exports = {};
+__export(modelInventoryService_exports, {
+  extractComfyObjectInfoChoices: () => extractComfyObjectInfoChoices,
+  listModelInventory: () => listModelInventory,
+  syncModelInventory: () => syncModelInventory,
+  updateLoraMentionConfig: () => updateLoraMentionConfig,
+  updateLoraVisibility: () => updateLoraVisibility,
+  updateModelConfig: () => updateModelConfig,
+  updateModelVisibility: () => updateModelVisibility
+});
+import fs20 from "fs";
+import path18 from "path";
+import crypto6 from "crypto";
+function extractComfyObjectInfoChoices(objectInfo, nodeClass, inputField) {
+  const nodeDef = objectInfo?.[nodeClass];
+  const fieldDef = nodeDef?.input?.required?.[inputField] ?? nodeDef?.input?.optional?.[inputField];
+  if (!Array.isArray(fieldDef)) return [];
+  let rawOptions = null;
+  if (Array.isArray(fieldDef[0])) {
+    rawOptions = fieldDef[0];
+  } else if (fieldDef[0] === "COMBO" && Array.isArray(fieldDef[1]?.options)) {
+    rawOptions = fieldDef[1].options;
+  }
+  if (!rawOptions) return [];
+  return rawOptions.map((v) => String(v ?? "").trim()).filter((v) => Boolean(v) && v !== "None");
+}
+async function computeModelHashesIfFeasible(filePath, size) {
+  if (size > 350 * 1024 * 1024) {
+    return { sha256: null, autov2: null };
+  }
+  try {
+    const data = await fs20.promises.readFile(filePath);
+    const hex = crypto6.createHash("sha256").update(data).digest("hex");
+    return { sha256: hex, autov2: hex.slice(0, 10) };
+  } catch {
+    return { sha256: null, autov2: null };
+  }
+}
+async function syncModelInventory() {
+  const walkModelRoot = async (rootDir, defaultType, includeSubfolderRelPath) => {
+    const found = /* @__PURE__ */ new Map();
+    if (!rootDir) return found;
+    const entries = await walkDirectoryFilesAsync(rootDir, {
+      extensions: MODEL_EXTS,
+      includeStat: true,
+      minSizeBytes: 1,
+      initialModelType: defaultType,
+      modelTypeByDirName: MODEL_DIR_TYPE_MAP
+    });
+    for (const entry of entries) {
+      const key = entry.filename.toLowerCase();
+      if (!found.has(key)) {
+        found.set(key, {
+          fullPath: entry.fullPath,
+          filename: entry.filename,
+          relativeToCategory: includeSubfolderRelPath ? entry.relativeToCategory || entry.filename : entry.filename,
+          modelType: entry.modelType,
+          size: entry.size
+        });
+      }
+    }
+    return found;
+  };
+  const downloadsDirResolved = path18.resolve(appConfig.downloadsDir || "");
+  const comfyDirResolved = path18.resolve(appConfig.comfyuiModelsDir || "");
+  const dirsOverlap = Boolean(downloadsDirResolved && comfyDirResolved) && (downloadsDirResolved === comfyDirResolved || downloadsDirResolved.startsWith(comfyDirResolved + path18.sep));
+  const [comfyModelsDirExists, downloadsDirExists, comfyDiskMap, downloadsDiskMap] = await Promise.all([
+    pathExistsAsync(appConfig.comfyuiModelsDir),
+    pathExistsAsync(appConfig.downloadsDir),
+    walkModelRoot(appConfig.comfyuiModelsDir, "other", true),
+    dirsOverlap ? Promise.resolve(/* @__PURE__ */ new Map()) : walkModelRoot(appConfig.downloadsDir, "lora", false)
+  ]);
+  let comfyApiOnline = false;
+  const comfyApiMap = /* @__PURE__ */ new Map();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3e3);
+    const res = await fetch(`${appConfig.comfyuiUrl}/object_info`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (res.ok) {
+      comfyApiOnline = true;
+      const objInfo = await res.json();
+      const extractList = (nodeName, inputKey, mType) => {
+        const list = extractComfyObjectInfoChoices(objInfo, nodeName, inputKey);
+        for (const rawEntry of list) {
+          const normalizedRaw = rawEntry.replace(/\\/g, "/").trim();
+          const filename = normalizedRaw.split("/").pop() || normalizedRaw;
+          const key = filename.toLowerCase();
+          if (!comfyApiMap.has(key)) {
+            comfyApiMap.set(key, { filename, rawName: normalizedRaw, modelType: mType });
+          }
+        }
+      };
+      extractList("CheckpointLoaderSimple", "ckpt_name", "checkpoint");
+      extractList("LoraLoader", "lora_name", "lora");
+      extractList("VAELoader", "vae_name", "vae");
+      extractList("ControlNetLoader", "control_net_name", "controlnet");
+      extractList("UpscaleModelLoader", "model_name", "upscaler");
+      extractList("CLIPLoader", "clip_name", "clip");
+      extractList("DualCLIPLoader", "clip_name1", "clip");
+      extractList("DualCLIPLoader", "clip_name2", "clip");
+      extractList("CLIPLoaderGGUF", "clip_name", "clip");
+      extractList("UNETLoader", "unet_name", "diffusion");
+      extractList("UnetLoaderGGUF", "unet_name", "diffusion");
+    }
+  } catch {
+  }
+  const allSeenKeys = /* @__PURE__ */ new Set([
+    ...comfyDiskMap.keys(),
+    ...downloadsDiskMap.keys(),
+    ...comfyApiMap.keys()
+  ]);
+  const verifiedInstalledKeys = /* @__PURE__ */ new Set();
+  const existingByFilename = /* @__PURE__ */ new Map();
+  for (const row of db.prepare("SELECT id, filename, file_size, sha256_hash, autov2_hash FROM models").all()) {
+    existingByFilename.set(String(row.filename).toLowerCase(), row);
+  }
+  for (const key of allSeenKeys) {
+    const comfyDisk = comfyDiskMap.get(key) || null;
+    const dlDisk = downloadsDiskMap.get(key) || null;
+    const apiEntry = comfyApiMap.get(key) || null;
+    const hasCompleteComfyDiskCopy = Boolean(
+      comfyDisk && (!dlDisk || comfyDisk.size === dlDisk.size)
+    );
+    const isComfyAvailable = Boolean(apiEntry || hasCompleteComfyDiskCopy);
+    const primaryDisk = comfyDisk || dlDisk;
+    const canonicalFilename = apiEntry?.filename || primaryDisk?.filename || key;
+    const resolvedType = apiEntry?.modelType || (comfyDisk && comfyDisk.modelType !== "other" ? comfyDisk.modelType : null) || dlDisk?.modelType || "other";
+    const resolvedPath = comfyDisk?.fullPath || dlDisk?.fullPath || null;
+    const resolvedSize = comfyDisk?.size ?? dlDisk?.size ?? null;
+    const comfyuiPath = isComfyAvailable ? apiEntry?.rawName || comfyDisk?.relativeToCategory || canonicalFilename : null;
+    const downloadFilePath = dlDisk?.fullPath || null;
+    const existing = existingByFilename.get(key);
+    let sha256 = existing?.sha256_hash || null;
+    let autov2 = existing?.autov2_hash || null;
+    if (primaryDisk && (!sha256 || existing?.file_size !== primaryDisk.size)) {
+      const computed = await computeModelHashesIfFeasible(primaryDisk.fullPath, primaryDisk.size);
+      sha256 = computed.sha256;
+      autov2 = computed.autov2;
+    }
+    const sourceType = apiEntry && !comfyDisk && !dlDisk ? "comfyui_api" : "filesystem";
+    const installedFlag = isComfyAvailable ? 1 : 0;
+    if (isComfyAvailable) {
+      verifiedInstalledKeys.add(key);
+    }
+    db.prepare(
+      `INSERT INTO models
+        (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, comfyui_path, download_file_path, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(filename) DO UPDATE SET
+         model_type = CASE WHEN excluded.model_type != 'other' THEN excluded.model_type ELSE models.model_type END,
+         file_path = COALESCE(excluded.file_path, models.file_path),
+         file_size = COALESCE(excluded.file_size, models.file_size),
+         sha256_hash = COALESCE(excluded.sha256_hash, models.sha256_hash),
+         autov2_hash = COALESCE(excluded.autov2_hash, models.autov2_hash),
+         is_installed = excluded.is_installed,
+         source_type = CASE WHEN excluded.source_type = 'filesystem' THEN 'filesystem' ELSE models.source_type END,
+         comfyui_path = excluded.comfyui_path,
+         download_file_path = excluded.download_file_path,
+         last_seen_at = datetime('now')`
+    ).run(
+      canonicalFilename.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, ""),
+      canonicalFilename,
+      resolvedType,
+      resolvedPath,
+      resolvedSize,
+      sha256,
+      autov2,
+      installedFlag,
+      sourceType,
+      comfyuiPath,
+      downloadFilePath
+    );
+  }
+  if (comfyModelsDirExists || comfyApiOnline) {
+    for (const key of existingByFilename.keys()) {
+      if (!verifiedInstalledKeys.has(key)) {
+        const dlEntry = downloadsDiskMap.get(key) || null;
+        db.prepare(
+          `UPDATE models
+           SET is_installed = 0,
+               comfyui_path = NULL,
+               download_file_path = ?
+           WHERE LOWER(filename) = ?`
+        ).run(dlEntry?.fullPath || null, key);
+      }
+    }
+  } else if (downloadsDirExists) {
+    for (const key of existingByFilename.keys()) {
+      const dlEntry = downloadsDiskMap.get(key) || null;
+      db.prepare(`UPDATE models SET download_file_path = ? WHERE LOWER(filename) = ?`).run(
+        dlEntry?.fullPath || null,
+        key
+      );
+    }
+  }
+  const allImgIds = db.prepare("SELECT id FROM images WHERE is_missing = 0").all();
+  for (const row of allImgIds) {
+    recomputeImageDependencyStatus(row.id);
+  }
+  invalidateInstalledModelsCache();
+  invalidateStorageUsageStatsCache();
+  return listModelInventory();
+}
+function listModelInventory() {
+  const rows = db.prepare(
+    `
+      SELECT
+        m.*,
+        COUNT(DISTINCT i.id) AS dependentImageCount,
+        COUNT(DISTINCT iw.workflow_id) AS dependentWorkflowCount,
+        AVG(CASE WHEN rt.rating > 0 THEN rt.rating ELSE NULL END) AS avgRating
+      FROM models m
+      LEFT JOIN image_models im ON LOWER(im.model_name) = LOWER(m.filename)
+      LEFT JOIN images i ON i.id = im.image_id AND i.is_missing = 0
+      LEFT JOIN ratings rt ON rt.content_hash = i.content_hash
+      LEFT JOIN image_workflows iw ON iw.image_id = i.id
+      GROUP BY m.id
+      ORDER BY m.is_installed DESC, dependentImageCount DESC, m.filename COLLATE NOCASE ASC
+    `
+  ).all();
+  return rows.map((r) => {
+    const isInstalled = Boolean(r.is_installed);
+    const downloadFilePath = r.download_file_path || null;
+    return {
+      id: r.id,
+      name: r.name,
+      filename: r.filename,
+      modelType: r.model_type,
+      loraCategory: r.lora_category || "unclassified",
+      filePath: r.file_path || null,
+      fileSize: r.file_size ?? null,
+      sha256Hash: r.sha256_hash || null,
+      autov2Hash: r.autov2_hash || null,
+      isInstalled,
+      isDownloadedPendingImport: Boolean(!isInstalled && downloadFilePath),
+      comfyuiPath: r.comfyui_path || null,
+      downloadFilePath,
+      isHidden: Boolean(r.is_hidden),
+      sourceType: r.source_type,
+      downloadUrl: r.download_url || null,
+      civitaiId: r.civitai_id || null,
+      civitaiVersionId: r.civitai_version_id || null,
+      civitaiUrl: r.civitai_url || null,
+      baseModel: r.base_model || null,
+      recommendedWeight: r.recommended_weight !== null && r.recommended_weight !== void 0 ? Number(r.recommended_weight) : null,
+      civitaiDescription: r.civitai_description || null,
+      previewImages: parsePreviewImagesJson(r.preview_images_json, r.id),
+      civitaiFetchedAt: r.civitai_fetched_at || null,
+      hfRepoId: r.hf_repo_id || null,
+      userNotes: r.user_notes || null,
+      nickname: r.nickname || null,
+      mentionEnabled: Boolean(r.mention_enabled),
+      llmDescription: r.llm_description || null,
+      averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
+      lastSeenAt: r.last_seen_at,
+      dependentImageCount: Number(r.dependentImageCount || 0),
+      dependentWorkflowCount: Number(r.dependentWorkflowCount || 0)
+    };
+  });
+}
+function updateLoraVisibility(loraName, isHidden) {
+  const cleanName = loraName.trim();
+  const hiddenFlag = isHidden ? 1 : 0;
+  db.prepare(
+    `INSERT INTO models (name, filename, model_type, lora_category, is_hidden)
+     VALUES (?, ?, 'lora', 'unclassified', ?)
+     ON CONFLICT(filename) DO UPDATE SET
+       is_hidden = excluded.is_hidden`
+  ).run(cleanName.replace(/\.(safetensors|pt|ckpt)$/i, ""), cleanName, hiddenFlag);
+  invalidateInstalledModelsCache();
+}
+function updateLoraMentionConfig(input) {
+  const {
+    loraName,
+    mentionEnabled,
+    nickname,
+    defaultModelStrength,
+    defaultClipStrength,
+    triggerWord,
+    llmDescription
+  } = input;
+  const existingRow = db.prepare(
+    `SELECT id, filename, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description
+       FROM models WHERE LOWER(filename) = LOWER(?)`
+  ).get(loraName);
+  const cleanNick = nickname !== void 0 ? typeof nickname === "string" ? nickname.trim().replace(/^@+/, "").toLowerCase() || null : null : existingRow?.nickname ?? null;
+  if (cleanNick) {
+    const existing = db.prepare(
+      `SELECT filename FROM models WHERE LOWER(nickname) = ? AND LOWER(filename) != LOWER(?)`
+    ).get(cleanNick, loraName);
+    if (existing) {
+      throw new Error(`Nickname "@${cleanNick}" is already assigned to ${existing.filename}`);
+    }
+  }
+  const cleanTriggerWord = triggerWord !== void 0 ? typeof triggerWord === "string" ? triggerWord.trim() || null : null : existingRow?.trigger_word ?? null;
+  const cleanLlmDescription = llmDescription !== void 0 ? typeof llmDescription === "string" ? llmDescription.trim() || null : null : existingRow?.llm_description ?? null;
+  const cleanModelStr = defaultModelStrength !== void 0 && !Number.isNaN(Number(defaultModelStrength)) ? Math.max(-10, Math.min(10, Number(defaultModelStrength))) : existingRow?.default_model_strength ?? 1;
+  const cleanClipStr = defaultClipStrength !== void 0 && !Number.isNaN(Number(defaultClipStrength)) ? Math.max(-10, Math.min(10, Number(defaultClipStrength))) : existingRow?.default_clip_strength ?? 1;
+  const isMention = mentionEnabled !== void 0 ? mentionEnabled ? 1 : 0 : existingRow?.mention_enabled ?? 0;
+  if (existingRow) {
+    db.prepare(
+      `UPDATE models
+       SET nickname = ?,
+           mention_enabled = ?,
+           default_model_strength = ?,
+           default_clip_strength = ?,
+           trigger_word = ?,
+           llm_description = ?
+       WHERE id = ?`
+    ).run(
+      cleanNick,
+      isMention,
+      cleanModelStr,
+      cleanClipStr,
+      cleanTriggerWord,
+      cleanLlmDescription,
+      existingRow.id
+    );
+  } else {
+    db.prepare(
+      `INSERT INTO models (name, filename, model_type, lora_category, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description)
+       VALUES (?, ?, 'lora', 'unclassified', ?, ?, ?, ?, ?, ?)`
+    ).run(
+      loraName.replace(/\.(safetensors|pt|ckpt)$/i, ""),
+      loraName,
+      cleanNick,
+      isMention,
+      cleanModelStr,
+      cleanClipStr,
+      cleanTriggerWord,
+      cleanLlmDescription
+    );
+  }
+  invalidateInstalledModelsCache();
+}
+function updateModelVisibility(modelId, isHidden) {
+  const result = db.prepare(`UPDATE models SET is_hidden = ? WHERE id = ?`).run(isHidden ? 1 : 0, modelId);
+  if (result.changes === 0) {
+    throw new Error(`Model #${modelId} not found`);
+  }
+  invalidateInstalledModelsCache();
+}
+function updateModelConfig(modelId, input) {
+  const existingRow = db.prepare(
+    `SELECT id, filename, nickname, mention_enabled, llm_description, user_notes
+       FROM models WHERE id = ?`
+  ).get(modelId);
+  if (!existingRow) {
+    throw new Error(`Model #${modelId} not found`);
+  }
+  const cleanNick = input.nickname !== void 0 ? typeof input.nickname === "string" ? input.nickname.trim().replace(/^@+/, "").toLowerCase() || null : null : existingRow.nickname ?? null;
+  if (cleanNick) {
+    const conflict = db.prepare(`SELECT filename FROM models WHERE LOWER(nickname) = ? AND id != ?`).get(cleanNick, modelId);
+    if (conflict) {
+      throw new Error(`Nickname "@${cleanNick}" is already assigned to ${conflict.filename}`);
+    }
+  }
+  const isMention = input.mentionEnabled !== void 0 ? input.mentionEnabled ? 1 : 0 : existingRow.mention_enabled ?? 0;
+  const cleanDetails = input.llmDescription !== void 0 ? typeof input.llmDescription === "string" ? input.llmDescription.trim() || null : null : existingRow.llm_description ?? null;
+  const cleanUserNotes = input.userNotes !== void 0 ? typeof input.userNotes === "string" ? input.userNotes.trim() || null : null : existingRow.user_notes ?? null;
+  db.prepare(
+    `UPDATE models
+     SET nickname = ?,
+         mention_enabled = ?,
+         llm_description = ?,
+         user_notes = ?
+     WHERE id = ?`
+  ).run(cleanNick, isMention, cleanDetails, cleanUserNotes, modelId);
+  invalidateInstalledModelsCache();
+}
+var init_modelInventoryService = __esm({
+  "src/server/services/modelInventoryService.ts"() {
+    init_db();
+    init_config();
+    init_fsWalkService();
+    init_scannerService();
+    init_civitaiHttpAndParse();
+    init_civitaiModelEnrichmentService();
+    init_storageStatsService();
+  }
+});
+
+// src/server/routes/lorasRoutes.ts
+import { Router as Router3 } from "express";
+var lorasRouter;
+var init_lorasRoutes = __esm({
+  "src/server/routes/lorasRoutes.ts"() {
+    init_galleryQueryService();
+    init_characterService();
+    init_civitaiModelEnrichmentService();
+    init_modelInventoryService();
+    lorasRouter = Router3();
+    lorasRouter.get("/loras", (_req, res) => {
+      try {
+        triggerBackgroundCivitaiLinkHealOnce();
+        res.json({ items: listLoraExplorerItems() });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to list LoRAs" });
+      }
+    });
+    lorasRouter.patch("/loras/classify", (req, res) => {
+      try {
+        const { loraName, loraCategory, userNotes } = req.body || {};
+        if (!loraName) {
+          res.status(400).json({ error: "loraName is required" });
+          return;
+        }
+        updateLoraCategory(String(loraName), loraCategory || "other", userNotes);
+        res.json({ ok: true, items: listLoraExplorerItems() });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to classify LoRA" });
+      }
+    });
+    lorasRouter.patch("/loras/visibility", (req, res) => {
+      try {
+        const { loraName, isHidden } = req.body || {};
+        if (!loraName) {
+          res.status(400).json({ error: "loraName is required" });
+          return;
+        }
+        updateLoraVisibility(String(loraName), Boolean(isHidden));
+        res.json({ ok: true, items: listLoraExplorerItems() });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to update LoRA visibility" });
+      }
+    });
+    lorasRouter.patch("/loras/mention-config", (req, res) => {
+      try {
+        const {
+          loraName,
+          mentionEnabled,
+          nickname,
+          defaultModelStrength,
+          defaultClipStrength,
+          triggerWord,
+          llmDescription
+        } = req.body || {};
+        if (!loraName) {
+          res.status(400).json({ error: "loraName is required" });
+          return;
+        }
+        updateLoraMentionConfig({
+          loraName: String(loraName),
+          mentionEnabled,
+          nickname,
+          defaultModelStrength,
+          defaultClipStrength,
+          triggerWord,
+          llmDescription
+        });
+        res.json({ ok: true, items: listLoraExplorerItems() });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to update LoRA mention settings" });
+      }
+    });
+  }
+});
+
+// src/server/routes/modelsRoutes.ts
+import { Router as Router4 } from "express";
+import fs21 from "fs";
+import path19 from "path";
+var modelsRouter;
+var init_modelsRoutes = __esm({
+  "src/server/routes/modelsRoutes.ts"() {
+    init_db();
+    init_modelInventoryService();
+    init_civitaiModelEnrichmentService();
+    modelsRouter = Router4();
+    modelsRouter.get("/models/inventory", (_req, res) => {
+      try {
+        res.json({ items: listModelInventory() });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to list model inventory" });
+      }
+    });
+    modelsRouter.post("/models/sync", async (_req, res) => {
+      try {
+        const items = await syncModelInventory();
+        res.json({ items });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to sync model inventory" });
+      }
+    });
+    modelsRouter.post("/models/civitai-heal", async (_req, res) => {
+      try {
+        const summary = await healExistingCivitaiLinks();
+        res.json({ ok: true, ...summary });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to heal Civitai links" });
+      }
+    });
+    modelsRouter.post("/models/:id/civitai-fetch", async (req, res) => {
+      try {
+        const modelId = Number(req.params.id);
+        if (!Number.isFinite(modelId) || modelId <= 0) {
+          res.status(400).json({ error: "Valid numeric model ID is required" });
+          return;
+        }
+        const result = await fetchAndEnrichModelFromCivitai(modelId);
+        res.json({
+          ok: true,
+          provider: result.provider,
+          hfRepoId: result.hfRepoId,
+          filledTriggerWord: result.filledTriggerWord,
+          filledDefaultStrength: result.filledDefaultStrength,
+          civitaiUrl: result.meta.civitaiUrl,
+          baseModel: result.meta.baseModel,
+          recommendedWeight: result.meta.recommendedWeight,
+          previewCount: result.cachedPreviews.length
+        });
+      } catch (err) {
+        const status = typeof err?.statusCode === "number" ? err.statusCode : 500;
+        res.status(status).json({ error: err?.message || "Failed to fetch model details" });
+      }
+    });
+    modelsRouter.get("/models/:id/preview/:filename", (req, res) => {
+      const targetPath = resolveSafeModelPreviewPath(req.params.filename);
+      if (!targetPath || !fs21.existsSync(targetPath)) {
+        res.status(404).end();
+        return;
+      }
+      res.setHeader("Content-Type", "image/webp");
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.sendFile(path19.resolve(targetPath));
+    });
+    modelsRouter.get("/models/:name/impact", (req, res) => {
+      try {
+        const modelName = req.params.name;
+        const images = db.prepare(
+          `SELECT DISTINCT i.id, i.filename, i.file_mtime, r.rating
+         FROM image_models im
+         JOIN images i ON i.id = im.image_id AND i.is_missing = 0
+         LEFT JOIN ratings r ON r.content_hash = i.content_hash
+         WHERE LOWER(im.model_name) = LOWER(?)
+         ORDER BY COALESCE(r.rating, 0) DESC, i.file_mtime DESC`
+        ).all(modelName);
+        const workflows = db.prepare(
+          `SELECT DISTINCT w.id, w.name, w.is_saved_library
+         FROM image_models im
+         JOIN image_workflows iw ON iw.image_id = im.image_id
+         JOIN workflows w ON w.id = iw.workflow_id
+         WHERE LOWER(im.model_name) = LOWER(?)`
+        ).all(modelName);
+        const characters = db.prepare(
+          `SELECT c.id, c.name, cl.appearance_label AS appearanceLabel
+         FROM character_loras cl
+         JOIN characters c ON c.id = cl.character_id
+         WHERE LOWER(cl.lora_name) = LOWER(?)`
+        ).all(modelName);
+        res.json({
+          modelName,
+          dependentImageCount: images.length,
+          dependentWorkflowCount: workflows.length,
+          images,
+          workflows,
+          characters
+        });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to compute model impact report" });
+      }
+    });
+    modelsRouter.patch("/models/:id/visibility", (req, res) => {
+      try {
+        const modelId = Number(req.params.id);
+        if (!Number.isFinite(modelId) || modelId <= 0) {
+          res.status(400).json({ error: "Valid numeric model ID is required" });
+          return;
+        }
+        const { isHidden } = req.body || {};
+        updateModelVisibility(modelId, Boolean(isHidden));
+        res.json({ ok: true, items: listModelInventory() });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to update model visibility" });
+      }
+    });
+    modelsRouter.patch("/models/:id/config", (req, res) => {
+      try {
+        const modelId = Number(req.params.id);
+        if (!Number.isFinite(modelId) || modelId <= 0) {
+          res.status(400).json({ error: "Valid numeric model ID is required" });
+          return;
+        }
+        const { mentionEnabled, nickname, llmDescription, userNotes } = req.body || {};
+        updateModelConfig(modelId, { mentionEnabled, nickname, llmDescription, userNotes });
+        res.json({ ok: true, items: listModelInventory() });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to update model settings" });
+      }
+    });
+  }
+});
+
+// src/server/services/civitai/civitaiImageShareService.ts
+import crypto7 from "crypto";
+import fs22 from "fs";
+import path20 from "path";
+import sharp6 from "sharp";
+function clampWeight(val, fallback = 1) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(-10, Math.min(10, Number(n.toFixed(2))));
+}
+function stripLoraTagsFromPrompt(rawPrompt) {
+  return rawPrompt.replace(/<lora:[^>]+>/gi, "").replace(/\s*,\s*,+/g, ", ").replace(/^[,\s]+|[,\s]+$/g, "").replace(/[ \t]{2,}/g, " ").trim();
+}
+async function fetchCivitaiImageMetadata(rawUrl) {
+  const parsed = parseCivitaiShareUrl(rawUrl);
+  if (!parsed) {
+    throw new Error("Please paste a valid Civitai image or post URL.");
+  }
+  const headers = getCivitaiHeaders();
+  let activeDomain = parsed.domain;
+  let restItem = null;
+  const restEndpoint = parsed.kind === "post" ? `/api/v1/images?postId=${parsed.id}&nsfw=X&limit=1` : `/api/v1/images?imageId=${parsed.id}&nsfw=X&limit=1`;
+  const restRes = await fetchCivitaiJsonWithFallback(restEndpoint, headers, activeDomain, 1e4);
+  if (restRes?.data) {
+    activeDomain = restRes.domain;
+    const items = Array.isArray(restRes.data?.items) ? restRes.data.items : [];
+    if (parsed.kind === "image") {
+      restItem = items.find((it) => Number(it?.id) === parsed.id) || null;
+    } else {
+      restItem = items[0] || null;
+    }
+  }
+  const targetImageId = Number(restItem?.id || (parsed.kind === "image" ? parsed.id : 0));
+  let trpcGenData = null;
+  if (targetImageId > 0) {
+    const trpcInput = encodeURIComponent(JSON.stringify({ json: { id: targetImageId } }));
+    const trpcRes = await fetchCivitaiJsonWithFallback(
+      `/api/trpc/image.getGenerationData?input=${trpcInput}`,
+      headers,
+      activeDomain,
+      1e4
+    );
+    if (trpcRes?.data?.result?.data?.json) {
+      activeDomain = trpcRes.domain;
+      trpcGenData = trpcRes.data.result.data.json;
+    }
+  }
+  if (!restItem && !trpcGenData) {
+    throw new Error("Could not retrieve that image from Civitai.");
+  }
+  const meta = (trpcGenData?.meta && typeof trpcGenData.meta === "object" ? { ...restItem?.meta || {}, ...trpcGenData.meta } : restItem?.meta) || {};
+  const width = Number(restItem?.width || 0);
+  const height = Number(restItem?.height || 0);
+  const aspectRatio = width > 0 && height > 0 ? resolveClosestAspectRatio(width, height) : null;
+  const rawPrompt = typeof meta?.prompt === "string" ? meta.prompt : "";
+  const negativePrompt = typeof meta?.negativePrompt === "string" ? meta.negativePrompt.trim() : "";
+  const loraCandidates = [];
+  const seenLoraKeys = /* @__PURE__ */ new Set();
+  const pushLoraCandidate = (cand) => {
+    const key = cand.versionId ? `v:${cand.versionId}` : cand.hash ? `h:${cand.hash.toLowerCase()}` : `n:${normalizeModelStem(cand.name)}`;
+    if (!key || key === "n:" || seenLoraKeys.has(key)) return;
+    seenLoraKeys.add(key);
+    loraCandidates.push(cand);
+  };
+  const baseCandidates = [];
+  const seenBaseKeys = /* @__PURE__ */ new Set();
+  const pushBaseCandidate = (cand) => {
+    if (!cand.versionId && !cand.name && !cand.hash) return;
+    const key = cand.versionId ? `v:${cand.versionId}` : cand.hash ? `h:${cand.hash.toLowerCase()}` : `n:${normalizeModelStem(cand.name)}`;
+    if (!key || key === "n:" || seenBaseKeys.has(key)) return;
+    seenBaseKeys.add(key);
+    baseCandidates.push(cand);
+  };
+  const resourceLists = [
+    Array.isArray(trpcGenData?.resources) ? trpcGenData.resources : [],
+    Array.isArray(meta?.civitaiResources) ? meta.civitaiResources : [],
+    Array.isArray(meta?.resources) ? meta.resources : []
+  ];
+  for (const list of resourceLists) {
+    for (const r of list) {
+      if (!r || typeof r !== "object") continue;
+      const rType = r.modelType ?? r.type;
+      const vId = r.versionId || r.modelVersionId ? String(r.versionId || r.modelVersionId).trim() : null;
+      const rName = String(r.modelName || r.name || r.versionName || "").trim();
+      const rHash = typeof r.hash === "string" ? r.hash.trim() : null;
+      if (isLoraResourceType(rType)) {
+        pushLoraCandidate({
+          versionId: vId,
+          name: rName || (vId ? `LoRA #${vId}` : "Unknown LoRA"),
+          hash: rHash,
+          weight: clampWeight(r.strength ?? r.weight, 1)
+        });
+      } else if (isBaseModelResourceType(rType)) {
+        pushBaseCandidate({
+          versionId: vId,
+          name: rName,
+          hash: rHash
+        });
+      }
+    }
+  }
+  if (rawPrompt) {
+    const tagRegex = /<lora:([^:>]+)(?::([^:>]+))?(?::[^>]+)?>/gi;
+    let match;
+    while ((match = tagRegex.exec(rawPrompt)) !== null) {
+      const tokenName = match[1].trim();
+      const weightVal = match[2] !== void 0 ? clampWeight(match[2], 1) : 1;
+      const loraHash = meta?.hashes && typeof meta.hashes === "object" ? meta.hashes[`lora:${tokenName}`] || null : null;
+      pushLoraCandidate({
+        versionId: null,
+        name: tokenName,
+        hash: typeof loraHash === "string" ? loraHash : null,
+        weight: weightVal
+      });
+    }
+  }
+  if (meta?.hashes && typeof meta.hashes === "object") {
+    for (const [key, val] of Object.entries(meta.hashes)) {
+      if (typeof val !== "string" || !val.trim()) continue;
+      if (key.toLowerCase().startsWith("lora:")) {
+        pushLoraCandidate({
+          versionId: null,
+          name: key.slice(5).trim(),
+          hash: val.trim(),
+          weight: 1
+        });
+      } else if (key.toLowerCase() === "model") {
+        pushBaseCandidate({
+          versionId: null,
+          name: typeof meta?.Model === "string" ? meta.Model.trim() : "",
+          hash: val.trim()
+        });
+      }
+    }
+  }
+  if (baseCandidates.length === 0 && typeof meta?.Model === "string" && meta.Model.trim()) {
+    pushBaseCandidate({ versionId: null, name: meta.Model.trim(), hash: null });
+  }
+  const sourceBaseModel = typeof restItem?.baseModel === "string" && restItem.baseModel.trim() || typeof trpcGenData?.baseModel === "string" && trpcGenData.baseModel.trim() || null;
+  return {
+    parsed,
+    activeDomain,
+    targetImageId,
+    restItem,
+    trpcGenData,
+    meta,
+    sourceBaseModel,
+    rawPrompt,
+    negativePrompt,
+    aspectRatio,
+    loraCandidates,
+    baseCandidates
+  };
+}
+function isSaveCivitaiImportImagesEnabled() {
+  return getBoolSetting("save_civitai_import_images", true);
+}
+async function fetchAndSaveCivitaiInspirationImage(imageUrl) {
+  if (!isSaveCivitaiImportImagesEnabled()) return null;
+  const trimmedUrl = String(imageUrl || "").trim();
+  if (!/^https?:\/\//i.test(trimmedUrl)) return null;
+  if (/\.(mp4|webm|mov|avi)(\?|$)/i.test(trimmedUrl)) return null;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1e4);
+    const res = await fetch(trimmedUrl, {
+      signal: controller.signal,
+      headers: {
+        Accept: "image/*,*/*;q=0.8",
+        "User-Agent": "Couchy-ComfyUI-Gallery/1.0"
+      }
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+    if (contentType && !contentType.startsWith("image/")) {
+      return null;
+    }
+    const arrayBuf = await res.arrayBuffer();
+    if (arrayBuf.byteLength === 0 || arrayBuf.byteLength > CIVITAI_INSPIRATION_MAX_BYTES) {
+      return null;
+    }
+    const inputBuf = Buffer.from(arrayBuf);
+    const { data: rotatedBuf, info: rotatedInfo } = await sharp6(inputBuf).rotate().toBuffer({ resolveWithObject: true });
+    const srcW = Number(rotatedInfo.width || 0);
+    const srcH = Number(rotatedInfo.height || 0);
+    if (srcW <= 0 || srcH <= 0) return null;
+    const totalPixels = srcW * srcH;
+    let pipeline = sharp6(rotatedBuf);
+    let outW = srcW;
+    let outH = srcH;
+    if (totalPixels > CIVITAI_INSPIRATION_MAX_PIXELS) {
+      const scale = Math.sqrt(CIVITAI_INSPIRATION_MAX_PIXELS / totalPixels);
+      outW = Math.max(1, Math.round(srcW * scale));
+      outH = Math.max(1, Math.round(srcH * scale));
+      pipeline = pipeline.resize(outW, outH, { fit: "inside", withoutEnlargement: true });
+    }
+    const { data: outBuf, info: outInfo } = await pipeline.jpeg({ quality: 88, mozjpeg: true }).toBuffer({ resolveWithObject: true });
+    if (outBuf.length === 0) return null;
+    fs22.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
+    const hashPrefix = crypto7.createHash("sha256").update(outBuf).digest("hex").slice(0, 10);
+    const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+    const filename = `civitai-1mp-${timestamp}-${hashPrefix}.jpg`;
+    fs22.writeFileSync(path20.join(appConfig.uploadedImagesDir, filename), outBuf);
+    invalidateStorageUsageStatsCache();
+    return {
+      filename,
+      width: Number(outInfo.width || outW),
+      height: Number(outInfo.height || outH)
+    };
+  } catch {
+    return null;
+  }
+}
+async function importCivitaiImageForQuickGen(rawUrl) {
+  const {
+    parsed,
+    activeDomain,
+    targetImageId,
+    restItem,
+    trpcGenData,
+    sourceBaseModel,
+    rawPrompt,
+    negativePrompt,
+    aspectRatio,
+    loraCandidates,
+    baseCandidates
+  } = await fetchCivitaiImageMetadata(rawUrl);
+  const rawMediaType = String(restItem?.type || trpcGenData?.type || "").toLowerCase();
+  const sourceImageUrl = rawMediaType === "video" ? null : typeof restItem?.url === "string" && restItem.url.trim() || typeof trpcGenData?.url === "string" && trpcGenData.url.trim() || null;
+  const savedInspiration = await fetchAndSaveCivitaiInspirationImage(sourceImageUrl);
+  const resolvedAspectRatio = aspectRatio || (savedInspiration && savedInspiration.width > 0 && savedInspiration.height > 0 ? resolveClosestAspectRatio(savedInspiration.width, savedInspiration.height) : null);
+  const baseCandidate = baseCandidates[0] || null;
+  const { loras: installedLoras, bases: installedBases } = getVisibleInstalledModelBuckets();
+  let checkpointName = null;
+  let skippedCheckpoint = null;
+  if (baseCandidate) {
+    const matchedBase = findInstalledModelMatch(baseCandidate, installedBases);
+    if (matchedBase) {
+      checkpointName = matchedBase.filename;
+    } else if (baseCandidate.name) {
+      skippedCheckpoint = baseCandidate.name;
+    }
+  }
+  const matchedLoras = [];
+  const skippedLoras = [];
+  const addedFilenames = /* @__PURE__ */ new Set();
+  for (const cand of loraCandidates) {
+    const matched = findInstalledModelMatch(cand, installedLoras);
+    if (!matched) {
+      skippedLoras.push(cand.name);
+      continue;
+    }
+    const lowerFile = matched.filename.toLowerCase();
+    if (addedFilenames.has(lowerFile)) continue;
+    if (matchedLoras.length >= MAX_SYSTEM_LORAS) {
+      skippedLoras.push(matched.nickname || matched.name || matched.filename);
+      continue;
+    }
+    addedFilenames.add(lowerFile);
+    const strength = clampWeight(cand.weight, matched.default_model_strength ?? 1);
+    matchedLoras.push({
+      loraName: matched.filename,
+      modelStrength: strength,
+      clipStrength: strength,
+      triggerWord: matched.trigger_word || "",
+      nickname: matched.nickname || matched.name
+    });
+  }
+  const cleanedPrompt = stripLoraTagsFromPrompt(rawPrompt);
+  return {
+    sourceUrl: parsed.cleanUrl,
+    civitaiDomain: activeDomain,
+    imageId: targetImageId || parsed.id,
+    prompt: cleanedPrompt,
+    negativePrompt,
+    aspectRatio: resolvedAspectRatio,
+    checkpointName,
+    loras: matchedLoras,
+    skippedLoras,
+    skippedCheckpoint,
+    sourceBaseModel,
+    hasPromptMetadata: cleanedPrompt.length > 0,
+    inspirationFilename: savedInspiration?.filename ?? null
+  };
+}
+async function resolveCivitaiResourceCard(params) {
+  const headers = getCivitaiHeaders();
+  let detectedDomain = params.domain;
+  let targetVer = null;
+  if (params.versionId) {
+    const res = await fetchCivitaiJsonWithFallback(
+      `/api/v1/model-versions/${encodeURIComponent(params.versionId)}`,
+      headers,
+      detectedDomain,
+      9e3
+    );
+    if (res?.data) {
+      targetVer = res.data;
+      detectedDomain = res.domain;
+    }
+  } else if (params.hash) {
+    const res = await fetchCivitaiJsonWithFallback(
+      `/api/v1/model-versions/by-hash/${encodeURIComponent(params.hash)}`,
+      headers,
+      detectedDomain,
+      9e3
+    );
+    if (res?.data) {
+      targetVer = res.data;
+      detectedDomain = res.domain;
+    }
+  }
+  if (!targetVer) return null;
+  let parentModel = null;
+  const parentId = targetVer.modelId;
+  if (parentId) {
+    const parentRes = await fetchCivitaiParentModelWithDomain(
+      parentId,
+      headers,
+      detectedDomain
+    );
+    parentModel = parentRes.model;
+    if (parentRes.domain === "civitai.red") detectedDomain = "civitai.red";
+  }
+  let finalDomain = resolveCivitaiDomain(parentModel, targetVer, detectedDomain);
+  if (finalDomain === "civitai.com" && parentId) {
+    finalDomain = await probeCivitaiWebDomain(parentId, finalDomain);
+  }
+  const rawType = String(
+    parentModel?.type || targetVer?.model?.type || (params.preferredType === "lora" ? "LORA" : "Checkpoint")
+  );
+  const availableVersions = extractCivitaiVersions(
+    parentModel,
+    targetVer,
+    rawType,
+    finalDomain
+  );
+  const activeVersion = availableVersions.find((v) => v.versionId === String(targetVer.id)) || availableVersions[0];
+  if (!activeVersion) return null;
+  return buildCivitaiSearchResultCard({
+    parentModel,
+    targetVer,
+    availableVersions,
+    activeVersion,
+    fallbackDescription: "Resolved from Civitai Image URL"
+  });
+}
+async function resolveCivitaiImageModelsForDownloader(rawUrl, typeFilter) {
+  const {
+    activeDomain,
+    sourceBaseModel,
+    baseCandidates,
+    loraCandidates
+  } = await fetchCivitaiImageMetadata(rawUrl);
+  const imageIsExplicitNonKrea = Boolean(sourceBaseModel) && sourceBaseModel.toLowerCase() !== "other" && !isKrea2BaseModel(sourceBaseModel);
+  if (imageIsExplicitNonKrea) {
+    const err = new Error(
+      `Only Krea 2 images are supported (this image uses ${sourceBaseModel}).`
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  const resolvableTasks = [];
+  let unlinkedCount = 0;
+  for (const b of baseCandidates) {
+    if (b.versionId || b.hash) {
+      resolvableTasks.push({
+        kind: "checkpoint",
+        versionId: b.versionId,
+        hash: b.hash,
+        label: b.name || "Base Model"
+      });
+    } else if (b.name) {
+      unlinkedCount += 1;
+    }
+  }
+  for (const l of loraCandidates) {
+    if (l.versionId || l.hash) {
+      resolvableTasks.push({
+        kind: "lora",
+        versionId: l.versionId,
+        hash: l.hash,
+        label: l.name || "LoRA"
+      });
+    } else if (l.name) {
+      unlinkedCount += 1;
+    }
+  }
+  if (resolvableTasks.length === 0) {
+    const err = new Error(
+      isKrea2BaseModel(sourceBaseModel) ? "No linked downloadable Civitai models were found on this Krea 2 image." : "Only Krea 2 images are supported (no linked Krea 2 models found on this image)."
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  const settled = await Promise.allSettled(
+    resolvableTasks.map(
+      (t) => resolveCivitaiResourceCard({
+        versionId: t.versionId,
+        hash: t.hash,
+        domain: activeDomain,
+        preferredType: t.kind
+      })
+    )
+  );
+  const seenCardIds = /* @__PURE__ */ new Set();
+  const kreaCards = [];
+  const nonKreaLabels = /* @__PURE__ */ new Set();
+  let failedLookups = 0;
+  for (const res of settled) {
+    if (res.status !== "fulfilled" || !res.value) {
+      failedLookups += 1;
+      continue;
+    }
+    const card = res.value;
+    const dedupeKey = `${card.provider}-${card.id}-${card.versionId || card.filename}`;
+    if (seenCardIds.has(dedupeKey)) continue;
+    seenCardIds.add(dedupeKey);
+    const cardBase = card.baseModel ? card.baseModel.trim() : "";
+    const isCardKrea = isKrea2BaseModel(cardBase) || (!cardBase || cardBase.toLowerCase() === "other") && isKrea2BaseModel(sourceBaseModel);
+    if (!isCardKrea) {
+      nonKreaLabels.add(cardBase || card.name);
+      continue;
+    }
+    kreaCards.push(card);
+  }
+  if (kreaCards.length === 0) {
+    const detectedList = Array.from(nonKreaLabels);
+    const err = new Error(
+      detectedList.length > 0 ? `Only Krea 2 images are supported (detected ${detectedList.join(", ")}).` : "Only Krea 2 images are supported \u2014 no Krea 2 models were found on this image."
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  const filteredCards = kreaCards.filter((c) => {
+    if (!typeFilter) return true;
+    if (typeFilter === "lora") return c.modelType === "lora";
+    if (typeFilter === "checkpoint") {
+      return c.modelType === "checkpoint" || c.modelType === "diffusion";
+    }
+    return c.modelType === typeFilter;
+  });
+  const annotated = annotateInstalledSearchResults(filteredCards);
+  const noticeParts = [];
+  if (nonKreaLabels.size > 0) {
+    noticeParts.push(
+      `Only Krea 2 models shown \xB7 skipped non-Krea (${Array.from(nonKreaLabels).join(", ")})`
+    );
+  }
+  if (unlinkedCount > 0 || failedLookups > 0) {
+    const skippedTotal = unlinkedCount + failedLookups;
+    noticeParts.push(
+      `${skippedTotal} unlinked/unavailable resource${skippedTotal === 1 ? "" : "s"} omitted`
+    );
+  }
+  return {
+    items: annotated,
+    notice: noticeParts.length > 0 ? noticeParts.join(" \xB7 ") : null
+  };
+}
+var MAX_SYSTEM_LORAS, CIVITAI_INSPIRATION_MAX_PIXELS, CIVITAI_INSPIRATION_MAX_BYTES;
+var init_civitaiImageShareService = __esm({
+  "src/server/services/civitai/civitaiImageShareService.ts"() {
+    init_config();
+    init_civitaiHttpAndParse();
+    init_civitaiModelEnrichmentService();
+    init_settingsService();
+    init_storageStatsService();
+    init_utils();
+    MAX_SYSTEM_LORAS = 5;
+    CIVITAI_INSPIRATION_MAX_PIXELS = 1e6;
+    CIVITAI_INSPIRATION_MAX_BYTES = 25 * 1024 * 1024;
+  }
+});
+
+// src/server/services/characterDownloadAutomationService.ts
+var characterDownloadAutomationService_exports = {};
+__export(characterDownloadAutomationService_exports, {
+  handleDownloadedCharacterLoraAutomation: () => handleDownloadedCharacterLoraAutomation,
+  processPendingLoraHeadshotTasks: () => processPendingLoraHeadshotTasks,
+  startLoraHeadshotWatcher: () => startLoraHeadshotWatcher
+});
+function createOrLinkCharacterForDownloadedLora(params) {
+  const cleanFilename = params.loraFilename.trim();
+  const fallbackStem = cleanFilename.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, "");
+  const cleanCharName = params.characterName.trim() || fallbackStem || "New Character";
+  const cleanTrigger = params.triggerWord.trim();
+  let charRow = db.prepare("SELECT id FROM characters WHERE LOWER(name) = LOWER(?) LIMIT 1").get(cleanCharName);
+  if (!charRow) {
+    const info = db.prepare(
+      `INSERT INTO characters (name, description, physical_description, notes)
+         VALUES (?, '', '', '')`
+    ).run(cleanCharName);
+    charRow = { id: Number(info.lastInsertRowid) };
+  }
+  const modelRow = db.prepare(
+    "SELECT id, sha256_hash, trigger_word FROM models WHERE LOWER(filename) = LOWER(?) LIMIT 1"
+  ).get(cleanFilename);
+  if (modelRow) {
+    db.prepare(
+      `UPDATE models
+       SET lora_category = 'character',
+           trigger_word = CASE
+             WHEN (? <> '' AND COALESCE(NULLIF(TRIM(trigger_word), ''), '') = '') THEN ?
+             ELSE trigger_word
+           END
+       WHERE id = ?`
+    ).run(cleanTrigger, cleanTrigger, modelRow.id);
+    invalidateInstalledModelsCache();
+  }
+  db.prepare(
+    `INSERT INTO character_loras
+      (character_id, model_id, lora_name, lora_hash, lora_category, appearance_label, trigger_word, notes)
+     VALUES (?, ?, ?, ?, 'character', 'Default', ?, '')
+     ON CONFLICT(character_id, lora_name) DO UPDATE SET
+       model_id = COALESCE(character_loras.model_id, excluded.model_id),
+       lora_category = 'character',
+       trigger_word = CASE
+         WHEN excluded.trigger_word <> '' THEN excluded.trigger_word
+         ELSE character_loras.trigger_word
+       END`
+  ).run(charRow.id, modelRow?.id ?? null, cleanFilename, modelRow?.sha256_hash ?? null, cleanTrigger);
+  runAssistedCharacterIdentificationForAll();
+  notifyImageIndexed();
+  return charRow.id;
+}
+async function resolveConfirmedComfyLoraPath(loraFilename) {
+  const modelRow = db.prepare(
+    "SELECT is_installed, comfyui_path FROM models WHERE LOWER(filename) = LOWER(?) LIMIT 1"
+  ).get(loraFilename);
+  if (!modelRow || modelRow.is_installed !== 1) {
+    return null;
+  }
+  const targetLower = loraFilename.trim().toLowerCase();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    const res = await fetch(`${appConfig.comfyuiUrl}/object_info/LoraLoader`, {
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const list = data?.LoraLoader?.input?.required?.lora_name?.[0];
+    if (!Array.isArray(list)) return null;
+    for (const rawEntry of list) {
+      if (typeof rawEntry !== "string") continue;
+      const normalized = rawEntry.replace(/\\/g, "/").trim();
+      const base = (normalized.split("/").pop() || normalized).toLowerCase();
+      if (base === targetLower) {
+        return rawEntry;
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+function trackHeadshotGenerationItem(taskId, characterId, itemId, promptId, fallbackUpscaleMp, baseImageId) {
+  pollComfyPromptCompletion({
+    promptId,
+    characterId,
+    onSuccess: async ({ firstImageId, firstOutputSpec }) => {
+      if (fallbackUpscaleMp && fallbackUpscaleMp > 3 && firstOutputSpec) {
+        try {
+          const upscalePayload = compileUpscaleWorkflow({
+            imageFilename: firstOutputSpec.filename,
+            subfolder: firstOutputSpec.subfolder,
+            targetMegapixels: fallbackUpscaleMp
+          });
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 8e3);
+          const upRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
+            body: JSON.stringify({
+              prompt: upscalePayload,
+              client_id: COUCHY_COMFY_CLIENT_ID
+            })
+          });
+          clearTimeout(timer);
+          if (upRes.ok) {
+            const upData = await upRes.json();
+            if (upData.prompt_id) {
+              db.prepare(
+                `UPDATE generation_items
+                 SET comfyui_prompt_id = ?, output_image_id = COALESCE(?, output_image_id)
+                 WHERE id = ?`
+              ).run(upData.prompt_id, firstImageId, itemId);
+              invalidateComfyQueueCache();
+              trackHeadshotGenerationItem(
+                taskId,
+                characterId,
+                itemId,
+                upData.prompt_id,
+                void 0,
+                firstImageId
+              );
+              return;
+            }
+          }
+        } catch {
+        }
+      }
+      if (baseImageId && firstImageId && baseImageId !== firstImageId) {
+        copyImageMetadataToDerivedImage(baseImageId, firstImageId);
+      }
+      const resolvedOutputImageId = firstImageId ?? baseImageId ?? null;
+      db.prepare(
+        `UPDATE generation_items
+         SET status = 'completed', output_image_id = COALESCE(?, output_image_id), completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(resolvedOutputImageId, itemId);
+      if (resolvedOutputImageId) {
+        const imgRow = db.prepare("SELECT content_hash FROM images WHERE id = ?").get(resolvedOutputImageId);
+        db.prepare(
+          `UPDATE characters
+           SET portrait_image_id = COALESCE(portrait_image_id, ?),
+               portrait_content_hash = COALESCE(portrait_content_hash, ?),
+               updated_at = datetime('now')
+           WHERE id = ?`
+        ).run(resolvedOutputImageId, imgRow?.content_hash || null, characterId);
+      }
+      db.prepare(
+        `UPDATE pending_lora_character_tasks
+         SET status = 'completed', error_message = NULL, updated_at = datetime('now')
+         WHERE id = ?`
+      ).run(taskId);
+      notifyImageIndexed();
+      logger.info(
+        "CharAutomation",
+        `Headshot completed for character #${characterId} -> image #${resolvedOutputImageId ?? "none"}`
+      );
+    },
+    onError: (errMsg) => {
+      db.prepare(
+        `UPDATE generation_items
+         SET status = 'failed', error_message = ?, completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(errMsg, itemId);
+      db.prepare(
+        `UPDATE pending_lora_character_tasks
+         SET status = 'failed', error_message = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      ).run(errMsg, taskId);
+      recordComfyExecutionError({ promptId, message: errMsg });
+      notifyImageIndexed();
+    },
+    onTimeout: () => {
+      db.prepare(
+        `UPDATE pending_lora_character_tasks
+         SET status = 'failed', error_message = 'Timed out waiting for ComfyUI headshot completion.', updated_at = datetime('now')
+         WHERE id = ?`
+      ).run(taskId);
+    }
+  });
+}
+async function dispatchHeadshotGeneration(task, comfyLoraPath) {
+  const wfRow = db.prepare("SELECT id FROM workflows WHERE is_default = 1 ORDER BY id ASC LIMIT 1").get() || db.prepare("SELECT id FROM workflows ORDER BY is_saved_library DESC, id ASC LIMIT 1").get();
+  if (!wfRow) {
+    throw new Error("No default workflow configured for automatic headshot generation.");
+  }
+  if (!task.character_id) {
+    throw new Error("Missing character ID for automatic headshot task.");
+  }
+  let wfDefaultMp = null;
+  let wfDefaultAr = null;
+  let wfDefaultCkpt = null;
+  try {
+    const wfDefaults = getWorkflowDefaults(wfRow.id);
+    wfDefaultMp = wfDefaults.defaultMegapixels ?? null;
+    wfDefaultAr = wfDefaults.defaultAspectRatio ?? null;
+    wfDefaultCkpt = wfDefaults.defaultCheckpoint ?? null;
+  } catch {
+  }
+  const resolvedAr = normalizeResolutionSelectorRatio(wfDefaultAr || void 0);
+  const resolvedMp = Math.max(0.5, Math.min(10, wfDefaultMp ?? 3));
+  const { width, height } = computeDimensionsFromMegapixels(resolvedAr, resolvedMp);
+  const cleanTrigger = (task.trigger_word || "").trim();
+  const promptLead = cleanTrigger || task.character_name.trim();
+  const positivePrompt = promptLead ? `${promptLead} headshot smiling on neutral background.` : "headshot smiling on neutral background.";
+  const loraWeight = typeof task.recommended_weight === "number" && Number.isFinite(task.recommended_weight) ? Math.max(-10, Math.min(10, task.recommended_weight)) : 1;
+  const batchInfo = db.prepare(
+    `INSERT INTO generation_batches
+        (character_id, workflow_id, theme_title, mode, total_count, aspect_ratio, megapixels, width, height, checkpoint_name, lora_count, lora_names_json)
+       VALUES (?, ?, 'Auto Headshot', 'single', 1, ?, ?, ?, ?, ?, 1, ?)`
+  ).run(
+    task.character_id,
+    wfRow.id,
+    resolvedAr,
+    resolvedMp,
+    width,
+    height,
+    wfDefaultCkpt,
+    JSON.stringify([comfyLoraPath])
+  );
+  const batchId = Number(batchInfo.lastInsertRowid);
+  const seed = String(Math.floor(Math.random() * 1e15) + 1);
+  const itemInfo = db.prepare(
+    `INSERT INTO generation_items (batch_id, item_index, prompt, negative_prompt, seed, status)
+       VALUES (?, 1, ?, '', ?, 'pending')`
+  ).run(batchId, positivePrompt, seed);
+  const itemId = Number(itemInfo.lastInsertRowid);
+  const apiPayload = compileWorkflowForGeneration({
+    workflowId: wfRow.id,
+    positivePrompt,
+    triggerWord: "",
+    negativePrompt: "",
+    seed,
+    aspectRatio: resolvedAr,
+    megapixels: resolvedMp,
+    width,
+    height,
+    loras: [
+      {
+        loraName: comfyLoraPath,
+        modelStrength: loraWeight,
+        clipStrength: loraWeight,
+        triggerWord: cleanTrigger
+      }
+    ],
+    checkpointName: wfDefaultCkpt || void 0
+  });
+  const hasInlineUpscale = Boolean(findInlineUpscaleNodes(apiPayload));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8e3);
+  const comfyRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    signal: controller.signal,
+    body: JSON.stringify({
+      prompt: apiPayload,
+      client_id: COUCHY_COMFY_CLIENT_ID
+    })
+  });
+  clearTimeout(timer);
+  if (!comfyRes.ok) {
+    const errText = await comfyRes.text();
+    db.prepare(
+      `UPDATE generation_items
+       SET status = 'failed', error_message = ?, completed_at = datetime('now')
+       WHERE id = ?`
+    ).run(`ComfyUI HTTP ${comfyRes.status}: ${errText}`, itemId);
+    throw new Error(`ComfyUI HTTP ${comfyRes.status}: ${errText}`);
+  }
+  const data = await comfyRes.json();
+  const promptId = data.prompt_id || `prompt-${Date.now()}-${itemId}`;
+  db.prepare(
+    `UPDATE generation_items SET comfyui_prompt_id = ?, status = 'submitted' WHERE id = ?`
+  ).run(promptId, itemId);
+  db.prepare(
+    `UPDATE pending_lora_character_tasks
+     SET status = 'submitted', generation_item_id = ?, updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(itemId, task.id);
+  invalidateComfyQueueCache();
+  trackHeadshotGenerationItem(
+    task.id,
+    task.character_id,
+    itemId,
+    promptId,
+    resolvedMp > 3 && !hasInlineUpscale ? resolvedMp : void 0
+  );
+  logger.info(
+    "CharAutomation",
+    `Submitted auto-headshot for "${task.character_name}" (${promptId}) using LoRA "${comfyLoraPath}"`
+  );
+}
+async function processPendingLoraHeadshotTasks() {
+  if (isProcessingTasks) return;
+  const awaitingCount = db.prepare(
+    `SELECT COUNT(*) AS c FROM pending_lora_character_tasks WHERE status = 'awaiting_comfy'`
+  ).get().c;
+  if (awaitingCount === 0) return;
+  isProcessingTasks = true;
+  try {
+    await syncModelInventory();
+    const awaiting = db.prepare(
+      `SELECT * FROM pending_lora_character_tasks
+         WHERE status = 'awaiting_comfy'
+         ORDER BY id ASC`
+    ).all();
+    for (const task of awaiting) {
+      const comfyLoraPath = await resolveConfirmedComfyLoraPath(task.lora_filename);
+      if (!comfyLoraPath) continue;
+      const claim = db.prepare(
+        `UPDATE pending_lora_character_tasks
+           SET status = 'submitting', updated_at = datetime('now')
+           WHERE id = ? AND status = 'awaiting_comfy'`
+      ).run(task.id);
+      if (claim.changes !== 1) continue;
+      try {
+        await dispatchHeadshotGeneration(task, comfyLoraPath);
+      } catch (err) {
+        const msg = err?.message || "Failed to submit headshot generation";
+        db.prepare(
+          `UPDATE pending_lora_character_tasks
+           SET status = 'failed', error_message = ?, updated_at = datetime('now')
+           WHERE id = ?`
+        ).run(msg, task.id);
+        logger.warn("CharAutomation", `Headshot dispatch failed for task #${task.id}: ${msg}`);
+      }
+    }
+  } catch (err) {
+    logger.warn("CharAutomation", "Pending headshot watcher tick failed", err);
+  } finally {
+    isProcessingTasks = false;
+  }
+}
+async function handleDownloadedCharacterLoraAutomation(params) {
+  const auto = params.automation;
+  if (!auto?.addCharacter) return;
+  const characterId = createOrLinkCharacterForDownloadedLora({
+    loraFilename: params.loraFilename,
+    characterName: auto.characterName,
+    triggerWord: auto.triggerWord || ""
+  });
+  logger.info(
+    "CharAutomation",
+    `Created/linked character #${characterId} ("${auto.characterName}") for downloaded LoRA "${params.loraFilename}"`
+  );
+  if (!auto.generateHeadshot) return;
+  const validJobId = params.downloadJobId > 0 ? db.prepare("SELECT id FROM download_jobs WHERE id = ?").get(params.downloadJobId)?.id ?? null : null;
+  db.prepare(
+    `INSERT INTO pending_lora_character_tasks
+      (download_job_id, lora_filename, character_name, trigger_word, recommended_weight, generate_headshot, character_id, status)
+     VALUES (?, ?, ?, ?, ?, 1, ?, 'awaiting_comfy')`
+  ).run(
+    validJobId,
+    params.loraFilename,
+    auto.characterName.trim() || params.loraFilename,
+    (auto.triggerWord || "").trim(),
+    params.recommendedWeight ?? null,
+    characterId
+  );
+  await processPendingLoraHeadshotTasks();
+}
+function startLoraHeadshotWatcher() {
+  if (watcherTimer) return watcherTimer;
+  db.prepare(
+    `UPDATE pending_lora_character_tasks
+     SET status = 'awaiting_comfy', updated_at = datetime('now')
+     WHERE status = 'submitting'`
+  ).run();
+  setTimeout(() => {
+    processPendingLoraHeadshotTasks().catch(() => {
+    });
+  }, 5e3);
+  watcherTimer = setInterval(() => {
+    processPendingLoraHeadshotTasks().catch(() => {
+    });
+  }, WATCHER_INTERVAL_MS);
+  return watcherTimer;
+}
+var WATCHER_INTERVAL_MS, watcherTimer, isProcessingTasks;
+var init_characterDownloadAutomationService = __esm({
+  "src/server/services/characterDownloadAutomationService.ts"() {
+    init_db();
+    init_config();
+    init_logger();
+    init_modelInventoryService();
+    init_characterService();
+    init_scannerService();
+    init_civitaiModelEnrichmentService();
+    init_comfyuiLiveMonitor();
+    init_comfyuiService();
+    init_workflowCompilerService();
+    init_types();
+    WATCHER_INTERVAL_MS = 15e3;
+    watcherTimer = null;
+    isProcessingTasks = false;
+  }
+});
+
+// src/shared/pillSettings.ts
+function normalizePillTypeSettings(raw) {
+  const input = raw && typeof raw === "object" ? raw : {};
+  const result = {
+    character: { ...DEFAULT_PILL_TYPE_SETTINGS.character },
+    baseModel: { ...DEFAULT_PILL_TYPE_SETTINGS.baseModel },
+    lora: { ...DEFAULT_PILL_TYPE_SETTINGS.lora },
+    loraCategoryColors: {}
+  };
+  for (const entity of ENTITY_KEYS) {
+    const entry = input[entity];
+    if (entry && typeof entry === "object") {
+      if (typeof entry.color === "string" && VALID_COLOR_SET.has(entry.color)) {
+        result[entity].color = entry.color;
+      }
+      if (typeof entry.insertMentionName === "boolean") {
+        result[entity].insertMentionName = entry.insertMentionName;
+      }
+    }
+  }
+  if (input.loraCategoryColors && typeof input.loraCategoryColors === "object") {
+    const normalizedCategories = {};
+    for (const [catKey, colorVal] of Object.entries(input.loraCategoryColors)) {
+      if (VALID_CUSTOM_CATEGORY_SET.has(catKey) && typeof colorVal === "string" && VALID_COLOR_SET.has(colorVal)) {
+        normalizedCategories[catKey] = colorVal;
+      }
+    }
+    result.loraCategoryColors = normalizedCategories;
+  }
+  return result;
+}
+function normalizePresetPillColor(color) {
+  if (color && VALID_PRESET_COLOR_SET.has(color)) {
+    return color;
+  }
+  return "fuchsia";
+}
+var DEFAULT_PILL_TYPE_SETTINGS, CUSTOMIZABLE_LORA_CATEGORIES, LORA_CATEGORY_OPTIONS, VALID_LORA_CATEGORIES, PILL_COLOR_OPTIONS, VALID_COLOR_SET, ENTITY_KEYS, VALID_CUSTOM_CATEGORY_SET, PRESET_PILL_COLOR_OPTIONS, VALID_PRESET_COLOR_SET;
+var init_pillSettings = __esm({
+  "src/shared/pillSettings.ts"() {
+    DEFAULT_PILL_TYPE_SETTINGS = {
+      character: { color: "indigo", insertMentionName: false },
+      baseModel: { color: "emerald", insertMentionName: false },
+      lora: { color: "amber", insertMentionName: false },
+      loraCategoryColors: {}
+    };
+    CUSTOMIZABLE_LORA_CATEGORIES = [
+      { key: "style", label: "Style" },
+      { key: "clothing", label: "Clothing" },
+      { key: "pose", label: "Pose" },
+      { key: "concept", label: "Concept" },
+      { key: "object", label: "Object" },
+      { key: "other", label: "Other" },
+      { key: "unclassified", label: "Unclassified" }
+    ];
+    LORA_CATEGORY_OPTIONS = [
+      { value: "unclassified", label: "Unclassified" },
+      { value: "character", label: "Character" },
+      { value: "style", label: "Style" },
+      { value: "clothing", label: "Clothing / Outfit" },
+      { value: "pose", label: "Pose" },
+      { value: "concept", label: "Concept" },
+      { value: "object", label: "Object" },
+      { value: "other", label: "Other" }
+    ];
+    VALID_LORA_CATEGORIES = new Set(
+      LORA_CATEGORY_OPTIONS.map((opt) => opt.value)
+    );
+    PILL_COLOR_OPTIONS = [
+      "indigo",
+      "emerald",
+      "amber",
+      "sky",
+      "rose",
+      "violet",
+      "teal",
+      "zinc"
+    ];
+    VALID_COLOR_SET = new Set(PILL_COLOR_OPTIONS);
+    ENTITY_KEYS = ["character", "baseModel", "lora"];
+    VALID_CUSTOM_CATEGORY_SET = new Set(
+      CUSTOMIZABLE_LORA_CATEGORIES.map((c) => c.key)
+    );
+    PRESET_PILL_COLOR_OPTIONS = [
+      "fuchsia",
+      "cyan",
+      "orange",
+      "lime",
+      "pink",
+      "purple"
+    ];
+    VALID_PRESET_COLOR_SET = new Set(PRESET_PILL_COLOR_OPTIONS);
+  }
+});
+
+// src/server/services/modelManagerService.ts
+import fs23 from "fs";
+import path21 from "path";
+import crypto8 from "crypto";
+import { Readable as Readable3 } from "stream";
+async function searchCivitaiModels(query, typeFilter) {
+  const trimmed = query.trim();
+  if (/^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(trimmed)) {
+    const resolved = await resolveDirectModelUrl(trimmed);
+    return [resolved];
+  }
+  const headers = getCivitaiHeaders();
+  if (/^[a-fA-F0-9]{10,64}$/.test(trimmed)) {
+    try {
+      const hashLookup = await fetchCivitaiJsonWithFallback(
+        `/api/v1/model-versions/by-hash/${encodeURIComponent(trimmed)}`,
+        headers,
+        "civitai.com",
+        9e3
+      );
+      if (hashLookup?.data) {
+        const ver = hashLookup.data;
+        let detectedDomain = hashLookup.domain;
+        let parentModel = null;
+        if (ver.modelId) {
+          const parentRes = await fetchCivitaiParentModelWithDomain(
+            ver.modelId,
+            headers,
+            detectedDomain
+          );
+          parentModel = parentRes.model;
+          if (parentRes.domain === "civitai.red") {
+            detectedDomain = "civitai.red";
+          }
+        }
+        const resolvedModelId = parentModel?.id || ver.modelId;
+        let finalDomain = resolveCivitaiDomain(parentModel, ver, detectedDomain);
+        if (finalDomain === "civitai.com" && resolvedModelId) {
+          finalDomain = await probeCivitaiWebDomain(resolvedModelId, finalDomain);
+        }
+        const rawType = String(parentModel?.type || ver.model?.type || "LORA");
+        const availableVersions = extractCivitaiVersions(
+          parentModel,
+          ver,
+          rawType,
+          finalDomain
+        );
+        const activeVersion = availableVersions.find((v) => v.versionId === String(ver.id)) || availableVersions[0];
+        if (activeVersion) {
+          const excerpt = activeVersion.civitaiDescription?.slice(0, 220) || `Matched exact model hash ${trimmed}`;
+          return annotateInstalledSearchResults([
+            {
+              provider: "civitai",
+              id: String(resolvedModelId || ver.id),
+              versionId: activeVersion.versionId,
+              civitaiUrl: activeVersion.civitaiUrl,
+              name: parentModel?.name || ver.model?.name || activeVersion.filename,
+              modelType: activeVersion.modelType,
+              suggestedSubfolder: activeVersion.suggestedSubfolder,
+              suggestedLoraCategory: activeVersion.suggestedLoraCategory ?? null,
+              subfolderHint: activeVersion.subfolderHint || null,
+              versionName: activeVersion.versionName,
+              baseModel: activeVersion.baseModel,
+              trainedWords: activeVersion.trainedWords,
+              recommendedWeight: activeVersion.recommendedWeight,
+              previewImageUrl: activeVersion.previewImageUrl,
+              previewImages: activeVersion.previewImages,
+              civitaiDescription: activeVersion.civitaiDescription,
+              filename: activeVersion.filename,
+              fileSize: activeVersion.fileSize,
+              sha256Hash: activeVersion.sha256Hash,
+              downloadUrl: activeVersion.downloadUrl,
+              creator: parentModel?.creator?.username || ver.model?.creator?.username || "Civitai Creator",
+              description: excerpt,
+              availableFiles: activeVersion.availableFiles,
+              totalRepoFilesCount: activeVersion.availableFiles.length,
+              availableVersions,
+              earlyAccessEndsAt: activeVersion.earlyAccessEndsAt,
+              isEarlyAccessActive: activeVersion.isEarlyAccessActive,
+              availability: activeVersion.availability,
+              earlyAccessConfig: activeVersion.earlyAccessConfig
+            }
+          ]);
+        }
+      }
+    } catch {
+    }
+  }
+  const params = new URLSearchParams();
+  params.set("limit", "12");
+  if (trimmed) params.set("query", trimmed);
+  if (typeFilter === "checkpoint") params.set("types", "Checkpoint");
+  else if (typeFilter === "lora") {
+    params.append("types", "LORA");
+    params.append("types", "LoCon");
+    params.append("types", "DoRA");
+  } else if (typeFilter === "controlnet") params.set("types", "Controlnet");
+  else if (typeFilter === "vae") params.set("types", "VAE");
+  else if (typeFilter === "upscaler") params.set("types", "Upscaler");
+  else if (typeFilter === "embedding") params.set("types", "TextualInversion");
+  const searchPath = `/api/v1/models?${params.toString()}`;
+  const searchRes = await fetchCivitaiJsonWithFallback(searchPath, headers, "civitai.com", 9e3);
+  if (!searchRes) {
+    throw new Error("Civitai API search failed on both civitai.com and civitai.red");
+  }
+  let items = Array.isArray(searchRes.data?.items) ? searchRes.data.items : [];
+  let searchDomain = searchRes.domain;
+  if (items.length === 0 && trimmed && searchDomain === "civitai.com") {
+    const redFallback = await fetchCivitaiJsonWithFallback(searchPath, headers, "civitai.red", 7e3);
+    if (redFallback?.data?.items?.length) {
+      items = redFallback.data.items;
+      searchDomain = "civitai.red";
+    }
+  }
+  const results = [];
+  for (const item of items) {
+    const latestVer = (item.modelVersions || [])[0];
+    if (!latestVer) continue;
+    const itemDomain = resolveCivitaiDomain(item, latestVer, searchDomain);
+    const rawType = String(item.type || "LORA");
+    const availableVersions = extractCivitaiVersions(item, latestVer, rawType, itemDomain);
+    const activeVersion = availableVersions[0];
+    if (!activeVersion) continue;
+    results.push({
+      provider: "civitai",
+      id: String(item.id),
+      versionId: activeVersion.versionId,
+      civitaiUrl: activeVersion.civitaiUrl,
+      name: item.name,
+      modelType: activeVersion.modelType,
+      suggestedSubfolder: activeVersion.suggestedSubfolder,
+      suggestedLoraCategory: activeVersion.suggestedLoraCategory ?? null,
+      subfolderHint: activeVersion.subfolderHint || null,
+      versionName: activeVersion.versionName,
+      baseModel: activeVersion.baseModel,
+      trainedWords: activeVersion.trainedWords,
+      recommendedWeight: activeVersion.recommendedWeight,
+      previewImageUrl: activeVersion.previewImageUrl,
+      previewImages: activeVersion.previewImages,
+      civitaiDescription: activeVersion.civitaiDescription,
+      filename: activeVersion.filename,
+      fileSize: activeVersion.fileSize,
+      sha256Hash: activeVersion.sha256Hash,
+      downloadUrl: activeVersion.downloadUrl,
+      creator: item.creator?.username || "Unknown",
+      description: activeVersion.civitaiDescription?.slice(0, 220) || String(item.description || "").replace(/<[^>]+>/g, "").slice(0, 220),
+      availableFiles: activeVersion.availableFiles,
+      totalRepoFilesCount: activeVersion.availableFiles.length,
+      availableVersions,
+      earlyAccessEndsAt: activeVersion.earlyAccessEndsAt,
+      isEarlyAccessActive: activeVersion.isEarlyAccessActive,
+      availability: activeVersion.availability,
+      earlyAccessConfig: activeVersion.earlyAccessConfig
+    });
+  }
+  return annotateInstalledSearchResults(results);
+}
+async function searchHuggingFaceModels(query, typeFilter) {
+  const trimmed = query.trim();
+  const directRepo = parseHuggingFaceRepoAndFile(trimmed);
+  if (directRepo && /^https?:\/\//i.test(trimmed)) {
+    const resolved = await resolveDirectModelUrl(trimmed);
+    return [resolved];
+  }
+  const headers = {};
+  if (appConfig.hfApiToken) {
+    headers.Authorization = `Bearer ${appConfig.hfApiToken}`;
+  }
+  const results = [];
+  const seenRepos = /* @__PURE__ */ new Set();
+  if (directRepo) {
+    try {
+      const resolved = await resolveDirectModelUrl(directRepo.repoId);
+      results.push(resolved);
+      seenRepos.add(resolved.id.toLowerCase());
+    } catch {
+    }
+  }
+  const typeHint = typeFilter === "clip" ? "text_encoders clip safetensors" : typeFilter === "diffusion" ? "gguf diffusion safetensors" : typeFilter ? `${typeFilter} safetensors` : "safetensors comfyui";
+  const searchTerm = trimmed ? typeFilter === "clip" && !/clip|t5|encoder/i.test(trimmed) ? `${trimmed} clip` : trimmed : typeHint;
+  const url = new URL("https://huggingface.co/api/models");
+  url.searchParams.set("search", searchTerm);
+  url.searchParams.set("limit", "10");
+  url.searchParams.set("full", "true");
+  const res = await fetch(url.toString(), { headers });
+  if (!res.ok) {
+    throw new Error(`Hugging Face API returned HTTP ${res.status}`);
+  }
+  const items = await res.json();
+  for (const repo of items || []) {
+    const repoId = String(repo.id || "");
+    if (!repoId || seenRepos.has(repoId.toLowerCase())) continue;
+    const tags = Array.isArray(repo.tags) ? repo.tags : [];
+    const siblings = Array.isArray(repo.siblings) ? repo.siblings : [];
+    const availableFiles = [];
+    for (const s of siblings) {
+      const rfilename = String(s.rfilename || "");
+      const ext = path21.extname(rfilename).toLowerCase();
+      if (!DOWNLOAD_WEIGHT_EXTS.has(ext)) continue;
+      const inferred = inferSubfolderAndTypeFromPath(rfilename, tags);
+      const encodedPath = rfilename.split("/").map((seg) => encodeURIComponent(seg)).join("/");
+      availableFiles.push({
+        rfilename,
+        filename: path21.basename(rfilename),
+        fileSize: typeof s.size === "number" ? s.size : s.lfs?.size ?? null,
+        sha256Hash: s.lfs?.oid ? String(s.lfs.oid).toUpperCase() : null,
+        downloadUrl: `https://huggingface.co/${repoId}/resolve/main/${encodedPath}`,
+        modelType: inferred.modelType,
+        suggestedSubfolder: inferred.suggestedSubfolder
+      });
+    }
+    if (availableFiles.length === 0) continue;
+    const matchingFile = typeFilter ? availableFiles.find(
+      (f) => f.modelType === typeFilter || typeFilter === "checkpoint" && f.modelType === "diffusion" || typeFilter === "diffusion" && f.modelType === "checkpoint"
+    ) : availableFiles.find(
+      (f) => f.modelType === "diffusion" || f.modelType === "checkpoint" || f.modelType === "lora"
+    ) || availableFiles[0];
+    if (typeFilter && !matchingFile) continue;
+    const primary = matchingFile || availableFiles[0];
+    const suggestedLoraCategory = primary.modelType === "lora" ? classifyLoraFromMetadata({
+      name: repoId,
+      filename: primary.filename,
+      tags
+    }) : null;
+    results.push({
+      provider: "huggingface",
+      id: repoId,
+      hfRepoId: repoId,
+      name: repoId,
+      modelType: primary.modelType,
+      suggestedSubfolder: primary.suggestedSubfolder,
+      suggestedLoraCategory,
+      versionName: "main",
+      filename: primary.filename,
+      fileSize: primary.fileSize,
+      sha256Hash: primary.sha256Hash,
+      downloadUrl: primary.downloadUrl,
+      creator: repoId.split("/")[0] || "HuggingFace",
+      description: `Hugging Face repository ${repoId} (${repo.downloads || 0} downloads \xB7 ${availableFiles.length} weight file${availableFiles.length === 1 ? "" : "s"})`,
+      availableFiles,
+      totalRepoFilesCount: availableFiles.length
+    });
+  }
+  return annotateInstalledSearchResults(results);
+}
+async function resolveDirectModelUrl(rawInput) {
+  const input = rawInput.trim();
+  if (!input) {
+    throw new Error("Please paste a URL or Hugging Face repository ID.");
+  }
+  const hfParsed = parseHuggingFaceRepoAndFile(input);
+  if (hfParsed) {
+    const repoData = await listHuggingFaceRepoFiles(hfParsed.repoId, hfParsed.branch);
+    if (repoData.files.length === 0) {
+      throw new Error(`No supported model weight files found in Hugging Face repo ${hfParsed.repoId}.`);
+    }
+    const matchedFile = (hfParsed.filePath ? repoData.files.find(
+      (f) => f.rfilename.toLowerCase() === hfParsed.filePath.toLowerCase() || f.filename.toLowerCase() === path21.basename(hfParsed.filePath).toLowerCase()
+    ) : null) || repoData.files[0];
+    const suggestedLoraCategory = matchedFile.modelType === "lora" ? classifyLoraFromMetadata({
+      name: repoData.repoId,
+      filename: matchedFile.filename,
+      tags: repoData.tags
+    }) : null;
+    return annotateInstalledSearchResults([
+      {
+        provider: "huggingface",
+        id: repoData.repoId,
+        hfRepoId: repoData.repoId,
+        name: repoData.repoId,
+        modelType: matchedFile.modelType,
+        suggestedSubfolder: matchedFile.suggestedSubfolder,
+        suggestedLoraCategory,
+        versionName: hfParsed.branch,
+        filename: matchedFile.filename,
+        fileSize: matchedFile.fileSize,
+        sha256Hash: matchedFile.sha256Hash,
+        downloadUrl: matchedFile.downloadUrl,
+        creator: repoData.repoId.split("/")[0] || "HuggingFace",
+        description: `Hugging Face repository ${repoData.repoId} (${repoData.files.length} weight file${repoData.files.length === 1 ? "" : "s"})`,
+        availableFiles: repoData.files,
+        totalRepoFilesCount: repoData.files.length
+      }
+    ])[0];
+  }
+  if (/^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(input)) {
+    const result = await resolveCivitaiModelUrl(input);
+    return annotateInstalledSearchResults([result])[0];
+  }
+  if (/^https?:\/\//i.test(input)) {
+    const parsedUrl = new URL(input);
+    const rawBasename = decodeURIComponent(path21.basename(parsedUrl.pathname)) || "downloaded_model.safetensors";
+    const cleanFilename = DOWNLOAD_WEIGHT_EXTS.has(path21.extname(rawBasename).toLowerCase()) ? rawBasename : `${rawBasename}.safetensors`;
+    const inferred = inferSubfolderAndTypeFromPath(parsedUrl.pathname);
+    const suggestedLoraCategory = inferred.modelType === "lora" ? classifyLoraFromMetadata({
+      name: cleanFilename,
+      filename: cleanFilename
+    }) : null;
+    return annotateInstalledSearchResults([
+      {
+        provider: "direct",
+        id: cleanFilename,
+        name: cleanFilename.replace(/\.(safetensors|gguf|ckpt|pt|pth|bin|sft)$/i, ""),
+        modelType: inferred.modelType,
+        suggestedSubfolder: inferred.suggestedSubfolder,
+        suggestedLoraCategory,
+        versionName: "Direct URL",
+        filename: cleanFilename,
+        fileSize: null,
+        sha256Hash: null,
+        downloadUrl: input,
+        creator: parsedUrl.hostname,
+        description: `Direct download from ${parsedUrl.hostname}`,
+        availableFiles: [
+          {
+            rfilename: cleanFilename,
+            filename: cleanFilename,
+            fileSize: null,
+            sha256Hash: null,
+            downloadUrl: input,
+            modelType: inferred.modelType,
+            suggestedSubfolder: inferred.suggestedSubfolder
+          }
+        ],
+        totalRepoFilesCount: 1
+      }
+    ])[0];
+  }
+  throw new Error(
+    "Unrecognized URL or repository format. Paste a Civitai URL, Hugging Face URL/repo (owner/repo), or direct model file link."
+  );
+}
+async function smartSearchModels(query, typeFilter) {
+  const trimmed = query.trim();
+  if (/^https?:\/\//i.test(trimmed)) {
+    const resolved = await resolveDirectModelUrl(trimmed);
+    return [resolved];
+  }
+  const hfRepo = parseHuggingFaceRepoAndFile(trimmed);
+  if (hfRepo) {
+    const resolved = await resolveDirectModelUrl(trimmed);
+    return [resolved];
+  }
+  if (/^[a-fA-F0-9]{10,64}$/.test(trimmed)) {
+    const civitaiHashMatches = await searchCivitaiModels(trimmed, typeFilter);
+    if (civitaiHashMatches.length > 0) {
+      return civitaiHashMatches;
+    }
+  }
+  const shouldQueryCivitai = typeFilter !== "clip";
+  const [civitaiRes, hfRes] = await Promise.allSettled([
+    shouldQueryCivitai ? searchCivitaiModels(trimmed, typeFilter) : Promise.resolve([]),
+    searchHuggingFaceModels(trimmed, typeFilter)
+  ]);
+  const combined = [];
+  if (civitaiRes.status === "fulfilled") {
+    combined.push(...civitaiRes.value);
+  }
+  if (hfRes.status === "fulfilled") {
+    combined.push(...hfRes.value);
+  }
+  if (combined.length === 0 && civitaiRes.status === "rejected" && hfRes.status === "rejected") {
+    throw new Error(
+      civitaiRes.reason?.message || hfRes.reason?.message || "External model search failed"
+    );
+  }
+  return combined;
+}
+async function smartSearchModelsWithNotice(query, typeFilter) {
+  const trimmed = query.trim();
+  if (parseCivitaiShareUrl(trimmed)) {
+    return resolveCivitaiImageModelsForDownloader(trimmed, typeFilter);
+  }
+  const items = await smartSearchModels(query, typeFilter);
+  return { items, notice: null };
+}
+function abortActiveDownloadStream(jobId) {
+  cancelledDownloadJobIds.add(jobId);
+  const controller = activeDownloadControllers.get(jobId);
+  if (controller) {
+    controller.abort();
+    activeDownloadControllers.delete(jobId);
+    return true;
+  }
+  return false;
+}
+function abortAllActiveDownloadStreams() {
+  let count = 0;
+  for (const [jobId, controller] of activeDownloadControllers.entries()) {
+    cancelledDownloadJobIds.add(jobId);
+    controller.abort();
+    activeDownloadControllers.delete(jobId);
+    count += 1;
+  }
+  return count;
+}
+async function executeDownloadJob(jobId, params) {
+  const partPath = `${params.destinationPath}.part`;
+  cancelledDownloadJobIds.delete(jobId);
+  const abortController = new AbortController();
+  activeDownloadControllers.set(jobId, abortController);
+  let fileStream = null;
+  try {
+    fs23.mkdirSync(path21.dirname(params.destinationPath), { recursive: true });
+    const headers = {};
+    if (params.provider === "civitai" && appConfig.civitaiApiKey) {
+      headers.Authorization = `Bearer ${appConfig.civitaiApiKey}`;
+    } else if (params.provider === "huggingface" && appConfig.hfApiToken) {
+      headers.Authorization = `Bearer ${appConfig.hfApiToken}`;
+    }
+    let res = await fetch(params.sourceUrl, { headers, signal: abortController.signal });
+    if ((!res.ok || !res.body) && /^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(params.sourceUrl)) {
+      const altDomain = /civitai\.red/i.test(params.sourceUrl) ? "civitai.com" : "civitai.red";
+      const altUrl = rewriteCivitaiDownloadUrl(params.sourceUrl, altDomain);
+      const retryRes = await fetch(altUrl, { headers, signal: abortController.signal });
+      if (retryRes.ok && retryRes.body) {
+        res = retryRes;
+      }
+    }
+    if (!res.ok || !res.body) {
+      if ((res.status === 401 || res.status === 403) && params.provider === "civitai") {
+        let discoveredEndsAt = null;
+        try {
+          const urlVerMatch = params.sourceUrl.match(/\/api\/download\/models\/(\d+)/i);
+          const versionId = params.civitaiMeta?.civitaiVersionId || (urlVerMatch ? urlVerMatch[1] : null);
+          if (versionId) {
+            const preferredDomain = /civitai\.red/i.test(params.sourceUrl) ? "civitai.red" : "civitai.com";
+            const verRes = await fetchCivitaiJsonWithFallback(
+              `/api/v1/model-versions/${encodeURIComponent(String(versionId))}`,
+              getCivitaiHeaders(),
+              preferredDomain,
+              6e3,
+              { bypassCache: true }
+            );
+            if (verRes?.data) {
+              const ea = extractCivitaiEarlyAccessInfo(verRes.data);
+              if (ea.earlyAccessEndsAt && Date.parse(ea.earlyAccessEndsAt) > Date.now()) {
+                discoveredEndsAt = ea.earlyAccessEndsAt;
+                const row = db.prepare("SELECT payload_json FROM download_jobs WHERE id = ?").get(jobId);
+                if (row) {
+                  let existingPayload = {};
+                  try {
+                    existingPayload = row.payload_json ? JSON.parse(row.payload_json) : {};
+                  } catch {
+                    existingPayload = {};
+                  }
+                  existingPayload.earlyAccessEndsAt = discoveredEndsAt;
+                  db.prepare("UPDATE download_jobs SET payload_json = ? WHERE id = ?").run(
+                    JSON.stringify(existingPayload),
+                    jobId
+                  );
+                }
+              }
+            }
+          }
+        } catch {
+        }
+        const unlockHint = discoveredEndsAt ? `Early Access active until ${new Date(discoveredEndsAt).toLocaleString()} \u2014 click Schedule After Unlock below to queue it automatically.` : "Early Access or Creator permission required \u2014 check CIVITAI_API_KEY or wait until early access ends";
+        const authErr = new Error(`Civitai returned HTTP ${res.status} (${unlockHint})`);
+        authErr.httpStatus = res.status;
+        if (params.deferAuthErrorToCaller) {
+          throw authErr;
+        }
+        throw authErr;
+      }
+      throw new Error(`Download failed with HTTP ${res.status}`);
+    }
+    const totalBytes = Number(res.headers.get("content-length") || 0);
+    db.prepare("UPDATE download_jobs SET total_bytes = ? WHERE id = ?").run(totalBytes, jobId);
+    const hash = crypto8.createHash("sha256");
+    fileStream = fs23.createWriteStream(partPath);
+    let bytesDownloaded = 0;
+    let lastUpdate = Date.now();
+    const nodeReadable = Readable3.fromWeb(res.body);
+    for await (const chunk of nodeReadable) {
+      if (abortController.signal.aborted || cancelledDownloadJobIds.has(jobId)) {
+        nodeReadable.destroy();
+        throw new Error("Download cancelled by user.");
+      }
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      hash.update(buf);
+      fileStream.write(buf);
+      bytesDownloaded += buf.length;
+      if (Date.now() - lastUpdate > 400) {
+        db.prepare("UPDATE download_jobs SET bytes_downloaded = ? WHERE id = ?").run(
+          bytesDownloaded,
+          jobId
+        );
+        lastUpdate = Date.now();
+      }
+    }
+    await new Promise((resolve, reject) => {
+      fileStream.end((err) => err ? reject(err) : resolve());
+    });
+    fileStream = null;
+    if (abortController.signal.aborted || cancelledDownloadJobIds.has(jobId)) {
+      throw new Error("Download cancelled by user.");
+    }
+    const actualHash = hash.digest("hex").toUpperCase();
+    const expected = params.expectedHash ? params.expectedHash.trim().toUpperCase() : null;
+    const hashVerified = expected ? actualHash === expected || actualHash.startsWith(expected) : true;
+    if (expected && !hashVerified) {
+      fs23.unlinkSync(partPath);
+      throw new Error(`Hash mismatch: expected ${expected}, got ${actualHash}`);
+    }
+    fs23.renameSync(partPath, params.destinationPath);
+    db.prepare(
+      `UPDATE download_jobs
+       SET status = 'completed', bytes_downloaded = ?, actual_hash = ?,
+           hash_verified = ?, error_message = NULL, completed_at = datetime('now')
+       WHERE id = ?`
+    ).run(bytesDownloaded, actualHash, hashVerified ? 1 : 0, jobId);
+    const resolvedDest = path21.resolve(params.destinationPath);
+    const resolvedComfyModels = path21.resolve(appConfig.comfyuiModelsDir || "");
+    const downloadedDirectlyIntoComfy = Boolean(
+      resolvedComfyModels && (resolvedDest === resolvedComfyModels || resolvedDest.startsWith(resolvedComfyModels + path21.sep))
+    );
+    let resolvedLoraCategory = "unclassified";
+    if (params.effectiveModelType === "lora") {
+      const requestedCat = params.loraCategory && VALID_LORA_CATEGORIES.has(params.loraCategory) ? params.loraCategory : "unclassified";
+      resolvedLoraCategory = requestedCat !== "unclassified" ? requestedCat : classifySafetensorsHeaderOnDisk(params.destinationPath, {
+        name: params.modelName,
+        filename: params.safeFilename,
+        trainedWords: params.civitaiMeta?.trainedWords || [],
+        description: params.civitaiMeta?.civitaiDescription || null,
+        baseModel: params.civitaiMeta?.baseModel || null
+      });
+    }
+    db.prepare(
+      `INSERT INTO models
+        (name, filename, model_type, lora_category, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, download_url, hf_repo_id, download_file_path, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'filesystem', ?, ?, ?, datetime('now'))
+       ON CONFLICT(filename) DO UPDATE SET
+         model_type = excluded.model_type,
+         lora_category = CASE
+           WHEN excluded.lora_category <> 'unclassified' THEN excluded.lora_category
+           ELSE models.lora_category
+         END,
+         file_path = excluded.file_path,
+         file_size = excluded.file_size,
+         sha256_hash = excluded.sha256_hash,
+         autov2_hash = excluded.autov2_hash,
+         is_installed = excluded.is_installed,
+         download_url = excluded.download_url,
+         hf_repo_id = COALESCE(excluded.hf_repo_id, models.hf_repo_id),
+         download_file_path = excluded.download_file_path,
+         last_seen_at = datetime('now')`
+    ).run(
+      params.modelName,
+      params.safeFilename,
+      params.effectiveModelType,
+      resolvedLoraCategory,
+      params.destinationPath,
+      bytesDownloaded,
+      actualHash.toLowerCase(),
+      actualHash.slice(0, 10).toLowerCase(),
+      downloadedDirectlyIntoComfy ? 1 : 0,
+      params.sourceUrl,
+      params.hfRepoId || null,
+      downloadedDirectlyIntoComfy ? null : params.destinationPath
+    );
+    invalidateInstalledModelsCache();
+    invalidateStorageUsageStatsCache();
+    const savedRow = db.prepare("SELECT id FROM models WHERE LOWER(filename) = LOWER(?)").get(params.safeFilename);
+    if (savedRow && params.provider === "civitai") {
+      try {
+        if (params.civitaiMeta) {
+          const meta = {
+            civitaiId: params.civitaiMeta.civitaiId ?? null,
+            civitaiVersionId: params.civitaiMeta.civitaiVersionId ?? null,
+            civitaiUrl: params.civitaiMeta.civitaiUrl ?? null,
+            baseModel: params.civitaiMeta.baseModel ?? null,
+            trainedWords: Array.isArray(params.civitaiMeta.trainedWords) ? params.civitaiMeta.trainedWords : [],
+            recommendedWeight: params.civitaiMeta.recommendedWeight ?? null,
+            civitaiDescription: params.civitaiMeta.civitaiDescription ?? null,
+            previewImages: Array.isArray(params.civitaiMeta.previewImages) ? params.civitaiMeta.previewImages : []
+          };
+          const cacheKey = `m${savedRow.id}_${meta.civitaiVersionId || actualHash.slice(0, 10).toLowerCase()}`;
+          const cachedPreviews = await cacheModelPreviewImages(cacheKey, meta.previewImages);
+          applyCivitaiEnrichmentToModel(savedRow.id, meta, cachedPreviews);
+        } else {
+          await fetchAndEnrichModelFromCivitai(savedRow.id);
+        }
+      } catch {
+      }
+    }
+    await syncModelInventory();
+    if (params.effectiveModelType === "lora" && params.mentionAutomation && (params.mentionAutomation.mentionEnabled || params.mentionAutomation.nickname.trim())) {
+      const cleanNick = params.mentionAutomation.nickname.trim().replace(/^@+/, "").toLowerCase();
+      try {
+        updateLoraMentionConfig({
+          loraName: params.safeFilename,
+          mentionEnabled: params.mentionAutomation.mentionEnabled,
+          ...cleanNick ? { nickname: cleanNick } : {}
+        });
+      } catch (err) {
+        console.warn(
+          `[Download] Failed to apply @mention config for ${params.safeFilename}:`,
+          err
+        );
+      }
+    }
+    if (params.effectiveModelType === "lora" && resolvedLoraCategory === "character" && params.characterAutomation?.addCharacter) {
+      await handleDownloadedCharacterLoraAutomation({
+        downloadJobId: jobId,
+        loraFilename: params.safeFilename,
+        recommendedWeight: params.civitaiMeta?.recommendedWeight ?? null,
+        automation: params.characterAutomation
+      }).catch(() => {
+      });
+    }
+  } catch (err) {
+    if (fileStream) {
+      try {
+        fileStream.destroy();
+      } catch {
+      }
+    }
+    if (fs23.existsSync(partPath)) {
+      try {
+        fs23.unlinkSync(partPath);
+      } catch {
+      }
+    }
+    const wasCancelled = cancelledDownloadJobIds.has(jobId) || abortController.signal.aborted || err?.name === "AbortError";
+    if (wasCancelled) {
+      db.prepare(`DELETE FROM download_jobs WHERE id = ? AND status IN ('downloading', 'queued')`).run(
+        jobId
+      );
+      return;
+    }
+    if (params.deferAuthErrorToCaller && (err?.httpStatus === 401 || err?.httpStatus === 403)) {
+      throw err;
+    }
+    db.prepare(
+      `UPDATE download_jobs
+       SET status = 'failed', error_message = ?, completed_at = datetime('now')
+       WHERE id = ?`
+    ).run(err?.message || "Download error", jobId);
+  } finally {
+    activeDownloadControllers.delete(jobId);
+    cancelledDownloadJobIds.delete(jobId);
+  }
+}
+async function startConfirmedModelDownload(params) {
+  const safeFilename = path21.basename(params.filename.trim());
+  if (!safeFilename || safeFilename.startsWith(".")) {
+    throw new Error("Invalid destination filename.");
+  }
+  const defaultFolder = MODEL_TYPE_TO_DEFAULT_SUBFOLDER[params.modelType] || "checkpoints";
+  const safeSubfolder = (params.subfolder || defaultFolder).replace(/[^a-zA-Z0-9_-]/g, "").toLowerCase();
+  const effectiveModelType = SUBFOLDER_TO_MODEL_TYPE[safeSubfolder] || params.modelType;
+  const targetDir = path21.join(appConfig.downloadsDir, safeSubfolder);
+  const resolvedRoot = path21.resolve(appConfig.downloadsDir);
+  const resolvedTargetDir = path21.resolve(targetDir);
+  if (!resolvedTargetDir.startsWith(resolvedRoot)) {
+    throw new Error("Destination directory validation failed.");
+  }
+  fs23.mkdirSync(resolvedTargetDir, { recursive: true });
+  const destinationPath = path21.join(resolvedTargetDir, safeFilename);
+  if (fs23.existsSync(destinationPath) && !params.allowOverwrite) {
+    throw new Error(
+      `File "${safeFilename}" already exists in ${resolvedTargetDir}. Confirm overwrite explicitly to replace it.`
+    );
+  }
+  let scheduledIso = null;
+  if (params.scheduledFor && String(params.scheduledFor).trim()) {
+    const parsedMs = Date.parse(String(params.scheduledFor).trim());
+    if (!Number.isFinite(parsedMs)) {
+      throw new Error("Invalid scheduledFor timestamp.");
+    }
+    if (parsedMs > Date.now() + 5e3) {
+      scheduledIso = new Date(parsedMs).toISOString();
+    }
+  }
+  const normalizedLoraCategory = effectiveModelType === "lora" && params.loraCategory && VALID_LORA_CATEGORIES.has(params.loraCategory) ? params.loraCategory : null;
+  const normalizedCharacterAutomation = effectiveModelType === "lora" && normalizedLoraCategory === "character" && params.characterAutomation?.addCharacter ? {
+    addCharacter: true,
+    generateHeadshot: Boolean(params.characterAutomation.generateHeadshot),
+    characterName: String(params.characterAutomation.characterName || "").trim(),
+    triggerWord: String(params.characterAutomation.triggerWord || "").trim()
+  } : null;
+  const cleanMentionNick = effectiveModelType === "lora" && params.mentionAutomation?.nickname ? String(params.mentionAutomation.nickname).trim().replace(/^@+/, "").toLowerCase() : "";
+  const wantMentionEnabled = Boolean(
+    effectiveModelType === "lora" && params.mentionAutomation?.mentionEnabled
+  );
+  if (cleanMentionNick) {
+    const existingNick = db.prepare(`SELECT filename FROM models WHERE LOWER(nickname) = ? AND LOWER(filename) != LOWER(?)`).get(cleanMentionNick, safeFilename);
+    if (existingNick) {
+      throw new Error(
+        `Mention tag "@${cleanMentionNick}" is already assigned to ${existingNick.filename}.`
+      );
+    }
+  }
+  const normalizedMentionAutomation = wantMentionEnabled || cleanMentionNick ? {
+    mentionEnabled: wantMentionEnabled,
+    nickname: cleanMentionNick
+  } : null;
+  const payloadJson = JSON.stringify({
+    subfolder: safeSubfolder,
+    allowOverwrite: Boolean(params.allowOverwrite),
+    hfRepoId: params.hfRepoId || null,
+    civitaiMeta: params.civitaiMeta || null,
+    loraCategory: normalizedLoraCategory,
+    characterAutomation: normalizedCharacterAutomation,
+    mentionAutomation: normalizedMentionAutomation,
+    retryCount: 0
+  });
+  const initialStatus = scheduledIso ? "scheduled" : "downloading";
+  const info = db.prepare(
+    `INSERT INTO download_jobs
+        (provider, model_name, model_type, source_url, destination_path, expected_hash, status, scheduled_for, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    params.provider,
+    params.modelName,
+    effectiveModelType,
+    params.sourceUrl,
+    destinationPath,
+    params.expectedHash || null,
+    initialStatus,
+    scheduledIso,
+    payloadJson
+  );
+  const jobId = Number(info.lastInsertRowid);
+  if (!scheduledIso) {
+    setImmediate(() => {
+      executeDownloadJob(jobId, {
+        provider: params.provider,
+        modelName: params.modelName,
+        safeFilename,
+        effectiveModelType,
+        destinationPath,
+        sourceUrl: params.sourceUrl,
+        expectedHash: params.expectedHash || null,
+        hfRepoId: params.hfRepoId || null,
+        civitaiMeta: params.civitaiMeta || null,
+        loraCategory: normalizedLoraCategory,
+        characterAutomation: normalizedCharacterAutomation,
+        mentionAutomation: normalizedMentionAutomation
+      }).catch(() => {
+      });
+    });
+  }
+  return db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(jobId);
+}
+var activeDownloadControllers, cancelledDownloadJobIds;
+var init_modelManagerService = __esm({
+  "src/server/services/modelManagerService.ts"() {
+    init_db();
+    init_config();
+    init_modelInventoryService();
+    init_modelDownloadPaths();
+    init_huggingFaceMetadataService();
+    init_civitaiHttpAndParse();
+    init_civitaiModelEnrichmentService();
+    init_civitaiImageShareService();
+    init_storageStatsService();
+    init_loraClassifierService();
+    init_characterDownloadAutomationService();
+    init_pillSettings();
+    activeDownloadControllers = /* @__PURE__ */ new Map();
+    cancelledDownloadJobIds = /* @__PURE__ */ new Set();
+  }
+});
+
+// src/server/services/downloadSchedulerService.ts
+var downloadSchedulerService_exports = {};
+__export(downloadSchedulerService_exports, {
+  cancelScheduledDownload: () => cancelScheduledDownload,
+  processDueScheduledDownloads: () => processDueScheduledDownloads,
+  rescheduleFailedDownload: () => rescheduleFailedDownload,
+  runScheduledDownloadNow: () => runScheduledDownloadNow,
+  startDownloadScheduler: () => startDownloadScheduler
+});
+import fs24 from "fs";
+import path22 from "path";
+function parseJobPayload(raw) {
+  if (!raw) {
+    return { subfolder: "checkpoints", allowOverwrite: false, retryCount: 0 };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    const rawCategory = parsed?.loraCategory;
+    const loraCategory = typeof rawCategory === "string" && VALID_LORA_CATEGORIES.has(rawCategory) ? rawCategory : null;
+    return {
+      subfolder: parsed?.subfolder || "checkpoints",
+      allowOverwrite: Boolean(parsed?.allowOverwrite),
+      hfRepoId: parsed?.hfRepoId ?? null,
+      civitaiMeta: parsed?.civitaiMeta ?? null,
+      loraCategory,
+      characterAutomation: parsed?.characterAutomation ?? null,
+      mentionAutomation: parsed?.mentionAutomation ?? null,
+      retryCount: typeof parsed?.retryCount === "number" ? parsed.retryCount : 0
+    };
+  } catch {
+    return { subfolder: "checkpoints", allowOverwrite: false, retryCount: 0 };
+  }
+}
+async function refreshCivitaiScheduledMetadata(job, payload) {
+  let sourceUrl = String(job.source_url || "");
+  let expectedHash = job.expected_hash || null;
+  const versionId = payload.civitaiMeta?.civitaiVersionId;
+  if (job.provider !== "civitai" || !versionId) {
+    return { rescheduledUntil: null, sourceUrl, expectedHash };
+  }
+  const preferredDomain = String(
+    payload.civitaiMeta?.civitaiUrl || sourceUrl
+  ).includes("civitai.red") ? "civitai.red" : "civitai.com";
+  try {
+    const verRes = await fetchCivitaiJsonWithFallback(
+      `/api/v1/model-versions/${encodeURIComponent(String(versionId))}`,
+      getCivitaiHeaders(),
+      preferredDomain,
+      9e3,
+      { bypassCache: true }
+    );
+    if (!verRes?.data) {
+      return { rescheduledUntil: null, sourceUrl, expectedHash };
+    }
+    const freshVer = verRes.data;
+    const earlyAccess = extractCivitaiEarlyAccessInfo(freshVer);
+    if (earlyAccess.earlyAccessEndsAt && Date.parse(earlyAccess.earlyAccessEndsAt) > Date.now()) {
+      const nextIso = new Date(Date.parse(earlyAccess.earlyAccessEndsAt) + 6e4).toISOString();
+      return { rescheduledUntil: nextIso, sourceUrl, expectedHash };
+    }
+    const domain = resolveCivitaiDomain(null, freshVer, verRes.domain);
+    const files = extractCivitaiVersionFiles(
+      freshVer,
+      String(freshVer?.model?.type || job.model_type || "LORA"),
+      freshVer.baseModel,
+      domain
+    );
+    const targetBasename = path22.basename(String(job.destination_path || "")).toLowerCase();
+    const matched = files.find((f) => f.filename.toLowerCase() === targetBasename) || files[0];
+    if (matched) {
+      sourceUrl = matched.downloadUrl;
+      expectedHash = matched.sha256Hash || expectedHash;
+    }
+  } catch {
+  }
+  return { rescheduledUntil: null, sourceUrl, expectedHash };
+}
+async function runClaimedScheduledJob(job, skipEarlyAccessRefresh = false) {
+  const payload = parseJobPayload(job.payload_json);
+  const destinationPath = String(job.destination_path || "");
+  const safeFilename = path22.basename(destinationPath);
+  if (fs24.existsSync(destinationPath) && !payload.allowOverwrite) {
+    db.prepare(
+      `UPDATE download_jobs
+       SET status = 'failed', error_message = ?, completed_at = datetime('now')
+       WHERE id = ?`
+    ).run(`File "${safeFilename}" already exists and overwrite was not enabled.`, job.id);
+    return;
+  }
+  let sourceUrl = String(job.source_url || "");
+  let expectedHash = job.expected_hash || null;
+  if (!skipEarlyAccessRefresh && job.provider === "civitai") {
+    const refreshed = await refreshCivitaiScheduledMetadata(job, payload);
+    if (refreshed.rescheduledUntil) {
+      db.prepare(
+        `UPDATE download_jobs
+         SET status = 'scheduled', scheduled_for = ?, error_message = ?
+         WHERE id = ?`
+      ).run(
+        refreshed.rescheduledUntil,
+        "Creator extended Civitai Early Access end time; rescheduled automatically.",
+        job.id
+      );
+      logger.info("Scheduler", `Rescheduled job #${job.id} (${safeFilename}) until ${refreshed.rescheduledUntil}`);
+      return;
+    }
+    sourceUrl = refreshed.sourceUrl;
+    expectedHash = refreshed.expectedHash;
+    if (sourceUrl !== job.source_url || expectedHash !== job.expected_hash) {
+      db.prepare("UPDATE download_jobs SET source_url = ?, expected_hash = ? WHERE id = ?").run(
+        sourceUrl,
+        expectedHash,
+        job.id
+      );
+    }
+  }
+  try {
+    await executeDownloadJob(job.id, {
+      provider: job.provider,
+      modelName: job.model_name,
+      safeFilename,
+      effectiveModelType: job.model_type,
+      destinationPath,
+      sourceUrl,
+      expectedHash,
+      hfRepoId: payload.hfRepoId || null,
+      civitaiMeta: payload.civitaiMeta || null,
+      loraCategory: payload.loraCategory ?? null,
+      characterAutomation: payload.characterAutomation ?? null,
+      mentionAutomation: payload.mentionAutomation ?? null,
+      deferAuthErrorToCaller: !skipEarlyAccessRefresh
+    });
+  } catch (err) {
+    const retryCount = payload.retryCount || 0;
+    if ((err?.httpStatus === 401 || err?.httpStatus === 403) && retryCount < MAX_UNLOCK_RETRIES) {
+      const nextRetry = retryCount + 1;
+      const nextSchedule = new Date(Date.now() + RETRY_DELAY_MS).toISOString();
+      const nextPayload = JSON.stringify({ ...payload, retryCount: nextRetry });
+      db.prepare(
+        `UPDATE download_jobs
+         SET status = 'scheduled', scheduled_for = ?, payload_json = ?, error_message = ?
+         WHERE id = ?`
+      ).run(
+        nextSchedule,
+        nextPayload,
+        `Waiting for Civitai unlock propagation; retrying in 5m (${nextRetry}/${MAX_UNLOCK_RETRIES}).`,
+        job.id
+      );
+      return;
+    }
+    db.prepare(
+      `UPDATE download_jobs
+       SET status = 'failed', error_message = ?, completed_at = datetime('now')
+       WHERE id = ?`
+    ).run(err?.message || "Scheduled download failed", job.id);
+  }
+}
+async function processDueScheduledDownloads() {
+  if (isProcessingDueJobs) return;
+  isProcessingDueJobs = true;
+  try {
+    const scheduledRows = db.prepare(
+      `SELECT * FROM download_jobs
+         WHERE status = 'scheduled' AND scheduled_for IS NOT NULL
+         ORDER BY scheduled_for ASC`
+    ).all();
+    const nowMs = Date.now();
+    for (const job of scheduledRows) {
+      const dueMs = Date.parse(String(job.scheduled_for || ""));
+      if (!Number.isFinite(dueMs) || dueMs > nowMs) continue;
+      const claim = db.prepare(
+        `UPDATE download_jobs
+           SET status = 'downloading', error_message = NULL
+           WHERE id = ? AND status = 'scheduled'`
+      ).run(job.id);
+      if (claim.changes !== 1) continue;
+      logger.info("Scheduler", `Triggering scheduled download job #${job.id} (${job.model_name})`);
+      await runClaimedScheduledJob(job, false);
+    }
+  } catch (err) {
+    logger.error("Scheduler", "Scheduled download tick failed", err);
+  } finally {
+    isProcessingDueJobs = false;
+  }
+}
+function runScheduledDownloadNow(jobId) {
+  const job = db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(jobId);
+  if (!job) {
+    throw new Error("Download job not found.");
+  }
+  if (job.status !== "scheduled") {
+    throw new Error(`Only scheduled jobs can be started manually (current status: ${job.status}).`);
+  }
+  const claim = db.prepare(
+    `UPDATE download_jobs
+       SET status = 'downloading', scheduled_for = NULL, error_message = NULL
+       WHERE id = ? AND status = 'scheduled'`
+  ).run(jobId);
+  if (claim.changes !== 1) {
+    throw new Error("Scheduled download could not be claimed.");
+  }
+  const updated = db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(jobId);
+  setImmediate(() => {
+    runClaimedScheduledJob(job, true).catch(() => {
+    });
+  });
+  return updated;
+}
+function cancelScheduledDownload(jobId) {
+  const job = db.prepare("SELECT id, status FROM download_jobs WHERE id = ?").get(jobId);
+  if (!job) {
+    throw new Error("Download job not found.");
+  }
+  if (job.status !== "scheduled") {
+    throw new Error(`Only scheduled downloads can be cancelled (current status: ${job.status}).`);
+  }
+  db.prepare(`DELETE FROM download_jobs WHERE id = ? AND status = 'scheduled'`).run(jobId);
+  return { ok: true, deletedId: jobId };
+}
+async function rescheduleFailedDownload(jobId, explicitScheduledFor) {
+  const job = db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(jobId);
+  if (!job) {
+    throw new Error("Download job not found.");
+  }
+  if (job.status !== "failed") {
+    throw new Error(`Only failed jobs can be rescheduled (current status: ${job.status}).`);
+  }
+  let targetIso = null;
+  if (explicitScheduledFor && Date.parse(explicitScheduledFor) > Date.now() + 5e3) {
+    targetIso = new Date(Date.parse(explicitScheduledFor)).toISOString();
+  }
+  const payload = parseJobPayload(job.payload_json);
+  try {
+    const rawParsed = job.payload_json ? JSON.parse(job.payload_json) : {};
+    if (!targetIso && rawParsed?.earlyAccessEndsAt && Date.parse(rawParsed.earlyAccessEndsAt) > Date.now()) {
+      targetIso = new Date(Date.parse(rawParsed.earlyAccessEndsAt) + 6e4).toISOString();
+    }
+  } catch {
+  }
+  if (!targetIso && job.provider === "civitai") {
+    const urlVerMatch = String(job.source_url || "").match(/\/api\/download\/models\/(\d+)/i);
+    const versionId = payload.civitaiMeta?.civitaiVersionId || (urlVerMatch ? urlVerMatch[1] : null);
+    if (versionId) {
+      const preferredDomain = String(job.source_url || "").includes("civitai.red") ? "civitai.red" : "civitai.com";
+      const verRes = await fetchCivitaiJsonWithFallback(
+        `/api/v1/model-versions/${encodeURIComponent(String(versionId))}`,
+        getCivitaiHeaders(),
+        preferredDomain,
+        8e3,
+        { bypassCache: true }
+      );
+      if (verRes?.data) {
+        const ea = extractCivitaiEarlyAccessInfo(verRes.data);
+        if (ea.earlyAccessEndsAt && Date.parse(ea.earlyAccessEndsAt) > Date.now()) {
+          targetIso = new Date(Date.parse(ea.earlyAccessEndsAt) + 6e4).toISOString();
+        }
+      }
+    }
+  }
+  if (!targetIso) {
+    targetIso = new Date(Date.now() + 60 * 6e4).toISOString();
+  }
+  const nextPayload = JSON.stringify({ ...payload, retryCount: 0 });
+  db.prepare(
+    `UPDATE download_jobs
+     SET status = 'scheduled', scheduled_for = ?, payload_json = ?, error_message = NULL, completed_at = NULL
+     WHERE id = ?`
+  ).run(targetIso, nextPayload, jobId);
+  return db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(jobId);
+}
+function startDownloadScheduler() {
+  if (schedulerTimer) return schedulerTimer;
+  setTimeout(() => {
+    processDueScheduledDownloads().catch(() => {
+    });
+  }, 3e3);
+  schedulerTimer = setInterval(() => {
+    processDueScheduledDownloads().catch(() => {
+    });
+  }, SCHEDULER_INTERVAL_MS);
+  return schedulerTimer;
+}
+var SCHEDULER_INTERVAL_MS, MAX_UNLOCK_RETRIES, RETRY_DELAY_MS, isProcessingDueJobs, schedulerTimer;
+var init_downloadSchedulerService = __esm({
+  "src/server/services/downloadSchedulerService.ts"() {
+    init_db();
+    init_logger();
+    init_civitaiHttpAndParse();
+    init_modelManagerService();
+    init_pillSettings();
+    SCHEDULER_INTERVAL_MS = 3e4;
+    MAX_UNLOCK_RETRIES = 3;
+    RETRY_DELAY_MS = 5 * 6e4;
+    isProcessingDueJobs = false;
+    schedulerTimer = null;
+  }
+});
+
+// src/server/services/modelRedownloadService.ts
+import fs25 from "fs";
+import path23 from "path";
+async function drainRedownloadQueue() {
+  if (isProcessingRedownloadQueue) return;
+  isProcessingRedownloadQueue = true;
+  try {
+    while (redownloadQueue.length > 0) {
+      const next = redownloadQueue.shift();
+      if (!next) break;
+      const claim = db.prepare(
+        `UPDATE download_jobs
+           SET status = 'downloading', error_message = NULL
+           WHERE id = ? AND status IN ('queued', 'downloading')`
+      ).run(next.jobId);
+      if (claim.changes === 0) continue;
+      try {
+        await executeDownloadJob(next.jobId, next.execParams);
+      } catch (err) {
+        logger.warn(
+          "Downloader",
+          `Sequential redownload job #${next.jobId} (${next.execParams.safeFilename}) failed`,
+          err
+        );
+      }
+    }
+  } finally {
+    isProcessingRedownloadQueue = false;
+  }
+}
+function fileExistsWithSize(filePath) {
+  if (!filePath || typeof filePath !== "string") return false;
+  try {
+    const st = fs25.statSync(filePath);
+    return st.isFile() && st.size > 0;
+  } catch {
+    return false;
+  }
+}
+function inferProvider(sourceUrl, civitaiId, civitaiVersionId, hfRepoId, jobProvider) {
+  if (jobProvider === "civitai" || jobProvider === "huggingface") {
+    return jobProvider;
+  }
+  const url = String(sourceUrl || "").toLowerCase();
+  if (url.includes("civitai.com") || url.includes("civitai.red") || civitaiId || civitaiVersionId) {
+    return "civitai";
+  }
+  if (url.includes("huggingface.co") || hfRepoId) {
+    return "huggingface";
+  }
+  return null;
+}
+function resolveFallbackDownloadUrl(params) {
+  if (params.directUrl && /^https?:\/\//i.test(params.directUrl.trim())) {
+    return params.directUrl.trim();
+  }
+  if (params.jobUrl && /^https?:\/\//i.test(params.jobUrl.trim())) {
+    return params.jobUrl.trim();
+  }
+  if (params.civitaiVersionId && String(params.civitaiVersionId).trim()) {
+    const verId = String(params.civitaiVersionId).trim();
+    const domain = String(params.civitaiUrl || "").includes("civitai.red") ? "civitai.red" : "civitai.com";
+    return `https://${domain}/api/download/models/${encodeURIComponent(verId)}`;
+  }
+  if (params.hfRepoId && String(params.hfRepoId).trim()) {
+    const repo = String(params.hfRepoId).trim().replace(/^\/+|\/+$/g, "");
+    return `https://huggingface.co/${repo}/resolve/main/${encodeURIComponent(params.filename)}`;
+  }
+  return null;
+}
+function listMissingRedownloadCandidates() {
+  const activeDownloadingJobs = db.prepare(
+    `SELECT destination_path FROM download_jobs WHERE status IN ('downloading', 'queued')`
+  ).all();
+  const activeFilenames = new Set(
+    activeDownloadingJobs.map((j) => path23.basename(String(j.destination_path || "")).toLowerCase()).filter(Boolean)
+  );
+  const allJobs = db.prepare(
+    `SELECT * FROM download_jobs
+       WHERE provider IN ('civitai', 'huggingface')
+       ORDER BY id DESC`
+  ).all();
+  const latestJobByFilename = /* @__PURE__ */ new Map();
+  for (const job of allJobs) {
+    const dest = String(job.destination_path || "");
+    const fname = path23.basename(dest).toLowerCase();
+    if (fname && !latestJobByFilename.has(fname)) {
+      latestJobByFilename.set(fname, job);
+    }
+  }
+  const modelsRows = db.prepare(
+    `SELECT id, name, filename, model_type, lora_category, file_path, download_file_path,
+              sha256_hash, is_installed, COALESCE(is_hidden, 0) AS is_hidden,
+              download_url, civitai_id, civitai_version_id, civitai_url, hf_repo_id
+       FROM models`
+  ).all();
+  const candidates = /* @__PURE__ */ new Map();
+  for (const m of modelsRows) {
+    if (m.is_hidden) continue;
+    const safeFilename = path23.basename(String(m.filename || "").trim());
+    if (!safeFilename) continue;
+    const key = safeFilename.toLowerCase();
+    if (activeFilenames.has(key)) continue;
+    const matchingJob = latestJobByFilename.get(key) || null;
+    const modelType = m.model_type || "lora";
+    const defaultSubfolder = MODEL_TYPE_TO_DEFAULT_SUBFOLDER[modelType] || "loras";
+    const expectedDownloadPath = path23.join(appConfig.downloadsDir, defaultSubfolder, safeFilename);
+    const existsOnDisk = fileExistsWithSize(m.file_path) || fileExistsWithSize(m.download_file_path) || fileExistsWithSize(matchingJob?.destination_path) || fileExistsWithSize(expectedDownloadPath);
+    if (existsOnDisk) continue;
+    let jobPayload = null;
+    if (matchingJob?.payload_json) {
+      try {
+        jobPayload = JSON.parse(matchingJob.payload_json);
+      } catch {
+        jobPayload = null;
+      }
+    }
+    const provider = inferProvider(
+      m.download_url || matchingJob?.source_url,
+      m.civitai_id,
+      m.civitai_version_id || jobPayload?.civitaiMeta?.civitaiVersionId,
+      m.hf_repo_id || jobPayload?.hfRepoId,
+      matchingJob?.provider
+    );
+    if (!provider) continue;
+    const sourceUrl = resolveFallbackDownloadUrl({
+      directUrl: m.download_url,
+      jobUrl: matchingJob?.source_url || null,
+      civitaiVersionId: m.civitai_version_id || jobPayload?.civitaiMeta?.civitaiVersionId || null,
+      civitaiUrl: m.civitai_url || jobPayload?.civitaiMeta?.civitaiUrl || null,
+      hfRepoId: m.hf_repo_id || jobPayload?.hfRepoId || null,
+      filename: safeFilename
+    });
+    if (!sourceUrl) continue;
+    const subfolder = jobPayload?.subfolder || defaultSubfolder;
+    const loraCategory = m.lora_category && VALID_LORA_CATEGORIES.has(m.lora_category) ? m.lora_category : jobPayload?.loraCategory || null;
+    candidates.set(key, {
+      key,
+      filename: safeFilename,
+      modelName: m.name || matchingJob?.model_name || safeFilename,
+      modelType,
+      subfolder,
+      provider,
+      sourceUrl,
+      expectedHash: m.sha256_hash || matchingJob?.expected_hash || matchingJob?.actual_hash || null,
+      hfRepoId: m.hf_repo_id || jobPayload?.hfRepoId || null,
+      loraCategory,
+      civitaiMeta: jobPayload?.civitaiMeta || null,
+      modelId: m.id,
+      lastJobId: matchingJob?.id ?? null
+    });
+  }
+  for (const [key, job] of latestJobByFilename.entries()) {
+    if (candidates.has(key) || activeFilenames.has(key)) continue;
+    if (job.status === "scheduled" || job.status === "downloading" || job.status === "queued") {
+      continue;
+    }
+    const destPath = String(job.destination_path || "");
+    const safeFilename = path23.basename(destPath);
+    if (!safeFilename) continue;
+    if (fileExistsWithSize(destPath)) continue;
+    const existingModel = modelsRows.find((m) => m.filename.toLowerCase() === key);
+    if (existingModel?.is_hidden) continue;
+    if (existingModel && (fileExistsWithSize(existingModel.file_path) || fileExistsWithSize(existingModel.download_file_path))) {
+      continue;
+    }
+    let jobPayload = null;
+    if (job.payload_json) {
+      try {
+        jobPayload = JSON.parse(job.payload_json);
+      } catch {
+        jobPayload = null;
+      }
+    }
+    const provider = inferProvider(
+      job.source_url,
+      jobPayload?.civitaiMeta?.civitaiId,
+      jobPayload?.civitaiMeta?.civitaiVersionId,
+      jobPayload?.hfRepoId,
+      job.provider
+    );
+    if (!provider) continue;
+    const sourceUrl = resolveFallbackDownloadUrl({
+      directUrl: null,
+      jobUrl: job.source_url || null,
+      civitaiVersionId: jobPayload?.civitaiMeta?.civitaiVersionId || null,
+      civitaiUrl: jobPayload?.civitaiMeta?.civitaiUrl || null,
+      hfRepoId: jobPayload?.hfRepoId || null,
+      filename: safeFilename
+    });
+    if (!sourceUrl) continue;
+    const modelType = job.model_type || "lora";
+    const defaultSubfolder = MODEL_TYPE_TO_DEFAULT_SUBFOLDER[modelType] || "loras";
+    const subfolder = jobPayload?.subfolder || defaultSubfolder;
+    candidates.set(key, {
+      key,
+      filename: safeFilename,
+      modelName: job.model_name || safeFilename,
+      modelType,
+      subfolder,
+      provider,
+      sourceUrl,
+      expectedHash: job.expected_hash || job.actual_hash || null,
+      hfRepoId: jobPayload?.hfRepoId || null,
+      loraCategory: jobPayload?.loraCategory || null,
+      civitaiMeta: jobPayload?.civitaiMeta || null,
+      modelId: existingModel?.id ?? null,
+      lastJobId: job.id
+    });
+  }
+  return Array.from(candidates.values());
+}
+function createQueuedRedownloadTask(candidate) {
+  const safeSubfolder = candidate.subfolder || MODEL_TYPE_TO_DEFAULT_SUBFOLDER[candidate.modelType] || "loras";
+  const effectiveModelType = SUBFOLDER_TO_MODEL_TYPE[safeSubfolder] || candidate.modelType;
+  const targetDir = path23.resolve(path23.join(appConfig.downloadsDir, safeSubfolder));
+  fs25.mkdirSync(targetDir, { recursive: true });
+  const destinationPath = path23.join(targetDir, candidate.filename);
+  const payloadJson = JSON.stringify({
+    subfolder: safeSubfolder,
+    allowOverwrite: true,
+    hfRepoId: candidate.hfRepoId || null,
+    civitaiMeta: candidate.civitaiMeta || null,
+    loraCategory: candidate.loraCategory || null,
+    characterAutomation: null,
+    mentionAutomation: null,
+    retryCount: 0
+  });
+  db.prepare(
+    `DELETE FROM download_jobs
+     WHERE LOWER(destination_path) = LOWER(?)
+       AND status IN ('queued', 'downloading')
+       AND bytes_downloaded = 0`
+  ).run(destinationPath);
+  const info = db.prepare(
+    `INSERT INTO download_jobs
+        (provider, model_name, model_type, source_url, destination_path, expected_hash, status, scheduled_for, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, ?)`
+  ).run(
+    candidate.provider,
+    candidate.modelName,
+    effectiveModelType,
+    candidate.sourceUrl,
+    destinationPath,
+    candidate.expectedHash || null,
+    payloadJson
+  );
+  const jobId = Number(info.lastInsertRowid);
+  const job = db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(jobId);
+  return {
+    job,
+    task: {
+      jobId,
+      execParams: {
+        provider: candidate.provider,
+        modelName: candidate.modelName,
+        safeFilename: candidate.filename,
+        effectiveModelType,
+        destinationPath,
+        sourceUrl: candidate.sourceUrl,
+        expectedHash: candidate.expectedHash || null,
+        hfRepoId: candidate.hfRepoId || null,
+        civitaiMeta: candidate.civitaiMeta || null,
+        loraCategory: candidate.loraCategory || null,
+        characterAutomation: null,
+        mentionAutomation: null
+      }
+    }
+  };
+}
+function adoptStuckOrOrphanedJobs() {
+  const inMemoryIds = new Set(redownloadQueue.map((t) => t.jobId));
+  const stuckRows = db.prepare(
+    `SELECT * FROM download_jobs
+       WHERE status IN ('queued', 'downloading')
+         AND provider IN ('civitai', 'huggingface')
+       ORDER BY id DESC`
+  ).all();
+  let adoptedCount = 0;
+  for (const row of stuckRows) {
+    if (inMemoryIds.has(Number(row.id))) continue;
+    if (isProcessingRedownloadQueue && row.status === "downloading" && Number(row.bytes_downloaded) > 0) {
+      continue;
+    }
+    const destPath = String(row.destination_path || "");
+    const safeFilename = path23.basename(destPath);
+    if (!safeFilename) continue;
+    if (fileExistsWithSize(destPath)) {
+      db.prepare(
+        `UPDATE download_jobs SET status = 'completed', completed_at = datetime('now') WHERE id = ?`
+      ).run(row.id);
+      continue;
+    }
+    let payload = null;
+    if (row.payload_json) {
+      try {
+        payload = JSON.parse(row.payload_json);
+      } catch {
+        payload = null;
+      }
+    }
+    db.prepare(`UPDATE download_jobs SET status = 'queued' WHERE id = ?`).run(row.id);
+    redownloadQueue.push({
+      jobId: Number(row.id),
+      execParams: {
+        provider: row.provider,
+        modelName: row.model_name || safeFilename,
+        safeFilename,
+        effectiveModelType: row.model_type || "lora",
+        destinationPath: destPath,
+        sourceUrl: String(row.source_url || ""),
+        expectedHash: row.expected_hash || null,
+        hfRepoId: payload?.hfRepoId || null,
+        civitaiMeta: payload?.civitaiMeta || null,
+        loraCategory: payload?.loraCategory || null,
+        characterAutomation: null,
+        mentionAutomation: null
+      }
+    });
+    adoptedCount += 1;
+  }
+  return adoptedCount;
+}
+function startRedownloadMissingModels(options) {
+  const adoptedCount = !options?.onlyJobId && !options?.onlyFilename ? adoptStuckOrOrphanedJobs() : 0;
+  let candidates = listMissingRedownloadCandidates();
+  if (options?.onlyJobId) {
+    const targetJob = db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(options.onlyJobId);
+    const targetFname = targetJob ? path23.basename(String(targetJob.destination_path || "")).toLowerCase() : "";
+    candidates = candidates.filter(
+      (c) => c.lastJobId === options.onlyJobId || targetFname && c.key === targetFname
+    );
+  } else if (options?.onlyFilename) {
+    const targetKey = path23.basename(options.onlyFilename.trim()).toLowerCase();
+    candidates = candidates.filter((c) => c.key === targetKey);
+  }
+  const createdJobs = [];
+  const createdTasks = [];
+  for (const candidate of candidates) {
+    const { job, task } = createQueuedRedownloadTask(candidate);
+    if (job) createdJobs.push(job);
+    createdTasks.push(task);
+  }
+  createdTasks.reverse();
+  redownloadQueue.unshift(...createdTasks);
+  setImmediate(() => {
+    drainRedownloadQueue().catch(() => {
+    });
+  });
+  return {
+    queuedCount: createdJobs.length + adoptedCount,
+    jobs: createdJobs
+  };
+}
+function ensureRedownloadQueueRunning() {
+  if (isProcessingRedownloadQueue) return;
+  const adopted = adoptStuckOrOrphanedJobs();
+  if (adopted > 0 || redownloadQueue.length > 0) {
+    setImmediate(() => {
+      drainRedownloadQueue().catch(() => {
+      });
+    });
+  }
+}
+function cancelDownloadJob(jobId) {
+  const job = db.prepare("SELECT id, status, destination_path FROM download_jobs WHERE id = ?").get(jobId);
+  if (!job) {
+    throw new Error("Download job not found.");
+  }
+  if (!["downloading", "queued", "scheduled"].includes(job.status)) {
+    throw new Error(`Cannot cancel a download with status "${job.status}".`);
+  }
+  for (let i = redownloadQueue.length - 1; i >= 0; i -= 1) {
+    if (redownloadQueue[i].jobId === jobId) {
+      redownloadQueue.splice(i, 1);
+    }
+  }
+  abortActiveDownloadStream(jobId);
+  if (job.destination_path) {
+    const partPath = `${job.destination_path}.part`;
+    if (fs25.existsSync(partPath)) {
+      try {
+        fs25.unlinkSync(partPath);
+      } catch {
+      }
+    }
+  }
+  db.prepare(`DELETE FROM download_jobs WHERE id = ?`).run(jobId);
+  return { ok: true, deletedId: jobId };
+}
+function cancelAllActiveAndQueuedDownloads() {
+  redownloadQueue.length = 0;
+  const activeOrQueuedRows = db.prepare(
+    `SELECT id, destination_path FROM download_jobs WHERE status IN ('downloading', 'queued')`
+  ).all();
+  abortAllActiveDownloadStreams();
+  for (const row of activeOrQueuedRows) {
+    abortActiveDownloadStream(row.id);
+    if (row.destination_path) {
+      const partPath = `${row.destination_path}.part`;
+      if (fs25.existsSync(partPath)) {
+        try {
+          fs25.unlinkSync(partPath);
+        } catch {
+        }
+      }
+    }
+  }
+  const info = db.prepare(`DELETE FROM download_jobs WHERE status IN ('downloading', 'queued')`).run();
+  return { ok: true, cancelledCount: Number(info.changes || activeOrQueuedRows.length) };
+}
+var redownloadQueue, isProcessingRedownloadQueue;
+var init_modelRedownloadService = __esm({
+  "src/server/services/modelRedownloadService.ts"() {
+    init_db();
+    init_config();
+    init_logger();
+    init_modelDownloadPaths();
+    init_modelManagerService();
+    init_pillSettings();
+    redownloadQueue = [];
+    isProcessingRedownloadQueue = false;
+  }
+});
+
+// src/server/routes/modelDownloadsRoutes.ts
+import { Router as Router5 } from "express";
+import path24 from "path";
+var modelDownloadsRouter;
+var init_modelDownloadsRoutes = __esm({
+  "src/server/routes/modelDownloadsRoutes.ts"() {
+    init_db();
+    init_civitaiHttpAndParse();
+    init_huggingFaceMetadataService();
+    init_civitaiModelEnrichmentService();
+    init_modelManagerService();
+    init_downloadSchedulerService();
+    init_modelRedownloadService();
+    init_pillSettings();
+    modelDownloadsRouter = Router5();
+    modelDownloadsRouter.get("/models/search", async (req, res) => {
+      try {
+        const q = String(req.query.q || "");
+        const type = String(req.query.type || "");
+        const result = await smartSearchModelsWithNotice(q, type);
+        res.json({ items: result.items, notice: result.notice ?? null });
+      } catch (err) {
+        const status = Number(err?.statusCode) || 502;
+        res.status(status).json({ error: err?.message || "Model search failed" });
+      }
+    });
+    modelDownloadsRouter.get("/models/search/civitai", async (req, res) => {
+      try {
+        const q = String(req.query.q || "");
+        const type = String(req.query.type || "");
+        const items = await searchCivitaiModels(q, type);
+        res.json({ items });
+      } catch (err) {
+        res.status(502).json({ error: err?.message || "Civitai search failed" });
+      }
+    });
+    modelDownloadsRouter.get("/models/search/huggingface", async (req, res) => {
+      try {
+        const q = String(req.query.q || "");
+        const items = await searchHuggingFaceModels(q);
+        res.json({ items });
+      } catch (err) {
+        res.status(502).json({ error: err?.message || "Hugging Face search failed" });
+      }
+    });
+    modelDownloadsRouter.get("/models/huggingface/files", async (req, res) => {
+      try {
+        const repo = String(req.query.repo || "").trim();
+        if (!repo) {
+          res.status(400).json({ error: "repo query parameter is required" });
+          return;
+        }
+        const data = await listHuggingFaceRepoFiles(repo);
+        res.json({
+          ...data,
+          files: annotateInstalledFileOptions(data.files)
+        });
+      } catch (err) {
+        res.status(502).json({ error: err?.message || "Failed to list Hugging Face repository files" });
+      }
+    });
+    modelDownloadsRouter.post("/models/resolve-url", async (req, res) => {
+      try {
+        const url = String(req.body?.url || "").trim();
+        const item = await resolveDirectModelUrl(url);
+        res.json({ item });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to resolve model URL" });
+      }
+    });
+    modelDownloadsRouter.post("/downloads/start", async (req, res) => {
+      try {
+        const {
+          provider,
+          modelName,
+          filename,
+          modelType,
+          sourceUrl,
+          expectedHash,
+          subfolder,
+          allowOverwrite,
+          userConfirmed,
+          hfRepoId,
+          civitaiMeta,
+          loraCategory,
+          characterAutomation,
+          mentionAutomation,
+          scheduledFor
+        } = req.body || {};
+        if (!userConfirmed) {
+          res.status(400).json({
+            error: "Explicit user confirmation is required before downloading models."
+          });
+          return;
+        }
+        const validatedCategory = typeof loraCategory === "string" && VALID_LORA_CATEGORIES.has(loraCategory) ? loraCategory : null;
+        const job = await startConfirmedModelDownload({
+          provider,
+          modelName,
+          filename,
+          modelType,
+          sourceUrl,
+          expectedHash,
+          subfolder,
+          allowOverwrite: Boolean(allowOverwrite),
+          hfRepoId: hfRepoId || null,
+          civitaiMeta: civitaiMeta || null,
+          loraCategory: validatedCategory,
+          characterAutomation: characterAutomation && typeof characterAutomation === "object" ? {
+            addCharacter: Boolean(characterAutomation.addCharacter),
+            generateHeadshot: Boolean(characterAutomation.generateHeadshot),
+            characterName: String(characterAutomation.characterName || ""),
+            triggerWord: String(characterAutomation.triggerWord || "")
+          } : null,
+          mentionAutomation: mentionAutomation && typeof mentionAutomation === "object" ? {
+            mentionEnabled: Boolean(mentionAutomation.mentionEnabled),
+            nickname: String(mentionAutomation.nickname || "")
+          } : null,
+          scheduledFor: scheduledFor || null
+        });
+        res.json({ job });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to start download" });
+      }
+    });
+    modelDownloadsRouter.post("/downloads/:id/run-now", (req, res) => {
+      try {
+        const jobId = Number(req.params.id);
+        if (!Number.isFinite(jobId)) {
+          res.status(400).json({ error: "Invalid download job id" });
+          return;
+        }
+        const job = runScheduledDownloadNow(jobId);
+        res.json({ job });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to trigger scheduled download" });
+      }
+    });
+    modelDownloadsRouter.post("/downloads/:id/reschedule", async (req, res) => {
+      try {
+        const jobId = Number(req.params.id);
+        if (!Number.isFinite(jobId)) {
+          res.status(400).json({ error: "Invalid download job id" });
+          return;
+        }
+        const scheduledFor = req.body?.scheduledFor ? String(req.body.scheduledFor) : null;
+        const job = await rescheduleFailedDownload(jobId, scheduledFor);
+        res.json({ job });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to reschedule download" });
+      }
+    });
+    modelDownloadsRouter.post("/downloads/cancel-all", (_req, res) => {
+      try {
+        const result = cancelAllActiveAndQueuedDownloads();
+        res.json(result);
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to cancel active downloads" });
+      }
+    });
+    modelDownloadsRouter.delete("/downloads/:id", (req, res) => {
+      try {
+        const jobId = Number(req.params.id);
+        if (!Number.isFinite(jobId)) {
+          res.status(400).json({ error: "Invalid download job id" });
+          return;
+        }
+        const result = cancelDownloadJob(jobId);
+        res.json(result);
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to cancel download" });
+      }
+    });
+    modelDownloadsRouter.post("/downloads/redownload-missing", (req, res) => {
+      try {
+        const onlyJobId = req.body?.jobId !== void 0 && req.body?.jobId !== null ? Number(req.body.jobId) : null;
+        const onlyFilename = typeof req.body?.filename === "string" && req.body.filename.trim() ? req.body.filename.trim() : null;
+        const result = startRedownloadMissingModels({
+          onlyJobId: Number.isFinite(onlyJobId) ? onlyJobId : null,
+          onlyFilename
+        });
+        const remainingMissingCount = listMissingRedownloadCandidates().length;
+        res.json({
+          queuedCount: result.queuedCount,
+          jobs: result.jobs,
+          missingCount: remainingMissingCount
+        });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to redownload missing models" });
+      }
+    });
+    modelDownloadsRouter.get("/downloads", (_req, res) => {
+      ensureRedownloadQueueRunning();
+      const jobs = db.prepare(
+        `SELECT * FROM download_jobs
+       ORDER BY
+         CASE status
+           WHEN 'downloading' THEN 0
+           WHEN 'queued' THEN 1
+           ELSE 2
+         END ASC,
+         id DESC
+       LIMIT 150`
+      ).all();
+      const modelRows = db.prepare(
+        `SELECT id, filename, file_path, model_type, is_installed, download_file_path, preview_images_json
+       FROM models`
+      ).all();
+      const byFilePath = /* @__PURE__ */ new Map();
+      const byFilename = /* @__PURE__ */ new Map();
+      for (const m of modelRows) {
+        if (m.file_path) byFilePath.set(m.file_path.toLowerCase(), m);
+        if (m.filename) byFilename.set(m.filename.toLowerCase(), m);
+      }
+      const missingCandidates = listMissingRedownloadCandidates();
+      const missingByKey = new Set(missingCandidates.map((c) => c.key));
+      const enriched = jobs.map((job) => {
+        const destPath = typeof job.destination_path === "string" ? job.destination_path : "";
+        const baseName = destPath ? path24.basename(destPath).toLowerCase() : "";
+        const matched = (destPath ? byFilePath.get(destPath.toLowerCase()) : void 0) || (baseName ? byFilename.get(baseName) : void 0);
+        let firstPreviewUrl = null;
+        if (job.provider === "civitai" && matched?.preview_images_json) {
+          const previews = parsePreviewImagesJson(matched.preview_images_json, matched.id);
+          firstPreviewUrl = previews[0]?.url || null;
+        }
+        let parsedPayload = null;
+        if (job.payload_json) {
+          try {
+            parsedPayload = JSON.parse(job.payload_json);
+          } catch {
+            parsedPayload = null;
+          }
+        }
+        if (!firstPreviewUrl && job.provider === "civitai" && parsedPayload?.civitaiMeta?.previewImages?.[0]?.url) {
+          const stagedUrl = parsedPayload.civitaiMeta.previewImages[0].url;
+          if (typeof stagedUrl === "string" && stagedUrl.trim()) {
+            firstPreviewUrl = stagedUrl.trim();
+          }
+        }
+        const canReschedule = job.status === "failed" && job.provider === "civitai" && /401|403|early access/i.test(String(job.error_message || ""));
+        const canRedownload = Boolean(baseName && missingByKey.has(baseName));
+        return {
+          ...job,
+          installed_model_id: matched?.id ?? null,
+          installed_filename: matched?.filename ?? null,
+          installed_model_type: matched?.model_type ?? null,
+          is_installed: matched ? Boolean(matched.is_installed) : false,
+          in_downloads: Boolean(matched?.download_file_path) && !canRedownload,
+          first_preview_url: firstPreviewUrl,
+          early_access_ends_at: parsedPayload?.earlyAccessEndsAt ?? null,
+          can_reschedule: canReschedule,
+          can_redownload: canRedownload
+        };
+      });
+      res.json({
+        items: enriched,
+        missingCount: missingCandidates.length
+      });
+    });
+  }
+});
+
+// src/server/services/workflowLibraryService.ts
+import crypto9 from "crypto";
+function listWorkflowLibraryItems() {
+  const rows = db.prepare(
+    `
+      SELECT
+        w.id,
+        w.name,
+        w.description,
+        w.is_saved_library,
+        w.is_default,
+        (w.visual_workflow_json IS NOT NULL AND w.visual_workflow_json != '') AS has_visual,
+        (w.api_workflow_json IS NOT NULL AND w.api_workflow_json != '') AS has_api,
+        w.workflow_hash,
+        w.created_at,
+        w.updated_at,
+        COUNT(DISTINCT iw.image_id) AS imageCount
+      FROM workflows w
+      LEFT JOIN image_workflows iw ON iw.workflow_id = w.id
+      GROUP BY w.id
+      ORDER BY w.is_default DESC, w.is_saved_library DESC, w.updated_at DESC
+    `
+  ).all();
+  const charRows = db.prepare(
+    `SELECT cw.workflow_id AS workflowId, c.id, c.name, cw.role_label AS roleLabel
+       FROM character_workflows cw
+       JOIN characters c ON c.id = cw.character_id`
+  ).all();
+  const charsByWf = /* @__PURE__ */ new Map();
+  for (const cr of charRows) {
+    const { workflowId, ...rest } = cr;
+    const arr = charsByWf.get(workflowId) || [];
+    arr.push(rest);
+    charsByWf.set(workflowId, arr);
+  }
+  return rows.map((r) => {
+    let defaultMegapixels = null;
+    let defaultAspectRatio = null;
+    let defaultSteps = null;
+    let defaultCheckpoint = null;
+    if (r.has_api || r.has_visual) {
+      try {
+        const wfDefaults = getWorkflowDefaults(Number(r.id));
+        defaultMegapixels = wfDefaults.defaultMegapixels ?? null;
+        defaultAspectRatio = wfDefaults.defaultAspectRatio ?? null;
+        defaultSteps = wfDefaults.defaultSteps ?? null;
+        defaultCheckpoint = wfDefaults.defaultCheckpoint ?? null;
+      } catch {
+      }
+    }
+    return {
+      id: r.id,
+      name: r.name,
+      description: r.description || "",
+      isSavedLibrary: Boolean(r.is_saved_library),
+      isDefault: Boolean(r.is_default),
+      hasVisualWorkflow: Boolean(r.has_visual),
+      hasApiWorkflow: Boolean(r.has_api),
+      workflowHash: r.workflow_hash,
+      imageCount: Number(r.imageCount || 0),
+      characters: charsByWf.get(r.id) || [],
+      defaultMegapixels,
+      defaultAspectRatio,
+      defaultSteps,
+      defaultCheckpoint,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    };
+  });
+}
+function getWorkflowRecordById(wfId) {
+  const wf = db.prepare("SELECT * FROM workflows WHERE id = ?").get(wfId);
+  if (!wf) {
+    throw new WorkflowServiceError(404, "Workflow not found");
+  }
+  if (!wf.api_workflow_json) {
+    const fallbackGraph = getExecutableApiGraph(wf);
+    if (fallbackGraph) {
+      wf.api_workflow_json = JSON.stringify(fallbackGraph, null, 2);
+    }
+  }
+  return wf;
+}
+function setDefaultWorkflow(wfId) {
+  const existing = db.prepare("SELECT * FROM workflows WHERE id = ?").get(wfId);
+  if (!existing) {
+    throw new WorkflowServiceError(404, "Workflow not found");
+  }
+  const tx = db.transaction(() => {
+    db.prepare("UPDATE workflows SET is_default = 0 WHERE is_default = 1").run();
+    db.prepare(
+      "UPDATE workflows SET is_default = 1, is_saved_library = 1, updated_at = datetime('now') WHERE id = ?"
+    ).run(wfId);
+  });
+  tx();
+  return db.prepare("SELECT * FROM workflows WHERE id = ?").get(wfId);
+}
+function saveOrUpdateWorkflow(input) {
+  const { id, name, description, visualWorkflowJson, apiWorkflowJson, isDefault } = input;
+  if (id) {
+    const wfId = Number(id);
+    const current = db.prepare("SELECT * FROM workflows WHERE id = ?").get(wfId);
+    if (!current) {
+      throw new WorkflowServiceError(404, "Workflow not found");
+    }
+    const nextName = name !== void 0 ? String(name || "Saved Workflow").trim() : current.name;
+    const nextDesc = description !== void 0 ? String(description || "") : current.description;
+    const nextVisual = visualWorkflowJson !== void 0 ? visualWorkflowJson : current.visual_workflow_json;
+    const nextApi = apiWorkflowJson !== void 0 ? apiWorkflowJson : current.api_workflow_json;
+    if (typeof nextApi === "string" && nextApi.trim()) {
+      try {
+        JSON.parse(nextApi);
+      } catch {
+        throw new WorkflowServiceError(400, "API Workflow JSON is not valid JSON");
+      }
+    }
+    if (typeof nextVisual === "string" && nextVisual.trim()) {
+      try {
+        JSON.parse(nextVisual);
+      } catch {
+        throw new WorkflowServiceError(400, "Visual Workflow JSON is not valid JSON");
+      }
+    }
+    const tx2 = db.transaction(() => {
+      if (isDefault) {
+        db.prepare("UPDATE workflows SET is_default = 0 WHERE is_default = 1").run();
+      }
+      const nextDefault = isDefault !== void 0 ? isDefault ? 1 : 0 : current.is_default;
+      db.prepare(
+        `UPDATE workflows
+         SET name = ?,
+             description = ?,
+             visual_workflow_json = ?,
+             api_workflow_json = ?,
+             is_saved_library = 1,
+             is_default = ?,
+             updated_at = datetime('now')
+         WHERE id = ?`
+      ).run(nextName, nextDesc, nextVisual, nextApi, nextDefault, wfId);
+    });
+    tx2();
+    return db.prepare("SELECT * FROM workflows WHERE id = ?").get(wfId);
+  }
+  if (!visualWorkflowJson && !apiWorkflowJson) {
+    throw new WorkflowServiceError(400, "Provide visual or API workflow JSON");
+  }
+  const wfHash = crypto9.createHash("sha256").update((visualWorkflowJson || "") + "||" + (apiWorkflowJson || "")).digest("hex");
+  const tx = db.transaction(() => {
+    if (isDefault) {
+      db.prepare("UPDATE workflows SET is_default = 0 WHERE is_default = 1").run();
+    }
+    db.prepare(
+      `INSERT INTO workflows (name, description, is_saved_library, is_default, visual_workflow_json, api_workflow_json, workflow_hash)
+       VALUES (?, ?, 1, ?, ?, ?, ?)
+       ON CONFLICT(workflow_hash) DO UPDATE SET
+         name = excluded.name,
+         description = excluded.description,
+         visual_workflow_json = COALESCE(excluded.visual_workflow_json, workflows.visual_workflow_json),
+         api_workflow_json = COALESCE(excluded.api_workflow_json, workflows.api_workflow_json),
+         is_saved_library = 1,
+         is_default = CASE WHEN excluded.is_default = 1 THEN 1 ELSE workflows.is_default END,
+         updated_at = datetime('now')`
+    ).run(
+      String(name || `Workflow ${wfHash.slice(0, 8)}`),
+      String(description || ""),
+      isDefault ? 1 : 0,
+      visualWorkflowJson || null,
+      apiWorkflowJson || null,
+      wfHash
+    );
+  });
+  tx();
+  return db.prepare("SELECT * FROM workflows WHERE workflow_hash = ?").get(wfHash);
+}
+var WorkflowServiceError;
+var init_workflowLibraryService = __esm({
+  "src/server/services/workflowLibraryService.ts"() {
+    init_db();
+    init_workflowCompilerService();
+    WorkflowServiceError = class extends Error {
+      constructor(statusCode, message) {
+        super(message);
+        this.statusCode = statusCode;
+      }
+    };
+  }
+});
+
+// src/server/routes/workflowsRoutes.ts
+import { Router as Router6 } from "express";
+var workflowsRouter;
+var init_workflowsRoutes = __esm({
+  "src/server/routes/workflowsRoutes.ts"() {
+    init_workflowLibraryService();
+    workflowsRouter = Router6();
+    workflowsRouter.get("/workflows", (_req, res) => {
+      try {
+        res.json({ items: listWorkflowLibraryItems() });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to list workflows" });
+      }
+    });
+    workflowsRouter.get("/workflows/:id", (req, res) => {
+      try {
+        const workflow = getWorkflowRecordById(Number(req.params.id));
+        res.json({ workflow });
+      } catch (err) {
+        const status = err instanceof WorkflowServiceError ? err.statusCode : 500;
+        res.status(status).json({ error: err?.message || "Failed to read workflow" });
+      }
+    });
+    workflowsRouter.post("/workflows/:id/set-default", (req, res) => {
+      try {
+        const updated = setDefaultWorkflow(Number(req.params.id));
+        res.json({ ok: true, workflow: updated });
+      } catch (err) {
+        const status = err instanceof WorkflowServiceError ? err.statusCode : 400;
+        res.status(status).json({ error: err?.message || "Failed to set default workflow" });
+      }
+    });
+    workflowsRouter.post("/workflows", (req, res) => {
+      try {
+        const workflow = saveOrUpdateWorkflow(req.body || {});
+        res.json({ workflow });
+      } catch (err) {
+        const status = err instanceof WorkflowServiceError ? err.statusCode : 400;
+        res.status(status).json({ error: err?.message || "Failed to save workflow" });
+      }
+    });
+  }
+});
+
+// src/server/routes/comfyuiRoutes.ts
+import { Router as Router7 } from "express";
+var comfyuiRouter;
+var init_comfyuiRoutes = __esm({
+  "src/server/routes/comfyuiRoutes.ts"() {
+    init_db();
+    init_comfyuiService();
+    init_comfyuiLiveMonitor();
+    comfyuiRouter = Router7();
+    comfyuiRouter.get("/comfyui/live-status", async (_req, res) => {
+      try {
+        const status = await getComfyUiLiveStatus();
+        res.json(status);
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to read ComfyUI live status" });
+      }
+    });
+    comfyuiRouter.post("/comfyui/cancel", async (req, res) => {
+      try {
+        const { itemId, batchId, comfyuiPromptId } = req.body || {};
+        const result = await cancelComfyUiJob({
+          itemId: itemId !== void 0 && itemId !== null ? Number(itemId) : null,
+          batchId: batchId !== void 0 && batchId !== null ? Number(batchId) : null,
+          comfyuiPromptId: typeof comfyuiPromptId === "string" ? comfyuiPromptId : null
+        });
+        res.json(result);
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to cancel generation job" });
+      }
+    });
+    comfyuiRouter.post("/comfyui/test", async (req, res) => {
+      const result = await testComfyUiConnection(req.body?.baseUrl);
+      res.json(result);
+    });
+    comfyuiRouter.post("/reproduce/validate", async (req, res) => {
+      try {
+        const { imageId, workflowId } = req.body || {};
+        const result = await validateWorkflowReproduction({
+          imageId: imageId ? Number(imageId) : void 0,
+          workflowId: workflowId ? Number(workflowId) : void 0
+        });
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Validation failed" });
+      }
+    });
+    comfyuiRouter.post("/reproduce/submit", async (req, res) => {
+      try {
+        const { imageId, workflowId, positivePrompt, loras, generationParams } = req.body || {};
+        const job = await submitWorkflowReproduction({
+          imageId: imageId ? Number(imageId) : void 0,
+          workflowId: workflowId ? Number(workflowId) : void 0,
+          positivePrompt: typeof positivePrompt === "string" ? positivePrompt : void 0,
+          loras: Array.isArray(loras) ? loras : void 0,
+          generationParams: generationParams && typeof generationParams === "object" ? generationParams : void 0
+        });
+        res.json({ job });
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Workflow execution failed" });
+      }
+    });
+    comfyuiRouter.get("/reproduce/jobs", (_req, res) => {
+      const jobs = db.prepare(
+        `SELECT rj.*, w.name AS workflow_name, i.filename AS source_filename
+       FROM reproduction_jobs rj
+       LEFT JOIN workflows w ON w.id = rj.workflow_id
+       LEFT JOIN images i ON i.id = rj.source_image_id
+       ORDER BY rj.id DESC LIMIT 50`
+      ).all();
+      res.json({ items: jobs });
+    });
+  }
+});
+
+// src/server/routes/modelsAndWorkflowsRoutes.ts
+var modelsAndWorkflowsRoutes_exports = {};
+__export(modelsAndWorkflowsRoutes_exports, {
+  modelsAndWorkflowsRouter: () => modelsAndWorkflowsRouter
+});
+import { Router as Router8 } from "express";
+var modelsAndWorkflowsRouter;
+var init_modelsAndWorkflowsRoutes = __esm({
+  "src/server/routes/modelsAndWorkflowsRoutes.ts"() {
+    init_lorasRoutes();
+    init_modelsRoutes();
+    init_modelDownloadsRoutes();
+    init_workflowsRoutes();
+    init_comfyuiRoutes();
+    modelsAndWorkflowsRouter = Router8();
+    modelsAndWorkflowsRouter.use(comfyuiRouter);
+    modelsAndWorkflowsRouter.use(lorasRouter);
+    modelsAndWorkflowsRouter.use(modelsRouter);
+    modelsAndWorkflowsRouter.use(modelDownloadsRouter);
+    modelsAndWorkflowsRouter.use(workflowsRouter);
+  }
+});
+
+// src/server/services/backupService.ts
+import fs26 from "fs";
+import path25 from "path";
+async function createDatabaseBackup(label = "manual") {
+  fs26.mkdirSync(appConfig.backupPath, { recursive: true });
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+  const safeLabel = label.replace(/[^a-zA-Z0-9_-]/g, "");
+  const filename = `gallery-backup-${safeLabel}-${timestamp}.db`;
+  const destPath = path25.join(appConfig.backupPath, filename);
+  await db.backup(destPath);
+  const stat = fs26.statSync(destPath);
+  const integrityRow = db.pragma("integrity_check", { simple: true });
+  return {
+    filename,
+    filePath: destPath,
+    sizeBytes: stat.size,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+    integrityOk: integrityRow === "ok"
+  };
+}
+function listDatabaseBackups() {
+  if (!fs26.existsSync(appConfig.backupPath)) return [];
+  return fs26.readdirSync(appConfig.backupPath).filter((f) => f.endsWith(".db") || f.endsWith(".json")).map((f) => {
+    const full = path25.join(appConfig.backupPath, f);
+    const stat = fs26.statSync(full);
+    return {
+      filename: f,
+      sizeBytes: stat.size,
+      createdAt: stat.mtime.toISOString(),
+      type: f.endsWith(".db") ? "sqlite_binary" : "annotations_json"
+    };
+  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+function exportUserAnnotationsJson() {
+  return {
+    exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    version: 1,
+    ratings: db.prepare("SELECT * FROM ratings").all(),
+    tags: db.prepare("SELECT * FROM tags").all(),
+    imageTags: db.prepare("SELECT * FROM image_tags").all(),
+    collections: db.prepare("SELECT * FROM collections").all(),
+    collectionImages: db.prepare("SELECT * FROM collection_images").all(),
+    savedSearches: db.prepare("SELECT * FROM saved_searches").all(),
+    savedWorkflows: db.prepare("SELECT * FROM workflows WHERE is_saved_library = 1").all(),
+    characters: db.prepare("SELECT * FROM characters").all(),
+    characterAliases: db.prepare("SELECT * FROM character_aliases").all(),
+    characterLoras: db.prepare("SELECT * FROM character_loras").all(),
+    imageCharacters: db.prepare("SELECT * FROM image_characters").all(),
+    characterTags: db.prepare("SELECT * FROM character_tags").all(),
+    characterCollections: db.prepare("SELECT * FROM character_collections").all()
+  };
+}
+function restoreUserAnnotationsJson(payload) {
+  const counts = {
+    ratings: 0,
+    tags: 0,
+    collections: 0,
+    characters: 0,
+    imageCharacters: 0,
+    savedWorkflows: 0
+  };
+  const tx = db.transaction(() => {
+    for (const r of payload.ratings || []) {
+      db.prepare(
+        `INSERT INTO ratings (content_hash, rating, is_favorite, is_rejected, is_archived, notes, favorited_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(content_hash) DO UPDATE SET
+           rating = excluded.rating,
+           is_favorite = excluded.is_favorite,
+           is_rejected = excluded.is_rejected,
+           is_archived = excluded.is_archived,
+           notes = excluded.notes,
+           favorited_at = excluded.favorited_at`
+      ).run(
+        r.content_hash,
+        r.rating || 0,
+        r.is_favorite || 0,
+        r.is_rejected || 0,
+        r.is_archived || 0,
+        r.notes || "",
+        r.favorited_at || null,
+        r.updated_at || (/* @__PURE__ */ new Date()).toISOString()
+      );
+      counts.ratings++;
+    }
+    for (const t of payload.tags || []) {
+      db.prepare("INSERT OR IGNORE INTO tags (id, name, color) VALUES (?, ?, ?)").run(
+        t.id,
+        t.name,
+        t.color || "#6366f1"
+      );
+      counts.tags++;
+    }
+    for (const it of payload.imageTags || []) {
+      db.prepare(
+        "INSERT OR IGNORE INTO image_tags (image_content_hash, tag_id) VALUES (?, ?)"
+      ).run(it.image_content_hash, it.tag_id);
+    }
+    for (const col of payload.collections || []) {
+      db.prepare(
+        "INSERT OR IGNORE INTO collections (id, name, description, created_at) VALUES (?, ?, ?, ?)"
+      ).run(col.id, col.name, col.description || "", col.created_at || (/* @__PURE__ */ new Date()).toISOString());
+      counts.collections++;
+    }
+    for (const ci of payload.collectionImages || []) {
+      db.prepare(
+        "INSERT OR IGNORE INTO collection_images (collection_id, image_content_hash, added_at) VALUES (?, ?, ?)"
+      ).run(ci.collection_id, ci.image_content_hash, ci.added_at || (/* @__PURE__ */ new Date()).toISOString());
+    }
+    for (const wf of payload.savedWorkflows || []) {
+      db.prepare(
+        `INSERT INTO workflows (name, description, is_saved_library, visual_workflow_json, api_workflow_json, workflow_hash)
+         VALUES (?, ?, 1, ?, ?, ?)
+         ON CONFLICT(workflow_hash) DO UPDATE SET
+           name = excluded.name,
+           description = excluded.description,
+           is_saved_library = 1`
+      ).run(
+        wf.name,
+        wf.description || "",
+        wf.visual_workflow_json || null,
+        wf.api_workflow_json || null,
+        wf.workflow_hash
+      );
+      counts.savedWorkflows++;
+    }
+    for (const ch of payload.characters || []) {
+      db.prepare(
+        `INSERT INTO characters (id, name, description, physical_description, notes, portrait_content_hash, portrait_crop_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET
+           description = excluded.description,
+           physical_description = COALESCE(NULLIF(excluded.physical_description, ''), characters.physical_description),
+           notes = excluded.notes,
+           portrait_content_hash = COALESCE(excluded.portrait_content_hash, characters.portrait_content_hash),
+           portrait_crop_json = COALESCE(excluded.portrait_crop_json, characters.portrait_crop_json)`
+      ).run(
+        ch.id,
+        ch.name,
+        ch.description || "",
+        ch.physical_description || "",
+        ch.notes || "",
+        ch.portrait_content_hash || null,
+        ch.portrait_crop_json || null,
+        ch.created_at || (/* @__PURE__ */ new Date()).toISOString(),
+        ch.updated_at || (/* @__PURE__ */ new Date()).toISOString()
+      );
+      counts.characters++;
+    }
+    for (const ca of payload.characterAliases || []) {
+      db.prepare(
+        "INSERT OR IGNORE INTO character_aliases (character_id, alias) VALUES (?, ?)"
+      ).run(ca.character_id, ca.alias);
+    }
+    for (const cl of payload.characterLoras || []) {
+      db.prepare(
+        `INSERT OR IGNORE INTO character_loras
+          (character_id, lora_name, lora_hash, lora_category, appearance_label, notes)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(
+        cl.character_id,
+        cl.lora_name,
+        cl.lora_hash || null,
+        cl.lora_category || "character",
+        cl.appearance_label || "Default",
+        cl.notes || ""
+      );
+    }
+    for (const ic of payload.imageCharacters || []) {
+      db.prepare(
+        `INSERT OR REPLACE INTO image_characters
+          (image_content_hash, character_id, status, source, confidence, match_reason, appearance_label)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        ic.image_content_hash,
+        ic.character_id,
+        ic.status || "confirmed",
+        ic.source || "manual",
+        ic.confidence ?? 1,
+        ic.match_reason || null,
+        ic.appearance_label || null
+      );
+      counts.imageCharacters++;
+    }
+  });
+  tx();
+  return { restoredCounts: counts };
+}
+function configureScheduledBackups(hours) {
+  appConfig.scheduledBackupHours = hours;
+  if (backupTimer) {
+    clearInterval(backupTimer);
+    backupTimer = null;
+  }
+  if (hours > 0) {
+    backupTimer = setInterval(() => {
+      createDatabaseBackup("scheduled").catch(
+        (err) => console.error("Scheduled backup failed:", err)
+      );
+    }, hours * 3600 * 1e3);
+  }
+}
+var backupTimer;
+var init_backupService = __esm({
+  "src/server/services/backupService.ts"() {
+    init_db();
+    init_config();
+    backupTimer = null;
+  }
+});
+
+// src/server/services/helpDocsService.ts
+import fs27 from "fs";
+import path26 from "path";
+function slugifyHeading(raw) {
+  return raw.replace(/`([^`]*)`/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/ /g, "-");
+}
+function getReadmePath() {
+  return path26.join(process.cwd(), "README.md");
+}
+function parseReadmeSections(markdown) {
+  const lines = markdown.split(/\r?\n/);
+  const sections = [];
+  let current = null;
+  let lastH2 = null;
+  let inFence = false;
+  const slugCounts = /* @__PURE__ */ new Map();
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence;
+    }
+    const headingMatch = !inFence ? line.match(/^(#{2,3})\s+(.+)$/) : null;
+    if (headingMatch) {
+      if (current) {
+        current.content = current.content.trim();
+        sections.push(current);
+      }
+      const level = headingMatch[1].length;
+      const title = headingMatch[2].trim();
+      if (level === 2) {
+        lastH2 = title;
+      }
+      const baseSlug = slugifyHeading(title);
+      const seen = slugCounts.get(baseSlug) || 0;
+      slugCounts.set(baseSlug, seen + 1);
+      const id = seen === 0 ? baseSlug : `${baseSlug}-${seen}`;
+      current = {
+        id,
+        level,
+        title,
+        parentTitle: level === 3 ? lastH2 : null,
+        content: line + "\n"
+      };
+    } else if (current) {
+      current.content += line + "\n";
+    }
+  }
+  if (current) {
+    current.content = current.content.trim();
+    sections.push(current);
+  }
+  return sections;
+}
+function getHelpDocsPayload() {
+  const readmePath = getReadmePath();
+  if (!fs27.existsSync(readmePath)) {
+    throw new Error("README.md was not found in the application root directory.");
+  }
+  const markdown = fs27.readFileSync(readmePath, "utf-8");
+  const stat = fs27.statSync(readmePath);
+  const parsed = parseReadmeSections(markdown);
+  return {
+    markdown,
+    sections: parsed.map(({ id, level, title, parentTitle }) => ({
+      id,
+      level,
+      title,
+      parentTitle
+    })),
+    updatedAt: stat.mtime.toISOString()
+  };
+}
+function tokenizeQuery(text) {
+  const rawTokens = text.toLowerCase().replace(/[^\w\s-]/g, " ").split(/\s+/).filter((t) => t.length >= 2 && !STOP_WORDS.has(t));
+  const expanded = new Set(rawTokens);
+  for (const token of rawTokens) {
+    for (const group of SYNONYM_GROUPS) {
+      if (group.includes(token)) {
+        for (const syn of group) expanded.add(syn);
+      }
+    }
+  }
+  return Array.from(expanded);
+}
+function selectRelevantSections(latestQuestion, recentUserText, sections, maxChars = 13500) {
+  const queryTokens = tokenizeQuery(latestQuestion);
+  const historyTokens = tokenizeQuery(recentUserText);
+  const scored = sections.map((sec, index) => {
+    const titleLower = sec.title.toLowerCase();
+    const parentLower = (sec.parentTitle || "").toLowerCase();
+    const bodyLower = sec.content.toLowerCase();
+    let score = 0;
+    for (const tok of queryTokens) {
+      if (titleLower.includes(tok)) score += 10;
+      if (parentLower.includes(tok)) score += 4;
+      if (bodyLower.includes(tok)) {
+        const hits = bodyLower.split(tok).length - 1;
+        score += Math.min(6, hits) * 2;
+      }
+    }
+    for (const tok of historyTokens) {
+      if (titleLower.includes(tok)) score += 3;
+      if (bodyLower.includes(tok)) score += 1;
+    }
+    if (queryTokens.length === 0 && index <= 2) {
+      score += 2;
+    }
+    return { sec, score, index };
+  });
+  scored.sort((a, b) => b.score - a.score || a.index - b.index);
+  const picked = [];
+  let usedChars = 0;
+  for (const item of scored) {
+    if (item.score <= 0 && picked.length >= 2) break;
+    if (picked.length >= 5) break;
+    const sectionLen = item.sec.content.length;
+    if (picked.length > 0 && usedChars + sectionLen > maxChars) {
+      continue;
+    }
+    picked.push(item.sec);
+    usedChars += sectionLen;
+  }
+  if (picked.length === 0) {
+    for (const sec of sections.slice(0, 3)) {
+      if (usedChars + sec.content.length > maxChars && picked.length > 0) break;
+      picked.push(sec);
+      usedChars += sec.content.length;
+    }
+  }
+  return picked;
+}
+async function askReadmeHelpAssistant(params) {
+  const status = await checkLmStudioStatus();
+  if (!status.online) {
+    throw new Error("Local LLM is offline. Connect a Local LLM in System -> Agent to use Help Chat.");
+  }
+  const validMessages = (params.messages || []).filter((m) => m && (m.role === "user" || m.role === "assistant") && m.content?.trim()).slice(-8);
+  const latestUserMsg = [...validMessages].reverse().find((m) => m.role === "user");
+  if (!latestUserMsg) {
+    throw new Error("A question message is required.");
+  }
+  const { markdown } = getHelpDocsPayload();
+  const sections = parseReadmeSections(markdown).filter(
+    (s) => s.title.toLowerCase() !== "contents"
+  );
+  const recentUserText = validMessages.filter((m) => m.role === "user").slice(-3).map((m) => m.content).join(" ");
+  const relevant = selectRelevantSections(latestUserMsg.content, recentUserText, sections);
+  const outline = sections.map((s) => `${s.level === 3 ? "  " : ""}- ${s.title}`).join("\n");
+  const excerptBlock = relevant.map((s) => `=== SECTION: ${s.title} ===
+${s.content}`).join("\n\n");
+  const systemPrompt = `You are Couchy's built-in Documentation Assistant.
+Answer the user's question concisely and accurately using ONLY the Couchy README documentation excerpts below.
+
+Rules:
+- Cite the relevant section heading(s) (e.g., **Keyboard Shortcuts & Curation Hotkeys**) so the user knows where to read more.
+- Preserve exact UI labels, hotkeys, environment variable names, and commands from the documentation.
+- If the provided documentation does not contain the answer, clearly say that it is not covered in the README excerpts rather than guessing.
+- Never output <proposed_prompt>, <proposed_concept>, or image-generation tags.
+
+README Section Outline:
+${outline}
+
+Retrieved README Excerpts:
+${excerptBlock}`;
+  const settings = getLmStudioSettings();
+  const baseUrl = settings.baseUrl.replace(/\/+$/, "");
+  const chatEndpoint = baseUrl.endsWith("/v1") ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`;
+  const modelToUse = status.selectedModel || settings.selectedModel || "local-model";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6e4);
+  try {
+    const res = await fetch(chatEndpoint, {
+      method: "POST",
+      headers: getLocalLlmHeaders(true),
+      signal: controller.signal,
+      body: JSON.stringify({
+        model: modelToUse,
+        messages: [{ role: "system", content: systemPrompt }, ...validMessages],
+        temperature: 0.25,
+        max_tokens: 1200
+      })
+    });
+    clearTimeout(timer);
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Local LLM returned HTTP ${res.status}: ${errText}`);
+    }
+    const data = await res.json();
+    const rawReply = data?.choices?.[0]?.message?.content?.trim() || "";
+    const cleaned = rawReply.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+    if (!cleaned) {
+      throw new Error("Local LLM returned an empty answer.");
+    }
+    logger.info(
+      "HelpDocs",
+      `README Help Q&A answered via ${data?.model || modelToUse} (${relevant.length} sections)`
+    );
+    return {
+      reply: cleaned,
+      matchedSections: relevant.map(({ id, title }) => ({ id, title })),
+      modelUsed: data?.model || modelToUse
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+var STOP_WORDS, SYNONYM_GROUPS;
+var init_helpDocsService = __esm({
+  "src/server/services/helpDocsService.ts"() {
+    init_llmClientService();
+    init_logger();
+    STOP_WORDS = /* @__PURE__ */ new Set([
+      "a",
+      "an",
+      "and",
+      "are",
+      "as",
+      "at",
+      "be",
+      "by",
+      "can",
+      "do",
+      "does",
+      "for",
+      "from",
+      "how",
+      "i",
+      "if",
+      "in",
+      "into",
+      "is",
+      "it",
+      "its",
+      "me",
+      "my",
+      "of",
+      "on",
+      "or",
+      "our",
+      "please",
+      "should",
+      "so",
+      "tell",
+      "that",
+      "the",
+      "their",
+      "them",
+      "then",
+      "there",
+      "these",
+      "this",
+      "to",
+      "up",
+      "use",
+      "using",
+      "what",
+      "when",
+      "where",
+      "which",
+      "who",
+      "why",
+      "will",
+      "with",
+      "you",
+      "your"
+    ]);
+    SYNONYM_GROUPS = [
+      ["hotkey", "hotkeys", "shortcut", "shortcuts", "key", "keys", "keybind", "keyboard"],
+      ["install", "setup", "deploy", "docker", "compose", "container"],
+      ["env", "environment", "variable", "variables", "port", "api", "key", "token"],
+      ["agent", "prompt", "prompts", "concept", "batch", "expand", "expansion", "preset"],
+      ["lora", "loras", "civitai", "huggingface", "download", "downloader", "early", "access"],
+      ["character", "characters", "portrait", "physical", "personality", "analyze", "bio"],
+      ["split", "compare", "loupe", "zoom", "stack", "series", "branch", "iterate"],
+      ["tagger", "wd14", "onnx", "interrogate", "interrogation", "vision"],
+      ["workflow", "workflows", "krea", "node", "mapper", "resolution", "upscale"],
+      ["backup", "backups", "restore", "database", "sqlite", "annotations"]
+    ];
+  }
+});
+
+// src/server/services/statsService.ts
+function normalizeStatsPeriod(value) {
+  if (value === "day" || value === "week" || value === "month" || value === "year") {
+    return value;
+  }
+  return "day";
+}
+function normalizeStatsGranularity(period, value) {
+  const allowed = VALID_GRANULARITIES[period];
+  if (value && allowed.includes(value)) {
+    return value;
+  }
+  return DEFAULT_GRANULARITY[period];
+}
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+function formatYmd(year, monthIndex, day) {
+  return `${year}-${pad2(monthIndex + 1)}-${pad2(day)}`;
+}
+function formatTime12(hour24, minute) {
+  const suffix = hour24 >= 12 ? "PM" : "AM";
+  const h12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${h12}:${pad2(minute)} ${suffix}`;
+}
+function formatHourShort(hour24) {
+  const suffix = hour24 >= 12 ? "p" : "a";
+  const h12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${h12}${suffix}`;
+}
+function parseAnchorYmd(anchorDate, tzOffsetMinutes) {
+  if (anchorDate && /^\d{4}-\d{2}-\d{2}$/.test(anchorDate)) {
+    const [y, m, d] = anchorDate.split("-").map(Number);
+    const probe = new Date(Date.UTC(y, m - 1, d));
+    if (probe.getUTCFullYear() === y && probe.getUTCMonth() === m - 1 && probe.getUTCDate() === d) {
+      return { year: y, month: m - 1, day: d };
+    }
+  }
+  const shiftedNow = new Date(Date.now() + tzOffsetMinutes * MS_PER_MINUTE);
+  return {
+    year: shiftedNow.getUTCFullYear(),
+    month: shiftedNow.getUTCMonth(),
+    day: shiftedNow.getUTCDate()
+  };
+}
+function buildBuckets(period, granularity, anchor, tzOffsetMinutes) {
+  const offsetMs = tzOffsetMinutes * MS_PER_MINUTE;
+  const toUtcMs = (shiftedMs) => shiftedMs - offsetMs;
+  const dayParityFromShifted = (shiftedDayStartMs) => Math.abs(Math.floor(shiftedDayStartMs / MS_PER_DAY)) % 2;
+  const buckets = [];
+  if (period === "day") {
+    const dayStartShifted = Date.UTC(anchor.year, anchor.month, anchor.day, 0, 0, 0);
+    const dayEndShifted = dayStartShifted + MS_PER_DAY;
+    const stepMinutes = granularity === "quarter_hour" ? 15 : granularity === "half_hour" ? 30 : 60;
+    const totalSteps = Math.floor(1440 / stepMinutes);
+    const parity = dayParityFromShifted(dayStartShifted);
+    for (let i = 0; i < totalSteps; i++) {
+      const startMin = i * stepMinutes;
+      const endMin = startMin + stepMinutes;
+      const startShifted = dayStartShifted + startMin * MS_PER_MINUTE;
+      const endShifted = dayStartShifted + endMin * MS_PER_MINUTE;
+      const h = Math.floor(startMin / 60);
+      const m = startMin % 60;
+      const endH = Math.floor(endMin / 60) % 24;
+      const endM = endMin % 60;
+      const label = formatTime12(h, m);
+      const endLabel = endMin === 1440 ? "12:00 AM" : formatTime12(endH, endM);
+      const shortLabel = m === 0 ? formatHourShort(h) : `${h}:${pad2(m)}`;
+      buckets.push({
+        key: `${pad2(h)}:${pad2(m)}`,
+        label,
+        shortLabel,
+        rangeLabel: `${label} - ${endLabel}`,
+        dayParity: parity,
+        startMs: toUtcMs(startShifted),
+        endMs: toUtcMs(endShifted),
+        count: 0
+      });
+    }
+    const weekday = WEEKDAY_SHORT[new Date(dayStartShifted).getUTCDay()];
+    const rangeLabel = `${weekday}, ${MONTH_SHORT[anchor.month]} ${anchor.day}, ${anchor.year}`;
+    return {
+      buckets,
+      rangeLabel,
+      rangeStartMs: toUtcMs(dayStartShifted),
+      rangeEndMs: toUtcMs(dayEndShifted)
+    };
+  }
+  if (period === "week") {
+    const anchorShifted = Date.UTC(anchor.year, anchor.month, anchor.day, 0, 0, 0);
+    const dow = new Date(anchorShifted).getUTCDay();
+    const weekStartShifted = anchorShifted - dow * MS_PER_DAY;
+    const weekEndShifted = weekStartShifted + 7 * MS_PER_DAY;
+    const divisionsPerDay = granularity === "6_hour" ? 4 : granularity === "half_day" ? 2 : 1;
+    const hoursPerDivision = 24 / divisionsPerDay;
+    for (let d = 0; d < 7; d++) {
+      const dayStartShifted = weekStartShifted + d * MS_PER_DAY;
+      const dt = new Date(dayStartShifted);
+      const dayName = WEEKDAY_SHORT[dt.getUTCDay()];
+      const dayNum = dt.getUTCDate();
+      const monName = MONTH_SHORT[dt.getUTCMonth()];
+      const parity = dayParityFromShifted(dayStartShifted);
+      for (let slot = 0; slot < divisionsPerDay; slot++) {
+        const startHour = slot * hoursPerDivision;
+        const endHour = startHour + hoursPerDivision;
+        const startShifted = dayStartShifted + startHour * MS_PER_HOUR;
+        const endShifted = dayStartShifted + endHour * MS_PER_HOUR;
+        let label = `${dayName} ${monName} ${dayNum}`;
+        let shortLabel = `${dayName} ${dayNum}`;
+        let rangeLabel2 = `${dayName}, ${monName} ${dayNum}`;
+        if (divisionsPerDay === 2) {
+          const half = slot === 0 ? "AM" : "PM";
+          label = `${dayName} ${dayNum} ${half}`;
+          shortLabel = slot === 0 ? `${dayName} ${dayNum}` : "PM";
+          rangeLabel2 = `${dayName}, ${monName} ${dayNum} (${slot === 0 ? "12:00 AM - 12:00 PM" : "12:00 PM - 12:00 AM"})`;
+        } else if (divisionsPerDay === 4) {
+          const endHourDisp = endHour === 24 ? "12:00 AM" : formatTime12(endHour, 0);
+          label = `${dayName} ${dayNum} ${formatHourShort(startHour)}`;
+          shortLabel = slot === 0 ? `${dayName} ${dayNum}` : formatHourShort(startHour);
+          rangeLabel2 = `${dayName}, ${monName} ${dayNum} (${formatTime12(startHour, 0)} - ${endHourDisp})`;
+        }
+        buckets.push({
+          key: `${formatYmd(dt.getUTCFullYear(), dt.getUTCMonth(), dayNum)}-${slot}`,
+          label,
+          shortLabel,
+          rangeLabel: rangeLabel2,
+          dayParity: parity,
+          startMs: toUtcMs(startShifted),
+          endMs: toUtcMs(endShifted),
+          count: 0
+        });
+      }
+    }
+    const startDt = new Date(weekStartShifted);
+    const endDt = new Date(weekEndShifted - MS_PER_DAY);
+    const rangeLabel = `${MONTH_SHORT[startDt.getUTCMonth()]} ${startDt.getUTCDate()} - ${MONTH_SHORT[endDt.getUTCMonth()]} ${endDt.getUTCDate()}, ${endDt.getUTCFullYear()}`;
+    return {
+      buckets,
+      rangeLabel,
+      rangeStartMs: toUtcMs(weekStartShifted),
+      rangeEndMs: toUtcMs(weekEndShifted)
+    };
+  }
+  if (period === "month") {
+    const monthStartShifted = Date.UTC(anchor.year, anchor.month, 1, 0, 0, 0);
+    const monthEndShifted = Date.UTC(anchor.year, anchor.month + 1, 1, 0, 0, 0);
+    const daysInMonth = Math.round((monthEndShifted - monthStartShifted) / MS_PER_DAY);
+    if (granularity === "week") {
+      let weekIdx = 0;
+      for (let dayStart = 1; dayStart <= daysInMonth; dayStart += 7) {
+        const dayEnd = Math.min(daysInMonth, dayStart + 6);
+        const startShifted = Date.UTC(anchor.year, anchor.month, dayStart, 0, 0, 0);
+        const endShifted = Date.UTC(anchor.year, anchor.month, dayEnd + 1, 0, 0, 0);
+        const mon = MONTH_SHORT[anchor.month];
+        buckets.push({
+          key: `${anchor.year}-${pad2(anchor.month + 1)}-w${weekIdx + 1}`,
+          label: `${mon} ${dayStart}-${dayEnd}`,
+          shortLabel: `${dayStart}-${dayEnd}`,
+          rangeLabel: `${MONTH_LONG[anchor.month]} ${dayStart} - ${dayEnd}, ${anchor.year}`,
+          dayParity: weekIdx % 2,
+          startMs: toUtcMs(startShifted),
+          endMs: toUtcMs(endShifted),
+          count: 0
+        });
+        weekIdx += 1;
+      }
+    } else {
+      for (let d = 1; d <= daysInMonth; d++) {
+        const startShifted = Date.UTC(anchor.year, anchor.month, d, 0, 0, 0);
+        const endShifted = startShifted + MS_PER_DAY;
+        const weekday = WEEKDAY_SHORT[new Date(startShifted).getUTCDay()];
+        buckets.push({
+          key: formatYmd(anchor.year, anchor.month, d),
+          label: `${MONTH_SHORT[anchor.month]} ${d}`,
+          shortLabel: String(d),
+          rangeLabel: `${weekday}, ${MONTH_SHORT[anchor.month]} ${d}, ${anchor.year}`,
+          dayParity: dayParityFromShifted(startShifted),
+          startMs: toUtcMs(startShifted),
+          endMs: toUtcMs(endShifted),
+          count: 0
+        });
+      }
+    }
+    return {
+      buckets,
+      rangeLabel: `${MONTH_LONG[anchor.month]} ${anchor.year}`,
+      rangeStartMs: toUtcMs(monthStartShifted),
+      rangeEndMs: toUtcMs(monthEndShifted)
+    };
+  }
+  const yearStartShifted = Date.UTC(anchor.year, 0, 1, 0, 0, 0);
+  const yearEndShifted = Date.UTC(anchor.year + 1, 0, 1, 0, 0, 0);
+  if (granularity === "week") {
+    let cursor = yearStartShifted;
+    let weekNum = 1;
+    while (cursor < yearEndShifted) {
+      const next = Math.min(yearEndShifted, cursor + 7 * MS_PER_DAY);
+      const sDt = new Date(cursor);
+      const eDt = new Date(next - MS_PER_DAY);
+      const label = `W${weekNum}`;
+      buckets.push({
+        key: `${anchor.year}-w${pad2(weekNum)}`,
+        label,
+        shortLabel: weekNum === 1 || weekNum % 4 === 0 ? label : "",
+        rangeLabel: `${MONTH_SHORT[sDt.getUTCMonth()]} ${sDt.getUTCDate()} - ${MONTH_SHORT[eDt.getUTCMonth()]} ${eDt.getUTCDate()}, ${anchor.year}`,
+        dayParity: (weekNum - 1) % 2,
+        startMs: toUtcMs(cursor),
+        endMs: toUtcMs(next),
+        count: 0
+      });
+      cursor = next;
+      weekNum += 1;
+    }
+  } else {
+    for (let m = 0; m < 12; m++) {
+      const startShifted = Date.UTC(anchor.year, m, 1, 0, 0, 0);
+      const endShifted = Date.UTC(anchor.year, m + 1, 1, 0, 0, 0);
+      buckets.push({
+        key: `${anchor.year}-${pad2(m + 1)}`,
+        label: `${MONTH_LONG[m]} ${anchor.year}`,
+        shortLabel: MONTH_SHORT[m],
+        rangeLabel: `${MONTH_LONG[m]} ${anchor.year}`,
+        dayParity: m % 2,
+        startMs: toUtcMs(startShifted),
+        endMs: toUtcMs(endShifted),
+        count: 0
+      });
+    }
+  }
+  return {
+    buckets,
+    rangeLabel: String(anchor.year),
+    rangeStartMs: toUtcMs(yearStartShifted),
+    rangeEndMs: toUtcMs(yearEndShifted)
+  };
+}
+function getGenerationStats(params) {
+  const period = normalizeStatsPeriod(params.period);
+  const granularity = normalizeStatsGranularity(period, params.granularity);
+  const tzOffsetMinutes = Number.isFinite(params.tzOffsetMinutes) ? Math.max(-840, Math.min(840, Math.trunc(params.tzOffsetMinutes))) : 0;
+  const anchor = parseAnchorYmd(params.anchorDate || void 0, tzOffsetMinutes);
+  const { buckets, rangeLabel, rangeStartMs, rangeEndMs } = buildBuckets(
+    period,
+    granularity,
+    anchor,
+    tzOffsetMinutes
+  );
+  const rangeStartIso = new Date(rangeStartMs).toISOString();
+  const rangeEndIso = new Date(rangeEndMs).toISOString();
+  const rows = db.prepare(
+    `SELECT file_mtime
+       FROM images
+       WHERE is_missing = 0
+         AND COALESCE(is_uploaded_reference, 0) = 0
+         AND file_mtime >= ?
+         AND file_mtime < ?
+       ORDER BY file_mtime ASC`
+  ).all(rangeStartIso, rangeEndIso);
+  const totalsRow = db.prepare(
+    `SELECT COUNT(*) AS totalAllTime, MAX(file_mtime) AS latestGenerationIso
+       FROM images
+       WHERE is_missing = 0
+         AND COALESCE(is_uploaded_reference, 0) = 0`
+  ).get();
+  let bucketIdx = 0;
+  let totalCount = 0;
+  for (const row of rows) {
+    const ms = Date.parse(row.file_mtime);
+    if (!Number.isFinite(ms)) continue;
+    while (bucketIdx < buckets.length && ms >= buckets[bucketIdx].endMs) {
+      bucketIdx += 1;
+    }
+    if (bucketIdx < buckets.length && ms >= buckets[bucketIdx].startMs && ms < buckets[bucketIdx].endMs) {
+      buckets[bucketIdx].count += 1;
+      totalCount += 1;
+    }
+  }
+  let peakBucket = null;
+  for (const b of buckets) {
+    if (b.count > 0 && (!peakBucket || b.count > peakBucket.count)) {
+      peakBucket = { label: b.label, rangeLabel: b.rangeLabel, count: b.count };
+    }
+  }
+  const outputBuckets = buckets.map((b) => ({
+    key: b.key,
+    label: b.label,
+    shortLabel: b.shortLabel,
+    rangeLabel: b.rangeLabel,
+    count: b.count,
+    dayParity: b.dayParity,
+    startIso: new Date(b.startMs).toISOString(),
+    endIso: new Date(b.endMs).toISOString()
+  }));
+  return {
+    period,
+    granularity,
+    anchorDate: formatYmd(anchor.year, anchor.month, anchor.day),
+    rangeLabel,
+    rangeStartIso,
+    rangeEndIso,
+    totalCount,
+    totalAllTime: totalsRow?.totalAllTime || 0,
+    latestGenerationIso: totalsRow?.latestGenerationIso || null,
+    peakBucket,
+    averagePerBucket: buckets.length > 0 ? Number((totalCount / buckets.length).toFixed(2)) : 0,
+    buckets: outputBuckets
+  };
+}
+var MS_PER_MINUTE, MS_PER_HOUR, MS_PER_DAY, MONTH_SHORT, MONTH_LONG, WEEKDAY_SHORT, VALID_GRANULARITIES, DEFAULT_GRANULARITY;
+var init_statsService = __esm({
+  "src/server/services/statsService.ts"() {
+    init_db();
+    MS_PER_MINUTE = 6e4;
+    MS_PER_HOUR = 36e5;
+    MS_PER_DAY = 864e5;
+    MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    MONTH_LONG = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December"
+    ];
+    WEEKDAY_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    VALID_GRANULARITIES = {
+      day: ["hour", "half_hour", "quarter_hour"],
+      week: ["day", "half_day", "6_hour"],
+      month: ["day", "week"],
+      year: ["month", "week"]
+    };
+    DEFAULT_GRANULARITY = {
+      day: "hour",
+      week: "day",
+      month: "day",
+      year: "month"
+    };
+  }
+});
+
+// src/server/services/generationDispatchService.ts
+function listGenerationBatches(limit = 20) {
+  const batchRows = db.prepare(
+    `SELECT gb.*, c.name as character_name, w.name as workflow_name
+       FROM generation_batches gb
+       LEFT JOIN characters c ON c.id = gb.character_id
+       LEFT JOIN workflows w ON w.id = gb.workflow_id
+       ORDER BY gb.id DESC
+       LIMIT ?`
+  ).all(limit);
+  const itemStmt = db.prepare(
+    `SELECT gi.*, i.id as resolved_image_id
+     FROM generation_items gi
+     LEFT JOIN images i ON i.id = gi.output_image_id
+     WHERE gi.batch_id = ?
+     ORDER BY gi.item_index ASC`
+  );
+  return batchRows.map((b) => {
+    const items = itemStmt.all(b.id).map((it) => ({
+      id: it.id,
+      batchId: it.batch_id,
+      itemIndex: it.item_index,
+      prompt: it.prompt,
+      negativePrompt: it.negative_prompt || "",
+      seed: it.seed,
+      comfyuiPromptId: it.comfyui_prompt_id,
+      status: it.status,
+      errorMessage: it.error_message,
+      outputImageId: it.resolved_image_id || null,
+      outputThumbnailUrl: it.resolved_image_id ? `/api/images/${it.resolved_image_id}/thumbnail` : null,
+      createdAt: it.created_at,
+      completedAt: it.completed_at
+    }));
+    return {
+      id: b.id,
+      characterId: b.character_id,
+      characterName: b.character_name || null,
+      workflowId: b.workflow_id,
+      workflowName: b.workflow_name || null,
+      themeTitle: b.theme_title || null,
+      mode: b.mode,
+      totalCount: b.total_count,
+      aspectRatio: b.aspect_ratio || "2:3 (Portrait Photo)",
+      megapixels: Number(b.megapixels ?? 1),
+      width: b.width,
+      height: b.height,
+      createdAt: b.created_at,
+      items
+    };
+  });
+}
+function trackGenerationItem(itemId, promptId, characterId, fallbackUpscaleMp, baseImageId) {
+  pollComfyPromptCompletion({
+    promptId,
+    characterId,
+    onSuccess: async ({ firstImageId, firstOutputSpec }) => {
+      if (fallbackUpscaleMp && fallbackUpscaleMp > 3 && firstOutputSpec) {
+        try {
+          const upscalePayload = compileUpscaleWorkflow({
+            imageFilename: firstOutputSpec.filename,
+            subfolder: firstOutputSpec.subfolder,
+            targetMegapixels: fallbackUpscaleMp
+          });
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 8e3);
+          const upRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
+            body: JSON.stringify({
+              prompt: upscalePayload,
+              client_id: COUCHY_COMFY_CLIENT_ID
+            })
+          });
+          clearTimeout(timer);
+          if (upRes.ok) {
+            const upData = await upRes.json();
+            if (upData.prompt_id) {
+              db.prepare(
+                `UPDATE generation_items
+                 SET comfyui_prompt_id = ?, output_image_id = COALESCE(?, output_image_id)
+                 WHERE id = ?`
+              ).run(upData.prompt_id, firstImageId, itemId);
+              invalidateComfyQueueCache();
+              trackGenerationItem(itemId, upData.prompt_id, characterId, void 0, firstImageId);
+              return;
+            }
+          }
+        } catch (upErr) {
+          console.warn("Automatic upscale pass failed, falling back to 3MP base image:", upErr);
+        }
+      }
+      if (baseImageId && firstImageId && baseImageId !== firstImageId) {
+        copyImageMetadataToDerivedImage(baseImageId, firstImageId);
+      }
+      const resolvedOutputImageId = firstImageId ?? baseImageId ?? null;
+      db.prepare(
+        `UPDATE generation_items
+         SET status = 'completed', output_image_id = COALESCE(?, output_image_id), completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(resolvedOutputImageId, itemId);
+      if (resolvedOutputImageId) {
+        try {
+          attachGenerationItemOutputToSeries(itemId, resolvedOutputImageId);
+        } catch (seriesErr) {
+          logger.warn(
+            "ComfyUI",
+            `Failed to attach generated image #${resolvedOutputImageId} to series`,
+            seriesErr
+          );
+        }
+      }
+      logger.info(
+        "ComfyUI",
+        `Completed generation item #${itemId} (${promptId}) -> image #${resolvedOutputImageId ?? "none"}`
+      );
+    },
+    onError: (errMsg) => {
+      db.prepare(
+        `UPDATE generation_items
+         SET status = 'failed', error_message = ?, completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(errMsg, itemId);
+      const recovery = preserveFailedGenerationConversation(itemId);
+      recordComfyExecutionError({
+        promptId,
+        message: errMsg,
+        recovery
+      });
+      notifyImageIndexed();
+    }
+  });
+}
+async function submitItemToComfyUi(params) {
+  const {
+    batchId,
+    itemId,
+    prompt,
+    seed,
+    workflowId,
+    aspectRatio,
+    megapixels,
+    steps,
+    width,
+    height,
+    loras,
+    checkpointName,
+    triggerWord,
+    negativePrompt,
+    characterId
+  } = params;
+  try {
+    const apiPayload = compileWorkflowForGeneration({
+      workflowId,
+      positivePrompt: prompt,
+      triggerWord: triggerWord !== void 0 ? String(triggerWord) : void 0,
+      negativePrompt: (negativePrompt || "").trim(),
+      seed,
+      aspectRatio,
+      megapixels,
+      steps,
+      width,
+      height,
+      loras,
+      checkpointName: checkpointName || void 0
+    });
+    const hasInlineUpscale = Boolean(findInlineUpscaleNodes(apiPayload));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8e3);
+    const comfyRes = await fetch(`${appConfig.comfyuiUrl}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        prompt: apiPayload,
+        client_id: COUCHY_COMFY_CLIENT_ID
+      })
+    });
+    clearTimeout(timer);
+    if (!comfyRes.ok) {
+      const errText = await comfyRes.text();
+      throw new Error(`ComfyUI HTTP ${comfyRes.status}: ${errText}`);
+    }
+    const data = await comfyRes.json();
+    const promptId = data.prompt_id || `prompt-${Date.now()}-${itemId}`;
+    if (isBatchCancelled(batchId)) {
+      markPromptsCancelled([promptId], batchId);
+      fetch(`${appConfig.comfyuiUrl}/queue`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delete: [promptId] })
+      }).catch(() => {
+      });
+      db.prepare(
+        `UPDATE generation_items
+         SET comfyui_prompt_id = ?, status = 'cancelled', error_message = 'Cancelled by user', completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(promptId, itemId);
+      return;
+    }
+    db.prepare(
+      `UPDATE generation_items
+       SET comfyui_prompt_id = ?, status = 'submitted'
+       WHERE id = ?`
+    ).run(promptId, itemId);
+    trackGenerationItem(
+      itemId,
+      promptId,
+      characterId ? Number(characterId) : null,
+      megapixels > 3 && !hasInlineUpscale ? megapixels : void 0
+    );
+    logger.info(
+      "ComfyUI",
+      `Submitted batch #${batchId} item #${itemId} (${promptId}) [${width}x${height}]`
+    );
+  } catch (err) {
+    const errMsg = err?.message || "Failed to submit to ComfyUI";
+    logger.error("ComfyUI", `Failed to submit batch #${batchId} item #${itemId}`, errMsg);
+    if (db.open) {
+      db.prepare(
+        `UPDATE generation_items
+         SET status = 'failed', error_message = ?, completed_at = datetime('now')
+         WHERE id = ?`
+      ).run(errMsg, itemId);
+      preserveFailedGenerationConversation(itemId);
+    }
+  }
+}
+async function dispatchGenerationBatch(input) {
+  const workflowId = Number(input.workflowId);
+  const promptList = input.prompts.map((p) => String(p).trim()).filter(Boolean);
+  if (!workflowId) {
+    throw new Error("Please select a ComfyUI workflow.");
+  }
+  if (promptList.length === 0) {
+    throw new Error("At least one positive prompt is required.");
+  }
+  const effectiveTotalCount = Math.max(
+    promptList.length,
+    Math.min(20, Math.round(Number(input.totalPlannedCount || promptList.length)) || promptList.length)
+  );
+  let wfDefaultMp = null;
+  let wfDefaultAr = null;
+  let wfDefaultCkpt = null;
+  try {
+    const wfDefaults = getWorkflowDefaults(workflowId);
+    wfDefaultMp = wfDefaults.defaultMegapixels ?? null;
+    wfDefaultAr = wfDefaults.defaultAspectRatio ?? null;
+    wfDefaultCkpt = wfDefaults.defaultCheckpoint ?? null;
+  } catch {
+  }
+  const resolvedAr = normalizeResolutionSelectorRatio(input.aspectRatio || wfDefaultAr || void 0);
+  const explicitMp = input.megapixels !== void 0 && input.megapixels !== null && Number(input.megapixels) > 0 ? Number(input.megapixels) : null;
+  const resolvedMp = Math.max(0.5, Math.min(10, explicitMp ?? wfDefaultMp ?? 3));
+  const resolvedSteps = input.steps !== void 0 && input.steps !== null && Number.isFinite(Number(input.steps)) && Number(input.steps) > 0 ? Math.max(1, Math.min(100, Math.round(Number(input.steps)))) : void 0;
+  const { width: computedWidth, height: computedHeight } = computeDimensionsFromMegapixels(
+    resolvedAr,
+    resolvedMp
+  );
+  const loraSelections = Array.isArray(input.loras) ? input.loras : [];
+  const activeLoraNames = loraSelections.map((l) => (l.loraName || "").trim()).filter(Boolean);
+  const serializedLoraNames = activeLoraNames.length > 0 ? JSON.stringify(activeLoraNames) : null;
+  const resolvedCheckpointName = input.checkpointName?.trim() || wfDefaultCkpt || null;
+  const serializedChatSnapshot = Array.isArray(input.chatSnapshot) && input.chatSnapshot.length > 0 ? JSON.stringify(input.chatSnapshot) : null;
+  let effectiveSeriesId = input.seriesId ? Number(input.seriesId) : null;
+  let inspirationImageId = null;
+  if (!effectiveSeriesId && !input.branchFromImageId && typeof input.inspirationFilename === "string" && input.inspirationFilename.trim()) {
+    inspirationImageId = await indexUploadedInspirationImage(
+      input.inspirationFilename.trim(),
+      promptList[0]
+    );
+  }
+  if (!effectiveSeriesId && !input.branchFromImageId && (effectiveTotalCount > 1 || inspirationImageId)) {
+    const seriesKind = effectiveTotalCount > 1 ? "multi_shot" : "iterative";
+    const createdSeries = db.prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (NULL, ?)`).run(seriesKind);
+    effectiveSeriesId = Number(createdSeries.lastInsertRowid);
+    if (inspirationImageId) {
+      const inspSeedSnapshot = serializedChatSnapshot || JSON.stringify([
+        {
+          id: `insp-${inspirationImageId}`,
+          role: "assistant",
+          content: "Uploaded inspiration image:",
+          proposedPrompt: promptList[0]
+        }
+      ]);
+      db.prepare(
+        `INSERT OR REPLACE INTO image_series_items (series_id, image_id, step_order, chat_snapshot_json)
+         VALUES (?, ?, 0, ?)`
+      ).run(effectiveSeriesId, inspirationImageId, inspSeedSnapshot);
+    }
+  }
+  const batchInfo = db.prepare(
+    `INSERT INTO generation_batches
+        (character_id, workflow_id, theme_title, mode, total_count, aspect_ratio, megapixels, width, height, checkpoint_name, lora_count, lora_names_json, series_id, branch_from_image_id, inspiration_image_id, chat_snapshot_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    input.characterId ? Number(input.characterId) : null,
+    workflowId,
+    input.themeTitle ? String(input.themeTitle).trim() : null,
+    input.mode === "theme_set" ? "theme_set" : "single",
+    effectiveTotalCount,
+    resolvedAr,
+    resolvedMp,
+    computedWidth,
+    computedHeight,
+    resolvedCheckpointName,
+    activeLoraNames.length,
+    serializedLoraNames,
+    effectiveSeriesId,
+    input.branchFromImageId ? Number(input.branchFromImageId) : null,
+    inspirationImageId,
+    serializedChatSnapshot
+  );
+  const batchId = Number(batchInfo.lastInsertRowid);
+  const insertItem = db.prepare(
+    `INSERT INTO generation_items
+      (batch_id, item_index, prompt, negative_prompt, seed, status)
+     VALUES (?, ?, ?, ?, ?, 'pending')`
+  );
+  const immediateItems = [];
+  const pendingSlots = [];
+  const hasFixedBaseSeed = Boolean(input.baseSeed && Number(input.baseSeed) > 0);
+  const startingSeed = hasFixedBaseSeed ? Math.floor(Number(input.baseSeed)) : Math.floor(Math.random() * 1e15) + 1;
+  for (let i = 0; i < effectiveTotalCount; i++) {
+    const itemSeed = hasFixedBaseSeed ? String(startingSeed + i) : String(Math.floor(Math.random() * 1e15) + 1);
+    const shotPrompt = promptList[i] || "";
+    const info = insertItem.run(
+      batchId,
+      i + 1,
+      shotPrompt,
+      (input.negativePrompt || "").trim(),
+      itemSeed
+    );
+    const itemId = Number(info.lastInsertRowid);
+    if (shotPrompt) {
+      immediateItems.push({ itemId, index: i + 1, prompt: shotPrompt, seed: itemSeed });
+    } else {
+      pendingSlots.push({ itemId, itemIndex: i + 1, seed: itemSeed });
+    }
+  }
+  for (const item of immediateItems) {
+    if (isBatchCancelled(batchId)) {
+      break;
+    }
+    await submitItemToComfyUi({
+      batchId,
+      itemId: item.itemId,
+      prompt: item.prompt,
+      seed: item.seed,
+      workflowId,
+      aspectRatio: resolvedAr,
+      megapixels: resolvedMp,
+      steps: resolvedSteps,
+      width: computedWidth,
+      height: computedHeight,
+      loras: loraSelections,
+      checkpointName: resolvedCheckpointName,
+      triggerWord: input.triggerWord,
+      negativePrompt: input.negativePrompt,
+      characterId: input.characterId
+    });
+  }
+  invalidateComfyQueueCache();
+  const batches = listGenerationBatches(25);
+  const createdBatch = batches.find((b) => b.id === batchId) || batches[0];
+  return pendingSlots.length > 0 ? { batch: createdBatch, batches, pendingSlots } : { batch: createdBatch, batches };
+}
+function touchBatchPendingItems(batchId) {
+  if (!db.open || batchId <= 0) return;
+  db.prepare(
+    `UPDATE generation_items
+     SET created_at = datetime('now')
+     WHERE batch_id = ? AND status = 'pending'`
+  ).run(batchId);
+}
+async function dispatchPendingGenerationItem(params) {
+  const { batchId, itemId } = params;
+  if (!db.open || isBatchCancelled(batchId)) {
+    return { cancelled: true };
+  }
+  const cleanPrompt = params.prompt.trim();
+  if (!cleanPrompt) {
+    throw new Error("Cannot dispatch empty pending prompt.");
+  }
+  const updateInfo = db.prepare(
+    `UPDATE generation_items
+       SET prompt = ?, created_at = datetime('now')
+       WHERE id = ? AND batch_id = ? AND status = 'pending'`
+  ).run(cleanPrompt, itemId, batchId);
+  if (updateInfo.changes === 0 || isBatchCancelled(batchId)) {
+    return { cancelled: true };
+  }
+  const batchRow = db.prepare(
+    `SELECT aspect_ratio, megapixels, width, height, checkpoint_name
+       FROM generation_batches
+       WHERE id = ?`
+  ).get(batchId);
+  if (!batchRow) {
+    return { cancelled: true };
+  }
+  const resolvedAr = normalizeResolutionSelectorRatio(
+    params.aspectRatio || batchRow.aspect_ratio || void 0
+  );
+  const resolvedMp = Number(params.megapixels ?? batchRow.megapixels ?? 3);
+  await submitItemToComfyUi({
+    batchId,
+    itemId,
+    prompt: cleanPrompt,
+    seed: params.seed,
+    workflowId: params.workflowId,
+    aspectRatio: resolvedAr,
+    megapixels: resolvedMp,
+    steps: params.steps ?? void 0,
+    width: Number(batchRow.width),
+    height: Number(batchRow.height),
+    loras: Array.isArray(params.loras) ? params.loras : [],
+    checkpointName: params.checkpointName ?? batchRow.checkpoint_name ?? null,
+    triggerWord: params.triggerWord,
+    negativePrompt: params.negativePrompt,
+    characterId: params.characterId
+  });
+  invalidateComfyQueueCache();
+  return { cancelled: isBatchCancelled(batchId) };
+}
+var init_generationDispatchService = __esm({
+  "src/server/services/generationDispatchService.ts"() {
+    init_config();
+    init_db();
+    init_logger();
+    init_comfyuiLiveMonitor();
+    init_comfyuiService();
+    init_scannerService();
+    init_seriesService();
+    init_workflowCompilerService();
+    init_types();
+  }
+});
+
+// src/server/services/randomRollPromptService.ts
+function getBaseModelHandle(candidate) {
+  return (candidate.nickname || "").trim().replace(/^@+/, "") || candidate.name.trim() || candidate.filename.replace(/\.(?:safetensors|ckpt|pt|bin|gguf|sft)$/i, "").trim();
+}
+function buildOfflineRandomPrompt(characterName, tags, shotIndex = 0) {
+  const framings = [
+    "medium three-quarter portrait, candid natural posture, 85mm lens, shallow depth of field",
+    "intimate close-up portrait, sharp catchlights in eyes, soft rim light, film grain",
+    "editorial full-body shot, atmospheric depth, architectural perspective, 35mm lens",
+    "over-the-shoulder candid composition, golden natural illumination, rich ambient detail",
+    "low-angle heroic framing, confident posture, expressive environmental depth, 50mm lens",
+    "seated relaxed composition, natural gesture, layered foreground bokeh",
+    "candid motion capture, dynamic stride, subtle environmental movement",
+    "profile silhouette against atmospheric backdrop, fine edge lighting, cinematic framing"
+  ];
+  const lightings = [
+    "soft golden hour sunlight, warm shadows",
+    "moody overcast daylight, crisp editorial contrast",
+    "warm indoor practical lighting, subtle ambient glow",
+    "dramatic side window light, natural skin texture",
+    "cool twilight ambient fill with warm highlights"
+  ];
+  const idx = Math.max(0, Math.floor(shotIndex));
+  const framing = framings[idx % framings.length];
+  const lighting = lightings[idx % lightings.length];
+  const sceneCue = tags.length > 0 ? tags.join(", ") : "relaxed outdoor lifestyle scene";
+  return sanitizeAgentPrompt(
+    `the subject in a spontaneous scene featuring ${sceneCue}, ${framing}, ${lighting}`,
+    characterName
+  );
+}
+function resolveSelectedBaseCandidate(llmContent, candidates) {
+  const match = llmContent.match(
+    /<selected_base>([\s\S]*?)(?:<\/selected_base>|(?=<proposed_prompt>)|\r?\n|$)/i
+  );
+  if (!match || !match[1]) return null;
+  const rawToken = match[1].replace(/^["'\s]+|["'\s]+$/g, "");
+  const targetKey = normalizeLoraMatchKey(rawToken);
+  if (!targetKey) return null;
+  return candidates.find((c) => {
+    const handleKey = normalizeLoraMatchKey(getBaseModelHandle(c));
+    const nameKey = normalizeLoraMatchKey(c.name);
+    const fileKey = normalizeLoraMatchKey(c.filename);
+    const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : "";
+    return handleKey === targetKey || nameKey === targetKey || fileKey === targetKey || Boolean(nickKey) && nickKey === targetKey;
+  }) || null;
+}
+function extractPromptFromRandomRollResponse(llmContent, characterName) {
+  const match = llmContent.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
+  if (match && match[1]) {
+    const insideTag = match[1].replace(/<\/?(?:lora_check|selected_base|proposed_concept|proposed_prompt)>/gi, "").replace(/^["']|["']$/g, "").trim();
+    return sanitizeAgentPrompt(insideTag, characterName);
+  }
+  if (/<(?:lora_check|selected_base|proposed_concept|shot_\d+)\b/i.test(llmContent)) {
+    return "";
+  }
+  const raw = llmContent.replace(/^["']|["']$/g, "").trim();
+  return sanitizeAgentPrompt(raw, characterName);
+}
+function getCheckpointCooldownTier(filename, recentCheckpointKeys2) {
+  const key = normalizeLoraMatchKey(filename);
+  if (!key) return 0;
+  if (recentCheckpointKeys2[0] === key) return 1;
+  if (recentCheckpointKeys2[1] === key) return 2;
+  return 0;
+}
+function buildBaseContext(candidates, recentCheckpointKeys2, lockedCheckpoint) {
+  if (lockedCheckpoint) {
+    const lockedKey = normalizeLoraMatchKey(lockedCheckpoint);
+    const matched = candidates.find((c) => normalizeLoraMatchKey(c.filename) === lockedKey) || null;
+    if (matched) {
+      const desc = matched.llm_description.replace(/\s+/g, " ").trim().slice(0, 320);
+      return {
+        block: `Active Base Model (${getBaseModelHandle(matched)}): ${desc}
+- Write the visual medium, lighting, and detail level to play to this base model's strengths.`,
+        shouldSelectBase: false,
+        lockedCandidate: matched
+      };
+    }
+    return { block: null, shouldSelectBase: false, lockedCandidate: null };
+  }
+  if (candidates.length === 0) {
+    return { block: null, shouldSelectBase: false, lockedCandidate: null };
+  }
+  if (candidates.length === 1) {
+    const only = candidates[0];
+    const desc = only.llm_description.replace(/\s+/g, " ").trim().slice(0, 320);
+    return {
+      block: `Active Base Model (${getBaseModelHandle(only)}): ${desc}
+- Write the visual medium, lighting, and detail level to play to this base model's strengths.`,
+      shouldSelectBase: false,
+      lockedCandidate: only
+    };
+  }
+  const shuffled = [...candidates];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  const lines = shuffled.map((c) => {
+    const handle = getBaseModelHandle(c);
+    const desc = c.llm_description.replace(/\s+/g, " ").trim().slice(0, 300);
+    const tier = getCheckpointCooldownTier(c.filename, recentCheckpointKeys2);
+    const cooldownNote = tier === 1 ? " [used last roll \u2014 pick only if clearly the best fit, otherwise prefer another fitting option for variety]" : "";
+    return `- @${handle}: ${desc}${cooldownNote}`;
+  });
+  return {
+    block: [
+      'Available Base Models (choose ONE via <selected_base>"@handle"</selected_base> whose Model Details & Strengths best suit this Character, Attached LoRAs, and scene):',
+      ...lines
+    ].join("\n"),
+    shouldSelectBase: true,
+    lockedCandidate: null
+  };
+}
+async function composeRandomRollPrompt(params) {
+  const shotNumber = Math.max(1, params.shotNumber || 1);
+  const totalShots = Math.max(1, params.totalShots || 1);
+  const resolvedFallbackCkpt = params.lockedCheckpoint || params.fallbackCheckpoint;
+  const requireLoraCheck = params.hasStyleLoras && shotNumber === 1;
+  try {
+    const status = await checkLmStudioStatus();
+    if (!status.online) {
+      return {
+        prompt: buildOfflineRandomPrompt(params.characterName, params.tags, shotNumber - 1),
+        checkpointName: resolvedFallbackCkpt,
+        usedLmStudio: false,
+        loraCheck: params.lockedLoraCheck || null
+      };
+    }
+    const settings = getLmStudioSettings();
+    const baseUrl = settings.baseUrl.replace(/\/+$/, "");
+    const modelToUse = status.selectedModel || settings.selectedModel || "local-model";
+    const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
+      characterName: params.characterName,
+      characterDescription: params.characterDescription,
+      characterPhysicalDescription: params.characterPhysicalDescription,
+      loraNames: params.loraNames
+    });
+    const {
+      block: baseModelBlock,
+      shouldSelectBase,
+      lockedCandidate
+    } = buildBaseContext(
+      params.baseCandidates,
+      params.recentCheckpointKeys || [],
+      params.lockedCheckpoint
+    );
+    const tagHint = params.tags.length > 0 ? `Secondary optional motifs (keep ONLY motifs that harmonize with the Attached LoRAs, and explicitly drop any setting/outfit motif that conflicts): ${params.tags.join(", ")}.` : "Invent a vivid, grounded setting, natural wardrobe, and expressive lighting.";
+    const loraDirective = requireLoraCheck ? [
+      "- Mandatory Step 1 (<lora_check>): Before choosing a base model or writing the prompt, output <lora_check>...</lora_check> with:",
+      "  1. For each non-character Attached LoRA, state the concrete visual elements (specific setting, architecture, uniform/wardrobe, props, pose, or lighting) that MUST appear in <proposed_prompt> to showcase that LoRA.",
+      "  2. Tag Filter: List which optional random motifs to KEEP and which to DROP because they clash with the Attached LoRA concept/wardrobe.",
+      "- Play to Attached LoRAs: Attached non-character LoRA(s) are the primary driver of the scene. Every concrete visual element you listed in <lora_check> MUST be explicitly described inside <proposed_prompt>."
+    ].join("\n") : params.hasStyleLoras ? [
+      "- Play to Attached LoRAs: Attached non-character LoRA(s) are the primary driver of this shot and MUST be explicitly depicted inside <proposed_prompt>.",
+      params.lockedLoraCheck ? `- Required LoRA Visual Cues (already verified): ${params.lockedLoraCheck.replace(/\s+/g, " ").trim()}` : null
+    ].filter(Boolean).join("\n") : "- Focus on a fresh, coherent scene that complements the subject naturally.";
+    const baseDirective = shouldSelectBase ? '- Base Model Choice: Output <selected_base>"@handle"</selected_base> using one exact @handle from Available Base Models that best matches the character, attached LoRAs, and intended scene mood, then tailor <proposed_prompt> to that chosen base model\u2019s strengths. Never write base model names or @handles inside <proposed_prompt>.' : baseModelBlock ? "- Play to Active Base Model: Tailor lighting, photographic texture, and detail cues to complement the Active Base Model description without naming it in <proposed_prompt>." : null;
+    const multiShotDirective = totalShots > 1 ? [
+      `- Multi-Shot Single-Frame Rule (Shot ${shotNumber} of ${totalShots}): Even though this is part of a ${totalShots}-shot set, ignore any Batch Concept or <proposed_concept> mode\u2014write ONLY ONE standalone prompt for Shot ${shotNumber} inside <proposed_prompt>...</proposed_prompt>.`,
+      "- Set Variety: Keep the same overall world/concept and LoRA style, but choose a distinctly different camera framing, pose, gesture, lighting angle, or action from prior shots."
+    ].join("\n") : null;
+    const randomRollRules = [
+      "RANDOM ROLL RULES:",
+      "- Output ONE original, ready-to-generate prompt wrapped inside <proposed_prompt>...</proposed_prompt>. Never include character names, base model names, or model/LoRA filenames inside <proposed_prompt>.",
+      "- Strict Identity Fidelity: Follow the Character Profile strictly for sex/gender pronouns and permanent physical traits. NEVER invent, guess, or insert a race, ethnicity, nationality, skin tone, hair color, eye color, or biological sex not explicitly supported by the Character Profile; leave unspecified identity traits unstated so the active character LoRA supplies them.",
+      loraDirective,
+      baseDirective,
+      multiShotDirective
+    ].filter(Boolean).join("\n");
+    const systemPrompt = [
+      settings.conversationSystemPrompt,
+      characterBlock,
+      attachedLoraBlock,
+      baseModelBlock,
+      randomRollRules
+    ].filter(Boolean).join("\n\n");
+    const responseFormatHint = requireLoraCheck ? shouldSelectBase ? 'Return ONLY <lora_check>...</lora_check>, <selected_base>"@handle"</selected_base>, and <proposed_prompt>...</proposed_prompt>.' : "Return ONLY <lora_check>...</lora_check> and <proposed_prompt>...</proposed_prompt>." : shouldSelectBase ? 'Return ONLY <selected_base>"@handle"</selected_base> and <proposed_prompt>...</proposed_prompt>.' : "Return ONLY <proposed_prompt>...</proposed_prompt>. Do NOT output <lora_check>, <proposed_concept>, or a multi-shot summary.";
+    const priorBlock = params.previousPrompts && params.previousPrompts.length > 0 ? [
+      `Already written shots in this ${totalShots}-shot set (DO NOT repeat these framings, poses, or actions):`,
+      ...params.previousPrompts.map((p, i) => `Shot ${i + 1}: ${p}`)
+    ].join("\n") : null;
+    const leadLine = totalShots > 1 ? params.hasStyleLoras ? `Write ONLY Shot ${shotNumber} of ${totalShots} as one standalone image prompt built directly around the attached non-character LoRA(s).` : `Write ONLY Shot ${shotNumber} of ${totalShots} as one standalone image prompt with fresh framing and action.` : params.hasStyleLoras ? "Create a single fresh, spontaneous scene prompt for the subject built directly around the attached non-character LoRA(s)." : "Create a single fresh, spontaneous scene prompt for the subject.";
+    const userInstruction = [leadLine, attachedLoraBlock || "", priorBlock || "", tagHint, responseFormatHint].filter(Boolean).join("\n\n");
+    const res = await postChatCompletion({
+      baseUrl,
+      model: modelToUse,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userInstruction }
+      ],
+      temperature: 0.74,
+      maxTokens: 1350,
+      timeoutMs: 35e3
+    });
+    let latestContent = res.content;
+    let chosenBase = shouldSelectBase ? resolveSelectedBaseCandidate(latestContent, params.baseCandidates) : lockedCandidate;
+    let loraCheck = extractLoraCheckFromRandomRollResponse(latestContent) || params.lockedLoraCheck || null;
+    let sanitized = extractPromptFromRandomRollResponse(latestContent, params.characterName);
+    if (sanitized.length < 15) {
+      const formatRetryRes = await postChatCompletion({
+        baseUrl,
+        model: modelToUse,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userInstruction },
+          { role: "assistant", content: latestContent },
+          {
+            role: "user",
+            content: `Format Error: Your response did not include a valid <proposed_prompt>...</proposed_prompt> for Shot ${shotNumber}. Write ONLY ONE standalone image prompt wrapped inside <proposed_prompt>...</proposed_prompt> (no <lora_check>, no <proposed_concept>, and no multi-shot summary).`
+          }
+        ],
+        temperature: 0.68,
+        maxTokens: 900,
+        timeoutMs: 25e3
+      });
+      const formatRetrySanitized = extractPromptFromRandomRollResponse(
+        formatRetryRes.content,
+        params.characterName
+      );
+      if (formatRetrySanitized.length >= 15) {
+        latestContent = formatRetryRes.content;
+        sanitized = formatRetrySanitized;
+        chosenBase = (shouldSelectBase ? resolveSelectedBaseCandidate(formatRetryRes.content, params.baseCandidates) : null) || chosenBase;
+        loraCheck = extractLoraCheckFromRandomRollResponse(formatRetryRes.content) || loraCheck;
+      }
+    }
+    if (params.hasStyleLoras && sanitized.length >= 15) {
+      const checkResult = verifyPromptReflectsLoraCheck(sanitized, loraCheck, attachedLoraBlock);
+      if (!checkResult.passed) {
+        const missingPreview = checkResult.expectedKeywords.slice(0, 10).join(", ");
+        const retryHint = shotNumber > 1 ? "Return ONLY <proposed_prompt>...</proposed_prompt>." : responseFormatHint;
+        const retryRes = await postChatCompletion({
+          baseUrl,
+          model: modelToUse,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userInstruction },
+            { role: "assistant", content: latestContent },
+            {
+              role: "user",
+              content: `Self-Check Verification Failed: Your <proposed_prompt> did not explicitly include the visual concepts from your <lora_check> / Attached LoRAs (expected visual cues such as: ${missingPreview}). Rewrite <proposed_prompt> so the setting, wardrobe, or visual style explicitly depicts those attached LoRA elements while keeping strict character identity fidelity. ${retryHint}`
+            }
+          ],
+          temperature: 0.65,
+          maxTokens: 1200,
+          timeoutMs: 3e4
+        });
+        const retrySanitized = extractPromptFromRandomRollResponse(
+          retryRes.content,
+          params.characterName
+        );
+        if (retrySanitized.length >= 15) {
+          sanitized = retrySanitized;
+          chosenBase = (shouldSelectBase ? resolveSelectedBaseCandidate(retryRes.content, params.baseCandidates) : null) || chosenBase;
+        }
+      }
+    }
+    const resolvedCheckpoint = params.lockedCheckpoint || chosenBase?.filename || params.fallbackCheckpoint;
+    if (sanitized.length >= 15) {
+      return {
+        prompt: sanitized,
+        checkpointName: resolvedCheckpoint,
+        usedLmStudio: true,
+        loraCheck
+      };
+    }
+  } catch {
+  }
+  return {
+    prompt: buildOfflineRandomPrompt(params.characterName, params.tags, shotNumber - 1),
+    checkpointName: resolvedFallbackCkpt,
+    usedLmStudio: false,
+    loraCheck: params.lockedLoraCheck || null
+  };
+}
+var extractLoraCheckFromRandomRollResponse;
+var init_randomRollPromptService = __esm({
+  "src/server/services/randomRollPromptService.ts"() {
+    init_llmClientService();
+    init_llmPromptUtils();
+    extractLoraCheckFromRandomRollResponse = extractLoraCheckBlock;
+  }
+});
+
+// src/server/services/randomRollService.ts
+function recordRecentRoll(charId, styleLoras, checkpointName) {
+  recentCharacterIds.unshift(charId);
+  if (recentCharacterIds.length > 4) recentCharacterIds.length = 4;
+  for (const l of styleLoras) {
+    const key = normalizeLoraMatchKey(l);
+    if (!key) continue;
+    recentLoraKeys.unshift(key);
+  }
+  if (recentLoraKeys.length > 6) recentLoraKeys.length = 6;
+  if (checkpointName) {
+    const ckptKey = normalizeLoraMatchKey(checkpointName);
+    if (ckptKey) {
+      recentCheckpointKeys.unshift(ckptKey);
+      if (recentCheckpointKeys.length > 2) recentCheckpointKeys.length = 2;
+    }
+  }
+}
+function getCheckpointCooldownTier2(filename) {
+  const key = normalizeLoraMatchKey(filename);
+  if (!key) return 0;
+  if (recentCheckpointKeys[0] === key) return 1;
+  if (recentCheckpointKeys[1] === key) return 2;
+  return 0;
+}
+function computeSublinearPopularityWeight(usageCount, favoriteCount = 0, isRecentlyUsed = false) {
+  const base = 1 + Math.sqrt(Math.max(0, usageCount));
+  const favBoost = favoriteCount > 0 ? 1 + Math.min(0.6, Math.sqrt(favoriteCount) * 0.15) : 1;
+  const cooldownPenalty = isRecentlyUsed ? 0.15 : 1;
+  return Math.max(0.05, base * favBoost * cooldownPenalty);
+}
+function pickWeightedItem(candidates) {
+  if (candidates.length === 0) return null;
+  const total = candidates.reduce((acc, c) => acc + Math.max(0.01, c.weight), 0);
+  let target = Math.random() * total;
+  for (const c of candidates) {
+    target -= Math.max(0.01, c.weight);
+    if (target <= 0) return c.item;
+  }
+  return candidates[candidates.length - 1].item;
+}
+function normalizeBaseModelGroup(raw) {
+  const s = (raw || "").trim().toLowerCase();
+  if (!s) return "";
+  if (s.includes("krea") || s.includes("flux")) return "flux";
+  if (s.includes("pony")) return "pony";
+  if (s.includes("illustrious") || s.includes("noob")) return "illustrious";
+  if (s.includes("sdxl")) return "sdxl";
+  if (s.includes("sd 1.5") || s.includes("sd15") || s.includes("1.5")) return "sd15";
+  return s;
+}
+function selectRolledCharacter(preferredCharacterId) {
+  let picked;
+  if (preferredCharacterId !== void 0 && preferredCharacterId !== null && Number.isFinite(Number(preferredCharacterId)) && Number(preferredCharacterId) > 0) {
+    picked = db.prepare(
+      `SELECT id, name, description, physical_description
+         FROM characters
+         WHERE id = ?`
+    ).get(Number(preferredCharacterId));
+    if (!picked) {
+      throw new Error(`Selected character #${preferredCharacterId} was not found.`);
+    }
+  } else {
+    const rows = db.prepare(
+      `SELECT
+           c.id,
+           c.name,
+           c.description,
+           c.physical_description,
+           COUNT(DISTINCT CASE WHEN i.id IS NOT NULL THEN ic.image_content_hash END) AS usage_count,
+           COUNT(DISTINCT CASE WHEN i.id IS NOT NULL AND COALESCE(r.is_favorite, 0) = 1 THEN ic.image_content_hash END) AS fav_count
+         FROM characters c
+         LEFT JOIN image_characters ic ON ic.character_id = c.id AND ic.status = 'confirmed'
+         LEFT JOIN images i ON i.content_hash = ic.image_content_hash
+           AND i.is_missing = 0
+           AND COALESCE(i.is_uploaded_reference, 0) = 0
+         LEFT JOIN ratings r ON r.content_hash = i.content_hash
+         WHERE (COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL)
+           AND EXISTS (
+             SELECT 1
+             FROM character_loras cl
+             JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
+             WHERE cl.character_id = c.id
+               AND COALESCE(m.is_installed, 0) = 1
+           )
+         GROUP BY c.id`
+    ).all();
+    if (rows.length === 0) {
+      throw new Error("No characters with an installed LoRA are available for Random Roll.");
+    }
+    picked = pickWeightedItem(
+      rows.map((row) => ({
+        item: row,
+        weight: computeSublinearPopularityWeight(
+          Number(row.usage_count || 0),
+          Number(row.fav_count || 0),
+          rows.length > 1 && recentCharacterIds.includes(row.id)
+        )
+      }))
+    );
+  }
+  const charLoras = db.prepare(
+    `SELECT
+         cl.lora_name,
+         COALESCE(NULLIF(TRIM(cl.trigger_word), ''), m.trigger_word, '') AS trigger_word,
+         m.base_model,
+         COALESCE(m.default_model_strength, 1.0) AS default_model_strength,
+         COALESCE(m.default_clip_strength, 1.0) AS default_clip_strength
+       FROM character_loras cl
+       JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
+       WHERE cl.character_id = ?
+         AND COALESCE(m.is_installed, 0) = 1
+       GROUP BY cl.id`
+  ).all(picked.id);
+  const installedCharLora = charLoras.length > 0 ? charLoras[Math.floor(Math.random() * charLoras.length)] : null;
+  return { character: picked, charLora: installedCharLora };
+}
+function getEligibleDescribedCheckpoints(preferredBaseGroup) {
+  const rows = db.prepare(
+    `SELECT
+         m.filename,
+         m.name,
+         m.nickname,
+         m.base_model,
+         TRIM(COALESCE(m.llm_description, '')) AS llm_description,
+         COUNT(DISTINCT i.id) AS usage_count,
+         COUNT(DISTINCT CASE WHEN COALESCE(r.is_favorite, 0) = 1 THEN i.id END) AS fav_count
+       FROM models m
+       LEFT JOIN image_metadata im ON LOWER(im.checkpoint_name) = LOWER(m.filename)
+       LEFT JOIN images i ON i.id = im.image_id AND i.is_missing = 0 AND COALESCE(i.is_uploaded_reference, 0) = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE m.model_type IN ('checkpoint', 'diffusion')
+         AND COALESCE(m.is_installed, 0) = 1
+         AND COALESCE(m.is_hidden, 0) = 0
+         AND COALESCE(m.mention_enabled, 0) = 1
+         AND TRIM(COALESCE(m.llm_description, '')) != ''
+         AND (COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL)
+       GROUP BY m.id`
+  ).all();
+  if (rows.length === 0) return [];
+  const compatible = preferredBaseGroup ? rows.filter((r) => {
+    const g = normalizeBaseModelGroup(r.base_model);
+    return !g || g === preferredBaseGroup;
+  }) : rows;
+  return compatible.length > 0 ? compatible : rows;
+}
+function pickWeightedCheckpointFallback(candidates, fallbackCheckpoint) {
+  if (candidates.length === 0) return fallbackCheckpoint;
+  const picked = pickWeightedItem(
+    candidates.map((r) => {
+      const baseWeight = computeSublinearPopularityWeight(
+        Number(r.usage_count || 0),
+        Number(r.fav_count || 0)
+      );
+      const tier = candidates.length > 1 ? getCheckpointCooldownTier2(r.filename) : 0;
+      const softCooldown = tier === 1 ? 0.25 : tier === 2 ? 0.6 : 1;
+      return {
+        item: r,
+        weight: Math.max(0.05, baseWeight * softCooldown)
+      };
+    })
+  );
+  return picked?.filename || fallbackCheckpoint;
+}
+function selectRolledStyleLoras(baseGroup) {
+  const roll = Math.random();
+  const targetCount = roll < 0.1 ? 0 : roll < 0.55 ? 1 : 2;
+  if (targetCount === 0) return [];
+  const rows = db.prepare(
+    `SELECT
+         m.filename,
+         m.base_model,
+         COALESCE(m.trigger_word, '') AS trigger_word,
+         COALESCE(m.default_model_strength, 1.0) AS default_model_strength,
+         COALESCE(m.default_clip_strength, 1.0) AS default_clip_strength,
+         COUNT(DISTINCT i.id) AS usage_count,
+         COUNT(DISTINCT CASE WHEN COALESCE(r.is_favorite, 0) = 1 THEN i.id END) AS fav_count
+       FROM models m
+       LEFT JOIN image_loras il ON LOWER(il.lora_name) = LOWER(m.filename)
+       LEFT JOIN images i ON i.id = il.image_id AND i.is_missing = 0 AND COALESCE(i.is_uploaded_reference, 0) = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE m.model_type = 'lora'
+         AND COALESCE(m.is_installed, 0) = 1
+         AND COALESCE(m.is_hidden, 0) = 0
+         AND COALESCE(m.mention_enabled, 0) = 1
+         AND LOWER(COALESCE(m.lora_category, 'unclassified')) != 'character'
+         AND NOT EXISTS (
+           SELECT 1 FROM character_loras cl
+           WHERE cl.model_id = m.id OR LOWER(cl.lora_name) = LOWER(m.filename)
+         )
+         AND (COALESCE(r.is_rejected, 0) = 0 OR i.id IS NULL)
+       GROUP BY m.id`
+  ).all();
+  const compatible = baseGroup ? rows.filter((r) => {
+    const g = normalizeBaseModelGroup(r.base_model);
+    return !g || g === baseGroup;
+  }) : rows;
+  const pool = [...compatible.length > 0 ? compatible : rows];
+  const selected = [];
+  while (selected.length < targetCount && pool.length > 0) {
+    const picked = pickWeightedItem(
+      pool.map((r) => ({
+        item: r,
+        weight: computeSublinearPopularityWeight(
+          Number(r.usage_count || 0),
+          Number(r.fav_count || 0),
+          pool.length > 2 && recentLoraKeys.includes(normalizeLoraMatchKey(r.filename))
+        )
+      }))
+    );
+    if (!picked) break;
+    selected.push({
+      filename: picked.filename,
+      baseModel: picked.base_model,
+      triggerWord: picked.trigger_word || "",
+      modelStrength: Number(picked.default_model_strength ?? 1),
+      clipStrength: Number(picked.default_clip_strength ?? 1)
+    });
+    const idx = pool.findIndex((p) => p.filename === picked.filename);
+    if (idx >= 0) pool.splice(idx, 1);
+  }
+  return selected;
+}
+function isIdentityOrDemographicTag(tag) {
+  const clean = tag.trim();
+  if (!clean) return true;
+  if (filterCharacterIdentityTags([clean]).length === 0) return true;
+  if (/^(?:\d+\s*(?:girl|boy|female|male|other)s?|solo|multiple\s+(?:girls|boys|females|males)|woman|man|girl|boy|female|male|mature\s+(?:female|male)|female\s+focus|male\s+focus|looking\s+at\s+viewer|simple\s+background)$/i.test(
+    clean
+  )) {
+    return true;
+  }
+  return /\b(?:caucasian|white\s+skin|pale\s+skin|fair\s+skin|dark\s+skin|dark-skinned|tan\s+skin|olive\s+skin|ebony|asian|east\s+asian|japanese|korean|chinese|latina|latino|hispanic|african|indian|middle\s+eastern|arab|indigenous|biracial|mixed\s+race|hair|blonde|blond|brunette|redhead|eyes|heterochromia|freckles|skin|tanlines|breasts|bust|chest|hips|waist|thighs|curvy|petite|slender|voluptuous|muscular|athletic|chubby|plump)\b/i.test(
+    clean
+  );
+}
+function selectRolledTags(desiredCount = 5) {
+  const userTagRows = db.prepare(
+    `SELECT t.name AS tag, COUNT(*) AS usage_count
+       FROM image_tags it
+       JOIN tags t ON t.id = it.tag_id
+       JOIN images i ON i.content_hash = it.image_content_hash AND i.is_missing = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE COALESCE(r.is_rejected, 0) = 0
+       GROUP BY t.id
+       ORDER BY usage_count DESC
+       LIMIT 60`
+  ).all();
+  const visualTagRows = db.prepare(
+    `SELECT ivt.tag AS tag, COUNT(*) AS usage_count
+       FROM image_visual_tags ivt
+       JOIN images i ON i.content_hash = ivt.image_content_hash AND i.is_missing = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE COALESCE(r.is_rejected, 0) = 0
+         AND LENGTH(TRIM(ivt.tag)) >= 3
+       GROUP BY LOWER(ivt.tag)
+       ORDER BY usage_count DESC
+       LIMIT 80`
+  ).all();
+  const tagMap = /* @__PURE__ */ new Map();
+  for (const row of [...userTagRows, ...visualTagRows]) {
+    const clean = row.tag.trim();
+    const key = clean.toLowerCase();
+    if (!clean || isIdentityOrDemographicTag(clean)) continue;
+    const prev = tagMap.get(key);
+    tagMap.set(key, {
+      label: prev?.label || clean,
+      count: (prev?.count || 0) + Number(row.usage_count || 0)
+    });
+  }
+  const pool = Array.from(tagMap.values());
+  const chosen = [];
+  while (chosen.length < desiredCount && pool.length > 0) {
+    const picked = pickWeightedItem(
+      pool.map((t) => ({
+        item: t,
+        weight: computeSublinearPopularityWeight(t.count)
+      }))
+    );
+    if (!picked) break;
+    chosen.push(picked.label);
+    const idx = pool.findIndex((p) => p.label.toLowerCase() === picked.label.toLowerCase());
+    if (idx >= 0) pool.splice(idx, 1);
+  }
+  return chosen;
+}
+function selectRolledAspectRatio(fallbackRatio) {
+  const rows = db.prepare(
+    `SELECT i.width, i.height, COALESCE(r.is_favorite, 0) AS is_fav
+       FROM images i
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE i.is_missing = 0
+         AND COALESCE(i.is_uploaded_reference, 0) = 0
+         AND COALESCE(r.is_rejected, 0) = 0
+         AND i.width > 0
+         AND i.height > 0`
+  ).all();
+  if (rows.length === 0) {
+    return fallbackRatio || "2:3 (Portrait Photo)";
+  }
+  const ratioCounts = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    const preset = resolveClosestAspectRatio(row.width, row.height);
+    const cur = ratioCounts.get(preset) || { usage: 0, fav: 0 };
+    cur.usage += 1;
+    if (row.is_fav) cur.fav += 1;
+    ratioCounts.set(preset, cur);
+  }
+  return pickWeightedItem(
+    Array.from(ratioCounts.entries()).map(([ratio, stats]) => ({
+      item: ratio,
+      weight: computeSublinearPopularityWeight(stats.usage, stats.fav)
+    }))
+  ) || fallbackRatio || "2:3 (Portrait Photo)";
+}
+async function runProgressiveRandomRollShots(params) {
+  const previousPrompts = [params.initialPrompt];
+  for (const slot of params.pendingSlots) {
+    if (!db.open || isBatchCancelled(params.batchId)) {
+      break;
+    }
+    try {
+      touchBatchPendingItems(params.batchId);
+      const { prompt } = await composeRandomRollPrompt({
+        characterName: params.characterName,
+        characterDescription: params.characterDescription,
+        characterPhysicalDescription: params.characterPhysicalDescription,
+        loraNames: params.loras.map((l) => l.loraName),
+        hasStyleLoras: params.hasStyleLoras,
+        tags: params.tags,
+        baseCandidates: params.baseCandidates,
+        fallbackCheckpoint: params.lockedCheckpoint,
+        recentCheckpointKeys,
+        shotNumber: slot.itemIndex,
+        totalShots: params.totalCount,
+        previousPrompts,
+        lockedCheckpoint: params.lockedCheckpoint,
+        lockedLoraCheck: params.lockedLoraCheck
+      });
+      if (!db.open || isBatchCancelled(params.batchId)) {
+        break;
+      }
+      previousPrompts.push(prompt);
+      const { cancelled } = await dispatchPendingGenerationItem({
+        batchId: params.batchId,
+        itemId: slot.itemId,
+        prompt,
+        seed: slot.seed,
+        workflowId: params.workflowId,
+        aspectRatio: params.aspectRatio,
+        triggerWord: params.triggerWord,
+        negativePrompt: "",
+        loras: params.loras,
+        checkpointName: params.lockedCheckpoint,
+        characterId: params.characterId
+      });
+      if (cancelled) break;
+    } catch (err) {
+      logger.error(
+        "ComfyUI",
+        `Progressive Random Roll batch #${params.batchId} shot #${slot.itemIndex} failed`,
+        err?.message || err
+      );
+      if (db.open) {
+        db.prepare(
+          `UPDATE generation_items
+           SET status = 'failed', error_message = ?, completed_at = datetime('now')
+           WHERE id = ? AND status = 'pending'`
+        ).run(err?.message || "Failed during progressive Random Roll generation", slot.itemId);
+      }
+    }
+  }
+}
+async function executeRandomRoll(options) {
+  const defaultWf = db.prepare(
+    "SELECT id FROM workflows ORDER BY is_default DESC, is_saved_library DESC, id ASC LIMIT 1"
+  ).get();
+  if (!defaultWf) {
+    throw new Error("No default ComfyUI workflow configured.");
+  }
+  const totalCount = Math.max(
+    1,
+    Math.min(8, Math.round(Number(options?.count ?? 1)) || 1)
+  );
+  const wfDefaults = getWorkflowDefaults(defaultWf.id);
+  const { character, charLora } = selectRolledCharacter(options?.characterId);
+  const charBaseGroup = normalizeBaseModelGroup(charLora?.base_model);
+  const styleLoras = selectRolledStyleLoras(charBaseGroup);
+  const effectiveBaseGroup = charBaseGroup || styleLoras.map((sl) => normalizeBaseModelGroup(sl.baseModel)).find(Boolean) || "";
+  const tags = selectRolledTags(5);
+  const aspectRatio = selectRolledAspectRatio(wfDefaults.defaultAspectRatio ?? null);
+  const baseCandidates = getEligibleDescribedCheckpoints(effectiveBaseGroup);
+  const fallbackCheckpoint = pickWeightedCheckpointFallback(
+    baseCandidates,
+    wfDefaults.defaultCheckpoint ?? null
+  );
+  const loras = [];
+  if (charLora) {
+    loras.push({
+      loraName: charLora.lora_name,
+      modelStrength: Number(charLora.default_model_strength ?? 1),
+      clipStrength: Number(charLora.default_clip_strength ?? 1),
+      triggerWord: charLora.trigger_word || ""
+    });
+  }
+  for (const sl of styleLoras) {
+    loras.push({
+      loraName: sl.filename,
+      modelStrength: sl.modelStrength,
+      clipStrength: sl.clipStrength,
+      triggerWord: sl.triggerWord
+    });
+  }
+  const triggerWord = Array.from(
+    new Set(
+      [charLora?.trigger_word, ...styleLoras.map((sl) => sl.triggerWord)].flatMap((t) => (t || "").split(",")).map((t) => t.trim()).filter(Boolean)
+    )
+  ).join(", ");
+  const { prompt, checkpointName, usedLmStudio, loraCheck } = await composeRandomRollPrompt({
+    characterName: character.name,
+    characterDescription: character.description || "",
+    characterPhysicalDescription: character.physical_description || "",
+    loraNames: loras.map((l) => l.loraName),
+    hasStyleLoras: styleLoras.length > 0,
+    tags,
+    baseCandidates,
+    fallbackCheckpoint,
+    recentCheckpointKeys,
+    shotNumber: 1,
+    totalShots: totalCount
+  });
+  recordRecentRoll(
+    character.id,
+    styleLoras.map((l) => l.filename),
+    checkpointName
+  );
+  const { batch, batches, pendingSlots } = await dispatchGenerationBatch({
+    characterId: character.id,
+    workflowId: defaultWf.id,
+    mode: totalCount > 1 ? "theme_set" : "single",
+    themeTitle: totalCount > 1 ? "Random Roll Set" : "Random Roll",
+    aspectRatio,
+    prompts: [prompt],
+    totalPlannedCount: totalCount,
+    triggerWord,
+    negativePrompt: "",
+    loras,
+    checkpointName
+  });
+  const progressiveTask = totalCount > 1 && pendingSlots && pendingSlots.length > 0 ? runProgressiveRandomRollShots({
+    batchId: batch.id,
+    workflowId: defaultWf.id,
+    pendingSlots,
+    totalCount,
+    initialPrompt: prompt,
+    characterId: character.id,
+    characterName: character.name,
+    characterDescription: character.description || "",
+    characterPhysicalDescription: character.physical_description || "",
+    loras,
+    hasStyleLoras: styleLoras.length > 0,
+    tags,
+    aspectRatio,
+    triggerWord,
+    baseCandidates,
+    lockedCheckpoint: checkpointName,
+    lockedLoraCheck: loraCheck
+  }) : void 0;
+  const rollSummary = {
+    characterId: character.id,
+    characterName: character.name,
+    checkpointName,
+    loraNames: loras.map((l) => l.loraName),
+    tags,
+    aspectRatio,
+    usedLmStudio,
+    prompt,
+    totalCount
+  };
+  logger.info(
+    "ComfyUI",
+    `Random Roll queued batch #${batch.id} (${totalCount} shot${totalCount === 1 ? "" : "s"}): char=${character.name} ckpt=${checkpointName || "default"} loras=${loras.length} ar=${aspectRatio} llm=${usedLmStudio}`
+  );
+  return progressiveTask ? { batch, batches, rollSummary, progressiveTask } : { batch, batches, rollSummary };
+}
+var recentCharacterIds, recentLoraKeys, recentCheckpointKeys;
+var init_randomRollService = __esm({
+  "src/server/services/randomRollService.ts"() {
+    init_db();
+    init_logger();
+    init_utils();
+    init_comfyuiLiveMonitor();
+    init_generationDispatchService();
+    init_llmPromptUtils();
+    init_randomRollPromptService();
+    init_workflowCompilerService();
+    recentCharacterIds = [];
+    recentLoraKeys = [];
+    recentCheckpointKeys = [];
+  }
+});
+
+// src/server/services/libraryUsageStatsService.ts
+function normalizeLoraCategory(raw) {
+  const normalized = (raw || "").trim().toLowerCase();
+  return VALID_LORA_CATEGORIES2.has(normalized) ? normalized : "unclassified";
+}
+function buildUsageRankGroup(rawRows) {
+  const rawScores = /* @__PURE__ */ new Map();
+  let totalEligibleScore = 0;
+  for (const row of rawRows) {
+    const score = computeSublinearPopularityWeight(row.usageCount, row.favoriteCount, false);
+    rawScores.set(row.id, score);
+    if (row.rollEligible) {
+      totalEligibleScore += score;
+    }
+  }
+  const items = rawRows.map((row) => {
+    const rawScore = rawScores.get(row.id) ?? 1;
+    const rollOddsPercent = row.rollEligible && totalEligibleScore > 0 ? Number((rawScore / totalEligibleScore * 100).toFixed(1)) : 0;
+    return {
+      id: row.id,
+      name: row.name,
+      subtitle: row.subtitle,
+      usageCount: row.usageCount,
+      favoriteCount: row.favoriteCount,
+      rollScore: Number(rawScore.toFixed(2)),
+      rollOddsPercent,
+      usageRank: 0,
+      rollRank: 0,
+      rollEligible: row.rollEligible,
+      excludedReasons: row.excludedReasons,
+      category: row.category,
+      baseModel: row.baseModel ?? null,
+      baseGroup: row.baseGroup ?? null,
+      portraitImageId: row.portraitImageId ?? null
+    };
+  });
+  const byUsage = [...items].sort((a, b) => {
+    if (b.usageCount !== a.usageCount) return b.usageCount - a.usageCount;
+    if (b.favoriteCount !== a.favoriteCount) return b.favoriteCount - a.favoriteCount;
+    return a.name.localeCompare(b.name, void 0, { sensitivity: "base" });
+  });
+  byUsage.forEach((item, index) => {
+    item.usageRank = index + 1;
+  });
+  const byRoll = [...items].sort((a, b) => {
+    if (a.rollEligible !== b.rollEligible) return a.rollEligible ? -1 : 1;
+    const scoreA = rawScores.get(a.id) ?? 0;
+    const scoreB = rawScores.get(b.id) ?? 0;
+    if (Math.abs(scoreB - scoreA) > 1e-9) return scoreB - scoreA;
+    if (b.usageCount !== a.usageCount) return b.usageCount - a.usageCount;
+    if (b.favoriteCount !== a.favoriteCount) return b.favoriteCount - a.favoriteCount;
+    return a.name.localeCompare(b.name, void 0, { sensitivity: "base" });
+  });
+  byRoll.forEach((item, index) => {
+    item.rollRank = index + 1;
+  });
+  const eligibleCount = items.filter((i) => i.rollEligible).length;
+  const totalUses = items.reduce((sum, i) => sum + i.usageCount, 0);
+  const totalFavorites = items.reduce((sum, i) => sum + i.favoriteCount, 0);
+  return {
+    totalCount: items.length,
+    eligibleCount,
+    totalUses,
+    totalFavorites,
+    topByUsage: byUsage[0] ?? null,
+    topByRollScore: byRoll[0] ?? null,
+    items: byUsage
+  };
+}
+function queryCharacterUsageRows() {
+  const rows = db.prepare(
+    `SELECT
+         c.id,
+         c.name,
+         c.portrait_image_id,
+         COUNT(DISTINCT CASE
+           WHEN i.id IS NOT NULL AND COALESCE(r.is_rejected, 0) = 0
+           THEN ic.image_content_hash
+         END) AS usage_count,
+         COUNT(DISTINCT CASE
+           WHEN i.id IS NOT NULL AND COALESCE(r.is_rejected, 0) = 0 AND COALESCE(r.is_favorite, 0) = 1
+           THEN ic.image_content_hash
+         END) AS fav_count,
+         EXISTS (
+           SELECT 1
+           FROM character_loras cl
+           JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
+           WHERE cl.character_id = c.id
+             AND COALESCE(m.is_installed, 0) = 1
+         ) AS has_installed_lora
+       FROM characters c
+       LEFT JOIN image_characters ic ON ic.character_id = c.id AND ic.status = 'confirmed'
+       LEFT JOIN images i ON i.content_hash = ic.image_content_hash
+         AND i.is_missing = 0
+         AND COALESCE(i.is_uploaded_reference, 0) = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       GROUP BY c.id`
+  ).all();
+  return rows.map((row) => {
+    const hasLora = Boolean(row.has_installed_lora);
+    return {
+      id: row.id,
+      name: row.name,
+      subtitle: null,
+      usageCount: Number(row.usage_count || 0),
+      favoriteCount: Number(row.fav_count || 0),
+      rollEligible: hasLora,
+      excludedReasons: hasLora ? [] : ["No installed LoRA"],
+      portraitImageId: row.portrait_image_id ?? null
+    };
+  });
+}
+function queryBaseModelUsageRows() {
+  const rows = db.prepare(
+    `SELECT
+         m.id,
+         m.name,
+         m.nickname,
+         m.filename,
+         m.base_model,
+         COALESCE(m.is_hidden, 0) AS is_hidden,
+         COALESCE(m.mention_enabled, 0) AS mention_enabled,
+         TRIM(COALESCE(m.llm_description, '')) AS llm_description,
+         COUNT(DISTINCT CASE
+           WHEN i.id IS NOT NULL AND COALESCE(r.is_rejected, 0) = 0
+           THEN i.id
+         END) AS usage_count,
+         COUNT(DISTINCT CASE
+           WHEN i.id IS NOT NULL AND COALESCE(r.is_rejected, 0) = 0 AND COALESCE(r.is_favorite, 0) = 1
+           THEN i.id
+         END) AS fav_count
+       FROM models m
+       LEFT JOIN image_metadata im ON LOWER(im.checkpoint_name) = LOWER(m.filename)
+       LEFT JOIN images i ON i.id = im.image_id
+         AND i.is_missing = 0
+         AND COALESCE(i.is_uploaded_reference, 0) = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE m.model_type IN ('checkpoint', 'diffusion')
+         AND COALESCE(m.is_installed, 0) = 1
+       GROUP BY m.id`
+  ).all();
+  return rows.map((row) => {
+    const excludedReasons = [];
+    if (row.is_hidden) excludedReasons.push("Hidden");
+    if (!row.mention_enabled) excludedReasons.push("Mention off");
+    if (!row.llm_description) excludedReasons.push("No description");
+    const displayName = (row.nickname || "").trim() || row.name || row.filename;
+    const baseGroup = normalizeBaseModelGroup(row.base_model) || null;
+    return {
+      id: row.id,
+      name: displayName,
+      subtitle: row.filename !== displayName ? row.filename : null,
+      usageCount: Number(row.usage_count || 0),
+      favoriteCount: Number(row.fav_count || 0),
+      rollEligible: excludedReasons.length === 0,
+      excludedReasons,
+      baseModel: row.base_model,
+      baseGroup
+    };
+  });
+}
+function queryLoraUsageRows() {
+  const rows = db.prepare(
+    `SELECT
+         m.id,
+         m.name,
+         m.nickname,
+         m.filename,
+         m.lora_category,
+         m.base_model,
+         COALESCE(m.is_hidden, 0) AS is_hidden,
+         COALESCE(m.mention_enabled, 0) AS mention_enabled,
+         EXISTS (
+           SELECT 1
+           FROM character_loras cl
+           WHERE cl.model_id = m.id OR LOWER(cl.lora_name) = LOWER(m.filename)
+         ) AS is_linked_to_character,
+         COUNT(DISTINCT CASE
+           WHEN i.id IS NOT NULL AND COALESCE(r.is_rejected, 0) = 0
+           THEN i.id
+         END) AS usage_count,
+         COUNT(DISTINCT CASE
+           WHEN i.id IS NOT NULL AND COALESCE(r.is_rejected, 0) = 0 AND COALESCE(r.is_favorite, 0) = 1
+           THEN i.id
+         END) AS fav_count
+       FROM models m
+       LEFT JOIN image_loras il ON LOWER(il.lora_name) = LOWER(m.filename)
+       LEFT JOIN images i ON i.id = il.image_id
+         AND i.is_missing = 0
+         AND COALESCE(i.is_uploaded_reference, 0) = 0
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE m.model_type = 'lora'
+         AND COALESCE(m.is_installed, 0) = 1
+       GROUP BY m.id`
+  ).all();
+  return rows.map((row) => {
+    const category = normalizeLoraCategory(row.lora_category);
+    const excludedReasons = [];
+    if (category === "character" || row.is_linked_to_character) {
+      excludedReasons.push("Character LoRA (via character)");
+    }
+    if (row.is_hidden) excludedReasons.push("Hidden");
+    if (!row.mention_enabled) excludedReasons.push("Mention off");
+    const displayName = (row.nickname || "").trim() || row.name || row.filename;
+    const baseGroup = normalizeBaseModelGroup(row.base_model) || null;
+    return {
+      id: row.id,
+      name: displayName,
+      subtitle: row.filename !== displayName ? row.filename : null,
+      usageCount: Number(row.usage_count || 0),
+      favoriteCount: Number(row.fav_count || 0),
+      rollEligible: excludedReasons.length === 0,
+      excludedReasons,
+      category,
+      baseModel: row.base_model,
+      baseGroup
+    };
+  });
+}
+function buildLoraCategorySummaries(loras) {
+  return LORA_CATEGORY_META.map(({ category, label }) => {
+    const inCategory = loras.filter((item) => item.category === category);
+    const byUsage = [...inCategory].sort((a, b) => a.usageRank - b.usageRank);
+    const byRoll = [...inCategory].sort((a, b) => a.rollRank - b.rollRank);
+    return {
+      category,
+      label,
+      totalCount: inCategory.length,
+      eligibleCount: inCategory.filter((i) => i.rollEligible).length,
+      totalUses: inCategory.reduce((sum, i) => sum + i.usageCount, 0),
+      topByUsage: byUsage[0] ?? null,
+      topByRollScore: byRoll[0] ?? null
+    };
+  });
+}
+function getLibraryUsageStats() {
+  const characters = buildUsageRankGroup(queryCharacterUsageRows());
+  const baseModels = buildUsageRankGroup(queryBaseModelUsageRows());
+  const loras = buildUsageRankGroup(queryLoraUsageRows());
+  const loraByCategory = buildLoraCategorySummaries(loras.items);
+  return {
+    characters,
+    baseModels,
+    loras,
+    loraByCategory,
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+var LORA_CATEGORY_META, VALID_LORA_CATEGORIES2;
+var init_libraryUsageStatsService = __esm({
+  "src/server/services/libraryUsageStatsService.ts"() {
+    init_db();
+    init_randomRollService();
+    LORA_CATEGORY_META = [
+      { category: "style", label: "Style" },
+      { category: "clothing", label: "Clothing" },
+      { category: "concept", label: "Concept" },
+      { category: "pose", label: "Pose" },
+      { category: "object", label: "Object" },
+      { category: "other", label: "Other" },
+      { category: "character", label: "Character" },
+      { category: "unclassified", label: "Unclassified" }
+    ];
+    VALID_LORA_CATEGORIES2 = new Set(
+      LORA_CATEGORY_META.map((entry) => entry.category)
+    );
+  }
+});
+
+// src/server/services/readinessService.ts
+import fs28 from "fs";
+function matchesFilename(installedList, target) {
+  const cleanTarget = target.trim().replace(/\\/g, "/").toLowerCase();
+  if (!cleanTarget) return false;
+  const targetBase = cleanTarget.split("/").pop();
+  return installedList.some((entry) => {
+    const cleanEntry = entry.trim().replace(/\\/g, "/").toLowerCase();
+    return cleanEntry === cleanTarget || cleanEntry.split("/").pop() === targetBase;
+  });
+}
+function getDefaultWorkflowRecord() {
+  const row = db.prepare(
+    `SELECT id, name, api_workflow_json, visual_workflow_json, workflow_hash
+       FROM workflows
+       ORDER BY is_default DESC, id ASC
+       LIMIT 1`
+  ).get();
+  return row ?? null;
+}
+async function getGenerationReadiness() {
+  const wfRow = getDefaultWorkflowRecord();
+  const apiGraph = wfRow ? getExecutableApiGraph(wfRow) : null;
+  const ckptNode = apiGraph?.["30_10"] || (apiGraph ? Object.values(apiGraph).find(
+    (n) => n && typeof n === "object" && (String(n.class_type || "").includes("UNETLoader") || String(n.class_type || "").includes("CheckpointLoader"))
+  ) : null);
+  const defaultUnetName = String(
+    ckptNode?.inputs?.unet_name ?? ckptNode?.inputs?.ckpt_name ?? ""
+  ).trim();
+  const defaultClipName = String(apiGraph?.["30_11"]?.inputs?.clip_name ?? "").trim();
+  const defaultVaeName = String(apiGraph?.["30_12"]?.inputs?.vae_name ?? "").trim();
+  const defaultUpscalerName = String(apiGraph?.["54"]?.inputs?.model_name ?? "").trim();
+  let objectInfo = null;
+  let comfyError = null;
+  const comfyPromise = (async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    try {
+      const res = await fetch(`${appConfig.comfyuiUrl}/object_info`, { signal: controller.signal });
+      if (!res.ok) {
+        comfyError = `HTTP ${res.status}`;
+        return;
+      }
+      objectInfo = await res.json();
+    } catch (err) {
+      comfyError = err?.name === "AbortError" ? "Timed out" : err?.message || "Unreachable";
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  const llmPromise = checkLmStudioStatus().catch(() => ({
+    online: false,
+    baseUrl: appConfig.lmStudioUrl,
+    models: [],
+    selectedModel: "",
+    isVisionCapable: false,
+    visionDetectionSource: "unknown"
+  }));
+  await Promise.all([comfyPromise, llmPromise]);
+  const llmStatus = await llmPromise;
+  const comfyuiOnline = Boolean(objectInfo);
+  const dbModelRows = db.prepare(
+    `SELECT filename, comfyui_path, model_type
+       FROM models
+       WHERE COALESCE(is_installed, 0) = 1`
+  ).all();
+  const liveUnets = [
+    ...extractComfyObjectInfoChoices(objectInfo, "UNETLoader", "unet_name"),
+    ...extractComfyObjectInfoChoices(objectInfo, "CheckpointLoaderSimple", "ckpt_name")
+  ];
+  const dbUnets = dbModelRows.filter((m) => m.model_type === "diffusion" || m.model_type === "checkpoint").map((m) => m.comfyui_path || m.filename);
+  const unetSet = /* @__PURE__ */ new Map();
+  for (const name of [...liveUnets, ...dbUnets]) {
+    const clean = name.trim();
+    if (clean && !unetSet.has(clean.toLowerCase())) {
+      unetSet.set(clean.toLowerCase(), clean);
+    }
+  }
+  const availableUnets = Array.from(unetSet.values()).sort(
+    (a, b) => a.localeCompare(b, void 0, { sensitivity: "base" })
+  );
+  const comfyCheck = {
+    id: "comfyui",
+    label: "ComfyUI Instance",
+    ok: comfyuiOnline,
+    detail: comfyuiOnline ? `Connected at ${appConfig.comfyuiUrl}` : `Offline (${comfyError || "unreachable"}) at ${appConfig.comfyuiUrl}`
+  };
+  const missingNodes = comfyuiOnline ? REQUIRED_KREA2_NODES.filter((nodeName) => !objectInfo?.[nodeName]) : [];
+  const nodesCheck = {
+    id: "nodes",
+    label: "Krea 2 Nodes (rgthree-comfy & comfy-core)",
+    ok: comfyuiOnline && missingNodes.length === 0,
+    detail: !comfyuiOnline ? "Connect ComfyUI to verify required nodes" : missingNodes.length === 0 ? "rgthree Power Lora Loader & comfy-core nodes verified" : `Missing in ComfyUI: ${missingNodes.join(", ")}`
+  };
+  const unetInstalled = Boolean(defaultUnetName) && (comfyuiOnline ? matchesFilename(availableUnets, defaultUnetName) : dbUnets.length === 0 || matchesFilename(dbUnets, defaultUnetName));
+  const defaultUnetCheck = {
+    id: "default_unet",
+    label: "Default Krea 2 Base Model (#30_10)",
+    ok: Boolean(defaultUnetName) && unetInstalled,
+    detail: !defaultUnetName ? "No default UNET selected in the default workflow yet" : unetInstalled ? defaultUnetName : `"${defaultUnetName}" not found in installed ComfyUI models`
+  };
+  const liveClips = extractComfyObjectInfoChoices(objectInfo, "CLIPLoader", "clip_name");
+  const liveVaes = extractComfyObjectInfoChoices(objectInfo, "VAELoader", "vae_name");
+  const liveUpscalers = extractComfyObjectInfoChoices(
+    objectInfo,
+    "UpscaleModelLoader",
+    "model_name"
+  );
+  const dbAllNames = dbModelRows.map((m) => m.comfyui_path || m.filename);
+  const isSupportWeightReady = (liveList, target) => {
+    if (comfyuiOnline && liveList.length > 0) {
+      return matchesFilename(liveList, target);
+    }
+    return dbAllNames.length === 0 || matchesFilename(dbAllNames, target);
+  };
+  const missingSupport = [];
+  if (defaultClipName && !isSupportWeightReady(liveClips, defaultClipName)) {
+    missingSupport.push(defaultClipName);
+  }
+  if (defaultVaeName && !isSupportWeightReady(liveVaes, defaultVaeName)) {
+    missingSupport.push(defaultVaeName);
+  }
+  if (defaultUpscalerName && !isSupportWeightReady(liveUpscalers, defaultUpscalerName)) {
+    missingSupport.push(defaultUpscalerName);
+  }
+  const supportCheck = {
+    id: "support_models",
+    label: "Krea 2 Support Weights (CLIP, VAE, 4x-ESRGAN)",
+    ok: comfyuiOnline ? missingSupport.length === 0 : missingSupport.length === 0,
+    detail: missingSupport.length === 0 ? [defaultClipName, defaultVaeName, defaultUpscalerName].filter(Boolean).join(" \xB7 ") || "Configured" : `Missing in ComfyUI: ${missingSupport.join(", ")}`
+  };
+  const imageCount = db.prepare(
+    "SELECT COUNT(*) AS c FROM images WHERE is_missing = 0 AND COALESCE(is_uploaded_reference, 0) = 0"
+  ).get().c;
+  const outputReadable = fs28.existsSync(appConfig.comfyuiOutputDir);
+  const scanCheck = {
+    id: "library_scan",
+    label: "Gallery Output Folder",
+    ok: outputReadable,
+    optional: true,
+    detail: outputReadable ? `${imageCount.toLocaleString()} indexed image${imageCount === 1 ? "" : "s"} in ${appConfig.comfyuiOutputDir}` : `Directory not found: ${appConfig.comfyuiOutputDir}`
+  };
+  const llmCheck = {
+    id: "local_llm",
+    label: "Local LLM Agent (Optional)",
+    ok: llmStatus.online,
+    optional: true,
+    detail: llmStatus.online ? `Online (${llmStatus.selectedModel || llmStatus.baseUrl})` : "Offline \u2014 Agent & interrogation disabled; core gallery and generation still work"
+  };
+  const checks = [
+    comfyCheck,
+    nodesCheck,
+    defaultUnetCheck,
+    supportCheck,
+    scanCheck,
+    llmCheck
+  ];
+  const requiredChecks = checks.filter((c) => !c.optional);
+  const ready = requiredChecks.every((c) => c.ok);
+  const needsAttention = !defaultUnetName || comfyuiOnline && (missingNodes.length > 0 || !unetInstalled || missingSupport.length > 0);
+  return {
+    ready,
+    needsAttention,
+    comfyuiOnline,
+    comfyuiUrl: appConfig.comfyuiUrl,
+    llmOnline: llmStatus.online,
+    defaultWorkflowId: wfRow?.id ?? null,
+    defaultWorkflowName: wfRow?.name ?? null,
+    defaultUnetName,
+    availableUnets,
+    checks,
+    checkedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+async function setDefaultWorkflowUnet(unetFilename) {
+  const cleanName = String(unetFilename || "").trim();
+  if (!cleanName) {
+    throw new Error("UNET filename cannot be empty.");
+  }
+  const wfRow = getDefaultWorkflowRecord();
+  if (!wfRow) {
+    throw new Error("No default workflow was found in the database.");
+  }
+  const graph = getExecutableApiGraph(wfRow);
+  if (!graph) {
+    throw new Error("Default workflow API graph is missing or invalid.");
+  }
+  const ckptNode = graph["30_10"]?.inputs ? graph["30_10"] : Object.values(graph).find(
+    (n) => n && typeof n === "object" && (String(n.class_type || "").includes("UNETLoader") || String(n.class_type || "").includes("CheckpointLoader"))
+  );
+  if (!ckptNode?.inputs) {
+    throw new Error("Could not find UNET/Checkpoint loader node in the default workflow.");
+  }
+  const field = "unet_name" in ckptNode.inputs ? "unet_name" : "ckpt_name";
+  ckptNode.inputs[field] = cleanName;
+  db.prepare(
+    `UPDATE workflows
+     SET api_workflow_json = ?, updated_at = datetime('now')
+     WHERE id = ?`
+  ).run(JSON.stringify(graph, null, 2), wfRow.id);
+  return getGenerationReadiness();
+}
+var REQUIRED_KREA2_NODES;
+var init_readinessService = __esm({
+  "src/server/services/readinessService.ts"() {
+    init_db();
+    init_config();
+    init_workflowCompilerService();
+    init_llmClientService();
+    init_modelInventoryService();
+    REQUIRED_KREA2_NODES = [
+      "Power Lora Loader (rgthree)",
+      "ResolutionSelector",
+      "ComfySwitchNode",
+      "TextGenerate"
+    ];
+  }
+});
+
+// src/server/routes/systemRoutes.ts
+var systemRoutes_exports = {};
+__export(systemRoutes_exports, {
+  systemRouter: () => systemRouter
+});
+import { Router as Router9 } from "express";
+import fs29 from "fs";
+import path27 from "path";
+function buildSafeConfigSnapshot() {
+  const settingsMap = getSettingsMap([
+    "quick_gen_box_enabled",
+    "save_uploaded_prompt_images",
+    "save_civitai_import_images",
+    "gallery_pill_colors_enabled",
+    "pill_type_settings_json"
+  ]);
+  const cleanupSettings = getModelCleanupSettings();
+  return {
+    comfyuiUrl: appConfig.comfyuiUrl,
+    comfyuiOutputDir: appConfig.comfyuiOutputDir,
+    comfyuiModelsDir: appConfig.comfyuiModelsDir,
+    databasePath: appConfig.databasePath,
+    thumbnailPath: appConfig.thumbnailPath,
+    localModelsDir: appConfig.localModelsDir,
+    downloadsDir: appConfig.downloadsDir,
+    uploadedImagesDir: appConfig.uploadedImagesDir,
+    hasCivitaiKey: Boolean(appConfig.civitaiApiKey),
+    hasHfToken: Boolean(appConfig.hfApiToken),
+    scheduledBackupHours: appConfig.scheduledBackupHours,
+    quickGenBoxEnabled: getBoolSetting("quick_gen_box_enabled", true, settingsMap),
+    saveUploadedPromptImages: getBoolSetting("save_uploaded_prompt_images", false, settingsMap),
+    saveCivitaiImportImages: getBoolSetting("save_civitai_import_images", true, settingsMap),
+    galleryPillColorsEnabled: getBoolSetting("gallery_pill_colors_enabled", false, settingsMap),
+    pillTypeSettings: normalizePillTypeSettings(
+      getJsonSetting("pill_type_settings_json", null, settingsMap)
+    ),
+    autoCleanCopiedModels: cleanupSettings.enabled,
+    autoCleanCopiedModelsHours: cleanupSettings.retentionHours
+  };
+}
+function validateHttpUrl(rawUrl, fieldName) {
+  const trimmed = String(rawUrl ?? "").trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    throw new Error(`${fieldName} cannot be empty.`);
+  }
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`${fieldName} must be a valid HTTP or HTTPS URL.`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`${fieldName} must use http:// or https://.`);
+  }
+  return trimmed;
+}
+function validateAbsoluteDirectoryPath(rawPath, fieldName) {
+  const trimmed = String(rawPath ?? "").trim();
+  if (!trimmed || trimmed.includes("\0")) {
+    throw new Error(`${fieldName} is invalid.`);
+  }
+  if (!path27.isAbsolute(trimmed)) {
+    throw new Error(`${fieldName} must be an absolute path.`);
+  }
+  return path27.resolve(trimmed);
+}
+var systemRouter;
+var init_systemRoutes = __esm({
+  "src/server/routes/systemRoutes.ts"() {
+    init_db();
+    init_config();
+    init_scannerService();
+    init_backupService();
+    init_visualTaggerService();
+    init_modelCleanupService();
+    init_helpDocsService();
+    init_statsService();
+    init_storageStatsService();
+    init_libraryUsageStatsService();
+    init_readinessService();
+    init_settingsService();
+    init_pillSettings();
+    init_httpError();
+    systemRouter = Router9();
+    systemRouter.get("/health", (_req, res) => {
+      const imgCount = db.prepare(
+        "SELECT COUNT(*) AS c FROM images WHERE is_missing = 0 AND COALESCE(is_uploaded_reference, 0) = 0"
+      ).get().c;
+      const charCount = db.prepare("SELECT COUNT(*) AS c FROM characters").get().c;
+      const loraCount = db.prepare("SELECT COUNT(*) AS c FROM models WHERE model_type = 'lora'").get().c;
+      const wfCount = db.prepare("SELECT COUNT(*) AS c FROM workflows").get().c;
+      const comfyRow = db.prepare("SELECT * FROM comfyui_instances WHERE is_default = 1").get();
+      res.json({
+        status: "ok",
+        counts: {
+          images: imgCount,
+          characters: charCount,
+          loras: loraCount,
+          workflows: wfCount
+        },
+        config: buildSafeConfigSnapshot(),
+        comfyuiInstance: comfyRow || null,
+        activeScan: getActiveScanStatus(),
+        visualTagger: getVisualTaggerStatus(),
+        modelCleanup: getModelCleanupStatus()
+      });
+    });
+    systemRouter.patch("/config", (req, res) => {
+      try {
+        const {
+          comfyuiUrl,
+          comfyuiOutputDir,
+          comfyuiModelsDir,
+          downloadsDir,
+          scheduledBackupHours,
+          quickGenBoxEnabled,
+          saveUploadedPromptImages,
+          saveCivitaiImportImages,
+          galleryPillColorsEnabled,
+          pillTypeSettings
+        } = req.body || {};
+        const nextComfyUrl = comfyuiUrl !== void 0 && String(comfyuiUrl).trim() !== "" ? validateHttpUrl(comfyuiUrl, "comfyuiUrl") : null;
+        const nextOutputDir = comfyuiOutputDir !== void 0 && String(comfyuiOutputDir).trim() !== "" ? validateAbsoluteDirectoryPath(comfyuiOutputDir, "comfyuiOutputDir") : null;
+        const nextModelsDir = comfyuiModelsDir !== void 0 && String(comfyuiModelsDir).trim() !== "" ? validateAbsoluteDirectoryPath(comfyuiModelsDir, "comfyuiModelsDir") : null;
+        const nextDownloadsDir = downloadsDir !== void 0 && String(downloadsDir).trim() !== "" ? validateAbsoluteDirectoryPath(downloadsDir, "downloadsDir") : null;
+        let nextBackupHours = null;
+        if (scheduledBackupHours !== void 0) {
+          const parsedHours = Number(scheduledBackupHours);
+          if (!Number.isFinite(parsedHours) || parsedHours < 0 || parsedHours > 500) {
+            throw new Error("scheduledBackupHours must be between 0 and 500.");
+          }
+          nextBackupHours = parsedHours;
+        }
+        if (nextComfyUrl) {
+          appConfig.comfyuiUrl = nextComfyUrl;
+          db.prepare("UPDATE comfyui_instances SET base_url = ? WHERE is_default = 1").run(
+            appConfig.comfyuiUrl
+          );
+        }
+        if (nextOutputDir) {
+          fs29.mkdirSync(nextOutputDir, { recursive: true });
+          appConfig.comfyuiOutputDir = nextOutputDir;
+          startFilesystemWatcher();
+        }
+        if (nextModelsDir) {
+          fs29.mkdirSync(nextModelsDir, { recursive: true });
+          appConfig.comfyuiModelsDir = nextModelsDir;
+        }
+        if (nextDownloadsDir) {
+          fs29.mkdirSync(nextDownloadsDir, { recursive: true });
+          appConfig.downloadsDir = nextDownloadsDir;
+        }
+        if (nextBackupHours !== null) {
+          configureScheduledBackups(nextBackupHours);
+        }
+        const settingUpdates = [];
+        if (quickGenBoxEnabled !== void 0) {
+          settingUpdates.push(["quick_gen_box_enabled", quickGenBoxEnabled ? "1" : "0"]);
+        }
+        if (saveUploadedPromptImages !== void 0) {
+          settingUpdates.push(["save_uploaded_prompt_images", saveUploadedPromptImages ? "1" : "0"]);
+        }
+        if (saveCivitaiImportImages !== void 0) {
+          settingUpdates.push(["save_civitai_import_images", saveCivitaiImportImages ? "1" : "0"]);
+        }
+        if (galleryPillColorsEnabled !== void 0) {
+          settingUpdates.push(["gallery_pill_colors_enabled", galleryPillColorsEnabled ? "1" : "0"]);
+        }
+        if (pillTypeSettings !== void 0) {
+          const normalized = normalizePillTypeSettings(pillTypeSettings);
+          settingUpdates.push(["pill_type_settings_json", JSON.stringify(normalized)]);
+        }
+        setSettings(settingUpdates);
+        res.json({ ok: true, config: buildSafeConfigSnapshot() });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to update configuration") });
+      }
+    });
+    systemRouter.post("/scans/trigger", async (req, res) => {
+      try {
+        const scanType = req.body?.scanType || "incremental";
+        const jobId = await runDirectoryScan(scanType);
+        res.json({ jobId, scan: getActiveScanStatus() });
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Failed to start scan") });
+      }
+    });
+    systemRouter.get("/scans", (_req, res) => {
+      const history = db.prepare("SELECT * FROM scan_jobs ORDER BY id DESC LIMIT 20").all();
+      res.json({ active: getActiveScanStatus(), history });
+    });
+    systemRouter.get("/organization/meta", (_req, res) => {
+      const tags = db.prepare(
+        `SELECT t.*, COUNT(it.image_content_hash) AS imageCount
+       FROM tags t
+       LEFT JOIN image_tags it ON it.tag_id = t.id
+       GROUP BY t.id ORDER BY t.name ASC`
+      ).all();
+      const collections = db.prepare(
+        `SELECT c.*, COUNT(ci.image_content_hash) AS imageCount
+       FROM collections c
+       LEFT JOIN collection_images ci ON ci.collection_id = c.id
+       GROUP BY c.id ORDER BY c.name ASC`
+      ).all();
+      const checkpoints = db.prepare(
+        `SELECT DISTINCT checkpoint_name AS name
+       FROM image_metadata
+       WHERE checkpoint_name IS NOT NULL AND checkpoint_name != ''
+       ORDER BY checkpoint_name ASC`
+      ).all();
+      const savedSearches = db.prepare("SELECT * FROM saved_searches ORDER BY created_at DESC").all().map((s) => ({
+        id: s.id,
+        name: s.name,
+        queryString: s.query_string,
+        filterJson: JSON.parse(s.filter_json || "{}"),
+        createdAt: s.created_at
+      }));
+      res.json({
+        tags,
+        collections,
+        checkpoints: checkpoints.map((c) => c.name),
+        savedSearches
+      });
+    });
+    systemRouter.post("/organization/collections", (req, res) => {
+      try {
+        const { name, description } = req.body || {};
+        if (!name || !String(name).trim()) {
+          res.status(400).json({ error: "Collection name is required" });
+          return;
+        }
+        const info = db.prepare("INSERT INTO collections (name, description) VALUES (?, ?)").run(String(name).trim(), String(description || ""));
+        res.json({ id: Number(info.lastInsertRowid), name: String(name).trim() });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to create collection") });
+      }
+    });
+    systemRouter.delete("/organization/collections/:id", (req, res) => {
+      db.prepare("DELETE FROM collections WHERE id = ?").run(Number(req.params.id));
+      res.json({ ok: true });
+    });
+    systemRouter.post("/organization/tags", (req, res) => {
+      try {
+        const { name, color } = req.body || {};
+        if (!name || !String(name).trim()) {
+          res.status(400).json({ error: "Tag name is required" });
+          return;
+        }
+        const info = db.prepare("INSERT INTO tags (name, color) VALUES (?, ?)").run(String(name).trim(), typeof color === "string" && color ? color : "#6366f1");
+        res.json({ id: Number(info.lastInsertRowid), name: String(name).trim() });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to create tag") });
+      }
+    });
+    systemRouter.post("/organization/saved-searches", (req, res) => {
+      try {
+        const { name, queryString, filterJson } = req.body || {};
+        if (!name || !String(name).trim()) {
+          res.status(400).json({ error: "Saved search name is required" });
+          return;
+        }
+        db.prepare(
+          `INSERT INTO saved_searches (name, query_string, filter_json)
+       VALUES (?, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET
+         query_string = excluded.query_string,
+         filter_json = excluded.filter_json`
+        ).run(String(name).trim(), String(queryString || ""), JSON.stringify(filterJson || {}));
+        res.json({ ok: true });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to save search") });
+      }
+    });
+    systemRouter.delete("/organization/saved-searches/:id", (req, res) => {
+      db.prepare("DELETE FROM saved_searches WHERE id = ?").run(Number(req.params.id));
+      res.json({ ok: true });
+    });
+    systemRouter.get("/backups", (_req, res) => {
+      const integrity = db.pragma("integrity_check", { simple: true });
+      res.json({
+        integrityOk: integrity === "ok",
+        backups: listDatabaseBackups()
+      });
+    });
+    systemRouter.post("/backups/create", async (req, res) => {
+      try {
+        const label = typeof req.body?.label === "string" && req.body.label ? req.body.label : "manual";
+        const backup = await createDatabaseBackup(label);
+        res.json({ backup });
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Backup failed") });
+      }
+    });
+    systemRouter.get("/backups/annotations-export", (_req, res) => {
+      const payload = exportUserAnnotationsJson();
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="couchy-annotations-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.json"`
+      );
+      res.send(JSON.stringify(payload, null, 2));
+    });
+    systemRouter.post("/backups/annotations-restore", (req, res) => {
+      try {
+        const result = restoreUserAnnotationsJson(req.body);
+        res.json({ ok: true, ...result });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to restore annotations") });
+      }
+    });
+    systemRouter.get("/tagger/status", (_req, res) => {
+      res.json(getVisualTaggerStatus());
+    });
+    systemRouter.patch("/tagger/config", (req, res) => {
+      try {
+        const status = updateVisualTaggerConfig(req.body || {});
+        res.json(status);
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to update visual tagger settings") });
+      }
+    });
+    systemRouter.post("/tagger/control", (req, res) => {
+      try {
+        const action = req.body?.action;
+        if (action !== "pause" && action !== "resume" && action !== "scan_unindexed" && action !== "rescan_all") {
+          res.status(400).json({ error: "Invalid tagger control action" });
+          return;
+        }
+        const status = controlVisualTaggerQueue(action);
+        res.json(status);
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to control visual tagger queue") });
+      }
+    });
+    systemRouter.get("/models/cleanup", (_req, res) => {
+      res.json(getModelCleanupStatus());
+    });
+    systemRouter.patch("/models/cleanup", (req, res) => {
+      try {
+        const { enabled, retentionHours } = req.body || {};
+        updateModelCleanupSettings({
+          enabled: enabled !== void 0 ? Boolean(enabled) : void 0,
+          retentionHours: retentionHours !== void 0 ? Number(retentionHours) : void 0
+        });
+        if (enabled === true) {
+          setImmediate(() => {
+            scanAndCleanCopiedDownloads().catch(() => {
+            });
+          });
+        }
+        res.json(getModelCleanupStatus());
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to update model cleanup settings") });
+      }
+    });
+    systemRouter.post("/models/cleanup/run", async (req, res) => {
+      try {
+        const action = req.body?.action || "scan";
+        if (action !== "scan" && action !== "clean_due" && action !== "clean_all") {
+          res.status(400).json({ error: "Invalid cleanup action" });
+          return;
+        }
+        const result = await scanAndCleanCopiedDownloads({
+          deleteEligible: action !== "scan",
+          forceImmediate: action === "clean_all"
+        });
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Model cleanup scan failed") });
+      }
+    });
+    systemRouter.get("/help/readme", (_req, res) => {
+      try {
+        res.json(getHelpDocsPayload());
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Failed to load README.md") });
+      }
+    });
+    systemRouter.post("/help/ask", async (req, res) => {
+      try {
+        const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
+        const result = await askReadmeHelpAssistant({ messages });
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Help Assistant request failed") });
+      }
+    });
+    systemRouter.get("/stats/generations", (req, res) => {
+      try {
+        const period = typeof req.query.period === "string" ? req.query.period : void 0;
+        const granularity = typeof req.query.granularity === "string" ? req.query.granularity : void 0;
+        const anchorDate = typeof req.query.anchorDate === "string" ? req.query.anchorDate : void 0;
+        const tzOffsetRaw = typeof req.query.tzOffsetMinutes === "string" ? Number(req.query.tzOffsetMinutes) : 0;
+        const result = getGenerationStats({
+          period,
+          granularity,
+          anchorDate,
+          tzOffsetMinutes: Number.isFinite(tzOffsetRaw) ? tzOffsetRaw : 0
+        });
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Failed to compute generation stats") });
+      }
+    });
+    systemRouter.get("/stats/storage", async (_req, res) => {
+      try {
+        const result = await getStorageUsageStats();
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Failed to compute storage usage stats") });
+      }
+    });
+    systemRouter.get("/stats/library-usage", (_req, res) => {
+      try {
+        res.json(getLibraryUsageStats());
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Failed to compute library usage stats") });
+      }
+    });
+    systemRouter.get("/system/readiness", async (_req, res) => {
+      try {
+        const result = await getGenerationReadiness();
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err, "Failed to check generation readiness") });
+      }
+    });
+    systemRouter.patch("/system/readiness/default-unet", async (req, res) => {
+      try {
+        const unetName = String(req.body?.unetName ?? "").trim();
+        const result = await setDefaultWorkflowUnet(unetName);
+        res.json(result);
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to update default workflow UNET") });
+      }
+    });
+  }
+});
+
+// src/server/services/llm/batchPromptVerification.ts
+function stripLlmPromptWrapperTags(raw) {
+  return raw.replace(
+    /<lora_check>[\s\S]*?(?:<\/lora_check>|(?=<selected_base>)|(?=<selected_preset>)|(?=<selected_loras>)|(?=<proposed_prompt>)|(?=<proposed_concept>)|(?=<shot(?:_\d+)?>)|$)/gi,
+    ""
+  ).replace(/<selected_(?:base|preset|loras)>[\s\S]*?(?:<\/selected_(?:base|preset|loras)>|$)/gi, "").replace(SHOT_TAG_REGEX, "").trim();
+}
+function parseShotPromptsFromLlm(rawContent) {
+  const withoutCheck = rawContent.replace(
+    /<lora_check>[\s\S]*?(?:<\/lora_check>|(?=<shot(?:_\d+)?>)|(?=<proposed_prompt>)|$)/gi,
+    ""
+  ).trim();
+  const shotTagMatches = Array.from(
+    withoutCheck.matchAll(
+      /<shot(?:_\d+)?>([\s\S]*?)(?:<\/shot(?:_\d+)?>|(?=<shot(?:_\d+)?>)|$)/gi
+    )
+  );
+  if (shotTagMatches.length > 0) {
+    const tagged = shotTagMatches.map(
+      (m) => stripLlmPromptWrapperTags(m[1]).replace(/^["']|["']$/g, "").trim()
+    ).filter(Boolean);
+    if (tagged.length > 0) return tagged;
+  }
+  const cleaned = stripLlmPromptWrapperTags(withoutCheck);
+  const jsonMatch = cleaned.match(/\[[\s\S]*\]/);
+  if (jsonMatch) {
+    try {
+      const arr = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(arr)) {
+        const parsed = arr.map((item) => stripLlmPromptWrapperTags(String(item)).trim()).filter(Boolean);
+        if (parsed.length > 0) return parsed;
+      }
+    } catch {
+    }
+  }
+  return cleaned.split("\n").map(
+    (line) => stripLlmPromptWrapperTags(line).replace(/^\s*(?:\d+[\.\)]\s*|[-*]\s*|Prompt\s*\d+:\s*|Shot\s*\d+:\s*)/i, "").replace(/^["']|["'],?$/g, "").trim()
+  ).filter((line) => line.length > 15 && !line.startsWith("[") && !line.startsWith("]"));
+}
+function extractPromptFromBatchShotResponse(llmContent, characterName) {
+  const proposedMatch = llmContent.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
+  if (proposedMatch && proposedMatch[1]) {
+    const inside = stripLlmPromptWrapperTags(proposedMatch[1]).replace(/^["']|["']$/g, "").trim();
+    return sanitizeAgentPrompt(inside, characterName);
+  }
+  if (/<shot(?:_\d+)?>/i.test(llmContent)) {
+    const shots = parseShotPromptsFromLlm(llmContent);
+    if (shots[0]) {
+      return sanitizeAgentPrompt(shots[0], characterName);
+    }
+  }
+  if (/<(?:lora_check|selected_base|selected_preset|selected_loras|proposed_concept)\b/i.test(llmContent)) {
+    return "";
+  }
+  const fallback = stripLlmPromptWrapperTags(llmContent).replace(/^["']|["']$/g, "").trim();
+  return sanitizeAgentPrompt(fallback, characterName);
+}
+function extractBatchConceptAnchors(theme, recentUserMessages = []) {
+  const combinedSource = [theme, ...recentUserMessages].filter(Boolean).join("\n").trim();
+  const wantsRearView = /\b(?:from\s+behind|back\s+to\s+(?:the\s+)?camera|back\s+turned|rear\s+view|view\s+from\s+behind)\b/i.test(
+    combinedSource
+  );
+  const matchedRules = [];
+  for (const rule of SEMANTIC_ANCHOR_RULES) {
+    if (rule.triggerRegex.test(combinedSource)) {
+      if (rule.label === "panties / underwear" && matchedRules.some((r) => r.label === "white panties / requested underwear")) {
+        continue;
+      }
+      matchedRules.push(rule);
+    }
+  }
+  const rawWords = combinedSource.toLowerCase().replace(/[^a-z0-9\s-]/g, " ").split(/\s+/).map((w) => w.replace(/^-+|-+$/g, "")).filter((w) => w.length >= 4 && !ANCHOR_STOPWORDS.has(w) && !/^\d+$/.test(w));
+  return {
+    combinedSource,
+    wantsRearView,
+    matchedRules,
+    concreteKeywords: Array.from(new Set(rawWords)).slice(0, 20)
+  };
+}
+function verifyBatchShotQuality(params) {
+  const { shotPrompt, theme, recentUserMessages = [], loraCheck = null, nonCharacterLoraBlock = null } = params;
+  const trimmed = shotPrompt.trim();
+  const words = trimmed ? trimmed.split(/\s+/).filter(Boolean) : [];
+  const wordCount = words.length;
+  const reasons = [];
+  if (wordCount < 50 || trimmed.length < 250) {
+    reasons.push(
+      `Prompt is too brief (${wordCount} words); expand to a dense ~80\u2013140 word paragraph covering all 5 visual sections (Medium & Framing, Subject Action & Expression, Wardrobe/Undress, Environment & Props, Lighting & Atmosphere).`
+    );
+  }
+  const anchors = extractBatchConceptAnchors(theme, recentUserMessages);
+  if (!anchors.wantsRearView && anchors.matchedRules.length > 0 && /\b(?:back\s+to\s+(?:the\s+)?camera|seen\s+from\s+behind|facing\s+away\s+from\s+(?:the\s+)?camera)\b/i.test(
+    trimmed
+  )) {
+    reasons.push(
+      "Do not turn the subject with her back to the camera or push her far away\u2014keep her facial expression and requested wardrobe/state of undress clearly visible to the viewer."
+    );
+  }
+  const missedAnchors = [];
+  for (const rule of anchors.matchedRules) {
+    if (!rule.verifyRegex.test(trimmed)) {
+      missedAnchors.push(rule.label);
+    }
+  }
+  if (missedAnchors.length > 0) {
+    reasons.push(
+      `Explicitly depict every missed mandatory concept anchor: ${missedAnchors.join("; ")}.`
+    );
+  }
+  if (anchors.matchedRules.length === 0 && anchors.concreteKeywords.length >= 4) {
+    const promptLower = trimmed.toLowerCase();
+    const matchedCount = anchors.concreteKeywords.filter((kw) => {
+      const stem = kw.length >= 6 ? kw.replace(/(?:ing|ed|es|s)$/, "") : kw;
+      return promptLower.includes(kw) || stem.length >= 4 && promptLower.includes(stem);
+    }).length;
+    if (matchedCount === 0) {
+      reasons.push(
+        `Incorporate concrete concepts from the user's request (${anchors.concreteKeywords.slice(0, 8).join(", ")}).`
+      );
+    }
+  }
+  let expectedLoraKeywords = [];
+  if (nonCharacterLoraBlock) {
+    const loraVerify = verifyPromptReflectsLoraCheck(trimmed, loraCheck, nonCharacterLoraBlock);
+    expectedLoraKeywords = loraVerify.expectedKeywords;
+    if (!loraVerify.passed) {
+      reasons.push(
+        `Reflect the active non-character LoRA visual elements (${loraVerify.expectedKeywords.slice(0, 8).join(", ")}).`
+      );
+    }
+  }
+  return {
+    passed: reasons.length === 0,
+    reasons,
+    wordCount,
+    expectedLoraKeywords
+  };
+}
+var SHOT_TAG_REGEX, SEMANTIC_ANCHOR_RULES, ANCHOR_STOPWORDS;
+var init_batchPromptVerification = __esm({
+  "src/server/services/llm/batchPromptVerification.ts"() {
+    init_llmPromptUtils();
+    SHOT_TAG_REGEX = /<\/?(?:shot(?:_\d+)?|proposed_prompt|proposed_concept)>/gi;
+    SEMANTIC_ANCHOR_RULES = [
+      {
+        label: "bare upper body / state of undress (wearing nothing else)",
+        triggerRegex: /\b(?:nothing\s+(?:else|except|but|other\s+than)|only\s+wear(?:ing)?|wear(?:ing|s)?\s+only|topless|bare[- ]?chested|naked|nude|unclothed)\b/i,
+        verifyRegex: /\b(?:topless|bare[- ]?(?:chest|torso|upper\s+body|skin|shoulders|back|breasts?)|nude|naked|unclothed|exposed\s+(?:breasts?|chest|torso)|no\s+(?:shirt|top|bra)|wearing\s+only|wearing\s+nothing\s+(?:else|above|on\s+top)|nothing\s+but)\b/i
+      },
+      {
+        label: "white panties / requested underwear",
+        triggerRegex: /\bwhite\s+(?:panties|underwear|briefs|lingerie|knickers)\b/i,
+        verifyRegex: /\bwhite\b[^.]{0,35}\b(?:panties|underwear|briefs|lingerie|knickers)\b|\b(?:panties|underwear|briefs|lingerie|knickers)\b[^.]{0,25}\bwhite\b/i
+      },
+      {
+        label: "panties / underwear",
+        triggerRegex: /\b(?:panties|underwear|knickers)\b/i,
+        verifyRegex: /\b(?:panties|underwear|briefs|knickers|lingerie)\b/i
+      },
+      {
+        label: "lingerie / bra",
+        triggerRegex: /\b(?:lingerie|bra|bralette|corset)\b/i,
+        verifyRegex: /\b(?:lingerie|bra|bralette|corset|lace)\b/i
+      },
+      {
+        label: "bikini / swimwear",
+        triggerRegex: /\b(?:bikini|swimsuit|swimwear)\b/i,
+        verifyRegex: /\b(?:bikini|swimsuit|swimwear|two-piece|one-piece)\b/i
+      },
+      {
+        label: "scared / terrified facial expression",
+        triggerRegex: /\b(?:scared|terrified|afraid|frightened|fearful|panicked|panicking|terror|horrified)\b/i,
+        verifyRegex: /\b(?:scared|terrified|afraid|frightened|fear|fearful|terror|panicked|panic|horrified|wide[- ]?eyed|trembling|shivering|startled|dread|alarmed)\b/i
+      },
+      {
+        label: "horror setting & atmosphere",
+        triggerRegex: /\b(?:horror|haunted|nightmare|slasher|macabre|creepy|asylum|dungeon)\b/i,
+        verifyRegex: /\b(?:horror|haunted|nightmare|macabre|creepy|eerie|sinister|menacing|ominous|dread|flickering|decay(?:ed|ing)?|peeling|grimy|rusted|rusty|claustrophobic|abandoned|asylum|dungeon|unsettling|oppressive|blood|chilling|pitch[- ]?black)\b/i
+      }
+    ];
+    ANCHOR_STOPWORDS = /* @__PURE__ */ new Set([
+      "about",
+      "across",
+      "after",
+      "alone",
+      "along",
+      "always",
+      "angle",
+      "another",
+      "around",
+      "atmosphere",
+      "background",
+      "between",
+      "camera",
+      "character",
+      "close",
+      "color",
+      "concept",
+      "continuous",
+      "corridor",
+      "detail",
+      "different",
+      "distinct",
+      "distance",
+      "during",
+      "editorial",
+      "environment",
+      "establishing",
+      "every",
+      "except",
+      "expression",
+      "female",
+      "figure",
+      "first",
+      "focus",
+      "frame",
+      "framing",
+      "front",
+      "genre",
+      "having",
+      "herself",
+      "himself",
+      "image",
+      "include",
+      "into",
+      "keep",
+      "keeping",
+      "light",
+      "lighting",
+      "look",
+      "looking",
+      "looks",
+      "make",
+      "making",
+      "medium",
+      "mood",
+      "more",
+      "movie",
+      "natural",
+      "nothing",
+      "only",
+      "other",
+      "outfit",
+      "overall",
+      "palette",
+      "person",
+      "photo",
+      "photograph",
+      "plan",
+      "portrait",
+      "pose",
+      "progression",
+      "prompt",
+      "roughly",
+      "scene",
+      "setting",
+      "setup",
+      "several",
+      "shoot",
+      "shot",
+      "shots",
+      "should",
+      "show",
+      "showing",
+      "single",
+      "something",
+      "stands",
+      "standing",
+      "story",
+      "style",
+      "styling",
+      "subject",
+      "take",
+      "takes",
+      "theme",
+      "their",
+      "there",
+      "these",
+      "they",
+      "thing",
+      "this",
+      "those",
+      "through",
+      "tight",
+      "toward",
+      "using",
+      "varied",
+      "variety",
+      "visual",
+      "wardrobe",
+      "wear",
+      "wearing",
+      "wears",
+      "where",
+      "which",
+      "while",
+      "wide",
+      "with",
+      "without",
+      "woman",
+      "would"
+    ]);
+  }
+});
+
+// src/server/services/llm/batchExpansionService.ts
+function buildOfflineFallbackShots(params) {
+  const shotVariations = [
+    "medium-wide environmental shot showing full styling and surroundings, dramatic lighting, 35mm lens",
+    "medium three-quarter shot, expressive emotion and dynamic pose, rich atmospheric depth, 50mm lens",
+    "intimate close-up portrait, sharp catchlights in eyes, shallow depth of field, 85mm lens",
+    "low-angle three-quarter composition, dramatic rim lighting, vivid environmental texture",
+    "tight medium-close framing, tense posture, moody directional highlights, 85mm lens",
+    "candid motion shot, natural movement, layered foreground shadow, editorial color grading",
+    "dramatic side-lit composition with crisp contrast, expressive mood, fine detail",
+    "medium seated or crouched composition, environmental storytelling props, atmospheric light"
+  ];
+  const fallbackPrompts = [];
+  for (let i = 0; i < params.count; i++) {
+    const variation = shotVariations[i % shotVariations.length];
+    const rawPrompt = interpolatePromptTemplate(params.basePromptTemplate, {
+      characterName: "the subject",
+      loraSummary: "",
+      theme: `${params.theme}, ${variation}`
+    });
+    fallbackPrompts.push(sanitizeAgentPrompt(rawPrompt, params.characterName));
+  }
+  return fallbackPrompts;
+}
+function extractRecentUserDirection(chatMessages) {
+  if (!Array.isArray(chatMessages) || chatMessages.length === 0) return [];
+  return chatMessages.filter((m) => m && m.role === "user" && typeof m.content === "string" && m.content.trim()).slice(-3).map((m) => m.content.trim());
+}
+function cleanBatchDirectiveForSingleShot(rawDirective) {
+  return rawDirective.replace(/^\s*\d+\.\s*Output Format:.*$/gim, "").replace(/<shot(?:_\d+|_\{count\})?>[\s\S]*?<\/shot(?:_\d+|_\{count\})?>/gi, "").trim();
+}
+function buildShotDirectorSystemPrompt(params) {
+  const {
+    shotNumber,
+    totalShots,
+    characterBlock,
+    attachedLoraBlock,
+    hasNonCharacterLoras,
+    requireLoraCheck,
+    lockedLoraCheck,
+    cleanedDirective,
+    wantsRearView
+  } = params;
+  const corePrompt = [
+    `You are an expert photography director and text-to-image prompt writer authoring Shot ${shotNumber} of ${totalShots} in a cohesive photo set.`,
+    "",
+    "## Shot Prompt Rules",
+    "1. Length & Structure (~80\u2013140 words; zero poetic filler): Write ONE dense, self-contained paragraph inside <proposed_prompt>...</proposed_prompt> following this exact 5-part order:",
+    "   1) Medium & Camera Framing/Angle: photographic or artistic medium, lens look, shot distance, and viewing angle.",
+    "   2) Subject Action, Posture & Contact Points: observable body orientation, limb placement, facial expression, and physical contact with surfaces.",
+    "   3) Wardrobe, Styling, Hairstyle & Makeup: exact garments, fabrics, colors, state of undress/partial nudity, footwear, accessories, hairstyle, and makeup.",
+    "   4) Environment & Fixed Spatial Props: specific room or outdoor surfaces plus 3\u20135 fixed props with their spatial positions.",
+    "   5) Lighting, Color Palette & Atmosphere: primary light sources, direction, color temperature, and palette.",
+    "2. Mandatory Anchor Fidelity & Anti-Sanitization:",
+    "   - Every shot MUST explicitly depict ALL user-requested wardrobe or state of undress (e.g. topless, bare chest, specific underwear/lingerie, or exact outfits), facial expression/emotion, and genre/setting atmosphere\u2014never soften, sanitize, generalize, or omit them.",
+    wantsRearView ? "   - Honor the requested rear/behind framing while still keeping requested styling and setting explicit." : "   - Never turn the subject away with her back to the camera or push her into a tiny far-off silhouette if doing so hides requested facial expression or wardrobe/undress. Even in wide establishing shots, keep the subject close enough and angled so her emotion, state of undress/wardrobe, and surroundings are clearly visible.",
+    "3. Identity & Naming Safety:",
+    "   - Never include character names or model/LoRA filenames (such as .safetensors) inside <proposed_prompt>.",
+    "   - When a Character Profile is attached, match gender/pronouns and key traits (hair color, skin tone, build, signature marks) naturally without copying facial geometry verbatim.",
+    "4. Krea 2 Visual Translation: Express every action, pose, and emotion through concrete spatial relationships, posture, contact points, and readable camera placement.",
+    '5. No Cross-References: Never write meta text such as "same outfit as shot 1" or "Shot 2:"; describe every visual element fresh inside the prompt.'
+  ].join("\n");
+  const loraRule = requireLoraCheck ? [
+    "ATTACHED LORA SELF-CHECK:",
+    "- Before <proposed_prompt>, emit <lora_check>...</lora_check> listing the concrete visual elements (setting, architecture, wardrobe, props, lighting, or photographic texture) from the Attached non-character LoRA(s) that MUST appear in every shot.",
+    "- Explicitly weave those visual elements into <proposed_prompt> without displacing the user\u2019s requested wardrobe, emotion, or setting."
+  ].join("\n") : hasNonCharacterLoras ? [
+    "ATTACHED LORA CONTINUITY:",
+    "- Explicitly reflect the Attached non-character LoRA visual elements inside <proposed_prompt>.",
+    lockedLoraCheck ? `- Required LoRA Cues: ${lockedLoraCheck.replace(/\s+/g, " ").trim()}` : null
+  ].filter(Boolean).join("\n") : null;
+  const directiveBlock = cleanedDirective ? `SET PACING & FRAMING DIRECTION (apply specifically to Shot ${shotNumber} of ${totalShots}):
+${cleanedDirective}` : null;
+  return [corePrompt, characterBlock, attachedLoraBlock, loraRule, directiveBlock].filter(Boolean).join("\n\n");
+}
+async function composeBatchShotPrompt(params) {
+  const {
+    shotNumber,
+    totalShots,
+    theme,
+    recentUserMessages,
+    resolvedBaseStyle,
+    characterName,
+    characterBlock,
+    attachedLoraBlock,
+    nonCharacterLoraBlock,
+    hasNonCharacterLoras,
+    cleanedDirective,
+    previousPrompts,
+    lockedLoraCheck,
+    baseUrl,
+    modelToUse,
+    fallbackPrompt
+  } = params;
+  const requireLoraCheck = hasNonCharacterLoras && shotNumber === 1 && !lockedLoraCheck;
+  const anchors = extractBatchConceptAnchors(theme, recentUserMessages);
+  const systemPrompt = buildShotDirectorSystemPrompt({
+    shotNumber,
+    totalShots,
+    characterBlock,
+    attachedLoraBlock,
+    hasNonCharacterLoras,
+    requireLoraCheck,
+    lockedLoraCheck,
+    cleanedDirective,
+    wantsRearView: anchors.wantsRearView
+  });
+  const userLines = [
+    `Write ONLY Shot ${shotNumber} of ${totalShots} as one dense, standalone ~80\u2013140 word image prompt.`,
+    "",
+    "Set Concept / Theme:",
+    theme.trim()
+  ];
+  const distinctUserTurns = recentUserMessages.filter(
+    (msg) => msg.trim().toLowerCase() !== theme.trim().toLowerCase()
+  );
+  if (distinctUserTurns.length > 0) {
+    userLines.push(
+      "",
+      "Original User Direction (preserve every specific wardrobe item, state of undress, facial emotion, and setting mood verbatim unless superseded):",
+      ...distinctUserTurns.map((m) => `- ${m}`)
+    );
+  }
+  if (anchors.matchedRules.length > 0) {
+    userLines.push(
+      "",
+      `Mandatory Visible Elements Required in Shot ${shotNumber}: ${anchors.matchedRules.map((r) => r.label).join("; ")}.`
+    );
+  }
+  if (resolvedBaseStyle && resolvedBaseStyle.trim() !== theme.trim()) {
+    userLines.push("", "Visual Style Foundation:", resolvedBaseStyle.trim());
+  }
+  if (hasNonCharacterLoras && nonCharacterLoraBlock) {
+    userLines.push("", nonCharacterLoraBlock);
+  }
+  if (previousPrompts.length > 0) {
+    userLines.push(
+      "",
+      `Already Written Shots in This Set (choose a distinctly different camera framing, viewing angle, pose, and action for Shot ${shotNumber} while keeping mandatory wardrobe/mood anchors intact):`,
+      ...previousPrompts.map((p, idx) => `Shot ${idx + 1}: ${p}`)
+    );
+  }
+  const formatHint = requireLoraCheck ? "Return ONLY <lora_check>...</lora_check> followed by <proposed_prompt>...</proposed_prompt> with no extra commentary." : "Return ONLY <proposed_prompt>...</proposed_prompt> with no extra commentary or <shot_N> tags.";
+  userLines.push("", formatHint);
+  const userPrompt = userLines.join("\n");
+  try {
+    const res = await postChatCompletion({
+      baseUrl,
+      model: modelToUse,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0.74,
+      maxTokens: 1150,
+      timeoutMs: 45e3
+    });
+    let latestRaw = res.content;
+    let loraCheck = extractLoraCheckBlock(latestRaw) || lockedLoraCheck;
+    let shotPrompt = extractPromptFromBatchShotResponse(latestRaw, characterName);
+    if (shotPrompt.length < 15) {
+      const formatRetry = await postChatCompletion({
+        baseUrl,
+        model: modelToUse,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: latestRaw },
+          {
+            role: "user",
+            content: `Format Error: Write ONE ~80\u2013140 word standalone image prompt for Shot ${shotNumber} wrapped inside <proposed_prompt>...</proposed_prompt>.`
+          }
+        ],
+        temperature: 0.68,
+        maxTokens: 1e3,
+        timeoutMs: 3e4
+      });
+      const retryPrompt = extractPromptFromBatchShotResponse(formatRetry.content, characterName);
+      if (retryPrompt.length >= 15) {
+        latestRaw = formatRetry.content;
+        shotPrompt = retryPrompt;
+        loraCheck = extractLoraCheckBlock(formatRetry.content) || loraCheck;
+      }
+    }
+    if (shotPrompt.length >= 15) {
+      const quality = verifyBatchShotQuality({
+        shotPrompt,
+        theme,
+        recentUserMessages,
+        loraCheck,
+        nonCharacterLoraBlock
+      });
+      if (!quality.passed) {
+        logger.info(
+          "LocalLLM",
+          `Batch Shot ${shotNumber}/${totalShots} quality check failed (${quality.reasons.join(" | ")}) \u2014 retrying once`
+        );
+        const retryRes = await postChatCompletion({
+          baseUrl,
+          model: modelToUse,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+            { role: "assistant", content: latestRaw },
+            {
+              role: "user",
+              content: [
+                `Self-Check Failed for Shot ${shotNumber}:`,
+                ...quality.reasons.map((r) => `- ${r}`),
+                `Rewrite Shot ${shotNumber} inside <proposed_prompt>...</proposed_prompt> as a dense ~80\u2013140 word 5-part paragraph that fixes every item above.`
+              ].join("\n")
+            }
+          ],
+          temperature: 0.66,
+          maxTokens: 1150,
+          timeoutMs: 35e3
+        });
+        const improved = extractPromptFromBatchShotResponse(retryRes.content, characterName);
+        if (improved.length >= 15) {
+          const improvedQuality = verifyBatchShotQuality({
+            shotPrompt: improved,
+            theme,
+            recentUserMessages,
+            loraCheck,
+            nonCharacterLoraBlock
+          });
+          if (improvedQuality.passed || improvedQuality.wordCount > quality.wordCount) {
+            shotPrompt = improved;
+            loraCheck = extractLoraCheckBlock(retryRes.content) || loraCheck;
+          }
+        }
+      }
+      return { prompt: shotPrompt, loraCheck };
+    }
+  } catch (err) {
+    logger.warn(
+      "LocalLLM",
+      `Batch Shot ${shotNumber}/${totalShots} LLM call failed, using fallback`,
+      err?.message || err
+    );
+  }
+  return { prompt: fallbackPrompt, loraCheck: lockedLoraCheck };
+}
+function prepareBatchContext(params) {
+  const settings = getLmStudioSettings();
+  const count = Math.max(1, Math.min(20, Number(params.count) || 4));
+  const resolvedBaseStyle = params.basePromptTemplate && params.basePromptTemplate.trim() !== "{theme}" ? interpolatePromptTemplate(params.basePromptTemplate, {
+    characterName: "the subject",
+    loraSummary: "",
+    theme: params.theme,
+    count
+  }) : "";
+  const { characterBlock, attachedLoraBlock, nonCharacterLoraBlock, hasNonCharacterLoras } = buildLlmCharacterAndLoraContext({
+    characterName: params.characterName,
+    characterDescription: params.characterDescription,
+    characterPhysicalDescription: params.characterPhysicalDescription,
+    loraNames: params.loraNames
+  });
+  const expansionDirectiveRaw = params.expansionDirective?.trim() || settings.batchExpansionPrompt || DEFAULT_BATCH_EXPANSION_PROMPT;
+  const interpolatedDirective = interpolatePromptTemplate(expansionDirectiveRaw, {
+    characterName: "the subject",
+    loraSummary: "",
+    theme: params.theme,
+    count,
+    basePrompt: resolvedBaseStyle || params.theme
+  });
+  const cleanedDirective = cleanBatchDirectiveForSingleShot(interpolatedDirective);
+  const recentUserMessages = extractRecentUserDirection(params.chatMessages);
+  const fallbackShots = buildOfflineFallbackShots({
+    theme: params.theme,
+    basePromptTemplate: params.basePromptTemplate,
+    characterName: params.characterName,
+    count
+  });
+  return {
+    settings,
+    count,
+    resolvedBaseStyle,
+    characterBlock,
+    attachedLoraBlock,
+    nonCharacterLoraBlock,
+    hasNonCharacterLoras,
+    cleanedDirective,
+    recentUserMessages,
+    fallbackShots
+  };
+}
+async function generatePhotoSetPromptsWithAgent(params) {
+  const ctx = prepareBatchContext(params);
+  const baseUrl = (params.baseUrlOverride || ctx.settings.baseUrl).replace(/\/+$/, "");
+  const status = await checkLmStudioStatus(params.baseUrlOverride ? baseUrl : void 0);
+  const previewSystemPrompt = buildShotDirectorSystemPrompt({
+    shotNumber: 1,
+    totalShots: ctx.count,
+    characterBlock: ctx.characterBlock,
+    attachedLoraBlock: ctx.attachedLoraBlock,
+    hasNonCharacterLoras: ctx.hasNonCharacterLoras,
+    requireLoraCheck: ctx.hasNonCharacterLoras,
+    lockedLoraCheck: null,
+    cleanedDirective: ctx.cleanedDirective,
+    wantsRearView: extractBatchConceptAnchors(params.theme, ctx.recentUserMessages).wantsRearView
+  });
+  if (!status.online) {
+    return {
+      prompts: ctx.fallbackShots,
+      usedLmStudio: false,
+      modelUsed: "Built-in Photo Set Director (Local LLM Offline)",
+      guidingTemplateName: "Per-Shot Batch Director",
+      sentSystemPrompt: previewSystemPrompt,
+      sentUserPrompt: params.theme.trim(),
+      warning: `Local LLM unreachable (${status.error || "offline"}). Generated set variations using Couchy's built-in shot director so you can still preview or edit your set.`
+    };
+  }
+  const modelToUse = params.modelOverride || status.selectedModel || ctx.settings.selectedModel || "local-model";
+  const prompts = [];
+  let lockedLoraCheck = null;
+  let anyLlmSucceeded = false;
+  for (let i = 0; i < ctx.count; i++) {
+    const shotResult = await composeBatchShotPrompt({
+      shotNumber: i + 1,
+      totalShots: ctx.count,
+      theme: params.theme,
+      recentUserMessages: ctx.recentUserMessages,
+      resolvedBaseStyle: ctx.resolvedBaseStyle,
+      characterName: params.characterName,
+      characterBlock: ctx.characterBlock,
+      attachedLoraBlock: ctx.attachedLoraBlock,
+      nonCharacterLoraBlock: ctx.nonCharacterLoraBlock,
+      hasNonCharacterLoras: ctx.hasNonCharacterLoras,
+      cleanedDirective: ctx.cleanedDirective,
+      previousPrompts: prompts,
+      lockedLoraCheck,
+      baseUrl,
+      modelToUse,
+      fallbackPrompt: ctx.fallbackShots[i]
+    });
+    if (shotResult.prompt !== ctx.fallbackShots[i]) {
+      anyLlmSucceeded = true;
+    }
+    if (shotResult.loraCheck && !lockedLoraCheck) {
+      lockedLoraCheck = shotResult.loraCheck;
+    }
+    prompts.push(shotResult.prompt);
+  }
+  return {
+    prompts,
+    usedLmStudio: anyLlmSucceeded,
+    modelUsed: anyLlmSucceeded ? modelToUse : "Built-in Photo Set Director (Local LLM Offline)",
+    guidingTemplateName: "Per-Shot Batch Director",
+    sentSystemPrompt: previewSystemPrompt,
+    sentUserPrompt: params.theme.trim(),
+    ...anyLlmSucceeded ? {} : {
+      warning: "Local LLM did not return valid shot prompts; populated fallback shot variations."
+    }
+  };
+}
+async function runProgressiveAgentBatchShots(params) {
+  const {
+    batchId,
+    pendingSlots,
+    totalCount,
+    initialPrompt,
+    initialLoraCheck,
+    useLlm,
+    baseUrl,
+    modelToUse,
+    batchParams,
+    ctx
+  } = params;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const previousPrompts = [initialPrompt];
+  let lockedLoraCheck = initialLoraCheck;
+  for (const slot of pendingSlots) {
+    if (!db.open || isBatchCancelled(batchId)) {
+      break;
+    }
+    try {
+      touchBatchPendingItems(batchId);
+      let nextPrompt = ctx.fallbackShots[slot.itemIndex - 1] || ctx.fallbackShots[0];
+      if (useLlm) {
+        const composed = await composeBatchShotPrompt({
+          shotNumber: slot.itemIndex,
+          totalShots: totalCount,
+          theme: batchParams.theme,
+          recentUserMessages: ctx.recentUserMessages,
+          resolvedBaseStyle: ctx.resolvedBaseStyle,
+          characterName: batchParams.characterName,
+          characterBlock: ctx.characterBlock,
+          attachedLoraBlock: ctx.attachedLoraBlock,
+          nonCharacterLoraBlock: ctx.nonCharacterLoraBlock,
+          hasNonCharacterLoras: ctx.hasNonCharacterLoras,
+          cleanedDirective: ctx.cleanedDirective,
+          previousPrompts,
+          lockedLoraCheck,
+          baseUrl,
+          modelToUse,
+          fallbackPrompt: nextPrompt
+        });
+        nextPrompt = composed.prompt;
+        if (composed.loraCheck && !lockedLoraCheck) {
+          lockedLoraCheck = composed.loraCheck;
+        }
+      }
+      if (!db.open || isBatchCancelled(batchId)) {
+        break;
+      }
+      previousPrompts.push(nextPrompt);
+      const { cancelled } = await dispatchPendingGenerationItem({
+        batchId,
+        itemId: slot.itemId,
+        prompt: nextPrompt,
+        seed: slot.seed,
+        workflowId: batchParams.workflowId,
+        aspectRatio: batchParams.aspectRatio,
+        megapixels: batchParams.megapixels,
+        steps: batchParams.steps,
+        loras: batchParams.loras,
+        checkpointName: batchParams.checkpointName,
+        triggerWord: batchParams.triggerWord,
+        negativePrompt: batchParams.negativePrompt ?? "",
+        characterId: batchParams.characterId ?? null
+      });
+      if (cancelled) break;
+    } catch (err) {
+      logger.error(
+        "ComfyUI",
+        `Progressive Agent Batch #${batchId} shot #${slot.itemIndex} failed`,
+        err?.message || err
+      );
+      if (db.open) {
+        db.prepare(
+          `UPDATE generation_items
+           SET status = 'failed', error_message = ?, completed_at = datetime('now')
+           WHERE id = ? AND status = 'pending'`
+        ).run(err?.message || "Failed during progressive batch shot generation", slot.itemId);
+      }
+    }
+  }
+}
+async function executeProgressiveAgentBatch(params) {
+  const totalCount = Math.max(1, Math.min(20, Number(params.count) || 1));
+  const loraNames = (params.loras || []).map((l) => l.loraName);
+  const ctx = prepareBatchContext({
+    characterName: params.characterName,
+    characterDescription: params.characterDescription,
+    characterPhysicalDescription: params.characterPhysicalDescription,
+    loraNames,
+    theme: params.theme,
+    count: totalCount,
+    basePromptTemplate: "{theme}",
+    chatMessages: params.chatMessages
+  });
+  const baseUrl = ctx.settings.baseUrl.replace(/\/+$/, "");
+  const status = await checkLmStudioStatus();
+  const useLlm = Boolean(status.online);
+  const modelToUse = status.selectedModel || ctx.settings.selectedModel || "local-model";
+  let shot1Prompt = ctx.fallbackShots[0];
+  let lockedLoraCheck = null;
+  let usedLmStudio = false;
+  if (useLlm) {
+    const shot1 = await composeBatchShotPrompt({
+      shotNumber: 1,
+      totalShots: totalCount,
+      theme: params.theme,
+      recentUserMessages: ctx.recentUserMessages,
+      resolvedBaseStyle: ctx.resolvedBaseStyle,
+      characterName: params.characterName,
+      characterBlock: ctx.characterBlock,
+      attachedLoraBlock: ctx.attachedLoraBlock,
+      nonCharacterLoraBlock: ctx.nonCharacterLoraBlock,
+      hasNonCharacterLoras: ctx.hasNonCharacterLoras,
+      cleanedDirective: ctx.cleanedDirective,
+      previousPrompts: [],
+      lockedLoraCheck: null,
+      baseUrl,
+      modelToUse,
+      fallbackPrompt: ctx.fallbackShots[0]
+    });
+    shot1Prompt = shot1.prompt;
+    lockedLoraCheck = shot1.loraCheck;
+    usedLmStudio = shot1.prompt !== ctx.fallbackShots[0];
+  }
+  const { batch, batches, pendingSlots } = await dispatchGenerationBatch({
+    characterId: params.characterId ?? null,
+    workflowId: params.workflowId,
+    mode: totalCount > 1 ? "theme_set" : "single",
+    themeTitle: params.theme.trim().slice(0, 80),
+    aspectRatio: params.aspectRatio,
+    megapixels: params.megapixels,
+    steps: params.steps,
+    prompts: [shot1Prompt],
+    totalPlannedCount: totalCount,
+    triggerWord: params.triggerWord,
+    negativePrompt: params.negativePrompt ?? "",
+    loras: params.loras,
+    checkpointName: params.checkpointName ?? void 0,
+    seriesId: totalCount > 1 ? null : params.seriesId ?? null,
+    branchFromImageId: totalCount > 1 ? null : params.branchFromImageId ?? null,
+    inspirationFilename: params.inspirationFilename ?? null,
+    chatSnapshot: params.chatSnapshot
+  });
+  const progressiveTask = totalCount > 1 && pendingSlots && pendingSlots.length > 0 ? runProgressiveAgentBatchShots({
+    batchId: batch.id,
+    pendingSlots,
+    totalCount,
+    initialPrompt: shot1Prompt,
+    initialLoraCheck: lockedLoraCheck,
+    useLlm,
+    baseUrl,
+    modelToUse,
+    batchParams: params,
+    ctx
+  }) : void 0;
+  return progressiveTask ? { batch, batches, totalCount, usedLmStudio, progressiveTask } : { batch, batches, totalCount, usedLmStudio };
+}
+var init_batchExpansionService = __esm({
+  "src/server/services/llm/batchExpansionService.ts"() {
+    init_db();
+    init_logger();
+    init_comfyuiLiveMonitor();
+    init_generationDispatchService();
+    init_llmClientService();
+    init_llmPromptUtils();
+    init_batchPromptVerification();
+  }
+});
+
+// src/server/services/llm/llmAgentService.ts
+function getCandidateHandle(c) {
+  return (c.nickname || "").trim().replace(/^@+/, "") || c.name.trim();
+}
+function loadAgentCatalog() {
+  const candidateRows = db.prepare(
+    `SELECT m.name, m.filename, m.lora_category, m.nickname, m.llm_description
+       FROM models m
+       WHERE m.model_type = 'lora'
+         AND m.mention_enabled = 1
+         AND COALESCE(m.is_installed, 0) = 1
+         AND COALESCE(m.is_hidden, 0) = 0
+         AND TRIM(COALESCE(m.llm_description, '')) != ''
+         AND LOWER(COALESCE(m.lora_category, 'unclassified')) != 'character'
+         AND NOT EXISTS (
+           SELECT 1 FROM character_loras cl WHERE LOWER(cl.lora_name) = LOWER(m.filename)
+         )
+       ORDER BY LOWER(COALESCE(NULLIF(TRIM(m.nickname), ''), m.name)) ASC`
+  ).all();
+  const presetRows = db.prepare(
+    `SELECT id, name, nickname, agent_description, checkpoint_name
+       FROM lora_presets
+       WHERE TRIM(COALESCE(agent_description, '')) != ''
+       ORDER BY LOWER(name) ASC`
+  ).all();
+  const presetItemRows = presetRows.length > 0 ? db.prepare(
+    `SELECT preset_id, lora_name, model_strength
+             FROM lora_preset_items
+             ORDER BY preset_id ASC, sort_order ASC, id ASC`
+  ).all() : [];
+  const presetItemsMap = /* @__PURE__ */ new Map();
+  for (const pi of presetItemRows) {
+    const label = `${pi.lora_name.replace(/\.(safetensors|pt|ckpt)$/i, "")}@${Number(pi.model_strength).toFixed(2)}x`;
+    const list = presetItemsMap.get(pi.preset_id) || [];
+    list.push(label);
+    presetItemsMap.set(pi.preset_id, list);
+  }
+  return { candidateRows, presetRows, presetItemsMap };
+}
+function parseAgentConversationResponse(params) {
+  const { withoutThink, availableCandidates, presetRows, targetBatchCount, characterName } = params;
+  const selectedLoras = [];
+  const loraTagMatch = withoutThink.match(/<selected_loras>([\s\S]*?)(?:<\/selected_loras>|$)/i);
+  if (loraTagMatch && loraTagMatch[1]?.trim() && availableCandidates.length > 0) {
+    const rawBlock = loraTagMatch[1].trim();
+    let tokens = [];
+    try {
+      const parsed = JSON.parse(rawBlock);
+      if (Array.isArray(parsed)) {
+        tokens = parsed.map((v) => String(v));
+      }
+    } catch {
+      tokens = rawBlock.replace(/^\[|\]$/g, "").split(/[,\n]+/).map((t) => t.replace(/^["'\s-]+|["'\s]+$/g, "")).filter(Boolean);
+    }
+    const seenFiles = /* @__PURE__ */ new Set();
+    for (const token of tokens) {
+      if (selectedLoras.length >= 3) break;
+      const cleanKey = normalizeLoraMatchKey(token);
+      if (!cleanKey) continue;
+      const matched = availableCandidates.find((c) => {
+        const fileKey = normalizeLoraMatchKey(c.filename);
+        const nameKey = normalizeLoraMatchKey(c.name);
+        const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : "";
+        return cleanKey === fileKey || cleanKey === nameKey || nickKey && cleanKey === nickKey;
+      });
+      if (matched && !seenFiles.has(matched.filename)) {
+        seenFiles.add(matched.filename);
+        selectedLoras.push(matched.filename);
+      }
+    }
+  }
+  let selectedPreset = null;
+  const presetTagMatch = withoutThink.match(/<selected_preset>([\s\S]*?)(?:<\/selected_preset>|$)/i);
+  if (presetTagMatch && presetTagMatch[1]?.trim() && presetRows.length > 0) {
+    let rawPreset = presetTagMatch[1].trim();
+    try {
+      const parsed = JSON.parse(rawPreset);
+      if (typeof parsed === "string") rawPreset = parsed;
+      else if (Array.isArray(parsed) && parsed[0]) rawPreset = String(parsed[0]);
+    } catch {
+    }
+    const cleanPresetKey = rawPreset.replace(/^["'\s@]+|["'\s]+$/g, "").toLowerCase();
+    if (cleanPresetKey) {
+      const matchedPreset = presetRows.find(
+        (p) => p.nickname && p.nickname.trim().replace(/^@+/, "").toLowerCase() === cleanPresetKey || p.name.trim().toLowerCase() === cleanPresetKey
+      );
+      if (matchedPreset) {
+        selectedPreset = {
+          id: matchedPreset.id,
+          name: matchedPreset.name,
+          nickname: matchedPreset.nickname || ""
+        };
+      }
+    }
+  }
+  const loraCheck = extractLoraCheckBlock(withoutThink);
+  const cleanedContent = withoutThink.replace(/<selected_loras>[\s\S]*?(?:<\/selected_loras>|$)/gi, "").replace(/<selected_preset>[\s\S]*?(?:<\/selected_preset>|$)/gi, "").replace(
+    /<lora_check>[\s\S]*?(?:<\/lora_check>|(?=<proposed_prompt>)|(?=<proposed_concept>)|$)/gi,
+    ""
+  ).trim();
+  let proposedPrompt = null;
+  let proposalKind = targetBatchCount > 1 ? "concept" : "prompt";
+  let replyText = cleanedContent;
+  const conceptMatch = cleanedContent.match(/<proposed_concept>([\s\S]*?)(?:<\/proposed_concept>|$)/i);
+  const promptMatch = cleanedContent.match(/<proposed_prompt>([\s\S]*?)(?:<\/proposed_prompt>|$)/i);
+  if (conceptMatch && conceptMatch[1]?.trim()) {
+    proposalKind = "concept";
+    proposedPrompt = sanitizeAgentPrompt(
+      conceptMatch[1].replace(/^["']|["']$/g, "").trim(),
+      characterName
+    );
+    replyText = cleanedContent.replace(/<proposed_concept>[\s\S]*?(?:<\/proposed_concept>|$)/gi, "").replace(/<proposed_prompt>[\s\S]*?(?:<\/proposed_prompt>|$)/gi, "").trim();
+  } else if (promptMatch && promptMatch[1]?.trim()) {
+    proposalKind = targetBatchCount > 1 ? "concept" : "prompt";
+    proposedPrompt = sanitizeAgentPrompt(
+      promptMatch[1].replace(/^["']|["']$/g, "").trim(),
+      characterName
+    );
+    replyText = cleanedContent.replace(/<proposed_prompt>[\s\S]*?(?:<\/proposed_prompt>|$)/gi, "").trim();
+  } else {
+    const fenceMatch = cleanedContent.match(/```(?:prompt|concept|text)?\s*([\s\S]{25,}?)```/i);
+    if (fenceMatch && fenceMatch[1]?.trim()) {
+      proposedPrompt = sanitizeAgentPrompt(
+        fenceMatch[1].replace(/^["']|["']$/g, "").trim(),
+        characterName
+      );
+      replyText = cleanedContent.replace(fenceMatch[0], "").trim();
+    }
+  }
+  if (!replyText && proposedPrompt) {
+    replyText = proposalKind === "concept" ? "Here is the set concept based on our conversation. You can preview/edit individual shots or expand & submit directly:" : "Here is a prompt based on our conversation. You can submit it or keep chatting to refine it:";
+  } else if (!replyText) {
+    replyText = "Could you share a bit more about the scene, lighting, or mood you have in mind?";
+  }
+  return {
+    reply: replyText,
+    proposedPrompt,
+    proposalKind,
+    selectedLoras,
+    selectedPreset,
+    loraCheck
+  };
+}
+async function converseQuickGenPrompt(params) {
+  const status = await checkLmStudioStatus();
+  if (!status.online) {
+    throw new Error("Local LLM is offline. Start your Local LLM server to use Conversation mode.");
+  }
+  const targetBatchCount = Math.max(1, Math.min(20, Number(params.batchCount) || 1));
+  const settings = getLmStudioSettings();
+  const baseUrl = settings.baseUrl.replace(/\/+$/, "");
+  const modelToUse = status.selectedModel || settings.selectedModel || "local-model";
+  const excludedKeys = new Set(
+    (params.excludedLoras || []).map((l) => normalizeLoraMatchKey(l)).filter(Boolean)
+  );
+  const attachedKeys = new Set(
+    (params.loraNames || []).map((l) => normalizeLoraMatchKey(l)).filter(Boolean)
+  );
+  const { candidateRows, presetRows, presetItemsMap } = loadAgentCatalog();
+  const availableCandidates = candidateRows.filter((c) => {
+    const fileKey = normalizeLoraMatchKey(c.filename);
+    const nameKey = normalizeLoraMatchKey(c.name);
+    const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : "";
+    const isExcluded = excludedKeys.has(fileKey) || excludedKeys.has(nameKey) || Boolean(nickKey && excludedKeys.has(nickKey));
+    const isAlreadyAttached = attachedKeys.has(fileKey) || attachedKeys.has(nameKey) || Boolean(nickKey && attachedKeys.has(nickKey));
+    return !isExcluded && !isAlreadyAttached;
+  });
+  const { characterBlock, attachedLoraBlock } = buildLlmCharacterAndLoraContext({
+    characterName: params.characterName,
+    characterDescription: params.characterDescription,
+    characterPhysicalDescription: params.characterPhysicalDescription,
+    loraNames: params.loraNames
+  });
+  const contextNotes = [];
+  if (characterBlock) contextNotes.push(characterBlock);
+  if (params.activePresetName?.trim()) {
+    contextNotes.push(`Active LoRA Preset: ${params.activePresetName.trim()}`);
+  }
+  if (attachedLoraBlock) contextNotes.push(attachedLoraBlock);
+  if (presetRows.length > 0) {
+    const presetLines = presetRows.map((p) => {
+      const handle = getCandidateHandle(p);
+      const baseLabel = p.checkpoint_name ? `Base: ${p.checkpoint_name.replace(/\.(safetensors|pt|ckpt|gguf|sft)$/i, "")}` : "Base: System Workflow Default";
+      const lorasSummary = (presetItemsMap.get(p.id) || []).join(", ");
+      const composition = lorasSummary ? `${baseLabel}; LoRAs: ${lorasSummary}` : baseLabel;
+      return `- @${handle} [${composition}]: ${p.agent_description.trim()}`;
+    });
+    contextNotes.push(
+      [
+        `Saved LoRA Presets available for selection (each applies a curated Base Model + LoRA stack with tuned strengths):`,
+        ...presetLines,
+        `Preset Selection Rules:`,
+        `- If one of these saved Presets best fits the user's request, emit <selected_preset>"@handle"</selected_preset> (choose at most 1 preset).`,
+        `- Do NOT write preset handles or LoRA filenames inside the generated prompt itself.`
+      ].join("\n")
+    );
+  }
+  if (availableCandidates.length > 0) {
+    const catalogLines = availableCandidates.map((c) => {
+      const handle = getCandidateHandle(c);
+      const cat = c.lora_category && c.lora_category !== "unclassified" ? ` [${c.lora_category}]` : "";
+      return `- @${handle}${cat}: ${c.llm_description.trim()}`;
+    });
+    contextNotes.push(
+      [
+        `Optional non-character LoRAs available for selection (not yet attached):`,
+        ...catalogLines,
+        `LoRA Selection Rules:`,
+        `- Already-attached LoRAs remain active automatically\u2014only select NEW additional LoRAs from the list above if they clearly match the scene, style, lighting, or outfit (up to 3 handles inside <selected_loras>["@handle1", "@handle2"]</selected_loras>).`,
+        `- Do NOT select character LoRAs or write trigger words inside the prompt.`
+      ].join("\n")
+    );
+  }
+  if (excludedKeys.size > 0) {
+    const excludedLabels = candidateRows.filter((c) => {
+      const fileKey = normalizeLoraMatchKey(c.filename);
+      const nickKey = c.nickname ? normalizeLoraMatchKey(c.nickname) : "";
+      return excludedKeys.has(fileKey) || nickKey && excludedKeys.has(nickKey);
+    }).map((c) => `@${getCandidateHandle(c)}`);
+    const fallbackExcluded = Array.from(excludedKeys).map((k) => `@${k}`);
+    const displayExcluded = excludedLabels.length > 0 ? excludedLabels : fallbackExcluded;
+    contextNotes.push(
+      `User-deselected LoRAs (respect the user's choice and do NOT select these again unless the user explicitly asks to re-enable them): ${displayExcluded.join(", ")}.`
+    );
+  }
+  if (targetBatchCount > 1) {
+    contextNotes.push(
+      `ACTIVE MODE: BATCH SET CONCEPT (x${targetBatchCount} shots). Wrap the approved Set Concept in <proposed_concept>...</proposed_concept> tags (do not emit <proposed_prompt>). Specify the Visual Medium & Color Palette, Subject Styling/Wardrobe (preserving exact user-requested garments, partial nudity/undress, and facial expression/emotion verbatim without sanitizing), Environment & Lighting plan (preserving requested genre/mood; fixed for one continuous scene, or progression/multi-location if requested), and the ${targetBatchCount}-shot arc.`
+    );
+  } else {
+    contextNotes.push(
+      `ACTIVE MODE: SINGLE SHOT. Wrap each ready-to-generate prompt in <proposed_prompt>...</proposed_prompt> tags.`
+    );
+  }
+  contextNotes.push(
+    [
+      `LORA CONCEPT SELF-CHECK & TAG ORDER (whenever you emit a <proposed_prompt> or <proposed_concept> and any non-character LoRA is already attached OR newly selected via <selected_loras>):`,
+      `1. Write your brief conversational reply first.`,
+      `2. If selecting new LoRA(s) or a preset on this turn, emit <selected_preset> / <selected_loras> BEFORE the prompt block.`,
+      `3. Next, emit <lora_check>...</lora_check> listing each active or newly selected non-character LoRA and the concrete visual elements (setting, architecture, uniform/wardrobe, props, lighting, or style) that MUST appear in your proposal (if the user explicitly asked to change away from an earlier LoRA's setting/outfit, mark that line "Skip: user pivot").`,
+      `4. Finally, emit <proposed_prompt>...</proposed_prompt> (or <proposed_concept>...</proposed_concept>) explicitly weaving every active visual element from <lora_check> into the scene description.`
+    ].join("\n")
+  );
+  const validMessages = params.messages.filter(
+    (m) => m && (m.role === "user" || m.role === "assistant") && Boolean(m.content?.trim() || m.proposedPrompt?.trim())
+  );
+  const recentRaw = validMessages.slice(-10);
+  const recentMessages = recentRaw.map((m) => {
+    const baseContent = (m.content || "").trim();
+    const promptBlock = m.proposedPrompt?.trim();
+    const tag = m.proposalKind === "concept" ? "proposed_concept" : "proposed_prompt";
+    if (m.role === "assistant" && promptBlock && !/<(?:proposed_prompt|proposed_concept)>/i.test(baseContent)) {
+      const combined = baseContent ? `${baseContent}
+
+<${tag}>
+${promptBlock}
+</${tag}>` : `<${tag}>
+${promptBlock}
+</${tag}>`;
+      return { role: m.role, content: combined };
+    }
+    return { role: m.role, content: baseContent };
+  });
+  const latestPromptInAll = [...validMessages].reverse().find((m) => m.role === "assistant" && m.proposedPrompt?.trim())?.proposedPrompt?.trim();
+  const latestPromptInRecent = recentRaw.some(
+    (m) => m.role === "assistant" && (Boolean(m.proposedPrompt?.trim()) || /<(?:proposed_prompt|proposed_concept)>/i.test(m.content || ""))
+  );
+  if (latestPromptInAll && !latestPromptInRecent) {
+    contextNotes.push(
+      `Latest active <proposed_prompt> from earlier in this series (preserve its unchanged wardrobe and environment anchors verbatim unless asked to change them):
+<proposed_prompt>
+${latestPromptInAll}
+</proposed_prompt>`
+    );
+  }
+  const systemPrompt = `${settings.conversationSystemPrompt}
+
+${contextNotes.join("\n\n")}`.trim();
+  try {
+    const res = await postChatCompletion({
+      baseUrl,
+      model: modelToUse,
+      messages: [{ role: "system", content: systemPrompt }, ...recentMessages],
+      temperature: 0.7,
+      maxTokens: 1650,
+      timeoutMs: 9e4
+    });
+    const parsed = parseAgentConversationResponse({
+      withoutThink: res.content,
+      availableCandidates,
+      presetRows,
+      targetBatchCount,
+      characterName: params.characterName
+    });
+    const combinedLoraNames = Array.from(
+      /* @__PURE__ */ new Set([...params.loraNames || [], ...parsed.selectedLoras])
+    );
+    const { nonCharacterLoraBlock, hasNonCharacterLoras } = buildLlmCharacterAndLoraContext({
+      characterName: params.characterName,
+      loraNames: combinedLoraNames
+    });
+    if (parsed.proposedPrompt && hasNonCharacterLoras) {
+      const checkResult = verifyPromptReflectsLoraCheck(
+        parsed.proposedPrompt,
+        parsed.loraCheck,
+        nonCharacterLoraBlock
+      );
+      if (parsed.loraCheck) {
+        logger.info(
+          "LocalLLM",
+          `Conversation <lora_check> (${checkResult.passed ? "verified" : "missed concept \u2014 retrying"}): ${parsed.loraCheck.replace(/\s+/g, " ")}`
+        );
+      }
+      if (!checkResult.passed) {
+        const missingPreview = checkResult.expectedKeywords.slice(0, 10).join(", ");
+        const targetTag = parsed.proposalKind === "concept" ? "proposed_concept" : "proposed_prompt";
+        const retryRes = await postChatCompletion({
+          baseUrl,
+          model: modelToUse,
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...recentMessages,
+            { role: "assistant", content: res.content },
+            {
+              role: "user",
+              content: `Self-Check Verification Failed: Your <${targetTag}> did not explicitly include the visual concepts from your active/selected LoRAs (expected visual cues such as: ${missingPreview}). Keep your conversational reply, <selected_loras>, and <lora_check>, and rewrite <${targetTag}>...</${targetTag}> so the setting, wardrobe, lighting, or visual style explicitly depicts those LoRA elements.`
+            }
+          ],
+          temperature: 0.65,
+          maxTokens: 1500,
+          timeoutMs: 6e4
+        });
+        const retryParsed = parseAgentConversationResponse({
+          withoutThink: retryRes.content,
+          availableCandidates,
+          presetRows,
+          targetBatchCount,
+          characterName: params.characterName
+        });
+        if (retryParsed.proposedPrompt && retryParsed.proposedPrompt.length >= 15) {
+          parsed.proposedPrompt = retryParsed.proposedPrompt;
+          if (retryParsed.reply) parsed.reply = retryParsed.reply;
+          if (retryParsed.selectedLoras.length > 0) {
+            parsed.selectedLoras = Array.from(
+              /* @__PURE__ */ new Set([...parsed.selectedLoras, ...retryParsed.selectedLoras])
+            ).slice(0, 3);
+          }
+          if (!parsed.selectedPreset && retryParsed.selectedPreset) {
+            parsed.selectedPreset = retryParsed.selectedPreset;
+          }
+          logger.info(
+            "LocalLLM",
+            "Conversation post-generation LoRA verification retry succeeded"
+          );
+        }
+      }
+    }
+    logger.info(
+      "LocalLLM",
+      `Conversation turn completed (${res.modelUsed}) | proposalKind=${parsed.proposalKind} | hasProposal=${Boolean(
+        parsed.proposedPrompt
+      )} | selectedLoras=${parsed.selectedLoras.length > 0 ? parsed.selectedLoras.join(", ") : "none"} | selectedPreset=${parsed.selectedPreset ? parsed.selectedPreset.name : "none"}`
+    );
+    return {
+      reply: parsed.reply,
+      proposedPrompt: parsed.proposedPrompt,
+      proposalKind: parsed.proposalKind,
+      selectedLoras: parsed.selectedLoras,
+      selectedPreset: parsed.selectedPreset,
+      modelUsed: res.modelUsed
+    };
+  } catch (err) {
+    if (err?.httpStatus) {
+      logger.error("LocalLLM", `Conversation HTTP ${err.httpStatus}`, err.errBody || err.message);
+    }
+    throw err;
+  }
+}
+var init_llmAgentService = __esm({
+  "src/server/services/llm/llmAgentService.ts"() {
+    init_db();
+    init_logger();
+    init_llmClientService();
+    init_llmPromptUtils();
+    init_batchPromptVerification();
+    init_batchExpansionService();
+  }
+});
+
+// src/server/routes/generationRoutes.ts
+var generationRoutes_exports = {};
+__export(generationRoutes_exports, {
+  generationRouter: () => generationRouter
+});
+import { Router as Router10 } from "express";
+function mapTemplateRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    positiveTemplate: row.positive_template,
+    negativeTemplate: row.negative_template || "",
+    isDefault: Boolean(row.is_default),
+    category: row.category || "character",
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+var generationRouter;
+var init_generationRoutes = __esm({
+  "src/server/routes/generationRoutes.ts"() {
+    init_db();
+    init_llmClientService();
+    init_llmImageAnalysisService();
+    init_llmAgentService();
+    init_batchExpansionService();
+    init_civitaiImageShareService();
+    init_generationDispatchService();
+    init_randomRollService();
+    init_httpError();
+    generationRouter = Router10();
+    generationRouter.get("/templates", (_req, res) => {
+      const rows = db.prepare("SELECT * FROM prompt_templates ORDER BY is_default DESC, updated_at DESC").all();
+      res.json({ items: rows.map(mapTemplateRow) });
+    });
+    generationRouter.post("/templates", (req, res) => {
+      try {
+        const { id, name, positiveTemplate, negativeTemplate, isDefault, category } = req.body || {};
+        if (!name?.trim() || !positiveTemplate?.trim()) {
+          return res.status(400).json({ error: "Template name and positive prompt are required." });
+        }
+        const tx = db.transaction(() => {
+          if (isDefault) {
+            db.prepare("UPDATE prompt_templates SET is_default = 0").run();
+          }
+          if (id) {
+            db.prepare(
+              `UPDATE prompt_templates
+           SET name = ?, positive_template = ?, negative_template = ?,
+               is_default = CASE WHEN ? = 1 THEN 1 ELSE is_default END,
+               category = ?, updated_at = datetime('now')
+           WHERE id = ?`
+            ).run(
+              name.trim(),
+              positiveTemplate.trim(),
+              (negativeTemplate || "").trim(),
+              isDefault ? 1 : 0,
+              category || "character",
+              Number(id)
+            );
+            return Number(id);
+          } else {
+            const info = db.prepare(
+              `INSERT INTO prompt_templates (name, positive_template, negative_template, is_default, category)
+             VALUES (?, ?, ?, ?, ?)`
+            ).run(
+              name.trim(),
+              positiveTemplate.trim(),
+              (negativeTemplate || "").trim(),
+              isDefault ? 1 : 0,
+              category || "character"
+            );
+            return Number(info.lastInsertRowid);
+          }
+        });
+        const savedId = tx();
+        const saved = db.prepare("SELECT * FROM prompt_templates WHERE id = ?").get(savedId);
+        const allRows = db.prepare("SELECT * FROM prompt_templates ORDER BY is_default DESC, updated_at DESC").all();
+        res.json({
+          template: saved ? mapTemplateRow(saved) : null,
+          items: allRows.map(mapTemplateRow)
+        });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to save prompt template.") });
+      }
+    });
+    generationRouter.delete("/templates/:id", (req, res) => {
+      const id = Number(req.params.id);
+      db.prepare("DELETE FROM prompt_templates WHERE id = ?").run(id);
+      const def = db.prepare("SELECT id FROM prompt_templates WHERE is_default = 1").get();
+      if (!def) {
+        const first = db.prepare("SELECT id FROM prompt_templates ORDER BY id ASC LIMIT 1").get();
+        if (first) {
+          db.prepare("UPDATE prompt_templates SET is_default = 1 WHERE id = ?").run(first.id);
+        }
+      }
+      const allRows = db.prepare("SELECT * FROM prompt_templates ORDER BY is_default DESC, updated_at DESC").all();
+      res.json({ ok: true, items: allRows.map(mapTemplateRow) });
+    });
+    generationRouter.get("/lmstudio/status", async (req, res) => {
+      const customUrl = typeof req.query.baseUrl === "string" ? req.query.baseUrl : void 0;
+      const status = await checkLmStudioStatus(customUrl);
+      res.json(status);
+    });
+    generationRouter.post("/lmstudio/config", async (req, res) => {
+      try {
+        const updated = updateLmStudioSettings(req.body || {});
+        const status = await checkLmStudioStatus(updated.baseUrl);
+        res.json(status);
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to update Local LLM settings.") });
+      }
+    });
+    generationRouter.get("/lmstudio/templates", (_req, res) => {
+      res.json({ items: listLmStudioGuidingTemplates() });
+    });
+    generationRouter.post("/lmstudio/templates", (req, res) => {
+      try {
+        const result = saveLmStudioGuidingTemplate(req.body || {});
+        res.json(result);
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to save guiding template.") });
+      }
+    });
+    generationRouter.delete("/lmstudio/templates/:id", (req, res) => {
+      try {
+        const id = Number(req.params.id);
+        const items = deleteLmStudioGuidingTemplate(id);
+        res.json({ ok: true, items });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to delete guiding template.") });
+      }
+    });
+    generationRouter.post("/lmstudio/generate-prompts", async (req, res) => {
+      try {
+        const {
+          characterName,
+          characterDescription,
+          characterPhysicalDescription,
+          loraNames,
+          theme,
+          count,
+          basePromptTemplate,
+          guidingTemplateId,
+          expansionDirective,
+          modelOverride,
+          baseUrlOverride,
+          chatMessages
+        } = req.body || {};
+        if (!theme?.trim()) {
+          return res.status(400).json({ error: "Please enter a photo set concept or theme." });
+        }
+        const result = await generatePhotoSetPromptsWithAgent({
+          characterName: characterName || "Character",
+          characterDescription: characterDescription || "",
+          characterPhysicalDescription: characterPhysicalDescription || "",
+          loraNames: Array.isArray(loraNames) ? loraNames : [],
+          theme: theme.trim(),
+          count: Number(count) || 4,
+          basePromptTemplate: basePromptTemplate || "masterpiece, best quality, portrait of {character}, {lora}, {theme}",
+          guidingTemplateId: guidingTemplateId ? Number(guidingTemplateId) : void 0,
+          expansionDirective: typeof expansionDirective === "string" ? expansionDirective : void 0,
+          modelOverride,
+          baseUrlOverride,
+          chatMessages: Array.isArray(chatMessages) ? chatMessages : void 0
+        });
+        res.json(result);
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to generate photo set prompts.") });
+      }
+    });
+    generationRouter.post("/lmstudio/submit-agent-batch", async (req, res) => {
+      try {
+        const body = req.body || {};
+        if (!body.workflowId) {
+          return res.status(400).json({ error: "Please select a ComfyUI workflow." });
+        }
+        if (!body.theme?.trim()) {
+          return res.status(400).json({ error: "Please enter a photo set concept or theme." });
+        }
+        const { batch, batches, totalCount, usedLmStudio, progressiveTask } = await executeProgressiveAgentBatch({
+          workflowId: Number(body.workflowId),
+          characterId: body.characterId ?? null,
+          characterName: body.characterName || "Character",
+          characterDescription: body.characterDescription || "",
+          characterPhysicalDescription: body.characterPhysicalDescription || "",
+          loras: Array.isArray(body.loras) ? body.loras : [],
+          checkpointName: body.checkpointName,
+          triggerWord: body.triggerWord,
+          negativePrompt: body.negativePrompt ?? "",
+          aspectRatio: body.aspectRatio || "2:3 (Portrait Photo)",
+          megapixels: body.megapixels,
+          steps: body.steps,
+          theme: body.theme.trim(),
+          count: Math.max(1, Math.min(20, Number(body.count) || 4)),
+          seriesId: body.seriesId ?? null,
+          branchFromImageId: body.branchFromImageId ?? null,
+          inspirationFilename: body.inspirationFilename ?? null,
+          chatMessages: Array.isArray(body.chatMessages) ? body.chatMessages : void 0,
+          chatSnapshot: body.chatSnapshot
+        });
+        if (progressiveTask) {
+          void progressiveTask.catch(() => {
+          });
+        }
+        res.json({ batch, batches, totalCount, usedLmStudio });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to expand and submit agent batch.") });
+      }
+    });
+    generationRouter.post("/lmstudio/chat", async (req, res) => {
+      try {
+        const {
+          messages,
+          characterName,
+          characterDescription,
+          characterPhysicalDescription,
+          loraNames,
+          excludedLoras,
+          activePresetName,
+          batchCount
+        } = req.body || {};
+        if (!Array.isArray(messages) || messages.length === 0) {
+          return res.status(400).json({ error: "Please enter a message to start the conversation." });
+        }
+        const result = await converseQuickGenPrompt({
+          messages,
+          characterName: characterName ? String(characterName) : void 0,
+          characterDescription: characterDescription ? String(characterDescription) : void 0,
+          characterPhysicalDescription: characterPhysicalDescription ? String(characterPhysicalDescription) : void 0,
+          loraNames: Array.isArray(loraNames) ? loraNames.map(String) : [],
+          excludedLoras: Array.isArray(excludedLoras) ? excludedLoras.map(String) : [],
+          activePresetName: activePresetName ? String(activePresetName) : void 0,
+          batchCount: batchCount ? Number(batchCount) : 1
+        });
+        res.json(result);
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to converse with Local LLM.") });
+      }
+    });
+    generationRouter.post("/interrogate-image", async (req, res) => {
+      try {
+        const { imageBase64DataUrl, characterName, userHint } = req.body || {};
+        if (!imageBase64DataUrl || typeof imageBase64DataUrl !== "string") {
+          return res.status(400).json({ error: "Please provide an image to interrogate." });
+        }
+        const result = await interrogateImageToPrompt({
+          imageBase64DataUrl,
+          characterName: characterName ? String(characterName) : void 0,
+          userHint: userHint ? String(userHint).trim() : void 0
+        });
+        res.json(result);
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to interrogate image.") });
+      }
+    });
+    generationRouter.post("/civitai-image", async (req, res) => {
+      try {
+        const rawUrl = typeof req.body?.url === "string" ? req.body.url.trim() : "";
+        if (!rawUrl) {
+          return res.status(400).json({ error: "Please provide a Civitai image URL." });
+        }
+        const result = await importCivitaiImageForQuickGen(rawUrl);
+        res.json(result);
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to read Civitai image metadata.") });
+      }
+    });
+    generationRouter.get("/batches", (_req, res) => {
+      res.json({ items: listGenerationBatches(25) });
+    });
+    generationRouter.post("/submit-batch", async (req, res) => {
+      try {
+        const body = req.body || {};
+        if (!body.workflowId) {
+          return res.status(400).json({ error: "Please select a ComfyUI workflow." });
+        }
+        const promptList = Array.isArray(body.prompts) ? body.prompts.map((p) => String(p).trim()).filter(Boolean) : [];
+        if (promptList.length === 0) {
+          return res.status(400).json({ error: "At least one positive prompt is required." });
+        }
+        const result = await dispatchGenerationBatch({
+          characterId: body.characterId,
+          workflowId: Number(body.workflowId),
+          mode: body.mode || "single",
+          themeTitle: body.themeTitle,
+          aspectRatio: body.aspectRatio || "2:3 (Portrait Photo)",
+          megapixels: body.megapixels,
+          steps: body.steps,
+          prompts: promptList,
+          triggerWord: body.triggerWord,
+          negativePrompt: body.negativePrompt ?? "",
+          loras: Array.isArray(body.loras) ? body.loras : [],
+          checkpointName: body.checkpointName,
+          baseSeed: body.baseSeed,
+          seriesId: body.seriesId,
+          branchFromImageId: body.branchFromImageId,
+          inspirationFilename: body.inspirationFilename,
+          chatSnapshot: body.chatSnapshot
+        });
+        res.json(result);
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to submit generation batch.") });
+      }
+    });
+    generationRouter.post("/random-roll", async (req, res) => {
+      try {
+        const rawCharId = req.body?.characterId;
+        const characterId = rawCharId !== void 0 && rawCharId !== null && Number.isFinite(Number(rawCharId)) && Number(rawCharId) > 0 ? Number(rawCharId) : null;
+        const rawCount = req.body?.count;
+        const count = rawCount !== void 0 && rawCount !== null && Number.isFinite(Number(rawCount)) ? Math.max(1, Math.min(8, Math.round(Number(rawCount)))) : 1;
+        const { batch, batches, rollSummary, progressiveTask } = await executeRandomRoll({
+          characterId,
+          count
+        });
+        if (progressiveTask) {
+          void progressiveTask.catch(() => {
+          });
+        }
+        res.json({ batch, batches, rollSummary });
+      } catch (err) {
+        res.status(400).json({ error: getErrorMessage(err, "Failed to roll random generation.") });
+      }
+    });
+  }
+});
+
+// src/server/services/presetsService.ts
+function clampStrength(value, fallback = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(-10, Math.min(10, Math.round(n * 100) / 100));
+}
+function normalizeModelKey(name) {
+  return name.trim().replace(/\\/g, "/").split("/").pop().replace(/\.(safetensors|pt|ckpt|pth|bin|gguf|sft)$/i, "").toLowerCase();
+}
+function cleanNickname(raw) {
+  return (raw || "").trim().replace(/^@+/, "").replace(/\s+/g, "-").toLowerCase();
+}
+function listLoraPresets() {
+  const presetRows = db.prepare(
+    `SELECT *
+       FROM lora_presets
+       ORDER BY LOWER(name) ASC, id ASC`
+  ).all();
+  if (presetRows.length === 0) return [];
+  const itemRows = db.prepare(
+    `SELECT *
+       FROM lora_preset_items
+       ORDER BY preset_id ASC, sort_order ASC, id ASC`
+  ).all();
+  const modelRows = db.prepare(
+    `SELECT name, filename, model_type, lora_category, is_installed, nickname
+       FROM models`
+  ).all();
+  const charLoraRows = db.prepare(
+    `SELECT lora_name, trigger_word
+       FROM character_loras`
+  ).all();
+  const loraModelMap = /* @__PURE__ */ new Map();
+  const baseModelMap = /* @__PURE__ */ new Map();
+  for (const m of modelRows) {
+    const kFile = normalizeModelKey(m.filename);
+    const kName = normalizeModelKey(m.name);
+    if (m.model_type === "lora") {
+      if (kFile) loraModelMap.set(kFile, m);
+      if (kName && !loraModelMap.has(kName)) loraModelMap.set(kName, m);
+    } else if (m.model_type === "diffusion" || m.model_type === "checkpoint") {
+      if (kFile) baseModelMap.set(kFile, m);
+      if (kName && !baseModelMap.has(kName)) baseModelMap.set(kName, m);
+    }
+  }
+  const triggerMap = /* @__PURE__ */ new Map();
+  for (const cl of charLoraRows) {
+    const k = normalizeModelKey(cl.lora_name);
+    if (k && cl.trigger_word?.trim() && !triggerMap.has(k)) {
+      triggerMap.set(k, cl.trigger_word.trim());
+    }
+  }
+  const itemsByPreset = /* @__PURE__ */ new Map();
+  for (const row of itemRows) {
+    const key = normalizeModelKey(row.lora_name);
+    const matched = loraModelMap.get(key);
+    const item = {
+      id: row.id,
+      presetId: row.preset_id,
+      loraName: matched?.filename || row.lora_name,
+      modelStrength: clampStrength(row.model_strength, 1),
+      clipStrength: clampStrength(row.clip_strength, clampStrength(row.model_strength, 1)),
+      sortOrder: Number(row.sort_order ?? 0),
+      displayName: matched?.nickname?.trim().replace(/^@+/, "") || matched?.name || row.lora_name.replace(/\.(safetensors|pt|ckpt)$/i, ""),
+      triggerWord: triggerMap.get(key) || null,
+      isInstalled: matched ? Boolean(matched.is_installed) : true,
+      loraCategory: matched?.lora_category || "unclassified"
+    };
+    const arr = itemsByPreset.get(row.preset_id) || [];
+    arr.push(item);
+    itemsByPreset.set(row.preset_id, arr);
+  }
+  return presetRows.map((p) => {
+    const ckptRaw = (p.checkpoint_name || "").trim() || null;
+    const ckptMeta = ckptRaw ? baseModelMap.get(normalizeModelKey(ckptRaw)) : void 0;
+    return {
+      id: p.id,
+      name: p.name,
+      nickname: p.nickname || "",
+      userDescription: p.user_description || "",
+      agentDescription: p.agent_description || "",
+      pillColor: normalizePresetPillColor(p.pill_color),
+      checkpointName: ckptMeta?.filename || ckptRaw,
+      checkpointDisplayName: ckptRaw ? ckptMeta?.nickname?.trim().replace(/^@+/, "") || ckptMeta?.name || ckptRaw.replace(/\.(safetensors|pt|ckpt|gguf|sft)$/i, "") : null,
+      checkpointInstalled: ckptRaw ? ckptMeta ? Boolean(ckptMeta.is_installed) : true : true,
+      items: itemsByPreset.get(p.id) || [],
+      createdAt: p.created_at,
+      updatedAt: p.updated_at
+    };
+  });
+}
+function saveLoraPreset(payload) {
+  const cleanName = (payload.name || "").trim();
+  if (!cleanName) {
+    throw new Error("Preset name is required.");
+  }
+  const normalizedNick = cleanNickname(payload.nickname);
+  const pillColor = normalizePresetPillColor(payload.pillColor);
+  const checkpointName = (payload.checkpointName || "").trim() || null;
+  const userDescription = (payload.userDescription || "").trim();
+  const agentDescription = (payload.agentDescription || "").trim();
+  const rawItems = Array.isArray(payload.items) ? payload.items : [];
+  const seenLoras = /* @__PURE__ */ new Set();
+  const cleanItems = [];
+  for (const item of rawItems) {
+    const loraName = (item?.loraName || "").trim();
+    const key = normalizeModelKey(loraName);
+    if (!key || seenLoras.has(key)) continue;
+    seenLoras.add(key);
+    const modelStrength = clampStrength(item.modelStrength, 1);
+    const clipStrength = clampStrength(item.clipStrength ?? modelStrength, modelStrength);
+    cleanItems.push({ loraName, modelStrength, clipStrength });
+  }
+  if (cleanItems.length > MAX_LORAS_PER_PRESET) {
+    throw new Error(`A preset can include at most ${MAX_LORAS_PER_PRESET} LoRAs.`);
+  }
+  if (!checkpointName && cleanItems.length === 0) {
+    throw new Error("Select at least one Base Model or LoRA for this preset.");
+  }
+  if (normalizedNick) {
+    const existingNick = db.prepare("SELECT id FROM lora_presets WHERE LOWER(nickname) = LOWER(?) AND id != ?").get(normalizedNick, payload.id ? Number(payload.id) : -1);
+    if (existingNick) {
+      throw new Error(`Preset pill nickname @${normalizedNick} is already in use.`);
+    }
+  }
+  const savedId = db.transaction(() => {
+    let targetId = payload.id ? Number(payload.id) : null;
+    if (targetId) {
+      const exists = db.prepare("SELECT id FROM lora_presets WHERE id = ?").get(targetId);
+      if (!exists) {
+        throw new Error("Preset not found.");
+      }
+      db.prepare(
+        `UPDATE lora_presets
+         SET name = ?, nickname = ?, user_description = ?, agent_description = ?,
+             pill_color = ?, checkpoint_name = ?, updated_at = datetime('now')
+         WHERE id = ?`
+      ).run(
+        cleanName,
+        normalizedNick,
+        userDescription,
+        agentDescription,
+        pillColor,
+        checkpointName,
+        targetId
+      );
+      db.prepare("DELETE FROM lora_preset_items WHERE preset_id = ?").run(targetId);
+    } else {
+      const info = db.prepare(
+        `INSERT INTO lora_presets
+             (name, nickname, user_description, agent_description, pill_color, checkpoint_name)
+           VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(
+        cleanName,
+        normalizedNick,
+        userDescription,
+        agentDescription,
+        pillColor,
+        checkpointName
+      );
+      targetId = Number(info.lastInsertRowid);
+    }
+    const insertItem = db.prepare(
+      `INSERT INTO lora_preset_items (preset_id, lora_name, model_strength, clip_strength, sort_order)
+       VALUES (?, ?, ?, ?, ?)`
+    );
+    cleanItems.forEach((item, index) => {
+      insertItem.run(targetId, item.loraName, item.modelStrength, item.clipStrength, index);
+    });
+    return targetId;
+  })();
+  const allItems = listLoraPresets();
+  const preset = allItems.find((p) => p.id === savedId);
+  if (!preset) {
+    throw new Error("Saved preset could not be reloaded.");
+  }
+  return { preset, items: allItems };
+}
+function deleteLoraPreset(id) {
+  const numericId = Number(id);
+  const info = db.prepare("DELETE FROM lora_presets WHERE id = ?").run(numericId);
+  if (info.changes === 0) {
+    throw new Error("Preset not found.");
+  }
+  return listLoraPresets();
+}
+var MAX_LORAS_PER_PRESET;
+var init_presetsService = __esm({
+  "src/server/services/presetsService.ts"() {
+    init_db();
+    init_pillSettings();
+    MAX_LORAS_PER_PRESET = 5;
+  }
+});
+
+// src/server/routes/presetsRoutes.ts
+var presetsRoutes_exports = {};
+__export(presetsRoutes_exports, {
+  presetsRouter: () => presetsRouter
+});
+import { Router as Router11 } from "express";
+var presetsRouter;
+var init_presetsRoutes = __esm({
+  "src/server/routes/presetsRoutes.ts"() {
+    init_presetsService();
+    presetsRouter = Router11();
+    presetsRouter.get("/", (_req, res) => {
+      try {
+        res.json({ items: listLoraPresets() });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to load presets." });
+      }
+    });
+    presetsRouter.post("/", (req, res) => {
+      try {
+        const result = saveLoraPreset(req.body || {});
+        res.status(201).json(result);
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to create preset." });
+      }
+    });
+    presetsRouter.put("/:id", (req, res) => {
+      try {
+        const id = Number(req.params.id);
+        const result = saveLoraPreset({ ...req.body || {}, id });
+        res.json(result);
+      } catch (err) {
+        res.status(400).json({ error: err?.message || "Failed to update preset." });
+      }
+    });
+    presetsRouter.delete("/:id", (req, res) => {
+      try {
+        const items = deleteLoraPreset(Number(req.params.id));
+        res.json({ ok: true, items });
+      } catch (err) {
+        res.status(404).json({ error: err?.message || "Failed to delete preset." });
+      }
+    });
+  }
+});
+
+// server.ts
+init_config();
+init_logger();
+import express from "express";
+import path28 from "path";
+async function startServer() {
+  const outerApp = express();
+  const innerApp = express();
+  innerApp.use(express.json({ limit: "25mb" }));
+  const disableHmr = process.env.DISABLE_HMR === "true";
+  let viteServer = null;
+  let reconcileTimer = null;
+  const readyPromise = (async () => {
+    const [
+      { runMigrations: runMigrations2 },
+      { imagesRouter: imagesRouter2 },
+      { charactersRouter: charactersRouter2 },
+      { modelsAndWorkflowsRouter: modelsAndWorkflowsRouter2 },
+      { systemRouter: systemRouter2 },
+      { generationRouter: generationRouter2 },
+      { presetsRouter: presetsRouter2 },
+      { notifyWorkspaceDataChanged: notifyWorkspaceDataChanged2 },
+      viteInstance
+    ] = await Promise.all([
+      Promise.resolve().then(() => (init_db(), db_exports)),
+      Promise.resolve().then(() => (init_imagesRoutes(), imagesRoutes_exports)),
+      Promise.resolve().then(() => (init_charactersRoutes(), charactersRoutes_exports)),
+      Promise.resolve().then(() => (init_modelsAndWorkflowsRoutes(), modelsAndWorkflowsRoutes_exports)),
+      Promise.resolve().then(() => (init_systemRoutes(), systemRoutes_exports)),
+      Promise.resolve().then(() => (init_generationRoutes(), generationRoutes_exports)),
+      Promise.resolve().then(() => (init_presetsRoutes(), presetsRoutes_exports)),
+      Promise.resolve().then(() => (init_comfyuiLiveMonitor(), comfyuiLiveMonitor_exports)),
+      process.env.NODE_ENV !== "production" ? import("vite").then(
+        ({ createServer: createViteServer }) => createViteServer({
+          server: {
+            middlewareMode: true,
+            ...disableHmr ? { hmr: false, ws: false, watch: null } : {}
+          },
+          appType: "spa"
+        })
+      ) : Promise.resolve(null)
+    ]);
+    runMigrations2();
+    const readOnlyApiPostPaths = /* @__PURE__ */ new Set([
+      "/images/query",
+      "/images/export-zip",
+      "/comfyui/test",
+      "/reproduce/validate",
+      "/help/ask",
+      "/characters/match-face",
+      "/models/resolve-url",
+      "/generation/lmstudio/chat",
+      "/generation/lmstudio/generate-prompts",
+      "/generation/interrogate-image",
+      "/generation/civitai-image"
+    ]);
+    innerApp.use("/api", (req, res, next) => {
+      if (req.method === "PUT" || req.method === "PATCH" || req.method === "DELETE" || req.method === "POST" && !readOnlyApiPostPaths.has(req.path)) {
+        res.on("finish", () => {
+          if (res.statusCode >= 200 && res.statusCode < 400) {
+            notifyWorkspaceDataChanged2();
+          }
+        });
+      }
+      next();
+    });
+    innerApp.use("/api/images", imagesRouter2);
+    innerApp.use("/api/characters", charactersRouter2);
+    innerApp.use("/api/generation", generationRouter2);
+    innerApp.use("/api/presets", presetsRouter2);
+    innerApp.use("/api", modelsAndWorkflowsRouter2);
+    innerApp.use("/api", systemRouter2);
+    if (viteInstance) {
+      viteServer = viteInstance;
+      innerApp.use(viteInstance.middlewares);
+    } else {
+      const distPath = path28.join(process.cwd(), "dist");
+      innerApp.use(express.static(distPath));
+      innerApp.get("*", (_req, res) => {
+        res.sendFile(path28.join(distPath, "index.html"));
+      });
+    }
+  })();
+  outerApp.use(async (req, res, next) => {
+    try {
+      await readyPromise;
+      innerApp(req, res, next);
+    } catch (err) {
+      next(err);
+    }
+  });
+  const httpServer = outerApp.listen(appConfig.port, "0.0.0.0", () => {
+    logger.info("Server", `Couchy listening on http://0.0.0.0:${appConfig.port}`);
+    logger.info("Server", `Watching ComfyUI Output Directory: ${appConfig.comfyuiOutputDir}`);
+    logger.info("Server", `WebP Thumbnail Cache (384px long-side): ${appConfig.thumbnailPath}`);
+    logger.info("Server", `Local Models Directory: ${appConfig.localModelsDir}`);
+    logger.info("Server", `Rotating Log File: ${logger.logFilePath}`);
+    readyPromise.then(async () => {
+      try {
+        const [
+          {
+            backfillMissingImagePrompts: backfillMissingImagePrompts2,
+            runBackgroundThumbnailMigration: runBackgroundThumbnailMigration2,
+            runDirectoryScan: runDirectoryScan2,
+            startFilesystemWatcher: startFilesystemWatcher2
+          },
+          { syncModelInventory: syncModelInventory2 },
+          { getTaggerSettings: getTaggerSettings2, isTaggerModelDownloaded: isTaggerModelDownloaded2, startVisualTaggerQueue: startVisualTaggerQueue2 },
+          { startDownloadScheduler: startDownloadScheduler2 },
+          { scanAndCleanCopiedDownloads: scanAndCleanCopiedDownloads2, startModelCleanupScheduler: startModelCleanupScheduler2 },
+          { startLoraHeadshotWatcher: startLoraHeadshotWatcher2 }
+        ] = await Promise.all([
+          Promise.resolve().then(() => (init_scannerService(), scannerService_exports)),
+          Promise.resolve().then(() => (init_modelInventoryService(), modelInventoryService_exports)),
+          Promise.resolve().then(() => (init_visualTaggerService(), visualTaggerService_exports)),
+          Promise.resolve().then(() => (init_downloadSchedulerService(), downloadSchedulerService_exports)),
+          Promise.resolve().then(() => (init_modelCleanupService(), modelCleanupService_exports)),
+          Promise.resolve().then(() => (init_characterDownloadAutomationService(), characterDownloadAutomationService_exports))
+        ]);
+        backfillMissingImagePrompts2(false);
+        startFilesystemWatcher2();
+        startDownloadScheduler2();
+        startLoraHeadshotWatcher2();
+        startModelCleanupScheduler2();
+        await runBackgroundThumbnailMigration2();
+        await syncModelInventory2();
+        await scanAndCleanCopiedDownloads2().catch(() => {
+        });
+        await runDirectoryScan2("incremental");
+        if (getTaggerSettings2().enabled && isTaggerModelDownloaded2()) {
+          startVisualTaggerQueue2().catch(() => {
+          });
+        }
+        reconcileTimer = setInterval(() => {
+          runDirectoryScan2("reconcile").catch(() => {
+          });
+        }, 5 * 60 * 1e3);
+      } catch (err) {
+        logger.error("Server", "Background startup scan error", err);
+      }
+    }).catch(() => {
+    });
+  });
+  readyPromise.catch((err) => {
+    logger.error("Server", "Core initialization failed", err);
+    httpServer.close(() => process.exit(1));
+  });
+  httpServer.on("error", (err) => {
+    logger.error("Server", "HTTP server listen error", err);
+    process.exit(1);
+  });
+  const shutdown = async () => {
+    if (reconcileTimer) clearInterval(reconcileTimer);
+    httpServer.close();
+    if (viteServer) {
+      await viteServer.close().catch(() => {
+      });
+    }
+    process.exit(0);
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
+}
+startServer().catch((err) => {
+  logger.error("Server", "Failed to start Couchy server", err);
+  process.exit(1);
+});

@@ -1,16 +1,14 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { db } from '../db.ts';
+import { resolveServerWorkflowPath } from '../workflows/workflowPaths.ts';
 import {
   normalizeResolutionSelectorRatio,
   type GenerationLoraSelection,
 } from '../../shared/types.ts';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const UPSCALE_WORKFLOW_PATH = path.resolve(__dirname, '../workflows/upscale_workflow.json');
-const PRIMARY_WORKFLOW_PATH = path.resolve(__dirname, '../workflows/primary_workflow.json');
+const UPSCALE_WORKFLOW_PATH = resolveServerWorkflowPath('upscale_workflow.json');
+const PRIMARY_WORKFLOW_PATH = resolveServerWorkflowPath('primary_workflow.json');
 
 /**
  * Computes pixel width & height (multiples of 64) from an aspect ratio string and megapixels (0.1 - 10.0).
