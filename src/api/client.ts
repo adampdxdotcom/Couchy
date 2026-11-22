@@ -39,6 +39,7 @@ import type {
   ComfyUiTestResponse,
   DatabaseBackupEntry,
   DownloadJobRecord,
+  HealthConfigSnapshot,
   HealthResponse,
   ModelImpactReport,
   ReproductionJobRecord,
@@ -72,7 +73,7 @@ export const api = {
   getHealth: () => requestJson<HealthResponse>('/api/health'),
 
   updateConfig: (payload: UpdateConfigPayload) =>
-    requestJson<{ ok: boolean; config: Record<string, unknown> }>('/api/config', {
+    requestJson<{ ok: boolean; config: HealthConfigSnapshot }>('/api/config', {
       method: 'PATCH',
       body: JSON.stringify(payload),
     }),

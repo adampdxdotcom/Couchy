@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import fs from 'fs';
+import path from 'path';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
 import {
@@ -39,7 +40,11 @@ import {
   setSettings,
 } from '../services/settingsService.ts';
 import { normalizePillTypeSettings } from '../../shared/pillSettings.ts';
-import type { ComfyUiInstanceRecord, UpdateConfigPayload } from '../../shared/apiTypes.ts';
+import type {
+  ComfyUiInstanceRecord,
+  HealthConfigSnapshot,
+  UpdateConfigPayload,
+} from '../../shared/apiTypes.ts';
 import { getErrorMessage } from '../utils/httpError.ts';
 
 interface SavedSearchDbRow {
@@ -51,6 +56,71 @@ interface SavedSearchDbRow {
 }
 
 export const systemRouter = Router();
+
+/**
+ * Builds the client-safe runtime config snapshot without exposing server-side API keys or tokens.
+ */
+function buildSafeConfigSnapshot(): HealthConfigSnapshot {
+  const settingsMap = getSettingsMap([
+    'quick_gen_box_enabled',
+    'save_uploaded_prompt_images',
+    'save_civitai_import_images',
+    'gallery_pill_colors_enabled',
+    'pill_type_settings_json',
+  ]);
+  const cleanupSettings = getModelCleanupSettings();
+
+  return {
+    comfyuiUrl: appConfig.comfyuiUrl,
+    comfyuiOutputDir: appConfig.comfyuiOutputDir,
+    comfyuiModelsDir: appConfig.comfyuiModelsDir,
+    databasePath: appConfig.databasePath,
+    thumbnailPath: appConfig.thumbnailPath,
+    localModelsDir: appConfig.localModelsDir,
+    downloadsDir: appConfig.downloadsDir,
+    uploadedImagesDir: appConfig.uploadedImagesDir,
+    hasCivitaiKey: Boolean(appConfig.civitaiApiKey),
+    hasHfToken: Boolean(appConfig.hfApiToken),
+    scheduledBackupHours: appConfig.scheduledBackupHours,
+    quickGenBoxEnabled: getBoolSetting('quick_gen_box_enabled', true, settingsMap),
+    saveUploadedPromptImages: getBoolSetting('save_uploaded_prompt_images', false, settingsMap),
+    saveCivitaiImportImages: getBoolSetting('save_civitai_import_images', true, settingsMap),
+    galleryPillColorsEnabled: getBoolSetting('gallery_pill_colors_enabled', false, settingsMap),
+    pillTypeSettings: normalizePillTypeSettings(
+      getJsonSetting<unknown>('pill_type_settings_json', null, settingsMap)
+    ),
+    autoCleanCopiedModels: cleanupSettings.enabled,
+    autoCleanCopiedModelsHours: cleanupSettings.retentionHours,
+  };
+}
+
+function validateHttpUrl(rawUrl: unknown, fieldName: string): string {
+  const trimmed = String(rawUrl ?? '').trim().replace(/\/+$/, '');
+  if (!trimmed) {
+    throw new Error(`${fieldName} cannot be empty.`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`${fieldName} must be a valid HTTP or HTTPS URL.`);
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error(`${fieldName} must use http:// or https://.`);
+  }
+  return trimmed;
+}
+
+function validateAbsoluteDirectoryPath(rawPath: unknown, fieldName: string): string {
+  const trimmed = String(rawPath ?? '').trim();
+  if (!trimmed || trimmed.includes('\0')) {
+    throw new Error(`${fieldName} is invalid.`);
+  }
+  if (!path.isAbsolute(trimmed)) {
+    throw new Error(`${fieldName} must be an absolute path.`);
+  }
+  return path.resolve(trimmed);
+}
 
 /**
  * GET /api/health
@@ -72,30 +142,6 @@ systemRouter.get('/health', (_req, res) => {
   const comfyRow = db
     .prepare('SELECT * FROM comfyui_instances WHERE is_default = 1')
     .get() as ComfyUiInstanceRecord | undefined;
-  const settingsMap = getSettingsMap([
-    'quick_gen_box_enabled',
-    'save_uploaded_prompt_images',
-    'save_civitai_import_images',
-    'gallery_pill_colors_enabled',
-    'pill_type_settings_json',
-  ]);
-  const quickGenBoxEnabled = getBoolSetting('quick_gen_box_enabled', true, settingsMap);
-  const saveUploadedPromptImages = getBoolSetting(
-    'save_uploaded_prompt_images',
-    false,
-    settingsMap
-  );
-  const saveCivitaiImportImages = getBoolSetting('save_civitai_import_images', true, settingsMap);
-  const galleryPillColorsEnabled = getBoolSetting(
-    'gallery_pill_colors_enabled',
-    false,
-    settingsMap
-  );
-  const pillTypeSettings = normalizePillTypeSettings(
-    getJsonSetting<unknown>('pill_type_settings_json', null, settingsMap)
-  );
-
-  const cleanupSettings = getModelCleanupSettings();
 
   res.json({
     status: 'ok',
@@ -105,26 +151,7 @@ systemRouter.get('/health', (_req, res) => {
       loras: loraCount,
       workflows: wfCount,
     },
-    config: {
-      comfyuiUrl: appConfig.comfyuiUrl,
-      comfyuiOutputDir: appConfig.comfyuiOutputDir,
-      comfyuiModelsDir: appConfig.comfyuiModelsDir,
-      databasePath: appConfig.databasePath,
-      thumbnailPath: appConfig.thumbnailPath,
-      localModelsDir: appConfig.localModelsDir,
-      downloadsDir: appConfig.downloadsDir,
-      uploadedImagesDir: appConfig.uploadedImagesDir,
-      hasCivitaiKey: Boolean(appConfig.civitaiApiKey),
-      hasHfToken: Boolean(appConfig.hfApiToken),
-      scheduledBackupHours: appConfig.scheduledBackupHours,
-      quickGenBoxEnabled,
-      saveUploadedPromptImages,
-      saveCivitaiImportImages,
-      galleryPillColorsEnabled,
-      pillTypeSettings,
-      autoCleanCopiedModels: cleanupSettings.enabled,
-      autoCleanCopiedModelsHours: cleanupSettings.retentionHours,
-    },
+    config: buildSafeConfigSnapshot(),
     comfyuiInstance: comfyRow || null,
     activeScan: getActiveScanStatus(),
     visualTagger: getVisualTaggerStatus(),
@@ -151,31 +178,56 @@ systemRouter.patch('/config', (req, res) => {
       pillTypeSettings,
     } = (req.body || {}) as UpdateConfigPayload;
 
-    if (comfyuiUrl && String(comfyuiUrl).trim()) {
-      appConfig.comfyuiUrl = String(comfyuiUrl).trim().replace(/\/+$/, '');
+    // Validate all inputs before applying mutations so failed requests leave config intact
+    const nextComfyUrl =
+      comfyuiUrl !== undefined && String(comfyuiUrl).trim() !== ''
+        ? validateHttpUrl(comfyuiUrl, 'comfyuiUrl')
+        : null;
+    const nextOutputDir =
+      comfyuiOutputDir !== undefined && String(comfyuiOutputDir).trim() !== ''
+        ? validateAbsoluteDirectoryPath(comfyuiOutputDir, 'comfyuiOutputDir')
+        : null;
+    const nextModelsDir =
+      comfyuiModelsDir !== undefined && String(comfyuiModelsDir).trim() !== ''
+        ? validateAbsoluteDirectoryPath(comfyuiModelsDir, 'comfyuiModelsDir')
+        : null;
+    const nextDownloadsDir =
+      downloadsDir !== undefined && String(downloadsDir).trim() !== ''
+        ? validateAbsoluteDirectoryPath(downloadsDir, 'downloadsDir')
+        : null;
+
+    let nextBackupHours: number | null = null;
+    if (scheduledBackupHours !== undefined) {
+      const parsedHours = Number(scheduledBackupHours);
+      if (!Number.isFinite(parsedHours) || parsedHours < 0 || parsedHours > 500) {
+        throw new Error('scheduledBackupHours must be between 0 and 500.');
+      }
+      nextBackupHours = parsedHours;
+    }
+
+    if (nextComfyUrl) {
+      appConfig.comfyuiUrl = nextComfyUrl;
       db.prepare('UPDATE comfyui_instances SET base_url = ? WHERE is_default = 1').run(
         appConfig.comfyuiUrl
       );
     }
-    if (comfyuiOutputDir && String(comfyuiOutputDir).trim()) {
-      const nextOut = String(comfyuiOutputDir).trim();
-      fs.mkdirSync(nextOut, { recursive: true });
-      appConfig.comfyuiOutputDir = nextOut;
+    if (nextOutputDir) {
+      fs.mkdirSync(nextOutputDir, { recursive: true });
+      appConfig.comfyuiOutputDir = nextOutputDir;
       startFilesystemWatcher();
     }
-    if (comfyuiModelsDir && String(comfyuiModelsDir).trim()) {
-      const nextMod = String(comfyuiModelsDir).trim();
-      fs.mkdirSync(nextMod, { recursive: true });
-      appConfig.comfyuiModelsDir = nextMod;
+    if (nextModelsDir) {
+      fs.mkdirSync(nextModelsDir, { recursive: true });
+      appConfig.comfyuiModelsDir = nextModelsDir;
     }
-    if (downloadsDir && String(downloadsDir).trim()) {
-      const nextDl = String(downloadsDir).trim();
-      fs.mkdirSync(nextDl, { recursive: true });
-      appConfig.downloadsDir = nextDl;
+    if (nextDownloadsDir) {
+      fs.mkdirSync(nextDownloadsDir, { recursive: true });
+      appConfig.downloadsDir = nextDownloadsDir;
     }
-    if (scheduledBackupHours !== undefined) {
-      configureScheduledBackups(Number(scheduledBackupHours));
+    if (nextBackupHours !== null) {
+      configureScheduledBackups(nextBackupHours);
     }
+
     const settingUpdates: [string, string][] = [];
     if (quickGenBoxEnabled !== undefined) {
       settingUpdates.push(['quick_gen_box_enabled', quickGenBoxEnabled ? '1' : '0']);
@@ -195,7 +247,7 @@ systemRouter.patch('/config', (req, res) => {
     }
     setSettings(settingUpdates);
 
-    res.json({ ok: true, config: appConfig });
+    res.json({ ok: true, config: buildSafeConfigSnapshot() });
   } catch (err: unknown) {
     res.status(400).json({ error: getErrorMessage(err, 'Failed to update configuration') });
   }
