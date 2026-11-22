@@ -1,8 +1,16 @@
 node_modules
 dist
+data
 gallery-data
 mounted-data
 model-downloads
 .git
-.env
+.env*
 *.log
+*.db
+*.db-wal
+*.db-shm
+docker-compose.yml
+docker-compose.yml.example
+tests
+project

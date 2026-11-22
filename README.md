@@ -64,7 +64,7 @@ git pull origin main
 Copy the example environment file and match the paths and URLs to your host:
 
 ```bash
-cp example.env .env
+cp .env.example .env
 ```
 
 ```ini
@@ -85,7 +85,11 @@ HF_API_TOKEN=
 
 ### Step 3: Configure `docker-compose.yml`
 
-Point the left-hand host volume paths to your local ComfyUI output and models folders:
+Copy the example Compose file and point the left-hand host volume paths to your local ComfyUI output and models folders:
+
+```bash
+cp docker-compose.yml.example docker-compose.yml
+```
 
 ```yaml
 services:
@@ -93,6 +97,11 @@ services:
     build: .
     container_name: comfyui-gallery
     restart: unless-stopped
+    user: "${UID:-1000}:${GID:-1000}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
       - "9980:8080"
     env_file:
@@ -101,20 +110,20 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       # Adjust host paths (left side) to your local system paths:
-      - /path/to/Couchy/data/thumbnails:/data/thumbnails
-      - /path/to/ComfyUI/output:/data/output:ro
-      - /path/to/ComfyUI/models:/data/models:ro
+      - /path/to/comfyui/output:/data/output:ro
+      - /path/to/comfyui/models:/data/models:ro
+      - /path/to/data/thumbnails:/data/thumbnails
       - ./gallery-data:/app/data
       - ./model-downloads:/downloads
 
-    # Optional: Enable NVIDIA GPU for the built-in ONNX visual tagger
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # Optional: Uncomment for NVIDIA GPU acceleration on the built-in ONNX visual tagger
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:8080/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
@@ -124,6 +133,8 @@ services:
 ```
 
 > **Port Mapping**: Host port `9980` maps to container port `8080`; change `"9980:8080"` as needed.
+>
+> **Security & Network Exposure**: Couchy is designed for local or trusted-network use and does not include built-in user login. Do not expose port `9980` directly to the public internet—keep it on `localhost`, a trusted LAN, Tailscale/VPN, or behind an authenticating reverse proxy.
 
 ### Step 4: Configure ComfyUI `extra_model_paths.yaml` (For Downloaded Models)
 
@@ -163,7 +174,7 @@ couchy_downloads:
 
 - Subfolders inside `model-downloads` are created automatically on first download, or you can pre-create them to prevent startup warnings:
   ```bash
-  mkdir -p /opt/docker/Couchy/model-downloads/{loras,checkpoints,diffusion_models,unet,text_encoders,clip,vae,controlnet,upscale_models,embeddings}
+  mkdir -p ./model-downloads/{loras,checkpoints,diffusion_models,unet,text_encoders,clip,vae,controlnet,upscale_models,embeddings}
   ```
 - Restart ComfyUI once after editing `extra_model_paths.yaml` (or press **`R`** in the ComfyUI web UI to refresh node lists after downloads complete).
 
@@ -310,7 +321,7 @@ The **System** workspace includes the top **Save Uploaded Prompt Images (1MP)** 
 
 1. **Search**: Enable/disable local visual keyword tagging, switch **CPU vs. NVIDIA GPU**, adjust confidence threshold, and **Pause / Resume**, **Scan Unindexed**, or **Rescan All**.
 2. **Quick Gen & Pills**: Toggle the **Quick Gen Box**, **Gallery Pill Colors**, and per-type `@mention` insertion rules (Characters, Base Models, LoRAs).
-3. **Stats**: Adjustable **Day / Week / Month / Year** generation activity charts (excluding uploaded `Inspo` references) plus **Storage Usage** breakdowns for ComfyUI assets (LoRAs, Base Models, photos) and local Couchy storage (imported 1MP reference photos, thumbnails, and models queued for cleanup).
+3. **Stats**: Adjustable **Day / Week / Month / Year** generation activity charts (excluding uploaded `Inspo` references), **Storage Usage** breakdowns for ComfyUI assets and local Couchy storage, and **Library Usage & Random Roll Rankings** across **Characters**, **Base Models**, and **LoRAs by Type** (showing totals, `#1` leaders, roll eligibility, usage vs. roll-score sorting, and baseline roll odds).
 4. **Agent**: Choose Local LLM endpoint presets, test **Vision vs. Text-Only** capabilities, and edit or reset the **Primary Agent System Prompt** and **Batch Expansion Instructions** (**Editorial Variety**, **Storyboard Arc**, **Lookbook Angles**).
 5. **ComfyUI**: Test your ComfyUI connection, inspect active paths, and enable **Auto-Clean Copied Downloads** (safely removes duplicate files from Couchy's downloads folder once verified identical inside your read-only ComfyUI models folder).
 6. **Database**: Create integrity-verified SQLite backups and export/import portable JSON annotation backups.

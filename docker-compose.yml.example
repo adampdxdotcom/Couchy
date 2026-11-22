@@ -9,7 +9,7 @@ services:
     cap_drop:
       - ALL
     ports:
-      - "8080:8080"
+      - "9980:8080"
     env_file:
       - .env
     extra_hosts:

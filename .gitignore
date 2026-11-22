@@ -6,3 +6,11 @@ coverage/
 *.log
 .env*
 !.env.example
+docker-compose.yml
+data/
+gallery-data/
+mounted-data/
+model-downloads/
+*.db
+*.db-wal
+*.db-shm
