@@ -262,6 +262,11 @@ The **Quick Gen Box** is a collapsible bottom bar accessible from **Gallery**, *
   - Toggle fullscreen (`Space`) or **Loupe (`L`)** (`2×`, `4×`, `1:1 Native`, click-to-pin).
   - Click the **Create Preset** bookmark button between **Favorite** and **Delete/Reject** in the Inspector header to save the active image's Base Model and up to 5 LoRAs (including character LoRAs and exact strengths) as a reusable preset auto-named `user0`, `user1`, etc. (reusing the lowest open number).
   - The right sidebar surfaces **Assigned Character**, **Workflow & Reproducibility** (`Run Workflow` and inline `4x` ESRGAN `Upscale`), **Series Stack** strip, copyable prompts, generation parameters, LoRA weights, visual tags, custom tags, collections, and notes.
+- **Civitai Draft Sharing (Inspector Top Bar)**:
+  - Click the **Share to Civitai** button next to **Reject** in the Inspector top header bar to open the Draft Confirmation Modal (pre-filled with editable title, primary Civitai `modelVersionId` auto-picked from linked LoRAs/Base Model, target domain **`civitai.com`** vs **`civitai.red`**, tags, and prompt/parameter summary, plus a preview of embedded resource filenames).
+  - **Draft-Only & Deterministic (`publish: false`)**: Requires `CIVITAI_API_KEY` in `.env` and posts deterministically from Couchy's backend to Civitai (`initialize` &rarr; `whoami` &rarr; `upload_image` &rarr; `create_post` with `publish: false`) with **zero Local LLM involvement**. Automatically routes mature/`.red`-linked drafts to **`civitai.red/posts/:id/edit`** (with an alternate-domain link) so you land straight in Civitai's draft editor to review mature ratings and publish manually.
+  - **Strict Eligibility Gates**: All linked characters (**both confirmed and suggested**, including multi-character images) must have **Share on CivitAI** turned **On** (`Off` by default); 0-character images require **Share 0-Character Images (Civitai)** enabled in **System** (`Off` by default); and the file on disk must natively contain generation metadata (inline Krea 2 + `4x` ESRGAN PNGs qualify, while standalone upscaled PNGs without generation nodes are blocked).
+  - **PNG-First with Multi-Resource Metadata & JPEG + EXIF Fallback**: On upload, Couchy keeps your file on disk untouched and injects an in-memory `parameters` block (`Civitai resources` + `Hashes` + `Lora hashes`) alongside original ComfyUI chunks so Civitai attaches **all** LoRAs (with weights) and the Base Model. If Civitai rejects PNG payload size (`HTTP 413`), the modal offers a one-click **Retry as High-Quality JPEG + EXIF Metadata** fallback with the same embedded parameters. Created drafts are tracked per image with direct links to open on Civitai.
 - **A/B Split Compare**:
   - Click **Compare** in the Inspector header for **Side-by-Side** or draggable **Overlay Wipe** comparison (`Fit` vs. `100% Native`), synchronized **Dual / Split `[A | B]` Loupe (`L`)**, a filterable **Compare with...** stack picker, per-slot step switching, **Swap**, and a collapsible **Diff Drawer** highlighting prompt, parameter, and LoRA differences with per-slot curation actions.
 
@@ -269,7 +274,7 @@ The **Quick Gen Box** is a collapsible bottom bar accessible from **Gallery**, *
 
 ### Characters, Portrait Framing & Assisted Identification
 
-- **Roster & Merge**: Browse character cards with counts, linked LoRAs, aliases, and average ratings. **Create Character** profiles or non-destructively **Merge Characters** (combining links, aliases, LoRAs, workflows, tags, collections, and optionally portrait/crop metadata).
+- **Roster, Civitai Opt-In & Merge**: Browse character cards with counts, linked LoRAs, aliases, and average ratings. Toggle **`Share on CivitAI: On/Off`** in any character's header (`Off` by default) to permit sharing images featuring that character as private Civitai drafts, **Create Character** profiles, or non-destructively **Merge Characters** (combining links, aliases, LoRAs, workflows, tags, collections, and optionally portrait/crop metadata).
 - **Display-Only Portrait Framing**: Click the pencil icon on a profile portrait to adjust focal point (`0%–100%`) and zoom (`1.00×–3.00×`) with live `1:1 Profile`, `4:3 Card`, and `Badge` previews—saved purely as display metadata.
 - **Adaptive Portrait Analysis (`Analyze Portrait`)**: Scans a character's portrait (via Vision LLM, or local visual tagging + Text LLM fallback) to draft a **Physical Description (Agent Reference Guide)** that informs the **Agent** without overriding requested outfits, hairstyles, or poses.
 - **LoRAs, Spotlight & Favorite Addons**: Manage linked LoRAs and trigger words (with inline `+ Link` for new profiles). View **Highest-Rated Images** (`5★` or `4★+`) alongside **Favorite Addons** (**Base Models**, **Addon LoRAs**, and **Friends**, sorted by **Most Used** or **Top Rated**) and click **New Image** to launch the **Quick Gen Box** pre-loaded with up to 5 total LoRAs.
@@ -320,7 +325,7 @@ Open **LoRAs & Models** for four integrated tabs:
 
 ### System Administration & In-App Help
 
-The **System** workspace includes the top **Save Uploaded Prompt Images (1MP)** and **Save Civitai Import Images (1MP)** toggles (controlling **Quick Gen Box** `Inspo` Step 1 archiving) and 8 tabs:
+The **System** workspace includes the top **Save Uploaded Prompt Images (1MP)**, **Save Civitai Import Images (1MP)** (controlling **Quick Gen Box** `Inspo` Step 1 archiving), and **Share 0-Character Images (Civitai)** *(**Off** by default)* toggles, alongside 8 tabs:
 
 1. **Search**: Enable/disable local visual keyword tagging, switch **CPU vs. NVIDIA GPU**, adjust confidence threshold, and **Pause / Resume**, **Scan Unindexed**, or **Rescan All**.
 2. **Quick Gen & Pills**: Toggle the **Quick Gen Box**, **Gallery Pill Colors**, and per-type `@mention` insertion rules (Characters, Base Models, LoRAs).
@@ -369,7 +374,7 @@ Single-key shortcuts pause inside text inputs/selects and inside A/B Split Compa
 | `BACKUP_PATH` | `/app/data/backups` | SQLite backup snapshots directory |
 | `LOGS_DIR` | `/app/data/logs` | Rotating server logs (`couchy.log`, 5 MB &times; 2) |
 | `DOWNLOADS_DIR` | `/downloads` | Target directory for downloaded models |
-| `CIVITAI_API_KEY` | *(Optional)* | Civitai API token for search, metadata, and authenticated downloads |
+| `CIVITAI_API_KEY` | *(Optional)* | Civitai API token for search, metadata, authenticated downloads, and private draft post sharing |
 | `HF_API_TOKEN` | *(Optional)* | Hugging Face token for gated downloads |
 
 ### Customizing Agent Prompts
@@ -388,7 +393,7 @@ Couchy runs as a single Node.js service (React + TypeScript + Tailwind CSS front
   - **Face Scan**: InsightFace **SCRFD (`det_10g.onnx`)** 5-point landmark alignment + **ArcFace (`w600k_r50.onnx`)** 512-D embeddings (`data/local_models/insightface-buffalo-l`, cached in `character_face_embeddings` with `0.38` default cosine threshold).
 - **Local LLM Proxy**: Server-side `/v1/models` and `/v1/chat/completions` client (plus LM Studio `/api/v0/models` vision detection) with `90s` interrogation/expansion timeouts and ranked `README.md` retrieval for **Ask the Docs**.
 - **Core SQLite Domain Groups**:
-  - *Images & Metadata*: `images`, `image_metadata`, `image_loras`, `image_models`, `image_visual_tags`, `image_workflows`
+  - *Images & Metadata*: `images`, `image_metadata`, `image_loras`, `image_models`, `image_visual_tags`, `image_workflows`, `image_civitai_drafts`
   - *Series & Generations*: `image_series`, `image_series_items`, `generation_batches`, `generation_items`, `reproduction_jobs`
   - *Curation & Characters*: `ratings`, `tags`, `image_tags`, `collections`, `collection_images`, `saved_searches`, `characters`, `character_aliases`, `character_loras`, `character_workflows`, `character_face_embeddings`, `image_characters`
   - *Models & System*: `models`, `lora_presets`, `lora_preset_items`, `download_jobs`, `downloaded_model_copies`, `pending_lora_character_tasks`, `workflows`, `workflow_mappings`, `prompt_templates`, `lm_studio_settings`, `lm_studio_prompt_templates`, `app_settings`, `scan_jobs`, `schema_migrations`

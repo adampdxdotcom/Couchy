@@ -193,6 +193,8 @@ export interface GenerationReadinessResponse {
   checkedAt: string;
 }
 
+export type CivitaiDomain = 'civitai.com' | 'civitai.red';
+
 export type CivitaiShareUploadMode = 'original_png' | 'jpeg_exif';
 
 export interface CivitaiDraftRecord {
@@ -211,6 +213,7 @@ export interface CivitaiModelVersionCandidate {
   modelName: string;
   modelType: string;
   civitaiId: string | null;
+  domain: CivitaiDomain;
   source: 'lora' | 'checkpoint';
 }
 
@@ -238,6 +241,7 @@ export interface CivitaiShareEligibilityResponse {
   prefilledDescription: string;
   prefilledTags: string[];
   recommendedModelVersionId: number | null;
+  recommendedDomain: CivitaiDomain;
   candidateModelVersions: CivitaiModelVersionCandidate[];
   embeddedResourceNames: string[];
   existingDrafts: CivitaiDraftRecord[];
@@ -248,12 +252,14 @@ export interface CivitaiShareDraftRequest {
   detail?: string;
   tags?: string[];
   modelVersionId?: number | null;
+  targetDomain?: CivitaiDomain;
   uploadMode?: CivitaiShareUploadMode;
 }
 
 export interface CivitaiShareDraftResponse {
   ok: boolean;
   postId: number;
+  domain: CivitaiDomain;
   draftUrl: string;
   uploadMode: CivitaiShareUploadMode;
   processingImageIds: number[];

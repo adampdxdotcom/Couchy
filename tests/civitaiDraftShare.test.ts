@@ -295,9 +295,14 @@ describe('Civitai Draft Post System', () => {
   });
 
   it('submits PNG-first draft with publish=false, handles 413 fallback to JPEG+EXIF, and logs SQLite draft rows', async () => {
-    await writeTestPng('draft_flow.png', {
-      parameters: 'moonlit forest shrine\nSteps: 16, Sampler: Euler, CFG scale: 4, Seed: 888',
+    const { readPngTextChunks } = await import('../src/server/services/pngMetadataParser.ts');
+    const diskPngPath = await writeTestPng('draft_flow.png', {
+      prompt: JSON.stringify({
+        '10': { class_type: 'UNETLoader', inputs: { unet_name: 'krea2_turbo.safetensors' } },
+        '20': { class_type: 'KSampler', inputs: { seed: 888, steps: 16, cfg: 4 } },
+      }),
     });
+    const diskBytesBefore = fs.readFileSync(diskPngPath);
     const imgId = insertImageRow({
       filename: 'draft_flow.png',
       contentHash: 'hash_draft_flow_1',
@@ -305,18 +310,42 @@ describe('Civitai Draft Post System', () => {
       checkpoint: 'krea2_turbo.safetensors',
     });
 
-    // Attach a LoRA + Civitai version ID and tag to verify prefill + primary model selection
-    const modelId = Number(
+    // Attach Base Model + 2 LoRAs (one hosted on civitai.red) + tag
+    const ckptModelId = Number(
       ctx.db
         .prepare(
-          `INSERT INTO models (filename, name, model_type, lora_category, civitai_id, civitai_version_id)
-           VALUES ('heroine_lora.safetensors', 'Heroine LoRA', 'lora', 'character', '9001', '775533')`
+          `INSERT INTO models (filename, name, model_type, civitai_id, civitai_version_id, civitai_url, autov2_hash)
+           VALUES ('krea2_turbo.safetensors', 'Krea 2 Turbo', 'diffusion', '8100', '991122', 'https://civitai.com/models/8100?modelVersionId=991122', 'CKPT123456')`
         )
         .run().lastInsertRowid
     );
     ctx.db
-      .prepare(`INSERT INTO image_loras (image_id, lora_name, model_id, model_strength, clip_strength) VALUES (?, 'heroine_lora.safetensors', ?, 0.85, 0.85)`)
-      .run(imgId, modelId);
+      .prepare(`INSERT INTO image_models (image_id, model_id, model_name, model_type) VALUES (?, ?, 'krea2_turbo.safetensors', 'diffusion')`)
+      .run(imgId, ckptModelId);
+
+    const lora1Id = Number(
+      ctx.db
+        .prepare(
+          `INSERT INTO models (filename, name, model_type, lora_category, civitai_id, civitai_version_id, civitai_url, autov2_hash)
+           VALUES ('heroine_lora.safetensors', 'Heroine LoRA', 'lora', 'character', '9001', '775533', 'https://civitai.red/models/9001?modelVersionId=775533', 'HERO112233')`
+        )
+        .run().lastInsertRowid
+    );
+    const lora2Id = Number(
+      ctx.db
+        .prepare(
+          `INSERT INTO models (filename, name, model_type, lora_category, civitai_id, civitai_version_id, civitai_url, autov2_hash)
+           VALUES ('lighting_style.safetensors', 'Lighting Style', 'lora', 'style', '9002', '886644', 'https://civitai.com/models/9002?modelVersionId=886644', 'LITE445566')`
+        )
+        .run().lastInsertRowid
+    );
+    ctx.db
+      .prepare(
+        `INSERT INTO image_loras (image_id, lora_name, model_id, model_strength, clip_strength)
+         VALUES (?, 'heroine_lora.safetensors', ?, 0.85, 0.85),
+                (?, 'lighting_style.safetensors', ?, 0.6, 0.6)`
+      )
+      .run(imgId, lora1Id, imgId, lora2Id);
 
     const tagId = Number(
       ctx.db.prepare(`INSERT INTO tags (name) VALUES ('scenic')`).run().lastInsertRowid
@@ -354,6 +383,8 @@ describe('Civitai Draft Post System', () => {
     const pre = await evaluateCivitaiShareEligibility(imgId);
     assert.equal(pre.eligible, true);
     assert.equal(pre.recommendedModelVersionId, 775533);
+    assert.equal(pre.recommendedDomain, 'civitai.red');
+    assert.equal(pre.candidateModelVersions[0]?.domain, 'civitai.red');
     assert.deepEqual(pre.prefilledTags, ['scenic']);
 
     const capturedCalls: Array<{ method: string; tool?: string; args?: any }> = [];
@@ -413,15 +444,30 @@ describe('Civitai Draft Post System', () => {
       };
     };
 
-    // 1. Original PNG path succeeds & sends publish=false
+    // 1. Original PNG path succeeds, injects multi-LoRA + Base Model `parameters` chunk in memory, and leaves disk PNG untouched
     const pngRes = await shareImageAsCivitaiDraft(
       imgId,
       { title: 'Moonlit Shrine', tags: ['scenic', 'night'] },
       { fetchFn: buildMockFetch(false) }
     );
     assert.equal(pngRes.postId, 554433);
-    assert.equal(pngRes.draftUrl, 'https://civitai.com/posts/554433');
+    assert.equal(pngRes.domain, 'civitai.red');
+    assert.equal(pngRes.draftUrl, 'https://civitai.red/posts/554433/edit');
     assert.equal(pngRes.uploadMode, 'original_png');
+    assert.deepEqual(fs.readFileSync(diskPngPath), diskBytesBefore);
+
+    const pngUpload = capturedCalls.find((c) => c.tool === 'upload_image');
+    const uploadedPngPath = path.join(tempImagesDir, 'uploaded_verify.png');
+    fs.writeFileSync(uploadedPngPath, Buffer.from(pngUpload?.args?.data, 'base64'));
+    const uploadedChunks = readPngTextChunks(uploadedPngPath);
+    assert.ok(uploadedChunks.prompt, 'Original ComfyUI prompt chunk must be preserved');
+    assert.ok(uploadedChunks.parameters, 'In-memory parameters chunk must be injected');
+    assert.ok(uploadedChunks.parameters.includes('Civitai resources: '));
+    assert.ok(uploadedChunks.parameters.includes('991122'));
+    assert.ok(uploadedChunks.parameters.includes('775533'));
+    assert.ok(uploadedChunks.parameters.includes('886644'));
+    assert.ok(uploadedChunks.parameters.includes('HERO112233'));
+    assert.ok(uploadedChunks.parameters.includes('LITE445566'));
 
     const createCall = capturedCalls.find((c) => c.tool === 'create_post');
     assert.equal(createCall?.args?.publish, false);
@@ -437,16 +483,20 @@ describe('Civitai Draft Post System', () => {
     capturedCalls.length = 0;
     const jpegRes = await shareImageAsCivitaiDraft(
       imgId,
-      { uploadMode: 'jpeg_exif', modelVersionId: null },
+      { uploadMode: 'jpeg_exif', modelVersionId: null, targetDomain: 'civitai.com' },
       { fetchFn: buildMockFetch(true) }
     );
     assert.equal(jpegRes.uploadMode, 'jpeg_exif');
+    assert.equal(jpegRes.domain, 'civitai.com');
+    assert.equal(jpegRes.draftUrl, 'https://civitai.com/posts/554433/edit');
     const jpegUpload = capturedCalls.find((c) => c.tool === 'upload_image');
     assert.equal(jpegUpload?.args?.contentType, 'image/jpeg');
     const jpegBuffer = Buffer.from(jpegUpload?.args?.data, 'base64');
     const jpegMeta = await sharp(jpegBuffer).metadata();
     assert.equal(jpegMeta.format, 'jpeg');
-    assert.ok(jpegMeta.exif && jpegMeta.exif.toString('latin1').includes('moonlit forest shrine'));
+    const jpegExif = jpegMeta.exif ? jpegMeta.exif.toString('latin1') : '';
+    assert.ok(jpegExif.includes('moonlit forest shrine'));
+    assert.ok(jpegExif.includes('775533') && jpegExif.includes('886644') && jpegExif.includes('991122'));
 
     // Both drafts logged in SQLite
     const postCheck = await evaluateCivitaiShareEligibility(imgId);

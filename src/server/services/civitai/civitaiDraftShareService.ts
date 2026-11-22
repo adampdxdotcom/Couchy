@@ -1,6 +1,7 @@
 import { db } from '../../db.ts';
 import { appConfig } from '../../config.ts';
 import { resolveImageDiskPath } from '../scannerService.ts';
+import { probeCivitaiWebDomain } from './civitaiHttpAndParse.ts';
 import { evaluateCivitaiShareEligibility } from './civitaiShareEligibility.ts';
 import { prepareCivitaiImagePayload } from './civitaiImagePayload.ts';
 import {
@@ -8,6 +9,7 @@ import {
   type CivitaiMcpClientDeps,
 } from './civitaiMcpClient.ts';
 import type {
+  CivitaiDomain,
   CivitaiDraftRecord,
   CivitaiShareDraftRequest,
   CivitaiShareDraftResponse,
@@ -80,6 +82,31 @@ export async function shareImageAsCivitaiDraft(
       ? Number(request.modelVersionId)
       : eligibility.recommendedModelVersionId;
 
+  // Determine civitai.red vs civitai.com from explicit override, attached models/tags, or live web probe
+  let resolvedDomain: CivitaiDomain =
+    request.targetDomain === 'civitai.red' || request.targetDomain === 'civitai.com'
+      ? request.targetDomain
+      : eligibility.recommendedDomain;
+
+  if (!request.targetDomain && resolvedDomain === 'civitai.com' && !deps?.fetchFn) {
+    const candidatesToProbe = modelVersionId
+      ? eligibility.candidateModelVersions.filter((c) => c.modelVersionId === modelVersionId)
+      : eligibility.candidateModelVersions;
+    for (const cand of candidatesToProbe) {
+      if (cand.domain === 'civitai.red') {
+        resolvedDomain = 'civitai.red';
+        break;
+      }
+      if (cand.civitaiId) {
+        const probed = await probeCivitaiWebDomain(cand.civitaiId, 'civitai.com');
+        if (probed === 'civitai.red') {
+          resolvedDomain = 'civitai.red';
+          break;
+        }
+      }
+    }
+  }
+
   const title = (request.title ?? eligibility.prefilledTitle).trim();
   const detail = (request.detail ?? eligibility.prefilledDescription).trim();
 
@@ -95,7 +122,8 @@ export async function shareImageAsCivitaiDraft(
     },
   });
 
-  const draftUrl = `https://civitai.com/posts/${created.postId}`;
+  // Link directly to /posts/:id/edit so Civitai opens the Draft Editor (mature rating & Publish controls)
+  const draftUrl = `https://${resolvedDomain}/posts/${created.postId}/edit`;
   const insertInfo = db
     .prepare(
       `INSERT INTO image_civitai_drafts
@@ -129,6 +157,7 @@ export async function shareImageAsCivitaiDraft(
   return {
     ok: true,
     postId: created.postId,
+    domain: resolvedDomain,
     draftUrl,
     uploadMode,
     processingImageIds: created.processingImageIds,

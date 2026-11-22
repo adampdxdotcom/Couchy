@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
 import type {
+  CivitaiDomain,
   CivitaiDraftRecord,
   CivitaiShareDraftResponse,
   CivitaiShareEligibilityResponse,
@@ -48,6 +49,9 @@ export const CivitaiDraftModal: React.FC<CivitaiDraftModalProps> = ({
   const [tagInput, setTagInput] = useState('');
   const [modelVersionId, setModelVersionId] = useState<number | ''>(
     eligibility.recommendedModelVersionId ?? ''
+  );
+  const [targetDomain, setTargetDomain] = useState<CivitaiDomain>(
+    eligibility.recommendedDomain || 'civitai.com'
   );
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -90,6 +94,7 @@ export const CivitaiDraftModal: React.FC<CivitaiDraftModalProps> = ({
         detail: detail.trim(),
         tags,
         modelVersionId: modelVersionId === '' ? null : Number(modelVersionId),
+        targetDomain,
         uploadMode: mode,
       });
       setCreatedResult(res);
@@ -224,8 +229,22 @@ export const CivitaiDraftModal: React.FC<CivitaiDraftModalProps> = ({
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium whitespace-nowrap"
                 >
-                  <span>Open Draft on Civitai</span>
+                  <span>Open Draft Editor ({createdResult.domain})</span>
                   <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+                <a
+                  href={`https://${
+                    createdResult.domain === 'civitai.red' ? 'civitai.com' : 'civitai.red'
+                  }/posts/${createdResult.postId}/edit`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-zinc-700 text-zinc-300 whitespace-nowrap"
+                  title="Open the draft editor on the alternate Civitai domain"
+                >
+                  <span>
+                    Try {createdResult.domain === 'civitai.red' ? 'civitai.com' : 'civitai.red'}
+                  </span>
+                  <ExternalLink className="w-3 h-3" />
                 </a>
                 <button
                   type="button"
@@ -255,26 +274,55 @@ export const CivitaiDraftModal: React.FC<CivitaiDraftModalProps> = ({
                   />
                 </div>
 
-                <div className="space-y-1">
-                  <label htmlFor="civitai-draft-model" className="block text-[11px] font-medium text-zinc-300">
-                    Primary Model Version
-                  </label>
-                  <select
-                    id="civitai-draft-model"
-                    value={modelVersionId}
-                    disabled={isSubmitting}
-                    onChange={(e) =>
-                      setModelVersionId(e.target.value === '' ? '' : Number(e.target.value))
-                    }
-                    className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
-                  >
-                    <option value="">None (do not link a primary model version)</option>
-                    {eligibility.candidateModelVersions.map((cand) => (
-                      <option key={cand.modelVersionId} value={cand.modelVersionId}>
-                        {cand.label} (#{cand.modelVersionId})
-                      </option>
-                    ))}
-                  </select>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="space-y-1 sm:col-span-2">
+                    <label htmlFor="civitai-draft-model" className="block text-[11px] font-medium text-zinc-300">
+                      Primary Model Version
+                    </label>
+                    <select
+                      id="civitai-draft-model"
+                      value={modelVersionId}
+                      disabled={isSubmitting}
+                      onChange={(e) => {
+                        const nextVal = e.target.value === '' ? '' : Number(e.target.value);
+                        setModelVersionId(nextVal);
+                        if (nextVal !== '') {
+                          const picked = eligibility.candidateModelVersions.find(
+                            (c) => c.modelVersionId === nextVal
+                          );
+                          if (picked?.domain === 'civitai.red') {
+                            setTargetDomain('civitai.red');
+                          }
+                        }
+                      }}
+                      className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
+                    >
+                      <option value="">None (do not link a primary model version)</option>
+                      {eligibility.candidateModelVersions.map((cand) => (
+                        <option key={cand.modelVersionId} value={cand.modelVersionId}>
+                          {cand.label} (#{cand.modelVersionId} · {cand.domain})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label htmlFor="civitai-draft-domain" className="block text-[11px] font-medium text-zinc-300">
+                      Civitai Domain
+                    </label>
+                    <select
+                      id="civitai-draft-domain"
+                      value={targetDomain}
+                      disabled={isSubmitting}
+                      onChange={(e) =>
+                        setTargetDomain(e.target.value === 'civitai.red' ? 'civitai.red' : 'civitai.com')
+                      }
+                      className="w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-100 focus:outline-none focus:border-indigo-500 disabled:opacity-60"
+                    >
+                      <option value="civitai.com">civitai.com</option>
+                      <option value="civitai.red">civitai.red (Mature)</option>
+                    </select>
+                  </div>
                 </div>
 
                 <div className="space-y-1.5">
@@ -357,7 +405,7 @@ export const CivitaiDraftModal: React.FC<CivitaiDraftModalProps> = ({
                         className="flex items-center justify-between gap-2 text-[11px] text-zinc-300 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5"
                       >
                         <span className="truncate font-mono tabular-nums">
-                          Post #{d.civitaiPostId} · {d.uploadMode === 'jpeg_exif' ? 'JPEG+EXIF' : 'PNG'} · {d.createdAt.slice(0, 16)}
+                          Post #{d.civitaiPostId} · {d.draftUrl.includes('civitai.red') ? 'civitai.red' : 'civitai.com'} · {d.uploadMode === 'jpeg_exif' ? 'JPEG+EXIF' : 'PNG'} · {d.createdAt.slice(0, 16)}
                         </span>
                         <a
                           href={d.draftUrl}

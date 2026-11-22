@@ -6,7 +6,7 @@ import { appConfig } from '../../config.ts';
 import { readPngTextChunks } from '../pngMetadataParser.ts';
 import { resolveImageDiskPath } from '../scannerService.ts';
 import { getBoolSetting } from '../settingsService.ts';
-import { parseIdsFromCivitaiUrl } from './civitaiHttpAndParse.ts';
+import { parseIdsFromCivitaiUrl, type CivitaiDomain } from './civitaiHttpAndParse.ts';
 import type {
   CivitaiDraftRecord,
   CivitaiModelVersionCandidate,
@@ -17,6 +17,8 @@ import type {
 const GENERATION_NODE_RE =
   /KSampler|SamplerCustom|UNETLoader|CheckpointLoader|CLIPTextEncode|TextGenerate|RandomNoise|BasicGuider|CFGGuider/i;
 const UPSCALE_NODE_RE = /UpscaleModelLoader|ImageUpscaleWithModel/i;
+const RED_VISUAL_TAG_RE =
+  /^(nude|completely_nude|topless|bottomless|nipples|areolae|pussy|penis|testicles|vaginal|anal|fellatio|cunnilingus|paizuri|sex|explicit|genitals|pubic_hair|cum|erection|nsfw)$/i;
 
 export interface DiskMetadataInspection {
   fileExists: boolean;
@@ -287,7 +289,7 @@ export async function evaluateCivitaiShareEligibility(
   const loraRows = db
     .prepare(
       `SELECT il.lora_name AS filename, m.name AS model_name, m.lora_category,
-              m.civitai_id, m.civitai_version_id, m.civitai_url
+              m.civitai_id, m.civitai_version_id, m.civitai_url, m.download_url
        FROM image_loras il
        LEFT JOIN models m ON m.id = il.model_id OR LOWER(m.filename) = LOWER(il.lora_name)
        WHERE il.image_id = ?
@@ -300,12 +302,13 @@ export async function evaluateCivitaiShareEligibility(
     civitai_id: string | null;
     civitai_version_id: string | null;
     civitai_url: string | null;
+    download_url: string | null;
   }>;
 
   const modelRows = db
     .prepare(
       `SELECT im.model_name AS filename, im.model_type, m.name AS display_name,
-              m.civitai_id, m.civitai_version_id, m.civitai_url
+              m.civitai_id, m.civitai_version_id, m.civitai_url, m.download_url
        FROM image_models im
        LEFT JOIN models m ON m.id = im.model_id OR LOWER(m.filename) = LOWER(im.model_name)
        WHERE im.image_id = ? AND im.model_type IN ('checkpoint', 'diffusion')`
@@ -317,22 +320,45 @@ export async function evaluateCivitaiShareEligibility(
     civitai_id: string | null;
     civitai_version_id: string | null;
     civitai_url: string | null;
+    download_url: string | null;
   }>;
 
   const candidateModelVersions: CivitaiModelVersionCandidate[] = [];
   const seenVersionIds = new Set<number>();
   const embeddedResourceNamesSet = new Set<string>();
+  let hasRedResource = false;
+
+  const detectResourceDomain = (
+    civitaiUrl: string | null,
+    downloadUrl: string | null
+  ): { modelId: string | null; versionId: string | null; domain: CivitaiDomain } => {
+    const parsedCivitai = parseIdsFromCivitaiUrl(civitaiUrl);
+    const parsedDownload = parseIdsFromCivitaiUrl(downloadUrl);
+    const domain: CivitaiDomain =
+      parsedCivitai.domain === 'civitai.red' || parsedDownload.domain === 'civitai.red'
+        ? 'civitai.red'
+        : 'civitai.com';
+    return {
+      modelId: parsedCivitai.modelId || parsedDownload.modelId,
+      versionId: parsedCivitai.versionId || parsedDownload.versionId,
+      domain,
+    };
+  };
 
   const pushCandidate = (
     rawVerId: string | null,
     civitaiUrl: string | null,
+    downloadUrl: string | null,
     civitaiId: string | null,
     label: string,
     modelName: string,
     modelType: string,
     source: 'lora' | 'checkpoint'
   ) => {
-    const parsed = parseIdsFromCivitaiUrl(civitaiUrl);
+    const parsed = detectResourceDomain(civitaiUrl, downloadUrl);
+    if (parsed.domain === 'civitai.red') {
+      hasRedResource = true;
+    }
     const verIdNum = Number(rawVerId || parsed.versionId || 0);
     if (!Number.isInteger(verIdNum) || verIdNum <= 0 || seenVersionIds.has(verIdNum)) return;
     seenVersionIds.add(verIdNum);
@@ -342,6 +368,7 @@ export async function evaluateCivitaiShareEligibility(
       modelName,
       modelType,
       civitaiId: civitaiId || parsed.modelId || null,
+      domain: parsed.domain,
       source,
     });
   };
@@ -352,6 +379,7 @@ export async function evaluateCivitaiShareEligibility(
     pushCandidate(
       l.civitai_version_id,
       l.civitai_url,
+      l.download_url,
       l.civitai_id,
       `LoRA: ${display}`,
       l.filename,
@@ -366,6 +394,7 @@ export async function evaluateCivitaiShareEligibility(
     pushCandidate(
       m.civitai_version_id,
       m.civitai_url,
+      m.download_url,
       m.civitai_id,
       `Base Model: ${display}`,
       m.filename,
@@ -376,6 +405,17 @@ export async function evaluateCivitaiShareEligibility(
   if (metaRow?.checkpoint_name) {
     embeddedResourceNamesSet.add(String(metaRow.checkpoint_name));
   }
+
+  const visualTagRows = db
+    .prepare(
+      `SELECT tag
+       FROM image_visual_tags
+       WHERE image_content_hash = ? AND confidence >= 0.35`
+    )
+    .all(imageRow.content_hash) as Array<{ tag: string }>;
+  const hasExplicitVisualTag = visualTagRows.some((r) => RED_VISUAL_TAG_RE.test(r.tag.trim()));
+  const recommendedDomain: CivitaiDomain =
+    hasRedResource || hasExplicitVisualTag ? 'civitai.red' : 'civitai.com';
 
   const tagRows = db
     .prepare(
@@ -436,6 +476,7 @@ export async function evaluateCivitaiShareEligibility(
     prefilledDescription: buildPrefilledDescription(metaRow),
     prefilledTags: tagRows.map((t) => t.name),
     recommendedModelVersionId: candidateModelVersions[0]?.modelVersionId ?? null,
+    recommendedDomain,
     candidateModelVersions,
     embeddedResourceNames: Array.from(embeddedResourceNamesSet),
     existingDrafts,
