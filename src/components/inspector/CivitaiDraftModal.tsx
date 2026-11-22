@@ -378,7 +378,7 @@ export const CivitaiDraftModal: React.FC<CivitaiDraftModalProps> = ({
 
                 <div className="space-y-1">
                   <label htmlFor="civitai-draft-detail" className="block text-[11px] font-medium text-zinc-300">
-                    Description (Prompt & Parameters Summary)
+                    Description (Prompt)
                   </label>
                   <textarea
                     id="civitai-draft-detail"
@@ -392,32 +392,43 @@ export const CivitaiDraftModal: React.FC<CivitaiDraftModalProps> = ({
                 </div>
               </div>
 
-              {/* Prior Draft History */}
+              {/* Prior Draft & Published History */}
               {eligibility.existingDrafts.length > 0 && (
                 <div className="pt-2 border-t border-zinc-800/80 space-y-1.5">
                   <div className="text-[11px] font-medium text-zinc-400">
-                    Previously Created Drafts for This Image
+                    Previously Shared Posts for This Image
                   </div>
                   <div className="space-y-1">
-                    {eligibility.existingDrafts.slice(0, 3).map((d) => (
-                      <div
-                        key={d.id}
-                        className="flex items-center justify-between gap-2 text-[11px] text-zinc-300 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5"
-                      >
-                        <span className="truncate font-mono tabular-nums">
-                          Post #{d.civitaiPostId} · {d.draftUrl.includes('civitai.red') ? 'civitai.red' : 'civitai.com'} · {d.uploadMode === 'jpeg_exif' ? 'JPEG+EXIF' : 'PNG'} · {d.createdAt.slice(0, 16)}
-                        </span>
-                        <a
-                          href={d.draftUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 whitespace-nowrap shrink-0"
+                    {eligibility.existingDrafts.slice(0, 3).map((d) => {
+                      const targetUrl = d.publishedUrl || d.draftUrl;
+                      const domainLabel = targetUrl.includes('civitai.red') ? 'civitai.red' : 'civitai.com';
+                      const isPub = d.status === 'published';
+                      return (
+                        <div
+                          key={d.id}
+                          className="flex items-center justify-between gap-2 text-[11px] text-zinc-300 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5"
                         >
-                          <span>Open</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      </div>
-                    ))}
+                          <span className="truncate font-mono tabular-nums">
+                            <span className={isPub ? 'text-emerald-400' : 'text-sky-400'}>
+                              {isPub ? 'Published' : 'Draft'}
+                            </span>{' '}
+                            · Post #{d.civitaiPostId} · {domainLabel}
+                            {isPub && (d.reactionCount > 0 || d.commentCount > 0)
+                              ? ` · ${d.reactionCount} likes · ${d.commentCount} comments`
+                              : ''}
+                          </span>
+                          <a
+                            href={targetUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 whitespace-nowrap shrink-0"
+                          >
+                            <span>{isPub ? 'View' : 'Open'}</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

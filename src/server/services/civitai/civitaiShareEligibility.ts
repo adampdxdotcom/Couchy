@@ -7,6 +7,7 @@ import { readPngTextChunks } from '../pngMetadataParser.ts';
 import { resolveImageDiskPath } from '../scannerService.ts';
 import { getBoolSetting } from '../settingsService.ts';
 import { parseIdsFromCivitaiUrl, type CivitaiDomain } from './civitaiHttpAndParse.ts';
+import { mapDraftRowToRecord } from './civitaiActivitySyncService.ts';
 import type {
   CivitaiDraftRecord,
   CivitaiModelVersionCandidate,
@@ -142,21 +143,8 @@ export async function inspectDiskImageNativeMetadata(
 }
 
 function buildPrefilledDescription(meta: any): string {
-  if (!meta) return '';
-  const parts: string[] = [];
-  if (meta.positive_prompt && String(meta.positive_prompt).trim()) {
-    parts.push(String(meta.positive_prompt).trim());
-  }
-  const paramBits: string[] = [];
-  if (meta.checkpoint_name) paramBits.push(`Model: ${meta.checkpoint_name}`);
-  if (meta.steps !== null && meta.steps !== undefined) paramBits.push(`Steps: ${meta.steps}`);
-  if (meta.sampler) paramBits.push(`Sampler: ${meta.sampler}`);
-  if (meta.cfg !== null && meta.cfg !== undefined) paramBits.push(`CFG: ${meta.cfg}`);
-  if (meta.seed) paramBits.push(`Seed: ${meta.seed}`);
-  if (paramBits.length > 0) {
-    parts.push(paramBits.join(' · '));
-  }
-  return parts.join('\n\n');
+  if (!meta?.positive_prompt) return '';
+  return String(meta.positive_prompt).trim();
 }
 
 async function findEligibleSourceInSeries(
@@ -429,30 +417,14 @@ export async function evaluateCivitaiShareEligibility(
 
   const draftRows = db
     .prepare(
-      `SELECT id, civitai_post_id, draft_url, title, upload_mode, model_version_id, created_at
+      `SELECT *
        FROM image_civitai_drafts
        WHERE image_id = ? OR image_content_hash = ?
        ORDER BY id DESC`
     )
-    .all(imageId, imageRow.content_hash) as Array<{
-    id: number;
-    civitai_post_id: number;
-    draft_url: string;
-    title: string;
-    upload_mode: 'original_png' | 'jpeg_exif';
-    model_version_id: number | null;
-    created_at: string;
-  }>;
+    .all(imageId, imageRow.content_hash) as any[];
 
-  const existingDrafts: CivitaiDraftRecord[] = draftRows.map((d) => ({
-    id: d.id,
-    civitaiPostId: d.civitai_post_id,
-    draftUrl: d.draft_url,
-    title: d.title,
-    uploadMode: d.upload_mode === 'jpeg_exif' ? 'jpeg_exif' : 'original_png',
-    modelVersionId: d.model_version_id ?? null,
-    createdAt: d.created_at,
-  }));
+  const existingDrafts: CivitaiDraftRecord[] = draftRows.map(mapDraftRowToRecord);
 
   const defaultTitle =
     linkedCharacters.length > 0

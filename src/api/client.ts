@@ -169,6 +169,11 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  markImageCivitaiShareSeen: (id: number) =>
+    requestJson<{ ok: boolean; updated: boolean }>(`/api/images/${id}/civitai-share/seen`, {
+      method: 'POST',
+    }),
+
   updateImageAnnotations: (
     id: number,
     payload: {

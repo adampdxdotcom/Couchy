@@ -30,6 +30,7 @@ export const INITIAL_FILTERS: GalleryFilterState = {
   characterMatchMode: 'ALL',
   includeSuggestedCharacters: false,
   dependencyStatus: '',
+  civitaiShareMode: '',
   dateFrom: '',
   dateTo: '',
 };
@@ -51,6 +52,7 @@ export function isDefaultFilters(f: GalleryFilterState): boolean {
     f.characterIds.length === 0 &&
     !f.includeSuggestedCharacters &&
     !f.dependencyStatus &&
+    !f.civitaiShareMode &&
     !f.dateFrom &&
     !f.dateTo
   );

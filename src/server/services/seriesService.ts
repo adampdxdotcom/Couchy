@@ -744,6 +744,35 @@ export function collapseSeriesInGalleryPool(pool: ImageRecord[]): ImageRecord[] 
     const repItem = seriesItems.find((si) => si.imageId === posterMember.image_id);
     const seriesKind = normalizeSeriesKind(members[0]?.series_kind);
 
+    let mergedShareSummary = baseRecord.civitaiShareSummary ?? null;
+    for (const m of visibleMembers) {
+      const s = poolById.get(m.image_id)?.civitaiShareSummary;
+      if (!s) continue;
+      if (!mergedShareSummary) {
+        mergedShareSummary = { ...s };
+      } else {
+        const nextStatus =
+          mergedShareSummary.status === 'published' || s.status === 'published'
+            ? 'published'
+            : 'draft';
+        mergedShareSummary = {
+          status: nextStatus,
+          totalDrafts: Math.max(mergedShareSummary.totalDrafts, s.totalDrafts),
+          publishedCount: Math.max(mergedShareSummary.publishedCount, s.publishedCount),
+          reactionCount: Math.max(mergedShareSummary.reactionCount, s.reactionCount),
+          commentCount: Math.max(mergedShareSummary.commentCount, s.commentCount),
+          hasActivity: mergedShareSummary.hasActivity || s.hasActivity,
+          hasUnseenActivity: mergedShareSummary.hasUnseenActivity || s.hasUnseenActivity,
+          primaryUrl:
+            mergedShareSummary.status === 'published'
+              ? mergedShareSummary.primaryUrl
+              : s.status === 'published'
+              ? s.primaryUrl
+              : mergedShareSummary.primaryUrl,
+        };
+      }
+    }
+
     // Use the latest member's fileMtime when sorting by newest if the poster is an older hearted step,
     // or keep baseRecord fields while attaching full seriesItems
     result.push({
@@ -753,6 +782,7 @@ export function collapseSeriesInGalleryPool(pool: ImageRecord[]): ImageRecord[] 
       seriesCount: seriesItems.length,
       seriesItems,
       chatSnapshot: repItem?.chatSnapshot || [],
+      civitaiShareSummary: mergedShareSummary,
     });
   }
 

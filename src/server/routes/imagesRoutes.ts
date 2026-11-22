@@ -17,6 +17,10 @@ import {
 import { ensureCharacterPortraitIfUnset } from '../services/characterService.ts';
 import { ensureWebpThumbnail, resolveImageDiskPath } from '../services/scannerService.ts';
 import { submitImageUpscale } from '../services/comfyuiService.ts';
+import {
+  markCivitaiActivitySeenForImage,
+  syncCivitaiActivityForImage,
+} from '../services/civitai/civitaiActivitySyncService.ts';
 import { evaluateCivitaiShareEligibility } from '../services/civitai/civitaiShareEligibility.ts';
 import {
   CivitaiShareValidationError,
@@ -468,16 +472,27 @@ imagesRouter.post('/:id/upscale', async (req, res) => {
 
 /**
  * GET /api/images/:id/civitai-share
- * Evaluates Civitai draft-sharing eligibility, candidate model versions, and prefilled fields.
+ * Evaluates Civitai draft-sharing eligibility, lazily syncs publish/activity stats, and returns drafts.
  */
 imagesRouter.get('/:id/civitai-share', async (req, res) => {
   try {
-    const status = await evaluateCivitaiShareEligibility(Number(req.params.id));
+    const imageId = Number(req.params.id);
+    await syncCivitaiActivityForImage(imageId).catch(() => {});
+    const status = await evaluateCivitaiShareEligibility(imageId);
     res.json(status);
   } catch (err: any) {
     const message = err?.message || 'Failed to evaluate Civitai sharing eligibility';
     res.status(message === 'Image not found' ? 404 : 500).json({ error: message });
   }
+});
+
+/**
+ * POST /api/images/:id/civitai-share/seen
+ * Clears unseen Civitai activity indicators after the user inspects the image.
+ */
+imagesRouter.post('/:id/civitai-share/seen', (req, res) => {
+  const updated = markCivitaiActivitySeenForImage(Number(req.params.id));
+  res.json({ ok: true, updated });
 });
 
 /**

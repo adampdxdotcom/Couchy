@@ -18,6 +18,11 @@ let evaluateCivitaiShareEligibility: typeof import('../src/server/services/civit
 let shareImageAsCivitaiDraft: typeof import('../src/server/services/civitai/civitaiDraftShareService.ts').shareImageAsCivitaiDraft;
 let CivitaiShareValidationError: typeof import('../src/server/services/civitai/civitaiDraftShareService.ts').CivitaiShareValidationError;
 let CivitaiPayloadTooLargeError: typeof import('../src/server/services/civitai/civitaiMcpClient.ts').CivitaiPayloadTooLargeError;
+let syncCivitaiActivityForImage: typeof import('../src/server/services/civitai/civitaiActivitySyncService.ts').syncCivitaiActivityForImage;
+let syncAllCivitaiShareActivity: typeof import('../src/server/services/civitai/civitaiActivitySyncService.ts').syncAllCivitaiShareActivity;
+let markCivitaiActivitySeenForImage: typeof import('../src/server/services/civitai/civitaiActivitySyncService.ts').markCivitaiActivitySeenForImage;
+let stopCivitaiActivityScheduler: typeof import('../src/server/services/civitai/civitaiActivitySyncService.ts').stopCivitaiActivityScheduler;
+let queryGalleryImages: typeof import('../src/server/services/galleryQueryService.ts').queryGalleryImages;
 let configureScheduledBackups: typeof import('../src/server/services/backupService.ts').configureScheduledBackups;
 
 const origConfig = {
@@ -113,6 +118,13 @@ before(async () => {
   ({ CivitaiPayloadTooLargeError } = await import(
     '../src/server/services/civitai/civitaiMcpClient.ts'
   ));
+  ({
+    syncCivitaiActivityForImage,
+    syncAllCivitaiShareActivity,
+    markCivitaiActivitySeenForImage,
+    stopCivitaiActivityScheduler,
+  } = await import('../src/server/services/civitai/civitaiActivitySyncService.ts'));
+  ({ queryGalleryImages } = await import('../src/server/services/galleryQueryService.ts'));
   ({ configureScheduledBackups } = await import('../src/server/services/backupService.ts'));
 
   const { charactersRouter } = await import('../src/server/routes/charactersRoutes.ts');
@@ -142,6 +154,7 @@ before(async () => {
 
 after(async () => {
   configureScheduledBackups(0);
+  stopCivitaiActivityScheduler?.();
   if (appConfig) {
     appConfig.comfyuiOutputDir = origConfig.comfyuiOutputDir;
     appConfig.civitaiApiKey = origConfig.civitaiApiKey;
@@ -385,6 +398,7 @@ describe('Civitai Draft Post System', () => {
     assert.equal(pre.recommendedModelVersionId, 775533);
     assert.equal(pre.recommendedDomain, 'civitai.red');
     assert.equal(pre.candidateModelVersions[0]?.domain, 'civitai.red');
+    assert.equal(pre.prefilledDescription, 'moonlit forest shrine');
     assert.deepEqual(pre.prefilledTags, ['scenic']);
 
     const capturedCalls: Array<{ method: string; tool?: string; args?: any }> = [];
@@ -503,5 +517,158 @@ describe('Civitai Draft Post System', () => {
     assert.equal(postCheck.existingDrafts.length, 2);
     assert.equal(postCheck.existingDrafts[0].uploadMode, 'jpeg_exif');
     assert.equal(postCheck.existingDrafts[1].uploadMode, 'original_png');
+  });
+
+  it('syncs Civitai publish status & reaction/comment counts with domain fallback and clears unseen state on inspect', async () => {
+    const imgId = insertImageRow({
+      filename: 'activity_sync.png',
+      contentHash: 'hash_activity_sync_1',
+    });
+
+    ctx.db
+      .prepare(
+        `INSERT INTO image_civitai_drafts
+          (image_id, image_content_hash, civitai_post_id, draft_url, title, upload_mode)
+         VALUES (?, 'hash_activity_sync_1', 778899, 'https://civitai.com/posts/778899/edit', 'Sync Post', 'original_png')`
+      )
+      .run(imgId);
+
+    // 1. Draft still unpublished on both domains -> stays draft
+    const unpublishedResult = await syncCivitaiActivityForImage(imgId, {
+      minIntervalMs: 0,
+      deps: {
+        fetchFn: async () => new Response(JSON.stringify({ items: [] }), { status: 200 }),
+      },
+    });
+    assert.equal(unpublishedResult.syncedPosts, 1);
+    assert.equal(unpublishedResult.changed, false);
+
+    let check = await evaluateCivitaiShareEligibility(imgId);
+    assert.equal(check.existingDrafts[0].status, 'draft');
+    assert.equal(check.existingDrafts[0].hasUnseenActivity, false);
+
+    // 2. Published on fallback civitai.red with likes + hearts + comments -> updates status & sets unseen
+    const requestedUrls: string[] = [];
+    const publishedSync = await syncAllCivitaiShareActivity({
+      minIntervalMs: 0,
+      deps: {
+        fetchFn: async (url) => {
+          const urlStr = String(url);
+          requestedUrls.push(urlStr);
+          if (urlStr.includes('civitai.com/api/v1/images?postId=778899')) {
+            return new Response(JSON.stringify({ items: [] }), { status: 200 });
+          }
+          if (urlStr.includes('civitai.red/api/v1/images?postId=778899')) {
+            return new Response(
+              JSON.stringify({
+                items: [
+                  {
+                    id: 9123456,
+                    stats: { likeCount: 4, heartCount: 3, laughCount: 1, cryCount: 0, commentCount: 2 },
+                  },
+                ],
+              }),
+              { status: 200 }
+            );
+          }
+          return new Response(JSON.stringify({ items: [] }), { status: 200 });
+        },
+      },
+    });
+    assert.ok(requestedUrls.some((u) => u.includes('civitai.com/api/v1/images?postId=778899')));
+    assert.ok(requestedUrls.some((u) => u.includes('civitai.red/api/v1/images?postId=778899')));
+    assert.ok(publishedSync.changedPosts >= 1);
+
+    check = await evaluateCivitaiShareEligibility(imgId);
+    const updatedDraft = check.existingDrafts[0];
+    assert.equal(updatedDraft.status, 'published');
+    assert.equal(updatedDraft.civitaiImageId, 9123456);
+    assert.equal(updatedDraft.publishedUrl, 'https://civitai.red/images/9123456');
+    assert.equal(updatedDraft.reactionCount, 8);
+    assert.equal(updatedDraft.commentCount, 2);
+    assert.equal(updatedDraft.hasUnseenActivity, true);
+
+    // 3. Marking seen clears hasUnseenActivity while keeping counts
+    const marked = markCivitaiActivitySeenForImage(imgId);
+    assert.equal(marked, true);
+    check = await evaluateCivitaiShareEligibility(imgId);
+    assert.equal(check.existingDrafts[0].hasUnseenActivity, false);
+    assert.equal(check.existingDrafts[0].reactionCount, 8);
+    assert.equal(check.existingDrafts[0].commentCount, 2);
+  });
+
+  it('filters gallery images by civitaiShareMode including across collapsed series stacks', async () => {
+    const unsharedId = insertImageRow({
+      filename: 'filter_unshared.png',
+      contentHash: 'hash_filter_unshared',
+    });
+    const draftOnlyId = insertImageRow({
+      filename: 'filter_draft.png',
+      contentHash: 'hash_filter_draft',
+    });
+    const pubSeenId = insertImageRow({
+      filename: 'filter_pub_seen.png',
+      contentHash: 'hash_filter_pub_seen',
+    });
+    const stackStep0Id = insertImageRow({
+      filename: 'filter_stack_0.png',
+      contentHash: 'hash_filter_stack_0',
+    });
+    const stackStep1Id = insertImageRow({
+      filename: 'filter_stack_1.png',
+      contentHash: 'hash_filter_stack_1',
+    });
+
+    ctx.db
+      .prepare(
+        `INSERT INTO image_civitai_drafts
+          (image_id, image_content_hash, civitai_post_id, draft_url, title, status, civitai_image_id, published_url, reaction_count, comment_count, seen_reaction_count, seen_comment_count)
+         VALUES
+          (?, 'hash_filter_draft', 810001, 'https://civitai.com/posts/810001/edit', 'Draft Only', 'draft', NULL, NULL, 0, 0, 0, 0),
+          (?, 'hash_filter_pub_seen', 810002, 'https://civitai.com/posts/810002/edit', 'Pub Seen', 'published', 610002, 'https://civitai.com/images/610002', 5, 0, 5, 0),
+          (?, 'hash_filter_stack_1', 810003, 'https://civitai.com/posts/810003/edit', 'Stack Unseen', 'published', 610003, 'https://civitai.com/images/610003', 3, 2, 1, 0)`
+      )
+      .run(draftOnlyId, pubSeenId, stackStep1Id);
+
+    // Make stackStep0 (unshared) the hearted poster so collapsed card uses stackStep0Id while inheriting stackStep1Id's summary
+    ctx.db
+      .prepare(`INSERT INTO ratings (content_hash, is_favorite) VALUES ('hash_filter_stack_0', 1)`)
+      .run();
+
+    // Put stackStep0 (poster, unshared) and stackStep1 (published + unseen activity) in a series
+    const stackSeriesId = Number(
+      ctx.db
+        .prepare(`INSERT INTO image_series (poster_image_id, series_kind) VALUES (?, 'iterative')`)
+        .run(stackStep0Id).lastInsertRowid
+    );
+    ctx.db
+      .prepare(`INSERT INTO image_series_items (series_id, image_id, step_order) VALUES (?, ?, 0), (?, ?, 1)`)
+      .run(stackSeriesId, stackStep0Id, stackSeriesId, stackStep1Id);
+
+    const sharedIds = queryGalleryImages({ civitaiShareMode: 'shared' }).map((i) => i.id);
+    assert.ok(sharedIds.includes(draftOnlyId));
+    assert.ok(sharedIds.includes(pubSeenId));
+    assert.ok(sharedIds.includes(stackStep0Id), 'Collapsed series card inherits shared status from member');
+    assert.ok(!sharedIds.includes(unsharedId));
+
+    const draftIds = queryGalleryImages({ civitaiShareMode: 'draft' }).map((i) => i.id);
+    assert.ok(draftIds.includes(draftOnlyId));
+    assert.ok(!draftIds.includes(pubSeenId));
+    assert.ok(!draftIds.includes(stackStep0Id));
+
+    const publishedIds = queryGalleryImages({ civitaiShareMode: 'published' }).map((i) => i.id);
+    assert.ok(!publishedIds.includes(draftOnlyId));
+    assert.ok(publishedIds.includes(pubSeenId));
+    assert.ok(publishedIds.includes(stackStep0Id));
+
+    const activityIds = queryGalleryImages({ civitaiShareMode: 'has_activity' }).map((i) => i.id);
+    assert.ok(activityIds.includes(pubSeenId));
+    assert.ok(activityIds.includes(stackStep0Id));
+    assert.ok(!activityIds.includes(draftOnlyId));
+
+    const unseenIds = queryGalleryImages({ civitaiShareMode: 'unseen_activity' }).map((i) => i.id);
+    assert.ok(!unseenIds.includes(pubSeenId));
+    assert.ok(unseenIds.includes(stackStep0Id));
+    assert.ok(!unseenIds.includes(draftOnlyId));
   });
 });

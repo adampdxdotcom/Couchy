@@ -1,6 +1,7 @@
 /**
  * Shared TypeScript contracts between Frontend and Backend.
  */
+import type { CivitaiShareFilterMode, CivitaiShareSummary } from './apiTypes.ts';
 
 export type DependencyStatus = 'exact_match' | 'available' | 'incomplete' | 'unknown';
 
@@ -173,6 +174,8 @@ export interface ImageRecord {
   seriesCount?: number;
   seriesItems?: ImageSeriesItem[];
   chatSnapshot?: QuickGenChatMessage[];
+  // Civitai share status & cached community activity
+  civitaiShareSummary?: CivitaiShareSummary | null;
 }
 
 export interface PortraitCrop {
@@ -540,6 +543,7 @@ export interface GalleryFilterState {
   characterMatchMode: 'ANY' | 'ALL';
   includeSuggestedCharacters: boolean;
   dependencyStatus: DependencyStatus | '';
+  civitaiShareMode?: CivitaiShareFilterMode;
   dateFrom: string;
   dateTo: string;
 }

@@ -2,6 +2,7 @@ import { db } from '../../db.ts';
 import { appConfig } from '../../config.ts';
 import { resolveImageDiskPath } from '../scannerService.ts';
 import { probeCivitaiWebDomain } from './civitaiHttpAndParse.ts';
+import { mapDraftRowToRecord } from './civitaiActivitySyncService.ts';
 import { evaluateCivitaiShareEligibility } from './civitaiShareEligibility.ts';
 import { prepareCivitaiImagePayload } from './civitaiImagePayload.ts';
 import {
@@ -144,15 +145,7 @@ export async function shareImageAsCivitaiDraft(
     .prepare('SELECT * FROM image_civitai_drafts WHERE id = ?')
     .get(Number(insertInfo.lastInsertRowid)) as any;
 
-  const draft: CivitaiDraftRecord = {
-    id: row.id,
-    civitaiPostId: row.civitai_post_id,
-    draftUrl: row.draft_url,
-    title: row.title,
-    uploadMode: row.upload_mode === 'jpeg_exif' ? 'jpeg_exif' : 'original_png',
-    modelVersionId: row.model_version_id ?? null,
-    createdAt: row.created_at,
-  };
+  const draft: CivitaiDraftRecord = mapDraftRowToRecord(row);
 
   return {
     ok: true,

@@ -5,6 +5,7 @@ import {
   enrichSingleImageWithSeries,
 } from './seriesService.ts';
 import { parsePreviewImagesJson } from './civitai/civitaiHttpAndParse.ts';
+import { summarizeCivitaiDraftRows } from './civitai/civitaiActivitySyncService.ts';
 import { getCharacterPortraitMetadataMap } from './characterService.ts';
 import type {
   GalleryFilterState,
@@ -52,6 +53,8 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
     { id: number; hasVisual: boolean; hasApi: boolean }
   >();
   const randomRollImageIds = new Set<number>();
+  const civitaiDraftsByImageId = new Map<number, any[]>();
+  const civitaiDraftsByHash = new Map<string, any[]>();
 
   if (rows.length === 1) {
     const single = rows[0];
@@ -184,6 +187,17 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
     if (rrRow) {
       randomRollImageIds.add(single.id);
     }
+
+    const singleDrafts = db
+      .prepare(
+        `SELECT * FROM image_civitai_drafts
+         WHERE image_id = ? OR image_content_hash = ?
+         ORDER BY id DESC`
+      )
+      .all(single.id, single.content_hash) as any[];
+    if (singleDrafts.length > 0) {
+      civitaiDraftsByImageId.set(single.id, singleDrafts);
+    }
   } else {
     // Bulk fetch all image_loras in one query
     const allLoras = db
@@ -313,6 +327,22 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
     for (const rr of allRandomRollRows) {
       randomRollImageIds.add(Number(rr.imageId));
     }
+
+    const allCivitaiDrafts = db
+      .prepare('SELECT * FROM image_civitai_drafts ORDER BY id DESC')
+      .all() as any[];
+    for (const d of allCivitaiDrafts) {
+      if (d.image_id) {
+        const list = civitaiDraftsByImageId.get(Number(d.image_id));
+        if (list) list.push(d);
+        else civitaiDraftsByImageId.set(Number(d.image_id), [d]);
+      }
+      if (d.image_content_hash) {
+        const list = civitaiDraftsByHash.get(String(d.image_content_hash));
+        if (list) list.push(d);
+        else civitaiDraftsByHash.set(String(d.image_content_hash), [d]);
+      }
+    }
   }
 
   const isSingleDetail = rows.length === 1;
@@ -391,6 +421,15 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
       tags,
       visualTags,
       collections,
+      civitaiShareSummary: (() => {
+        const byId = civitaiDraftsByImageId.get(r.id) || [];
+        const byHash = civitaiDraftsByHash.get(r.content_hash) || [];
+        if (byId.length === 0 && byHash.length === 0) return null;
+        const mergedMap = new Map<number, any>();
+        for (const d of byId) mergedMap.set(Number(d.id), d);
+        for (const d of byHash) mergedMap.set(Number(d.id), d);
+        return summarizeCivitaiDraftRows(Array.from(mergedMap.values()));
+      })(),
     };
   }).map((img) => (isSingleDetail ? enrichSingleImageWithSeries(img) : img));
 }
@@ -602,6 +641,19 @@ export function queryGalleryImages(filters: Partial<GalleryFilterState>): ImageR
   }
   if (filters.dependencyStatus) {
     items = items.filter((i) => i.dependencyStatus === filters.dependencyStatus);
+  }
+  if (filters.civitaiShareMode) {
+    const mode = filters.civitaiShareMode;
+    items = items.filter((i) => {
+      const s = i.civitaiShareSummary;
+      if (!s) return false;
+      if (mode === 'shared') return true;
+      if (mode === 'draft') return s.status === 'draft';
+      if (mode === 'published') return s.status === 'published';
+      if (mode === 'has_activity') return s.hasActivity;
+      if (mode === 'unseen_activity') return s.hasUnseenActivity;
+      return true;
+    });
   }
   if (filters.collectionId) {
     items = items.filter((i) => i.collections.some((c) => c.id === filters.collectionId));

@@ -96,6 +96,7 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
     if (filters.collectionId) count++;
     if (filters.checkpoint) count++;
     if (filters.dependencyStatus) count++;
+    if (filters.civitaiShareMode) count++;
     return count;
   }, [filters]);
 
@@ -599,6 +600,21 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
                   <option value="only:exclude">Rejected Only</option>
                   <option value="exclude:only">Archived Only</option>
                   <option value="include:include">Show Everything</option>
+                </select>
+              </div>
+              <div className="col-span-2">
+                <label className="block text-[11px] text-zinc-400 mb-0.5">Civitai Share Status</label>
+                <select
+                  value={filters.civitaiShareMode || ''}
+                  onChange={(e) => onChange({ ...filters, civitaiShareMode: e.target.value as any })}
+                  className="w-full px-2 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-zinc-200"
+                >
+                  <option value="">All Images (Shared & Unshared)</option>
+                  <option value="shared">Shared on Civitai (Draft or Published)</option>
+                  <option value="draft">Civitai Drafts Only</option>
+                  <option value="published">Published on Civitai</option>
+                  <option value="has_activity">Has Civitai Likes or Comments</option>
+                  <option value="unseen_activity">New Civitai Activity</option>
                 </select>
               </div>
             </div>

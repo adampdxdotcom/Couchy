@@ -4,6 +4,7 @@ import { migrationsCore, type SchemaMigration } from './db/migrationsCore.ts';
 import { migrationsV2ToV14 } from './db/migrationsV2ToV14.ts';
 import { migrationsV15ToV28 } from './db/migrationsV15ToV28.ts';
 import { migrationsV29 } from './db/migrationsV29.ts';
+import { migrationsV30 } from './db/migrationsV30.ts';
 import { seedPromptsAndLlmSettings } from './db/seedPromptsAndLlm.ts';
 import { seedWorkflowsAndInstances } from './db/seedWorkflowsAndInstances.ts';
 
@@ -21,6 +22,7 @@ const ALL_MIGRATIONS: SchemaMigration[] = [
   ...migrationsV2ToV14,
   ...migrationsV15ToV28,
   ...migrationsV29,
+  ...migrationsV30,
 ];
 
 /**

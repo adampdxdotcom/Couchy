@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { BookmarkPlus, Columns2, Dices, Heart, Keyboard, Loader2, Play, RotateCcw, Share2, Star, Trash2, X } from 'lucide-react';
+import { BookmarkPlus, Columns2, Dices, ExternalLink, Heart, Keyboard, Loader2, MessageSquare, Play, RotateCcw, Share2, Star, Trash2, X } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
@@ -177,6 +177,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     useState<CivitaiShareEligibilityResponse | null>(null);
   const [isLoadingShareStatus, setIsLoadingShareStatus] = useState(false);
   const [showCivitaiDraftModal, setShowCivitaiDraftModal] = useState(false);
+  const [unseenCivitaiImageId, setUnseenCivitaiImageId] = useState<number | null>(null);
 
   const characterTagSig = useMemo(
     () =>
@@ -193,21 +194,54 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     try {
       const res = await api.getImageCivitaiShareStatus(activeImage.id);
       setCivitaiShareStatus(res);
+      if (res.existingDrafts.some((d) => d.hasUnseenActivity)) {
+        setUnseenCivitaiImageId(activeImage.id);
+        const seenRes = await api.markImageCivitaiShareSeen(activeImage.id).catch(() => null);
+        if (seenRes?.updated) {
+          void onUpdated();
+        }
+      }
     } catch {
       setCivitaiShareStatus(null);
     } finally {
       setIsLoadingShareStatus(false);
     }
-  }, [activeImage.id]);
+  }, [activeImage.id, onUpdated]);
 
   useEffect(() => {
     let cancelled = false;
+    const prevSummary = activeImage.civitaiShareSummary;
     setIsLoadingShareStatus(true);
     setShowCivitaiDraftModal(false);
+    setUnseenCivitaiImageId(prevSummary?.hasUnseenActivity ? activeImage.id : null);
+
     api
       .getImageCivitaiShareStatus(activeImage.id)
-      .then((res) => {
-        if (!cancelled) setCivitaiShareStatus(res);
+      .then(async (res) => {
+        if (cancelled) return;
+        setCivitaiShareStatus(res);
+
+        const drafts = res.existingDrafts || [];
+        const hasUnseen = drafts.some((d) => d.hasUnseenActivity);
+        if (hasUnseen) {
+          setUnseenCivitaiImageId(activeImage.id);
+          const seenRes = await api.markImageCivitaiShareSeen(activeImage.id).catch(() => null);
+          if (!cancelled && seenRes?.updated) {
+            void onUpdated();
+          }
+        } else {
+          // Refresh gallery if background/lazy sync discovered a newly published post or updated counts
+          const hasPublished = drafts.some((d) => d.status === 'published');
+          const nextReactions = drafts.reduce((sum, d) => sum + (d.status === 'published' ? d.reactionCount : 0), 0);
+          const nextComments = drafts.reduce((sum, d) => sum + (d.status === 'published' ? d.commentCount : 0), 0);
+          if (
+            (hasPublished && prevSummary?.status !== 'published') ||
+            (prevSummary &&
+              (prevSummary.reactionCount !== nextReactions || prevSummary.commentCount !== nextComments))
+          ) {
+            void onUpdated();
+          }
+        }
       })
       .catch(() => {
         if (!cancelled) setCivitaiShareStatus(null);
@@ -219,6 +253,57 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
       cancelled = true;
     };
   }, [activeImage.id, characterTagSig]);
+
+  const civitaiVisualState = useMemo(() => {
+    const drafts = civitaiShareStatus?.existingDrafts;
+    const summary = activeImage.civitaiShareSummary ?? null;
+    if (drafts && drafts.length > 0) {
+      const publishedDrafts = drafts.filter((d) => d.status === 'published');
+      const isPublished = publishedDrafts.length > 0;
+      const seenPostIds = new Set<number>();
+      let reactionCount = 0;
+      let commentCount = 0;
+      for (const d of publishedDrafts) {
+        if (!seenPostIds.has(d.civitaiPostId)) {
+          seenPostIds.add(d.civitaiPostId);
+          reactionCount += d.reactionCount;
+          commentCount += d.commentCount;
+        }
+      }
+      const primary = publishedDrafts[0] || drafts[0];
+      return {
+        hasShare: true,
+        status: (isPublished ? 'published' : 'draft') as 'draft' | 'published',
+        totalDrafts: drafts.length,
+        reactionCount,
+        commentCount,
+        hasUnseenActivity:
+          unseenCivitaiImageId === activeImage.id || drafts.some((d) => d.hasUnseenActivity),
+        primaryUrl: primary.publishedUrl || primary.draftUrl,
+      };
+    }
+    if (summary) {
+      return {
+        hasShare: true,
+        status: summary.status,
+        totalDrafts: summary.totalDrafts,
+        reactionCount: summary.reactionCount,
+        commentCount: summary.commentCount,
+        hasUnseenActivity:
+          unseenCivitaiImageId === activeImage.id || summary.hasUnseenActivity,
+        primaryUrl: summary.primaryUrl,
+      };
+    }
+    return {
+      hasShare: false,
+      status: null as 'draft' | 'published' | null,
+      totalDrafts: 0,
+      reactionCount: 0,
+      commentCount: 0,
+      hasUnseenActivity: false,
+      primaryUrl: null as string | null,
+    };
+  }, [civitaiShareStatus, activeImage.civitaiShareSummary, activeImage.id, unseenCivitaiImageId]);
 
   const nextUserPresetName = useMemo(() => resolveNextUserPresetName(presets), [presets]);
   const hasPresetModels = Boolean(
@@ -445,9 +530,19 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   }}
                   className={`p-1.5 rounded-lg border shrink-0 transition-colors ${
                     isLoadingShareStatus || !civitaiShareStatus?.eligible
-                      ? 'bg-zinc-950 border-zinc-800/70 text-zinc-600 cursor-not-allowed opacity-45'
-                      : (civitaiShareStatus.existingDrafts?.length || 0) > 0
-                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/20 cursor-pointer'
+                      ? civitaiVisualState.hasShare
+                        ? civitaiVisualState.hasUnseenActivity
+                          ? 'bg-amber-500/15 border-amber-500/40 text-amber-300/70 cursor-not-allowed'
+                          : civitaiVisualState.status === 'published'
+                          ? 'bg-emerald-500/10 border-emerald-500/35 text-emerald-300/70 cursor-not-allowed'
+                          : 'bg-sky-500/10 border-sky-500/35 text-sky-300/70 cursor-not-allowed'
+                        : 'bg-zinc-950 border-zinc-800/70 text-zinc-600 cursor-not-allowed opacity-45'
+                      : civitaiVisualState.hasUnseenActivity
+                      ? 'bg-amber-500/20 border-amber-500/55 text-amber-300 hover:bg-amber-500/30 cursor-pointer'
+                      : civitaiVisualState.status === 'published'
+                      ? 'bg-emerald-500/15 border-emerald-500/45 text-emerald-300 hover:bg-emerald-500/25 cursor-pointer'
+                      : civitaiVisualState.hasShare
+                      ? 'bg-sky-500/15 border-sky-500/45 text-sky-300 hover:bg-sky-500/25 cursor-pointer'
                       : 'bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-indigo-300 hover:border-indigo-500/50 cursor-pointer'
                   }`}
                   title={
@@ -457,8 +552,12 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                       ? 'Unable to verify Civitai sharing status'
                       : !civitaiShareStatus.eligible
                       ? civitaiShareStatus.reasons.join(' ')
-                      : (civitaiShareStatus.existingDrafts?.length || 0) > 0
-                      ? `Share on Civitai as Private Draft (${civitaiShareStatus.existingDrafts.length} draft(s) already created)`
+                      : civitaiVisualState.hasUnseenActivity
+                      ? `New Civitai activity (${civitaiVisualState.reactionCount} likes · ${civitaiVisualState.commentCount} comments)`
+                      : civitaiVisualState.status === 'published'
+                      ? `Published on Civitai (${civitaiVisualState.reactionCount} likes · ${civitaiVisualState.commentCount} comments)`
+                      : civitaiVisualState.hasShare
+                      ? `Share on Civitai as Private Draft (${civitaiVisualState.totalDrafts} draft(s) already created)`
                       : 'Share on Civitai as Private Draft'
                   }
                   aria-label="Share on Civitai as Private Draft"
@@ -469,6 +568,54 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                     <Share2 className="w-4 h-4" />
                   )}
                 </button>
+
+                {civitaiVisualState.hasShare && civitaiVisualState.primaryUrl && (
+                  <a
+                    href={civitaiVisualState.primaryUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-[11px] font-medium shrink-0 transition-colors ${
+                      civitaiVisualState.hasUnseenActivity
+                        ? 'bg-amber-500/15 border-amber-500/45 text-amber-200 hover:bg-amber-500/25'
+                        : civitaiVisualState.status === 'published'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/25'
+                        : 'bg-sky-500/15 border-sky-500/40 text-sky-200 hover:bg-sky-500/25'
+                    }`}
+                    title={
+                      civitaiVisualState.status === 'published'
+                        ? 'Open published post on Civitai'
+                        : 'Open draft editor on Civitai'
+                    }
+                  >
+                    {civitaiVisualState.hasUnseenActivity && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+                    )}
+                    {civitaiVisualState.status === 'published' ? (
+                      <>
+                        <span>Published</span>
+                        {(civitaiVisualState.reactionCount > 0 || civitaiVisualState.commentCount > 0) && (
+                          <span className="inline-flex items-center gap-1.5 font-mono tabular-nums text-[10px] opacity-90">
+                            {civitaiVisualState.reactionCount > 0 && (
+                              <span className="inline-flex items-center gap-0.5">
+                                <Heart className="w-2.5 h-2.5" />
+                                {civitaiVisualState.reactionCount}
+                              </span>
+                            )}
+                            {civitaiVisualState.commentCount > 0 && (
+                              <span className="inline-flex items-center gap-0.5">
+                                <MessageSquare className="w-2.5 h-2.5" />
+                                {civitaiVisualState.commentCount}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span>Draft</span>
+                    )}
+                    <ExternalLink className="w-2.5 h-2.5 opacity-75" />
+                  </a>
+                )}
 
                 {renderDependencyLabel(activeImage.dependencyStatus)}
 

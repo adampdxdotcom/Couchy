@@ -131,6 +131,10 @@ async function startServer() {
             { startDownloadScheduler },
             { scanAndCleanCopiedDownloads, startModelCleanupScheduler },
             { startLoraHeadshotWatcher },
+            {
+              startCivitaiActivityScheduler,
+              stopCivitaiActivityScheduler,
+            },
           ] = await Promise.all([
             import('./src/server/services/scannerService.ts'),
             import('./src/server/services/modelInventoryService.ts'),
@@ -138,6 +142,7 @@ async function startServer() {
             import('./src/server/services/downloadSchedulerService.ts'),
             import('./src/server/services/modelCleanupService.ts'),
             import('./src/server/services/characterDownloadAutomationService.ts'),
+            import('./src/server/services/civitai/civitaiActivitySyncService.ts'),
           ]);
 
           backfillMissingImagePrompts(false);
@@ -145,6 +150,7 @@ async function startServer() {
           startDownloadScheduler();
           startLoraHeadshotWatcher();
           startModelCleanupScheduler();
+          startCivitaiActivityScheduler();
 
           await runBackgroundThumbnailMigration();
           await syncModelInventory();
@@ -178,6 +184,9 @@ async function startServer() {
 
   const shutdown = async () => {
     if (reconcileTimer) clearInterval(reconcileTimer);
+    await import('./src/server/services/civitai/civitaiActivitySyncService.ts')
+      .then((m) => m.stopCivitaiActivityScheduler())
+      .catch(() => {});
     httpServer.close();
     if (viteServer) {
       await viteServer.close().catch(() => {});

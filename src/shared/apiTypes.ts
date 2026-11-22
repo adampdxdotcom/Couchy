@@ -197,6 +197,27 @@ export type CivitaiDomain = 'civitai.com' | 'civitai.red';
 
 export type CivitaiShareUploadMode = 'original_png' | 'jpeg_exif';
 
+export type CivitaiPostStatus = 'draft' | 'published';
+
+export type CivitaiShareFilterMode =
+  | ''
+  | 'shared'
+  | 'draft'
+  | 'published'
+  | 'has_activity'
+  | 'unseen_activity';
+
+export interface CivitaiShareSummary {
+  status: CivitaiPostStatus;
+  totalDrafts: number;
+  publishedCount: number;
+  reactionCount: number;
+  commentCount: number;
+  hasActivity: boolean;
+  hasUnseenActivity: boolean;
+  primaryUrl: string;
+}
+
 export interface CivitaiDraftRecord {
   id: number;
   civitaiPostId: number;
@@ -204,6 +225,15 @@ export interface CivitaiDraftRecord {
   title: string;
   uploadMode: CivitaiShareUploadMode;
   modelVersionId: number | null;
+  status: CivitaiPostStatus;
+  civitaiImageId: number | null;
+  publishedUrl: string | null;
+  reactionCount: number;
+  commentCount: number;
+  seenReactionCount: number;
+  seenCommentCount: number;
+  hasUnseenActivity: boolean;
+  statsSyncedAt: string | null;
   createdAt: string;
 }
 
