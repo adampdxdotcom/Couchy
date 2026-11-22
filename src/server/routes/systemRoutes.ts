@@ -34,6 +34,10 @@ import { getGenerationStats } from '../services/statsService.ts';
 import { getStorageUsageStats } from '../services/storageStatsService.ts';
 import { getLibraryUsageStats } from '../services/libraryUsageStatsService.ts';
 import {
+  getGenerationReadiness,
+  setDefaultWorkflowUnet,
+} from '../services/readinessService.ts';
+import {
   getBoolSetting,
   getJsonSetting,
   getSettingsMap,
@@ -634,5 +638,32 @@ systemRouter.get('/stats/library-usage', (_req, res) => {
     res.json(getLibraryUsageStats());
   } catch (err: unknown) {
     res.status(500).json({ error: getErrorMessage(err, 'Failed to compute library usage stats') });
+  }
+});
+
+/**
+ * GET /api/system/readiness
+ * Returns lightweight First-Run & Generation Readiness diagnostics for ComfyUI, Krea 2 nodes, and default weights.
+ */
+systemRouter.get('/system/readiness', async (_req, res) => {
+  try {
+    const result = await getGenerationReadiness();
+    res.json(result);
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to check generation readiness') });
+  }
+});
+
+/**
+ * PATCH /api/system/readiness/default-unet
+ * Updates Node #30_10 (or fallback loader) on the default workflow to the chosen UNET filename.
+ */
+systemRouter.patch('/system/readiness/default-unet', async (req, res) => {
+  try {
+    const unetName = String(req.body?.unetName ?? '').trim();
+    const result = await setDefaultWorkflowUnet(unetName);
+    res.json(result);
+  } catch (err: unknown) {
+    res.status(400).json({ error: getErrorMessage(err, 'Failed to update default workflow UNET') });
   }
 });

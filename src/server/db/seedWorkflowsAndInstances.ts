@@ -117,46 +117,17 @@ export function seedWorkflowsAndInstances(db: Database.Database): void {
     }
   }
 
-  // Ensure any existing default workflow record has a valid diffusion model in Node 30_10
-  const defaultWf = db
-    .prepare(
-      "SELECT id, api_workflow_json FROM workflows WHERE workflow_hash = 'default-krea2-turbo-workflow' OR id = 1 LIMIT 1"
-    )
-    .get() as { id: number; api_workflow_json: string } | undefined;
-  const fallbackUnet =
-    krea2TurboApiWorkflow['30_10']?.inputs?.unet_name || 'krea_muse_INT8-ConvRot.safetensors';
-  if (defaultWf?.api_workflow_json) {
-    try {
-      const parsed = JSON.parse(defaultWf.api_workflow_json);
-      if (
-        parsed['30_10']?.inputs &&
-        (!parsed['30_10'].inputs.unet_name || !parsed['30_10'].inputs.unet_name.trim())
-      ) {
-        parsed['30_10'].inputs.unet_name = fallbackUnet;
-        db.prepare('UPDATE workflows SET api_workflow_json = ? WHERE id = ?').run(
-          JSON.stringify(parsed, null, 2),
-          defaultWf.id
-        );
-      }
-    } catch {
-      // ignore
-    }
-  }
-
   // Ensure at least one workflow is marked as default
   const anyDefaultWf = db
     .prepare('SELECT id FROM workflows WHERE is_default = 1 LIMIT 1')
     .get() as { id: number } | undefined;
   if (!anyDefaultWf) {
+    const defaultWf = db
+      .prepare(
+        "SELECT id FROM workflows WHERE workflow_hash = 'default-krea2-turbo-workflow' OR id = 1 LIMIT 1"
+      )
+      .get() as { id: number } | undefined;
     const targetDefaultId = defaultWf?.id ?? kreaWorkflowId ?? 1;
     db.prepare('UPDATE workflows SET is_default = 1 WHERE id = ?').run(targetDefaultId);
   }
-
-  // Ensure primary default diffusion model is registered in models table (inventory sync verifies installation)
-  const unetStem = fallbackUnet.replace(/\.(safetensors|ckpt|pt|bin)$/i, '');
-  db.prepare(`
-    INSERT INTO models (name, filename, model_type, is_installed, source_type)
-    VALUES (?, ?, 'diffusion', 0, 'workflow_default')
-    ON CONFLICT(filename) DO UPDATE SET model_type = 'diffusion'
-  `).run(unetStem, fallbackUnet);
 }

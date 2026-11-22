@@ -39,6 +39,7 @@ import type {
   ComfyUiTestResponse,
   DatabaseBackupEntry,
   DownloadJobRecord,
+  GenerationReadinessResponse,
   HealthConfigSnapshot,
   HealthResponse,
   ModelImpactReport,
@@ -897,6 +898,15 @@ export const api = {
   getStorageStats: () => requestJson<StorageUsageStatsResponse>('/api/stats/storage'),
 
   getLibraryUsageStats: () => requestJson<LibraryUsageStatsResponse>('/api/stats/library-usage'),
+
+  getGenerationReadiness: () =>
+    requestJson<GenerationReadinessResponse>('/api/system/readiness'),
+
+  setDefaultWorkflowUnet: (unetName: string) =>
+    requestJson<GenerationReadinessResponse>('/api/system/readiness/default-unet', {
+      method: 'PATCH',
+      body: JSON.stringify({ unetName }),
+    }),
 
   importCivitaiImageUrl: (url: string) =>
     requestJson<CivitaiImageImportResult>('/api/generation/civitai-image', {

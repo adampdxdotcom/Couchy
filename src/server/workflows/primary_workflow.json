@@ -32,11 +32,6 @@
       "PowerLoraLoaderHeaderWidget": {
         "type": "PowerLoraLoaderHeaderWidget"
       },
-      "lora_1": {
-        "on": true,
-        "lora": "xashv2.safetensors",
-        "strength": 1
-      },
       "➕ Add Lora": "",
       "model": [
         "30_10",
@@ -167,7 +162,7 @@
   },
   "30_23": {
     "inputs": {
-      "value": true
+      "value": false
     },
     "class_type": "PrimitiveBoolean",
     "_meta": {
@@ -189,7 +184,7 @@
   },
   "30_10": {
     "inputs": {
-      "unet_name": "krea_muse_INT8-ConvRot.safetensors",
+      "unet_name": "",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",
@@ -331,7 +326,7 @@
         "30_20",
         0
       ],
-      "string_b": "xashx",
+      "string_b": "",
       "delimiter": ", "
     },
     "class_type": "StringConcatenate",

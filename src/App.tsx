@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { AlertTriangle, X } from 'lucide-react';
 import { api } from './api/client.ts';
+import type { GenerationReadinessResponse } from './shared/apiTypes.ts';
 import { TopNavHeader, type WorkspaceTab } from './components/TopNavHeader.tsx';
 import { GalleryFilterBar, type GalleryViewLayout } from './components/GalleryFilterBar.tsx';
 import { GalleryGridView } from './components/GalleryGridView.tsx';
@@ -29,6 +31,29 @@ export default function App() {
   const [inspectedImageId, setInspectedImageId] = useState<number | null>(null);
   const [selectedCharacterId, setSelectedCharacterId] = useState<number | null>(null);
   const [quickGenPrefill, setQuickGenPrefill] = useState<QuickGenPrefill | null>(null);
+  const [readiness, setReadiness] = useState<GenerationReadinessResponse | null>(null);
+  const [readinessDismissed, setReadinessDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('couchy_readiness_banner_dismissed') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    let active = true;
+    api
+      .getGenerationReadiness()
+      .then((res) => {
+        if (active) setReadiness(res);
+      })
+      .catch(() => {
+        // ignore startup check failure
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleClearQuickGenPrefill = useCallback(() => {
     setQuickGenPrefill(null);
@@ -151,6 +176,47 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className={`flex-1 w-full max-w-full min-w-0 overflow-x-clip ${showQuickGenBar ? 'pb-36 md:pb-28' : ''}`}>
+        {readiness?.needsAttention && !readinessDismissed && activeTab !== 'system' && (
+          <div className="max-w-7xl mx-auto px-4 pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/35 text-xs text-amber-200">
+              <div className="flex items-center gap-2 min-w-0">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span className="truncate">
+                  {!readiness.defaultUnetName
+                    ? 'First-run Krea 2 setup: pick your default base model (Node #30_10) to enable generation.'
+                    : 'Krea 2 setup needs attention: one or more required ComfyUI nodes or default weights are missing.'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSystemSubTab('comfyui');
+                    setActiveTab('system');
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100 font-medium cursor-pointer"
+                >
+                  Open Setup
+                </button>
+                <button
+                  type="button"
+                  aria-label="Dismiss setup notice"
+                  onClick={() => {
+                    setReadinessDismissed(true);
+                    try {
+                      localStorage.setItem('couchy_readiness_banner_dismissed', '1');
+                    } catch {
+                      // ignore storage error
+                    }
+                  }}
+                  className="p-1 rounded-lg text-amber-300/80 hover:text-amber-100 hover:bg-amber-500/15 cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {activeTab === 'gallery' && (
           <GalleryGridView
             images={workspace.images}
@@ -324,6 +390,7 @@ export default function App() {
             healthData={workspace.healthData}
             onRefreshAll={refreshAll}
             initialSubTab={systemSubTab}
+            onReadinessUpdated={setReadiness}
           />
         )}
       </main>

@@ -168,3 +168,25 @@ export interface ComfyUiTestResponse {
   systemStats: Record<string, unknown> | null;
   error: string | null;
 }
+
+export interface ReadinessCheckItem {
+  id: 'comfyui' | 'nodes' | 'default_unet' | 'support_models' | 'library_scan' | 'local_llm';
+  label: string;
+  ok: boolean;
+  optional?: boolean;
+  detail: string;
+}
+
+export interface GenerationReadinessResponse {
+  ready: boolean;
+  needsAttention: boolean;
+  comfyuiOnline: boolean;
+  comfyuiUrl: string;
+  llmOnline: boolean;
+  defaultWorkflowId: number | null;
+  defaultWorkflowName: string | null;
+  defaultUnetName: string;
+  availableUnets: string[];
+  checks: ReadinessCheckItem[];
+  checkedAt: string;
+}

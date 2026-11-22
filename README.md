@@ -43,7 +43,10 @@ Couchy bridges raw ComfyUI output folders and an organized creative studio—let
 
 ### Prerequisites
 - Docker and Docker Compose ([Docker Engine](https://docs.docker.com/engine/install/))
-- A running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance configured with the standard **Krea 2** template, its suggested models, and **`4x` ESRGAN** *(compatibility note: Krea 2 + `4x` ESRGAN only)*
+- A running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance (`comfy-core >= 0.43.0`) configured for **Krea 2**:
+  - **Custom node**: **`rgthree-comfy`** *(for `Power Lora Loader (rgthree)` — installable via ComfyUI Manager)*
+  - **Core nodes**: `ResolutionSelector`, `ComfySwitchNode`, and `TextGenerate` *(included in `comfy-core >= 0.43.0`)*
+  - **Models**: A Krea 2 UNET/diffusion model, **`qwen3vl_4b_fp8_scaled.safetensors`** (CLIP), **`qwen_image_vae.safetensors`** (VAE), and **`4x-ESRGAN.pth`** (upscaler) *(compatibility note: Krea 2 + `4x-ESRGAN` only)*
 - *(Optional)* An NVIDIA GPU with NVIDIA Container Toolkit for GPU-accelerated local visual tagging
 - *(Optional)* Any OpenAI-compatible Local LLM server—built-in presets cover **Ollama** (`:11434/v1`), **llama.cpp** (`:8080/v1`), **KoboldCpp** (`:5001/v1`), **vLLM** (`:8000/v1`), and **LM Studio / Port 1234** (`:1234/v1`), plus **TabbyAPI** or custom authenticated `/v1` proxies
 

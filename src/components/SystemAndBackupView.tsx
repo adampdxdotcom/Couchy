@@ -7,11 +7,13 @@ import type {
   PillTypeSettings,
   VisualTaggerStatus,
 } from '../shared/types.ts';
+import type { GenerationReadinessResponse } from '../shared/apiTypes.ts';
 import { WorkspacePreferencesSection } from './system/WorkspacePreferencesSection.tsx';
 import { QuickGenAndPillsSection } from './system/QuickGenAndPillsSection.tsx';
 import { VisualTaggerSection } from './system/VisualTaggerSection.tsx';
 import { LmStudioTemplatesSection } from './system/LmStudioTemplatesSection.tsx';
 import { ComfyUiConnectionSection } from './system/ComfyUiConnectionSection.tsx';
+import { GenerationReadinessCard } from './system/GenerationReadinessCard.tsx';
 import { ModelCleanupSection } from './system/ModelCleanupSection.tsx';
 import { DatabaseBackupSection } from './system/DatabaseBackupSection.tsx';
 import { CollectionsAndScannerSection } from './system/CollectionsAndScannerSection.tsx';
@@ -47,6 +49,7 @@ interface SystemAndBackupViewProps {
   healthData: any;
   onRefreshAll: () => Promise<void>;
   initialSubTab?: SystemSubTab;
+  onReadinessUpdated?: (readiness: GenerationReadinessResponse) => void;
 }
 
 /**
@@ -57,6 +60,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   healthData,
   onRefreshAll,
   initialSubTab = 'tagger',
+  onReadinessUpdated,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<SystemSubTab>(initialSubTab);
 
@@ -571,6 +575,10 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
 
       {activeSubTab === 'comfyui' && (
         <div className="space-y-5">
+          <GenerationReadinessCard
+            onRefreshAll={onRefreshAll}
+            onReadinessUpdated={onReadinessUpdated}
+          />
           <ComfyUiConnectionSection
             comfyuiUrl={comfyuiUrl}
             setComfyuiUrl={setComfyuiUrl}
