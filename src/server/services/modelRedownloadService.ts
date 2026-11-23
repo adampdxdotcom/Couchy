@@ -10,7 +10,10 @@ import {
 import {
   abortActiveDownloadStream,
   abortAllActiveDownloadStreams,
+  clearDownloadJobPending,
   executeDownloadJob,
+  isDownloadJobActive,
+  markDownloadJobPending,
   type ExecuteDownloadJobParams,
   type ScheduledDownloadPayload,
 } from './modelManagerService.ts';
@@ -57,11 +60,15 @@ async function drainRedownloadQueue(): Promise<void> {
            WHERE id = ? AND status IN ('queued', 'downloading')`
         )
         .run(next.jobId);
-      if (claim.changes === 0) continue;
+      if (claim.changes === 0) {
+        clearDownloadJobPending(next.jobId);
+        continue;
+      }
 
       try {
         await executeDownloadJob(next.jobId, next.execParams);
       } catch (err) {
+        clearDownloadJobPending(next.jobId);
         logger.warn(
           'Downloader',
           `Sequential redownload job #${next.jobId} (${next.execParams.safeFilename}) failed`,
@@ -439,7 +446,8 @@ function adoptStuckOrOrphanedJobs(): number {
 
   let adoptedCount = 0;
   for (const row of stuckRows) {
-    if (inMemoryIds.has(Number(row.id))) continue;
+    const jobId = Number(row.id);
+    if (inMemoryIds.has(jobId) || isDownloadJobActive(jobId)) continue;
     // If a job is actively streaming right now (bytes_downloaded > 0 while queue is running), leave it alone
     if (isProcessingRedownloadQueue && row.status === 'downloading' && Number(row.bytes_downloaded) > 0) {
       continue;
@@ -452,7 +460,7 @@ function adoptStuckOrOrphanedJobs(): number {
     if (fileExistsWithSize(destPath)) {
       db.prepare(
         `UPDATE download_jobs SET status = 'completed', completed_at = datetime('now') WHERE id = ?`
-      ).run(row.id);
+      ).run(jobId);
       continue;
     }
 
@@ -465,10 +473,11 @@ function adoptStuckOrOrphanedJobs(): number {
       }
     }
 
-    db.prepare(`UPDATE download_jobs SET status = 'queued' WHERE id = ?`).run(row.id);
+    db.prepare(`UPDATE download_jobs SET status = 'queued' WHERE id = ?`).run(jobId);
+    markDownloadJobPending(jobId);
 
     redownloadQueue.push({
-      jobId: Number(row.id),
+      jobId,
       execParams: {
         provider: row.provider,
         modelName: row.model_name || safeFilename,
@@ -557,6 +566,19 @@ export function ensureRedownloadQueueRunning(): void {
   }
 }
 
+function cleanupPartFilesForJob(destinationPath: string | null | undefined, jobId: number): void {
+  if (!destinationPath) return;
+  for (const candidate of [`${destinationPath}.part.${jobId}`, `${destinationPath}.part`]) {
+    if (fs.existsSync(candidate)) {
+      try {
+        fs.unlinkSync(candidate);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
 /**
  * Cancels an active (`downloading`), waiting (`queued`), or `scheduled` download job,
  * aborting any active network stream, removing any partial `.part` file, and deleting the job row.
@@ -581,17 +603,7 @@ export function cancelDownloadJob(jobId: number): { ok: true; deletedId: number 
 
   // Abort active stream if currently downloading
   abortActiveDownloadStream(jobId);
-
-  if (job.destination_path) {
-    const partPath = `${job.destination_path}.part`;
-    if (fs.existsSync(partPath)) {
-      try {
-        fs.unlinkSync(partPath);
-      } catch {
-        // ignore
-      }
-    }
-  }
+  cleanupPartFilesForJob(job.destination_path, jobId);
 
   db.prepare(`DELETE FROM download_jobs WHERE id = ?`).run(jobId);
   return { ok: true, deletedId: jobId };
@@ -613,16 +625,7 @@ export function cancelAllActiveAndQueuedDownloads(): { ok: true; cancelledCount:
 
   for (const row of activeOrQueuedRows) {
     abortActiveDownloadStream(row.id);
-    if (row.destination_path) {
-      const partPath = `${row.destination_path}.part`;
-      if (fs.existsSync(partPath)) {
-        try {
-          fs.unlinkSync(partPath);
-        } catch {
-          // ignore
-        }
-      }
-    }
+    cleanupPartFilesForJob(row.destination_path, row.id);
   }
 
   const info = db

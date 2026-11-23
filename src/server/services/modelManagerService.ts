@@ -608,13 +608,33 @@ export interface ExecuteDownloadJobParams {
 }
 
 const activeDownloadControllers = new Map<number, AbortController>();
+const executingDownloadJobIds = new Set<number>();
 const cancelledDownloadJobIds = new Set<number>();
+
+/**
+ * Synchronously reserves `jobId` as pending/active before async scheduling (`setImmediate` / metadata refresh)
+ * so orphan-recovery polls cannot adopt and double-execute the same job.
+ */
+export function markDownloadJobPending(jobId: number): void {
+  if (Number.isFinite(jobId) && jobId > 0) {
+    executingDownloadJobIds.add(jobId);
+  }
+}
+
+export function clearDownloadJobPending(jobId: number): void {
+  executingDownloadJobIds.delete(jobId);
+}
+
+export function isDownloadJobActive(jobId: number): boolean {
+  return activeDownloadControllers.has(jobId) || executingDownloadJobIds.has(jobId);
+}
 
 /**
  * Aborts an actively streaming download job if one is running for `jobId`.
  */
 export function abortActiveDownloadStream(jobId: number): boolean {
   cancelledDownloadJobIds.add(jobId);
+  executingDownloadJobIds.delete(jobId);
   const controller = activeDownloadControllers.get(jobId);
   if (controller) {
     controller.abort();
@@ -646,8 +666,15 @@ export async function executeDownloadJob(
   jobId: number,
   params: ExecuteDownloadJobParams
 ): Promise<void> {
-  const partPath = `${params.destinationPath}.part`;
+  // Single-flight guard: never allow two workers to stream/rename the same jobId concurrently
+  if (activeDownloadControllers.has(jobId)) {
+    return;
+  }
+
+  // Scope temp file per jobId so concurrent or overlapping jobs never clobber/unlink each other's .part file
+  const partPath = `${params.destinationPath}.part.${jobId}`;
   cancelledDownloadJobIds.delete(jobId);
+  executingDownloadJobIds.add(jobId);
   const abortController = new AbortController();
   activeDownloadControllers.set(jobId, abortController);
   let fileStream: fs.WriteStream | null = null;
@@ -952,6 +979,7 @@ export async function executeDownloadJob(
     ).run(err?.message || 'Download error', jobId);
   } finally {
     activeDownloadControllers.delete(jobId);
+    executingDownloadJobIds.delete(jobId);
     cancelledDownloadJobIds.delete(jobId);
   }
 }
@@ -1097,6 +1125,7 @@ export async function startConfirmedModelDownload(params: {
   const jobId = Number(info.lastInsertRowid);
 
   if (!scheduledIso) {
+    markDownloadJobPending(jobId);
     setImmediate(() => {
       executeDownloadJob(jobId, {
         provider: params.provider,
@@ -1111,7 +1140,9 @@ export async function startConfirmedModelDownload(params: {
         loraCategory: normalizedLoraCategory,
         characterAutomation: normalizedCharacterAutomation,
         mentionAutomation: normalizedMentionAutomation,
-      }).catch(() => {});
+      }).catch(() => {
+        clearDownloadJobPending(jobId);
+      });
     });
   }
 

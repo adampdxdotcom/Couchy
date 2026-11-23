@@ -11,7 +11,9 @@ import {
   type CivitaiDomain,
 } from './civitai/civitaiHttpAndParse.ts';
 import {
+  clearDownloadJobPending,
   executeDownloadJob,
+  markDownloadJobPending,
   type ScheduledDownloadPayload,
 } from './modelManagerService.ts';
 import { VALID_LORA_CATEGORIES } from '../../shared/pillSettings.ts';
@@ -240,8 +242,13 @@ export async function processDueScheduledDownloads(): Promise<void> {
         .run(job.id);
       if (claim.changes !== 1) continue;
 
+      markDownloadJobPending(job.id);
       logger.info('Scheduler', `Triggering scheduled download job #${job.id} (${job.model_name})`);
-      await runClaimedScheduledJob(job, false);
+      try {
+        await runClaimedScheduledJob(job, false);
+      } finally {
+        clearDownloadJobPending(job.id);
+      }
     }
   } catch (err) {
     logger.error('Scheduler', 'Scheduled download tick failed', err);
@@ -275,8 +282,13 @@ export function runScheduledDownloadNow(jobId: number): any {
   }
 
   const updated = db.prepare('SELECT * FROM download_jobs WHERE id = ?').get(jobId);
+  markDownloadJobPending(jobId);
   setImmediate(() => {
-    runClaimedScheduledJob(job, true).catch(() => {});
+    runClaimedScheduledJob(job, true)
+      .catch(() => {})
+      .finally(() => {
+        clearDownloadJobPending(jobId);
+      });
   });
   return updated;
 }
