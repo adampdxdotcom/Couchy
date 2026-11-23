@@ -180,8 +180,8 @@ modelsRouter.patch('/models/:id/config', (req, res) => {
       res.status(400).json({ error: 'Valid numeric model ID is required' });
       return;
     }
-    const { mentionEnabled, nickname, llmDescription, userNotes } = req.body || {};
-    updateModelConfig(modelId, { mentionEnabled, nickname, llmDescription, userNotes });
+    const { name, mentionEnabled, nickname, llmDescription, userNotes } = req.body || {};
+    updateModelConfig(modelId, { name, mentionEnabled, nickname, llmDescription, userNotes });
     res.json({ ok: true, items: listModelInventory() });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || 'Failed to update model settings' });

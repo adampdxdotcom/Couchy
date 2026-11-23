@@ -15,6 +15,7 @@ import { formatBytes, getModelAvailabilityInfo } from '../../shared/utils.ts';
 import type { ImageRecord, ModelInventoryItem } from '../../shared/types.ts';
 import { normalizeLoraKey } from '../quickgen/quickGenUtils.ts';
 import { formatModelTypeLabel, isBaseModelType } from './BaseModelExplorerGrid.tsx';
+import { InlineEditableTitle } from '../shared/InlineEditableTitle.tsx';
 
 interface BaseModelDetailViewProps {
   model: ModelInventoryItem;
@@ -29,6 +30,7 @@ interface BaseModelDetailViewProps {
   onUpdateModelConfig: (
     modelId: number,
     payload: {
+      name?: string;
       mentionEnabled?: boolean;
       nickname?: string | null;
       llmDescription?: string | null;
@@ -161,7 +163,13 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-5">
         <div className="space-y-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2.5">
-            <h1 className="text-2xl font-display font-bold text-zinc-100">{model.name}</h1>
+            <InlineEditableTitle
+              value={model.name}
+              resetKey={model.id}
+              editTooltip="Click to rename model (local display name only)"
+              ariaLabel="Rename model"
+              onCommit={(nextName) => onUpdateModelConfig(model.id, { name: nextName })}
+            />
             <span
               className={`px-2 py-0.5 text-[11px] font-mono bg-zinc-950 border rounded ${
                 isBase

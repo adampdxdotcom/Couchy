@@ -149,6 +149,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   const handleUpdateMentionConfig = async (
     loraName: string,
     payload: {
+      name?: string;
       mentionEnabled?: boolean;
       nickname?: string | null;
       defaultModelStrength?: number;
@@ -161,7 +162,9 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       await api.updateLoraMentionConfig({ loraName, ...payload });
       await onRefresh();
       if (onPushToast) {
-        if (payload.mentionEnabled !== undefined) {
+        if (payload.name !== undefined) {
+          onPushToast(`Renamed LoRA to "${payload.name}"`, 'success');
+        } else if (payload.mentionEnabled !== undefined) {
           onPushToast(
             payload.mentionEnabled
               ? `Enabled @mention for ${loraName}`
@@ -214,6 +217,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   const handleUpdateModelConfig = async (
     modelId: number,
     payload: {
+      name?: string;
       mentionEnabled?: boolean;
       nickname?: string | null;
       llmDescription?: string | null;
@@ -226,7 +230,9 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       await api.updateModelConfig(modelId, payload);
       await onRefresh();
       if (onPushToast) {
-        if (payload.mentionEnabled !== undefined) {
+        if (payload.name !== undefined) {
+          onPushToast(`Renamed model to "${payload.name}"`, 'success');
+        } else if (payload.mentionEnabled !== undefined) {
           onPushToast(
             payload.mentionEnabled
               ? `Enabled @mention for ${label}`

@@ -372,6 +372,7 @@ export const api = {
 
   updateLoraMentionConfig: (payload: {
     loraName: string;
+    name?: string;
     mentionEnabled?: boolean;
     nickname?: string | null;
     defaultModelStrength?: number;
@@ -414,6 +415,7 @@ export const api = {
   updateModelConfig: (
     modelId: number,
     payload: {
+      name?: string;
       mentionEnabled?: boolean;
       nickname?: string | null;
       llmDescription?: string | null;

@@ -979,6 +979,32 @@ var init_migrationsV29 = __esm({
   }
 });
 
+// src/server/db/migrationsV30.ts
+var migrationsV30;
+var init_migrationsV30 = __esm({
+  "src/server/db/migrationsV30.ts"() {
+    migrationsV30 = [
+      {
+        version: 30,
+        name: "civitai_share_activity",
+        sql: `
+      ALTER TABLE image_civitai_drafts ADD COLUMN status TEXT NOT NULL DEFAULT 'draft';
+      ALTER TABLE image_civitai_drafts ADD COLUMN civitai_image_id INTEGER;
+      ALTER TABLE image_civitai_drafts ADD COLUMN published_url TEXT;
+      ALTER TABLE image_civitai_drafts ADD COLUMN reaction_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE image_civitai_drafts ADD COLUMN comment_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE image_civitai_drafts ADD COLUMN seen_reaction_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE image_civitai_drafts ADD COLUMN seen_comment_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE image_civitai_drafts ADD COLUMN stats_synced_at TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_image_civitai_drafts_status
+        ON image_civitai_drafts(status, stats_synced_at);
+    `
+      }
+    ];
+  }
+});
+
 // src/shared/agentPromptDefaults.ts
 var DEFAULT_CONVERSATION_SYSTEM_PROMPT, DEFAULT_BATCH_EXPANSION_PROMPT;
 var init_agentPromptDefaults = __esm({
@@ -1419,6 +1445,7 @@ var init_db = __esm({
     init_migrationsV2ToV14();
     init_migrationsV15ToV28();
     init_migrationsV29();
+    init_migrationsV30();
     init_seedPromptsAndLlm();
     init_seedWorkflowsAndInstances();
     db = new Database(appConfig.databasePath);
@@ -1429,7 +1456,8 @@ var init_db = __esm({
       ...migrationsCore,
       ...migrationsV2ToV14,
       ...migrationsV15ToV28,
-      ...migrationsV29
+      ...migrationsV29,
+      ...migrationsV30
     ];
   }
 });
@@ -5386,13 +5414,34 @@ function collapseSeriesInGalleryPool(pool) {
     const seriesItems = members.map(buildSeriesItemRecord);
     const repItem = seriesItems.find((si) => si.imageId === posterMember.image_id);
     const seriesKind = normalizeSeriesKind(members[0]?.series_kind);
+    let mergedShareSummary = baseRecord.civitaiShareSummary ?? null;
+    for (const m of visibleMembers) {
+      const s = poolById.get(m.image_id)?.civitaiShareSummary;
+      if (!s) continue;
+      if (!mergedShareSummary) {
+        mergedShareSummary = { ...s };
+      } else {
+        const nextStatus = mergedShareSummary.status === "published" || s.status === "published" ? "published" : "draft";
+        mergedShareSummary = {
+          status: nextStatus,
+          totalDrafts: Math.max(mergedShareSummary.totalDrafts, s.totalDrafts),
+          publishedCount: Math.max(mergedShareSummary.publishedCount, s.publishedCount),
+          reactionCount: Math.max(mergedShareSummary.reactionCount, s.reactionCount),
+          commentCount: Math.max(mergedShareSummary.commentCount, s.commentCount),
+          hasActivity: mergedShareSummary.hasActivity || s.hasActivity,
+          hasUnseenActivity: mergedShareSummary.hasUnseenActivity || s.hasUnseenActivity,
+          primaryUrl: mergedShareSummary.status === "published" ? mergedShareSummary.primaryUrl : s.status === "published" ? s.primaryUrl : mergedShareSummary.primaryUrl
+        };
+      }
+    }
     result.push({
       ...baseRecord,
       seriesId,
       seriesKind,
       seriesCount: seriesItems.length,
       seriesItems,
-      chatSnapshot: repItem?.chatSnapshot || []
+      chatSnapshot: repItem?.chatSnapshot || [],
+      civitaiShareSummary: mergedShareSummary
     });
   }
   return result;
@@ -8427,6 +8476,295 @@ var init_visualTaggerService = __esm({
   }
 });
 
+// src/server/services/civitai/civitaiActivitySyncService.ts
+var civitaiActivitySyncService_exports = {};
+__export(civitaiActivitySyncService_exports, {
+  extractCivitaiPostStats: () => extractCivitaiPostStats,
+  mapDraftRowToRecord: () => mapDraftRowToRecord,
+  markAllCivitaiActivitySeen: () => markAllCivitaiActivitySeen,
+  markCivitaiActivitySeenForImage: () => markCivitaiActivitySeenForImage,
+  startCivitaiActivityScheduler: () => startCivitaiActivityScheduler,
+  stopCivitaiActivityScheduler: () => stopCivitaiActivityScheduler,
+  summarizeCivitaiDraftRows: () => summarizeCivitaiDraftRows,
+  syncAllCivitaiShareActivity: () => syncAllCivitaiShareActivity,
+  syncCivitaiActivityForImage: () => syncCivitaiActivityForImage
+});
+function parseSqliteUtcMs(raw) {
+  if (!raw || !String(raw).trim()) return 0;
+  const s = String(raw).trim();
+  const normalized = s.includes("T") ? s.endsWith("Z") ? s : `${s}Z` : `${s.replace(" ", "T")}Z`;
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? ms : 0;
+}
+function inferDomainFromDraftUrl(url) {
+  return String(url || "").toLowerCase().includes("civitai.red") ? "civitai.red" : "civitai.com";
+}
+function mapDraftRowToRecord(row) {
+  const status = row.status === "published" ? "published" : "draft";
+  const reactionCount = Math.max(0, Number(row.reaction_count || 0));
+  const commentCount = Math.max(0, Number(row.comment_count || 0));
+  const seenReactionCount = Math.max(0, Number(row.seen_reaction_count || 0));
+  const seenCommentCount = Math.max(0, Number(row.seen_comment_count || 0));
+  const hasUnseenActivity = status === "published" && (reactionCount > seenReactionCount || commentCount > seenCommentCount);
+  return {
+    id: Number(row.id),
+    civitaiPostId: Number(row.civitai_post_id),
+    draftUrl: String(row.draft_url || ""),
+    title: String(row.title || ""),
+    uploadMode: row.upload_mode === "jpeg_exif" ? "jpeg_exif" : "original_png",
+    modelVersionId: row.model_version_id ?? null,
+    status,
+    civitaiImageId: row.civitai_image_id ? Number(row.civitai_image_id) : null,
+    publishedUrl: row.published_url ? String(row.published_url) : null,
+    reactionCount,
+    commentCount,
+    seenReactionCount,
+    seenCommentCount,
+    hasUnseenActivity,
+    statsSyncedAt: row.stats_synced_at ? String(row.stats_synced_at) : null,
+    createdAt: String(row.created_at || "")
+  };
+}
+function summarizeCivitaiDraftRows(rows) {
+  if (!rows || rows.length === 0) return null;
+  const sorted = [...rows].sort((a, b) => Number(b.id) - Number(a.id));
+  const publishedRows = sorted.filter((r) => r.status === "published");
+  const status = publishedRows.length > 0 ? "published" : "draft";
+  const seenPostIds = /* @__PURE__ */ new Set();
+  let reactionCount = 0;
+  let commentCount = 0;
+  let hasUnseenActivity = false;
+  for (const r of publishedRows) {
+    const pid = Number(r.civitai_post_id);
+    const rCnt = Math.max(0, Number(r.reaction_count || 0));
+    const cCnt = Math.max(0, Number(r.comment_count || 0));
+    const seenR = Math.max(0, Number(r.seen_reaction_count || 0));
+    const seenC = Math.max(0, Number(r.seen_comment_count || 0));
+    if (rCnt > seenR || cCnt > seenC) {
+      hasUnseenActivity = true;
+    }
+    if (!seenPostIds.has(pid)) {
+      seenPostIds.add(pid);
+      reactionCount += rCnt;
+      commentCount += cCnt;
+    }
+  }
+  const primaryRow = publishedRows[0] || sorted[0];
+  const primaryUrl = String(primaryRow.published_url || primaryRow.draft_url || "");
+  return {
+    status,
+    totalDrafts: sorted.length,
+    publishedCount: publishedRows.length,
+    reactionCount,
+    commentCount,
+    hasActivity: status === "published" && (reactionCount > 0 || commentCount > 0),
+    hasUnseenActivity,
+    primaryUrl
+  };
+}
+function extractCivitaiPostStats(items, domain, postId) {
+  let reactionCount = 0;
+  let commentCount = 0;
+  const firstId = Number(items[0]?.id || 0);
+  const civitaiImageId = Number.isInteger(firstId) && firstId > 0 ? firstId : null;
+  for (const item of items) {
+    const stats = item?.stats || {};
+    reactionCount += Math.max(0, Number(stats.likeCount || 0)) + Math.max(0, Number(stats.heartCount || 0)) + Math.max(0, Number(stats.laughCount || 0)) + Math.max(0, Number(stats.cryCount || 0));
+    commentCount += Math.max(0, Number(stats.commentCount || 0));
+  }
+  const publishedUrl = civitaiImageId ? `https://${domain}/images/${civitaiImageId}` : `https://${domain}/posts/${postId}`;
+  return { civitaiImageId, publishedUrl, reactionCount, commentCount };
+}
+async function queryPostStatsAcrossDomains(postId, preferredDomain, fetchFn) {
+  const domains = preferredDomain === "civitai.red" ? ["civitai.red", "civitai.com"] : ["civitai.com", "civitai.red"];
+  const headers = getCivitaiHeaders();
+  for (const domain of domains) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const res = await fetchFn(
+        `https://${domain}/api/v1/images?postId=${encodeURIComponent(String(postId))}&nsfw=X&limit=10`,
+        { headers, signal: controller.signal }
+      );
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const items = Array.isArray(data?.items) ? data.items : [];
+      if (items.length > 0) {
+        return {
+          domain,
+          ...extractCivitaiPostStats(items, domain, postId)
+        };
+      }
+    } catch {
+    }
+  }
+  return null;
+}
+async function syncPostIdStats(postId, sampleDraftRow, deps) {
+  const fetchFn = deps?.fetchFn || fetch;
+  const preferredDomain = inferDomainFromDraftUrl(
+    sampleDraftRow.published_url || sampleDraftRow.draft_url
+  );
+  const live = await queryPostStatsAcrossDomains(postId, preferredDomain, fetchFn);
+  if (!live) {
+    db.prepare(
+      `UPDATE image_civitai_drafts
+       SET stats_synced_at = datetime('now')
+       WHERE civitai_post_id = ?`
+    ).run(postId);
+    return false;
+  }
+  const prevStatus = sampleDraftRow.status === "published" ? "published" : "draft";
+  const prevImgId = sampleDraftRow.civitai_image_id ? Number(sampleDraftRow.civitai_image_id) : null;
+  const prevReactions = Number(sampleDraftRow.reaction_count || 0);
+  const prevComments = Number(sampleDraftRow.comment_count || 0);
+  const changed = prevStatus !== "published" || prevImgId !== live.civitaiImageId || prevReactions !== live.reactionCount || prevComments !== live.commentCount;
+  db.prepare(
+    `UPDATE image_civitai_drafts
+     SET status = 'published',
+         civitai_image_id = COALESCE(?, civitai_image_id),
+         published_url = ?,
+         reaction_count = ?,
+         comment_count = ?,
+         stats_synced_at = datetime('now')
+     WHERE civitai_post_id = ?`
+  ).run(live.civitaiImageId, live.publishedUrl, live.reactionCount, live.commentCount, postId);
+  return changed;
+}
+async function syncCivitaiActivityForImage(imageId, options) {
+  const imageRow = db.prepare("SELECT id, content_hash FROM images WHERE id = ?").get(imageId);
+  if (!imageRow) return { syncedPosts: 0, changed: false };
+  const draftRows = db.prepare(
+    `SELECT * FROM image_civitai_drafts
+       WHERE image_id = ? OR image_content_hash = ?
+       ORDER BY id DESC`
+  ).all(imageId, imageRow.content_hash);
+  if (draftRows.length === 0) return { syncedPosts: 0, changed: false };
+  const minIntervalMs = options?.minIntervalMs ?? DEFAULT_INSPECTOR_MIN_INTERVAL_MS;
+  const nowMs = Date.now();
+  const seenPosts = /* @__PURE__ */ new Set();
+  let syncedPosts = 0;
+  let anyChanged = false;
+  for (const row of draftRows) {
+    const postId = Number(row.civitai_post_id);
+    if (!postId || seenPosts.has(postId)) continue;
+    seenPosts.add(postId);
+    const lastSyncMs = parseSqliteUtcMs(row.stats_synced_at);
+    if (minIntervalMs > 0 && lastSyncMs > 0 && nowMs - lastSyncMs < minIntervalMs) {
+      continue;
+    }
+    const changed = await syncPostIdStats(postId, row, options?.deps);
+    syncedPosts += 1;
+    if (changed) anyChanged = true;
+  }
+  if (anyChanged) {
+    notifyWorkspaceDataChanged();
+  }
+  return { syncedPosts, changed: anyChanged };
+}
+function markCivitaiActivitySeenForImage(imageId) {
+  const imageRow = db.prepare("SELECT id, content_hash FROM images WHERE id = ?").get(imageId);
+  if (!imageRow) return false;
+  const info = db.prepare(
+    `UPDATE image_civitai_drafts
+       SET seen_reaction_count = MAX(seen_reaction_count, reaction_count),
+           seen_comment_count = MAX(seen_comment_count, comment_count)
+       WHERE (image_id = ? OR image_content_hash = ?)
+         AND status = 'published'
+         AND (reaction_count > seen_reaction_count OR comment_count > seen_comment_count)`
+  ).run(imageId, imageRow.content_hash);
+  return info.changes > 0;
+}
+function markAllCivitaiActivitySeen() {
+  const info = db.prepare(
+    `UPDATE image_civitai_drafts
+       SET seen_reaction_count = MAX(seen_reaction_count, reaction_count),
+           seen_comment_count = MAX(seen_comment_count, comment_count)
+       WHERE status = 'published'
+         AND (reaction_count > seen_reaction_count OR comment_count > seen_comment_count)`
+  ).run();
+  if (info.changes > 0) {
+    notifyWorkspaceDataChanged();
+  }
+  return info.changes;
+}
+async function syncAllCivitaiShareActivity(options) {
+  if (isSyncRunning) return { checkedPosts: 0, changedPosts: 0 };
+  if (!options?.deps?.fetchFn && !appConfig.civitaiApiKey?.trim()) {
+    return { checkedPosts: 0, changedPosts: 0 };
+  }
+  isSyncRunning = true;
+  let checkedPosts = 0;
+  let changedPosts = 0;
+  try {
+    const rows = db.prepare("SELECT * FROM image_civitai_drafts ORDER BY id DESC").all();
+    const minIntervalMs = options?.minIntervalMs ?? 10 * 60 * 1e3;
+    const nowMs = Date.now();
+    const seenPosts = /* @__PURE__ */ new Set();
+    for (const row of rows) {
+      const postId = Number(row.civitai_post_id);
+      if (!postId || seenPosts.has(postId)) continue;
+      seenPosts.add(postId);
+      const lastSyncMs = parseSqliteUtcMs(row.stats_synced_at);
+      if (minIntervalMs > 0 && lastSyncMs > 0 && nowMs - lastSyncMs < minIntervalMs) {
+        continue;
+      }
+      const changed = await syncPostIdStats(postId, row, options?.deps);
+      checkedPosts += 1;
+      if (changed) changedPosts += 1;
+      if (!options?.deps?.fetchFn) {
+        await new Promise((r) => setTimeout(r, 150));
+      }
+    }
+    if (changedPosts > 0) {
+      notifyWorkspaceDataChanged();
+    }
+  } catch (err) {
+    logger.warn("CivitaiSync", "Background Civitai activity check failed", err);
+  } finally {
+    isSyncRunning = false;
+  }
+  return { checkedPosts, changedPosts };
+}
+function startCivitaiActivityScheduler() {
+  if (activitySyncTimer) return;
+  activityStartupTimer = setTimeout(() => {
+    syncAllCivitaiShareActivity().catch(() => {
+    });
+  }, 2e4);
+  activitySyncTimer = setInterval(() => {
+    syncAllCivitaiShareActivity().catch(() => {
+    });
+  }, DEFAULT_BACKGROUND_INTERVAL_MS);
+}
+function stopCivitaiActivityScheduler() {
+  if (activityStartupTimer) {
+    clearTimeout(activityStartupTimer);
+    activityStartupTimer = null;
+  }
+  if (activitySyncTimer) {
+    clearInterval(activitySyncTimer);
+    activitySyncTimer = null;
+  }
+}
+var DEFAULT_BACKGROUND_INTERVAL_MS, DEFAULT_INSPECTOR_MIN_INTERVAL_MS, REQUEST_TIMEOUT_MS, activitySyncTimer, activityStartupTimer, isSyncRunning;
+var init_civitaiActivitySyncService = __esm({
+  "src/server/services/civitai/civitaiActivitySyncService.ts"() {
+    init_db();
+    init_config();
+    init_logger();
+    init_comfyuiLiveMonitor();
+    init_civitaiHttpAndParse();
+    DEFAULT_BACKGROUND_INTERVAL_MS = 15 * 60 * 1e3;
+    DEFAULT_INSPECTOR_MIN_INTERVAL_MS = 2 * 60 * 1e3;
+    REQUEST_TIMEOUT_MS = 8e3;
+    activitySyncTimer = null;
+    activityStartupTimer = null;
+    isSyncRunning = false;
+  }
+});
+
 // src/server/services/galleryQueryService.ts
 function hydrateImageRecords(rows) {
   if (rows.length === 0) return [];
@@ -8448,6 +8786,8 @@ function hydrateImageRecords(rows) {
   const colsByHash = /* @__PURE__ */ new Map();
   const wfByImageId = /* @__PURE__ */ new Map();
   const randomRollImageIds = /* @__PURE__ */ new Set();
+  const civitaiDraftsByImageId = /* @__PURE__ */ new Map();
+  const civitaiDraftsByHash = /* @__PURE__ */ new Map();
   if (rows.length === 1) {
     const single = rows[0];
     const rawLoras = db.prepare(
@@ -8554,6 +8894,14 @@ function hydrateImageRecords(rows) {
     if (rrRow) {
       randomRollImageIds.add(single.id);
     }
+    const singleDrafts = db.prepare(
+      `SELECT * FROM image_civitai_drafts
+         WHERE image_id = ? OR image_content_hash = ?
+         ORDER BY id DESC`
+    ).all(single.id, single.content_hash);
+    if (singleDrafts.length > 0) {
+      civitaiDraftsByImageId.set(single.id, singleDrafts);
+    }
   } else {
     const allLoras = db.prepare(
       `SELECT
@@ -8657,6 +9005,19 @@ function hydrateImageRecords(rows) {
     for (const rr of allRandomRollRows) {
       randomRollImageIds.add(Number(rr.imageId));
     }
+    const allCivitaiDrafts = db.prepare("SELECT * FROM image_civitai_drafts ORDER BY id DESC").all();
+    for (const d of allCivitaiDrafts) {
+      if (d.image_id) {
+        const list = civitaiDraftsByImageId.get(Number(d.image_id));
+        if (list) list.push(d);
+        else civitaiDraftsByImageId.set(Number(d.image_id), [d]);
+      }
+      if (d.image_content_hash) {
+        const list = civitaiDraftsByHash.get(String(d.image_content_hash));
+        if (list) list.push(d);
+        else civitaiDraftsByHash.set(String(d.image_content_hash), [d]);
+      }
+    }
   }
   const isSingleDetail = rows.length === 1;
   return rows.map((r) => {
@@ -8729,7 +9090,16 @@ function hydrateImageRecords(rows) {
       characters,
       tags,
       visualTags,
-      collections
+      collections,
+      civitaiShareSummary: (() => {
+        const byId = civitaiDraftsByImageId.get(r.id) || [];
+        const byHash = civitaiDraftsByHash.get(r.content_hash) || [];
+        if (byId.length === 0 && byHash.length === 0) return null;
+        const mergedMap = /* @__PURE__ */ new Map();
+        for (const d of byId) mergedMap.set(Number(d.id), d);
+        for (const d of byHash) mergedMap.set(Number(d.id), d);
+        return summarizeCivitaiDraftRows(Array.from(mergedMap.values()));
+      })()
     };
   }).map((img) => isSingleDetail ? enrichSingleImageWithSeries(img) : img);
 }
@@ -8874,6 +9244,19 @@ function queryGalleryImages(filters) {
   }
   if (filters.dependencyStatus) {
     items = items.filter((i) => i.dependencyStatus === filters.dependencyStatus);
+  }
+  if (filters.civitaiShareMode) {
+    const mode = filters.civitaiShareMode;
+    items = items.filter((i) => {
+      const s = i.civitaiShareSummary;
+      if (!s) return false;
+      if (mode === "shared") return true;
+      if (mode === "draft") return s.status === "draft";
+      if (mode === "published") return s.status === "published";
+      if (mode === "has_activity") return s.hasActivity;
+      if (mode === "unseen_activity") return s.hasUnseenActivity;
+      return true;
+    });
   }
   if (filters.collectionId) {
     items = items.filter((i) => i.collections.some((c) => c.id === filters.collectionId));
@@ -9062,6 +9445,7 @@ var init_galleryQueryService = __esm({
     init_visualTaggerService();
     init_seriesService();
     init_civitaiHttpAndParse();
+    init_civitaiActivitySyncService();
     init_characterService();
   }
 });
@@ -10231,21 +10615,8 @@ async function inspectDiskImageNativeMetadata(diskPath) {
   }
 }
 function buildPrefilledDescription(meta) {
-  if (!meta) return "";
-  const parts = [];
-  if (meta.positive_prompt && String(meta.positive_prompt).trim()) {
-    parts.push(String(meta.positive_prompt).trim());
-  }
-  const paramBits = [];
-  if (meta.checkpoint_name) paramBits.push(`Model: ${meta.checkpoint_name}`);
-  if (meta.steps !== null && meta.steps !== void 0) paramBits.push(`Steps: ${meta.steps}`);
-  if (meta.sampler) paramBits.push(`Sampler: ${meta.sampler}`);
-  if (meta.cfg !== null && meta.cfg !== void 0) paramBits.push(`CFG: ${meta.cfg}`);
-  if (meta.seed) paramBits.push(`Seed: ${meta.seed}`);
-  if (paramBits.length > 0) {
-    parts.push(paramBits.join(" \xB7 "));
-  }
-  return parts.join("\n\n");
+  if (!meta?.positive_prompt) return "";
+  return String(meta.positive_prompt).trim();
 }
 async function findEligibleSourceInSeries(imageId) {
   const seriesRows = db.prepare(
@@ -10257,7 +10628,7 @@ async function findEligibleSourceInSeries(imageId) {
          AND sib.image_id != ?
          AND i.is_missing = 0
          AND COALESCE(i.is_uploaded_reference, 0) = 0
-       ORDER BY sib.step_order ASC, sib.id ASC`
+       ORDER BY sib.step_order ASC, sib.image_id ASC`
   ).all(imageId, imageId);
   for (const row of seriesRows) {
     const diskPath = resolveImageDiskPath(row);
@@ -10329,7 +10700,7 @@ async function evaluateCivitaiShareEligibility(imageId) {
   const sourceOriginalImageId = diskMeta.isStandaloneUpscale || !diskMeta.hasNativeMetadata ? await findEligibleSourceInSeries(imageId) : null;
   const loraRows = db.prepare(
     `SELECT il.lora_name AS filename, m.name AS model_name, m.lora_category,
-              m.civitai_id, m.civitai_version_id, m.civitai_url
+              m.civitai_id, m.civitai_version_id, m.civitai_url, m.download_url
        FROM image_loras il
        LEFT JOIN models m ON m.id = il.model_id OR LOWER(m.filename) = LOWER(il.lora_name)
        WHERE il.image_id = ?
@@ -10337,7 +10708,7 @@ async function evaluateCivitaiShareEligibility(imageId) {
   ).all(imageId);
   const modelRows = db.prepare(
     `SELECT im.model_name AS filename, im.model_type, m.name AS display_name,
-              m.civitai_id, m.civitai_version_id, m.civitai_url
+              m.civitai_id, m.civitai_version_id, m.civitai_url, m.download_url
        FROM image_models im
        LEFT JOIN models m ON m.id = im.model_id OR LOWER(m.filename) = LOWER(im.model_name)
        WHERE im.image_id = ? AND im.model_type IN ('checkpoint', 'diffusion')`
@@ -10345,8 +10716,22 @@ async function evaluateCivitaiShareEligibility(imageId) {
   const candidateModelVersions = [];
   const seenVersionIds = /* @__PURE__ */ new Set();
   const embeddedResourceNamesSet = /* @__PURE__ */ new Set();
-  const pushCandidate = (rawVerId, civitaiUrl, civitaiId, label, modelName, modelType, source) => {
-    const parsed = parseIdsFromCivitaiUrl(civitaiUrl);
+  let hasRedResource = false;
+  const detectResourceDomain = (civitaiUrl, downloadUrl) => {
+    const parsedCivitai = parseIdsFromCivitaiUrl(civitaiUrl);
+    const parsedDownload = parseIdsFromCivitaiUrl(downloadUrl);
+    const domain = parsedCivitai.domain === "civitai.red" || parsedDownload.domain === "civitai.red" ? "civitai.red" : "civitai.com";
+    return {
+      modelId: parsedCivitai.modelId || parsedDownload.modelId,
+      versionId: parsedCivitai.versionId || parsedDownload.versionId,
+      domain
+    };
+  };
+  const pushCandidate = (rawVerId, civitaiUrl, downloadUrl, civitaiId, label, modelName, modelType, source) => {
+    const parsed = detectResourceDomain(civitaiUrl, downloadUrl);
+    if (parsed.domain === "civitai.red") {
+      hasRedResource = true;
+    }
     const verIdNum = Number(rawVerId || parsed.versionId || 0);
     if (!Number.isInteger(verIdNum) || verIdNum <= 0 || seenVersionIds.has(verIdNum)) return;
     seenVersionIds.add(verIdNum);
@@ -10356,6 +10741,7 @@ async function evaluateCivitaiShareEligibility(imageId) {
       modelName,
       modelType,
       civitaiId: civitaiId || parsed.modelId || null,
+      domain: parsed.domain,
       source
     });
   };
@@ -10365,6 +10751,7 @@ async function evaluateCivitaiShareEligibility(imageId) {
     pushCandidate(
       l.civitai_version_id,
       l.civitai_url,
+      l.download_url,
       l.civitai_id,
       `LoRA: ${display}`,
       l.filename,
@@ -10378,6 +10765,7 @@ async function evaluateCivitaiShareEligibility(imageId) {
     pushCandidate(
       m.civitai_version_id,
       m.civitai_url,
+      m.download_url,
       m.civitai_id,
       `Base Model: ${display}`,
       m.filename,
@@ -10388,6 +10776,13 @@ async function evaluateCivitaiShareEligibility(imageId) {
   if (metaRow?.checkpoint_name) {
     embeddedResourceNamesSet.add(String(metaRow.checkpoint_name));
   }
+  const visualTagRows = db.prepare(
+    `SELECT tag
+       FROM image_visual_tags
+       WHERE image_content_hash = ? AND confidence >= 0.35`
+  ).all(imageRow.content_hash);
+  const hasExplicitVisualTag = visualTagRows.some((r) => RED_VISUAL_TAG_RE.test(r.tag.trim()));
+  const recommendedDomain = hasRedResource || hasExplicitVisualTag ? "civitai.red" : "civitai.com";
   const tagRows = db.prepare(
     `SELECT t.name
        FROM image_tags it
@@ -10396,20 +10791,12 @@ async function evaluateCivitaiShareEligibility(imageId) {
        ORDER BY t.name ASC`
   ).all(imageRow.content_hash);
   const draftRows = db.prepare(
-    `SELECT id, civitai_post_id, draft_url, title, upload_mode, model_version_id, created_at
+    `SELECT *
        FROM image_civitai_drafts
        WHERE image_id = ? OR image_content_hash = ?
        ORDER BY id DESC`
   ).all(imageId, imageRow.content_hash);
-  const existingDrafts = draftRows.map((d) => ({
-    id: d.id,
-    civitaiPostId: d.civitai_post_id,
-    draftUrl: d.draft_url,
-    title: d.title,
-    uploadMode: d.upload_mode === "jpeg_exif" ? "jpeg_exif" : "original_png",
-    modelVersionId: d.model_version_id ?? null,
-    createdAt: d.created_at
-  }));
+  const existingDrafts = draftRows.map(mapDraftRowToRecord);
   const defaultTitle = linkedCharacters.length > 0 ? `${linkedCharacters.map((c) => c.name).join(" & ")} \u2014 ${path15.parse(imageRow.filename).name}` : path15.parse(imageRow.filename).name;
   return {
     eligible: reasons.length === 0,
@@ -10428,12 +10815,13 @@ async function evaluateCivitaiShareEligibility(imageId) {
     prefilledDescription: buildPrefilledDescription(metaRow),
     prefilledTags: tagRows.map((t) => t.name),
     recommendedModelVersionId: candidateModelVersions[0]?.modelVersionId ?? null,
+    recommendedDomain,
     candidateModelVersions,
     embeddedResourceNames: Array.from(embeddedResourceNamesSet),
     existingDrafts
   };
 }
-var GENERATION_NODE_RE, UPSCALE_NODE_RE;
+var GENERATION_NODE_RE, UPSCALE_NODE_RE, RED_VISUAL_TAG_RE;
 var init_civitaiShareEligibility = __esm({
   "src/server/services/civitai/civitaiShareEligibility.ts"() {
     init_db();
@@ -10442,15 +10830,89 @@ var init_civitaiShareEligibility = __esm({
     init_scannerService();
     init_settingsService();
     init_civitaiHttpAndParse();
+    init_civitaiActivitySyncService();
     GENERATION_NODE_RE = /KSampler|SamplerCustom|UNETLoader|CheckpointLoader|CLIPTextEncode|TextGenerate|RandomNoise|BasicGuider|CFGGuider/i;
     UPSCALE_NODE_RE = /UpscaleModelLoader|ImageUpscaleWithModel/i;
+    RED_VISUAL_TAG_RE = /^(nude|completely_nude|topless|bottomless|nipples|areolae|pussy|penis|testicles|vaginal|anal|fellatio|cunnilingus|paizuri|sex|explicit|genitals|pubic_hair|cum|erection|nsfw)$/i;
   }
 });
 
 // src/server/services/civitai/civitaiImagePayload.ts
+import fs17 from "fs";
 import path16 from "path";
 import sharp5 from "sharp";
-import fs17 from "fs";
+function crc32(buf) {
+  let c = 4294967295;
+  for (let i = 0; i < buf.length; i++) {
+    c ^= buf[i];
+    for (let j = 0; j < 8; j++) {
+      c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+    }
+  }
+  return (c ^ 4294967295) >>> 0;
+}
+function isLatin1(text) {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code > 255 || code === 0) return false;
+  }
+  return true;
+}
+function quoteInfotextValue(value) {
+  return /[,\n:"]/.test(value) ? JSON.stringify(value) : value;
+}
+function upsertPngTextChunk(pngBuffer, keyword, text) {
+  if (pngBuffer.length < 8 || !pngBuffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    return pngBuffer;
+  }
+  const chunks = [];
+  let offset = 8;
+  while (offset + 12 <= pngBuffer.length) {
+    const length = pngBuffer.readUInt32BE(offset);
+    const type = pngBuffer.toString("ascii", offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > pngBuffer.length) break;
+    const data = pngBuffer.subarray(dataStart, dataEnd);
+    let matchesKeyword = false;
+    if (type === "tEXt" || type === "iTXt" || type === "zTXt") {
+      const nul = data.indexOf(0);
+      if (nul !== -1 && data.toString("latin1", 0, nul) === keyword) {
+        matchesKeyword = true;
+      }
+    }
+    if (!matchesKeyword) {
+      chunks.push({ type, data });
+    }
+    offset = dataEnd + 4;
+    if (type === "IEND") break;
+  }
+  const keyBytes = Buffer.from(keyword, "latin1");
+  const newChunk = isLatin1(text) ? {
+    type: "tEXt",
+    data: Buffer.concat([keyBytes, Buffer.from([0]), Buffer.from(text, "latin1")])
+  } : {
+    type: "iTXt",
+    data: Buffer.concat([keyBytes, Buffer.from([0, 0, 0, 0, 0]), Buffer.from(text, "utf8")])
+  };
+  const insertIdx = chunks.findIndex((c) => c.type !== "IHDR");
+  chunks.splice(insertIdx === -1 ? chunks.length : insertIdx, 0, newChunk);
+  const outParts = [PNG_SIGNATURE];
+  for (const chunk of chunks) {
+    const lenBuf = Buffer.alloc(4);
+    lenBuf.writeUInt32BE(chunk.data.length, 0);
+    const body = Buffer.concat([Buffer.from(chunk.type, "ascii"), chunk.data]);
+    const crcBuf = Buffer.alloc(4);
+    crcBuf.writeUInt32BE(crc32(body), 0);
+    outParts.push(lenBuf, body, crcBuf);
+  }
+  return Buffer.concat(outParts);
+}
+function resolveVersionId(rawVersionId, civitaiUrl, downloadUrl) {
+  const parsed = parseIdsFromCivitaiUrl(civitaiUrl || downloadUrl);
+  const ver = Number(rawVersionId || parsed.versionId || 0);
+  return Number.isInteger(ver) && ver > 0 ? ver : null;
+}
 function buildA1111ParameterText(imageId, width, height) {
   const meta = db.prepare(
     `SELECT positive_prompt, negative_prompt, seed, steps, cfg, sampler, scheduler, checkpoint_name, checkpoint_hash
@@ -10458,36 +10920,85 @@ function buildA1111ParameterText(imageId, width, height) {
        WHERE image_id = ?`
   ).get(imageId);
   const loras = db.prepare(
-    `SELECT il.lora_name, il.lora_hash, m.autov2_hash, m.sha256_hash
+    `SELECT il.id AS row_id, il.lora_name, il.lora_hash, il.model_strength,
+              m.autov2_hash, m.sha256_hash, m.civitai_version_id, m.civitai_url, m.download_url
        FROM image_loras il
        LEFT JOIN models m ON m.id = il.model_id OR LOWER(m.filename) = LOWER(il.lora_name)
-       WHERE il.image_id = ?`
+       WHERE il.image_id = ?
+       ORDER BY il.id ASC`
+  ).all(imageId);
+  const checkpoints = db.prepare(
+    `SELECT im.model_name, im.model_hash,
+              m.autov2_hash, m.sha256_hash, m.civitai_version_id, m.civitai_url, m.download_url
+       FROM image_models im
+       LEFT JOIN models m ON m.id = im.model_id OR LOWER(m.filename) = LOWER(im.model_name)
+       WHERE im.image_id = ? AND im.model_type IN ('checkpoint', 'diffusion')`
   ).all(imageId);
   const lines = [];
   if (meta?.positive_prompt) lines.push(String(meta.positive_prompt).trim());
   if (meta?.negative_prompt) lines.push(`Negative prompt: ${String(meta.negative_prompt).trim()}`);
   const settings = [];
-  if (meta?.steps !== null && meta?.steps !== void 0) settings.push(`Steps: ${meta.steps}`);
+  const stepVal = meta?.steps !== null && meta?.steps !== void 0 ? Number(meta.steps) : 8;
+  settings.push(`Steps: ${Number.isFinite(stepVal) ? stepVal : 8}`);
   if (meta?.sampler) {
     const samplerText = meta.scheduler ? `${meta.sampler} ${meta.scheduler}` : String(meta.sampler);
-    settings.push(`Sampler: ${samplerText}`);
+    settings.push(`Sampler: ${quoteInfotextValue(samplerText)}`);
   }
   if (meta?.cfg !== null && meta?.cfg !== void 0) settings.push(`CFG scale: ${meta.cfg}`);
   if (meta?.seed) settings.push(`Seed: ${meta.seed}`);
   if (width > 0 && height > 0) settings.push(`Size: ${width}x${height}`);
-  if (meta?.checkpoint_name) {
-    settings.push(`Model: ${path16.parse(String(meta.checkpoint_name)).name}`);
+  const primaryCkpt = checkpoints[0];
+  const ckptName = meta?.checkpoint_name || primaryCkpt?.model_name;
+  if (ckptName) {
+    settings.push(`Model: ${quoteInfotextValue(path16.parse(String(ckptName)).name)}`);
   }
-  if (meta?.checkpoint_hash) {
-    settings.push(`Model hash: ${String(meta.checkpoint_hash).slice(0, 10)}`);
+  const ckptHash = primaryCkpt?.autov2_hash || (meta?.checkpoint_hash || primaryCkpt?.model_hash || primaryCkpt?.sha256_hash || "").slice(0, 10);
+  if (ckptHash) {
+    settings.push(`Model hash: ${ckptHash}`);
   }
-  const loraHashEntries = loras.map((l) => {
+  const hashesRecord = {};
+  if (ckptHash) {
+    hashesRecord.model = ckptHash;
+  }
+  const civitaiResources = [];
+  const seenVersionIds = /* @__PURE__ */ new Set();
+  if (primaryCkpt) {
+    const ckptVerId = resolveVersionId(
+      primaryCkpt.civitai_version_id,
+      primaryCkpt.civitai_url,
+      primaryCkpt.download_url
+    );
+    if (ckptVerId && !seenVersionIds.has(ckptVerId)) {
+      seenVersionIds.add(ckptVerId);
+      civitaiResources.push({ type: "checkpoint", modelVersionId: ckptVerId });
+    }
+  }
+  const seenRowIds = /* @__PURE__ */ new Set();
+  const loraHashEntries = [];
+  for (const l of loras) {
+    if (seenRowIds.has(l.row_id)) continue;
+    seenRowIds.add(l.row_id);
+    const shortName = path16.parse(l.lora_name).name;
     const hash = l.autov2_hash || (l.lora_hash || l.sha256_hash || "").slice(0, 10);
-    if (!hash) return null;
-    return `${path16.parse(l.lora_name).name}: ${hash}`;
-  }).filter((entry) => Boolean(entry));
+    if (hash) {
+      loraHashEntries.push(`${shortName}: ${hash}`);
+      hashesRecord[`lora:${shortName}`] = hash;
+    }
+    const verId = resolveVersionId(l.civitai_version_id, l.civitai_url, l.download_url);
+    if (verId && !seenVersionIds.has(verId)) {
+      seenVersionIds.add(verId);
+      const weight = l.model_strength !== null && l.model_strength !== void 0 ? Number(Number(l.model_strength).toFixed(3)) : 1;
+      civitaiResources.push({ type: "lora", modelVersionId: verId, weight });
+    }
+  }
   if (loraHashEntries.length > 0) {
     settings.push(`Lora hashes: "${loraHashEntries.join(", ")}"`);
+  }
+  if (Object.keys(hashesRecord).length > 0) {
+    settings.push(`Hashes: ${JSON.stringify(hashesRecord)}`);
+  }
+  if (civitaiResources.length > 0) {
+    settings.push(`Civitai resources: ${JSON.stringify(civitaiResources)}`);
   }
   if (settings.length > 0) {
     lines.push(settings.join(", "));
@@ -10495,20 +11006,21 @@ function buildA1111ParameterText(imageId, width, height) {
   return lines.join("\n");
 }
 async function prepareCivitaiImagePayload(imageId, diskPath, width, height, uploadMode) {
+  const paramText = buildA1111ParameterText(imageId, width, height);
   if (uploadMode === "original_png") {
     const rawBuffer = fs17.readFileSync(diskPath);
     const ext = path16.extname(diskPath).toLowerCase();
     const contentType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".webp" ? "image/webp" : "image/png";
+    const uploadBuffer = contentType === "image/png" && paramText.trim() ? upsertPngTextChunk(rawBuffer, "parameters", paramText) : rawBuffer;
     return {
-      base64Data: rawBuffer.toString("base64"),
+      base64Data: uploadBuffer.toString("base64"),
       contentType,
       width,
       height,
-      byteLength: rawBuffer.length,
+      byteLength: uploadBuffer.length,
       uploadMode: "original_png"
     };
   }
-  const paramText = buildA1111ParameterText(imageId, width, height);
   const encodeJpeg = async (quality) => {
     let pipeline = sharp5(diskPath).rotate().jpeg({ quality, mozjpeg: true });
     if (paramText.trim()) {
@@ -10530,11 +11042,13 @@ async function prepareCivitaiImagePayload(imageId, diskPath, width, height, uplo
     uploadMode: "jpeg_exif"
   };
 }
-var MAX_FALLBACK_JPEG_BYTES;
+var MAX_FALLBACK_JPEG_BYTES, PNG_SIGNATURE;
 var init_civitaiImagePayload = __esm({
   "src/server/services/civitai/civitaiImagePayload.ts"() {
     init_db();
+    init_civitaiHttpAndParse();
     MAX_FALLBACK_JPEG_BYTES = 9.5 * 1024 * 1024;
+    PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   }
 });
 
@@ -10763,6 +11277,23 @@ async function shareImageAsCivitaiDraft(imageId, request = {}, deps) {
   });
   const cleanTags = Array.isArray(request.tags) ? Array.from(new Set(request.tags.map((t) => String(t).trim()).filter(Boolean))) : eligibility.prefilledTags;
   const modelVersionId = request.modelVersionId === null ? null : request.modelVersionId !== void 0 && Number(request.modelVersionId) > 0 ? Number(request.modelVersionId) : eligibility.recommendedModelVersionId;
+  let resolvedDomain = request.targetDomain === "civitai.red" || request.targetDomain === "civitai.com" ? request.targetDomain : eligibility.recommendedDomain;
+  if (!request.targetDomain && resolvedDomain === "civitai.com" && !deps?.fetchFn) {
+    const candidatesToProbe = modelVersionId ? eligibility.candidateModelVersions.filter((c) => c.modelVersionId === modelVersionId) : eligibility.candidateModelVersions;
+    for (const cand of candidatesToProbe) {
+      if (cand.domain === "civitai.red") {
+        resolvedDomain = "civitai.red";
+        break;
+      }
+      if (cand.civitaiId) {
+        const probed = await probeCivitaiWebDomain(cand.civitaiId, "civitai.com");
+        if (probed === "civitai.red") {
+          resolvedDomain = "civitai.red";
+          break;
+        }
+      }
+    }
+  }
   const title = (request.title ?? eligibility.prefilledTitle).trim();
   const detail = (request.detail ?? eligibility.prefilledDescription).trim();
   const created = await client.createDraftPost({
@@ -10776,7 +11307,7 @@ async function shareImageAsCivitaiDraft(imageId, request = {}, deps) {
       height: uploaded.height || prepared.height || 1024
     }
   });
-  const draftUrl = `https://civitai.com/posts/${created.postId}`;
+  const draftUrl = `https://${resolvedDomain}/posts/${created.postId}/edit`;
   const insertInfo = db.prepare(
     `INSERT INTO image_civitai_drafts
         (image_id, image_content_hash, civitai_post_id, draft_url, title, upload_mode, model_version_id)
@@ -10791,18 +11322,11 @@ async function shareImageAsCivitaiDraft(imageId, request = {}, deps) {
     modelVersionId
   );
   const row = db.prepare("SELECT * FROM image_civitai_drafts WHERE id = ?").get(Number(insertInfo.lastInsertRowid));
-  const draft = {
-    id: row.id,
-    civitaiPostId: row.civitai_post_id,
-    draftUrl: row.draft_url,
-    title: row.title,
-    uploadMode: row.upload_mode === "jpeg_exif" ? "jpeg_exif" : "original_png",
-    modelVersionId: row.model_version_id ?? null,
-    createdAt: row.created_at
-  };
+  const draft = mapDraftRowToRecord(row);
   return {
     ok: true,
     postId: created.postId,
+    domain: resolvedDomain,
     draftUrl,
     uploadMode,
     processingImageIds: created.processingImageIds,
@@ -10815,6 +11339,8 @@ var init_civitaiDraftShareService = __esm({
     init_db();
     init_config();
     init_scannerService();
+    init_civitaiHttpAndParse();
+    init_civitaiActivitySyncService();
     init_civitaiShareEligibility();
     init_civitaiImagePayload();
     init_civitaiMcpClient();
@@ -10846,6 +11372,7 @@ var init_imagesRoutes = __esm({
     init_characterService();
     init_scannerService();
     init_comfyuiService();
+    init_civitaiActivitySyncService();
     init_civitaiShareEligibility();
     init_civitaiDraftShareService();
     init_civitaiMcpClient();
@@ -10859,6 +11386,10 @@ var init_imagesRoutes = __esm({
       } catch (err) {
         res.status(500).json({ error: err?.message || "Failed to query images" });
       }
+    });
+    imagesRouter.post("/civitai-share/seen-all", (_req, res) => {
+      const updatedCount = markAllCivitaiActivitySeen();
+      res.json({ ok: true, updatedCount });
     });
     imagesRouter.get("/:id", (req, res) => {
       try {
@@ -11174,12 +11705,19 @@ var init_imagesRoutes = __esm({
     });
     imagesRouter.get("/:id/civitai-share", async (req, res) => {
       try {
-        const status = await evaluateCivitaiShareEligibility(Number(req.params.id));
+        const imageId = Number(req.params.id);
+        await syncCivitaiActivityForImage(imageId).catch(() => {
+        });
+        const status = await evaluateCivitaiShareEligibility(imageId);
         res.json(status);
       } catch (err) {
         const message = err?.message || "Failed to evaluate Civitai sharing eligibility";
         res.status(message === "Image not found" ? 404 : 500).json({ error: message });
       }
+    });
+    imagesRouter.post("/:id/civitai-share/seen", (req, res) => {
+      const updated = markCivitaiActivitySeenForImage(Number(req.params.id));
+      res.json({ ok: true, updated });
     });
     imagesRouter.post("/:id/civitai-share", async (req, res) => {
       try {
@@ -13594,6 +14132,7 @@ function updateLoraVisibility(loraName, isHidden) {
 function updateLoraMentionConfig(input) {
   const {
     loraName,
+    name,
     mentionEnabled,
     nickname,
     defaultModelStrength,
@@ -13602,9 +14141,17 @@ function updateLoraMentionConfig(input) {
     llmDescription
   } = input;
   const existingRow = db.prepare(
-    `SELECT id, filename, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description
+    `SELECT id, name, filename, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description
        FROM models WHERE LOWER(filename) = LOWER(?)`
   ).get(loraName);
+  let nextName = existingRow?.name ?? loraName.replace(/\.(safetensors|pt|ckpt)$/i, "");
+  if (name !== void 0) {
+    const cleanName = typeof name === "string" ? name.trim() : "";
+    if (!cleanName) {
+      throw new Error("Model name cannot be empty");
+    }
+    nextName = cleanName;
+  }
   const cleanNick = nickname !== void 0 ? typeof nickname === "string" ? nickname.trim().replace(/^@+/, "").toLowerCase() || null : null : existingRow?.nickname ?? null;
   if (cleanNick) {
     const existing = db.prepare(
@@ -13622,7 +14169,8 @@ function updateLoraMentionConfig(input) {
   if (existingRow) {
     db.prepare(
       `UPDATE models
-       SET nickname = ?,
+       SET name = ?,
+           nickname = ?,
            mention_enabled = ?,
            default_model_strength = ?,
            default_clip_strength = ?,
@@ -13630,6 +14178,7 @@ function updateLoraMentionConfig(input) {
            llm_description = ?
        WHERE id = ?`
     ).run(
+      nextName,
       cleanNick,
       isMention,
       cleanModelStr,
@@ -13643,7 +14192,7 @@ function updateLoraMentionConfig(input) {
       `INSERT INTO models (name, filename, model_type, lora_category, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description)
        VALUES (?, ?, 'lora', 'unclassified', ?, ?, ?, ?, ?, ?)`
     ).run(
-      loraName.replace(/\.(safetensors|pt|ckpt)$/i, ""),
+      nextName,
       loraName,
       cleanNick,
       isMention,
@@ -13664,11 +14213,19 @@ function updateModelVisibility(modelId, isHidden) {
 }
 function updateModelConfig(modelId, input) {
   const existingRow = db.prepare(
-    `SELECT id, filename, nickname, mention_enabled, llm_description, user_notes
+    `SELECT id, name, filename, nickname, mention_enabled, llm_description, user_notes
        FROM models WHERE id = ?`
   ).get(modelId);
   if (!existingRow) {
     throw new Error(`Model #${modelId} not found`);
+  }
+  let nextName = existingRow.name;
+  if (input.name !== void 0) {
+    const cleanName = typeof input.name === "string" ? input.name.trim() : "";
+    if (!cleanName) {
+      throw new Error("Model name cannot be empty");
+    }
+    nextName = cleanName;
   }
   const cleanNick = input.nickname !== void 0 ? typeof input.nickname === "string" ? input.nickname.trim().replace(/^@+/, "").toLowerCase() || null : null : existingRow.nickname ?? null;
   if (cleanNick) {
@@ -13682,12 +14239,13 @@ function updateModelConfig(modelId, input) {
   const cleanUserNotes = input.userNotes !== void 0 ? typeof input.userNotes === "string" ? input.userNotes.trim() || null : null : existingRow.user_notes ?? null;
   db.prepare(
     `UPDATE models
-     SET nickname = ?,
+     SET name = ?,
+         nickname = ?,
          mention_enabled = ?,
          llm_description = ?,
          user_notes = ?
      WHERE id = ?`
-  ).run(cleanNick, isMention, cleanDetails, cleanUserNotes, modelId);
+  ).run(nextName, cleanNick, isMention, cleanDetails, cleanUserNotes, modelId);
   invalidateInstalledModelsCache();
 }
 var init_modelInventoryService = __esm({
@@ -13750,6 +14308,7 @@ var init_lorasRoutes = __esm({
       try {
         const {
           loraName,
+          name,
           mentionEnabled,
           nickname,
           defaultModelStrength,
@@ -13763,6 +14322,7 @@ var init_lorasRoutes = __esm({
         }
         updateLoraMentionConfig({
           loraName: String(loraName),
+          name,
           mentionEnabled,
           nickname,
           defaultModelStrength,
@@ -13903,8 +14463,8 @@ var init_modelsRoutes = __esm({
           res.status(400).json({ error: "Valid numeric model ID is required" });
           return;
         }
-        const { mentionEnabled, nickname, llmDescription, userNotes } = req.body || {};
-        updateModelConfig(modelId, { mentionEnabled, nickname, llmDescription, userNotes });
+        const { name, mentionEnabled, nickname, llmDescription, userNotes } = req.body || {};
+        updateModelConfig(modelId, { name, mentionEnabled, nickname, llmDescription, userNotes });
         res.json({ ok: true, items: listModelInventory() });
       } catch (err) {
         res.status(400).json({ error: err?.message || "Failed to update model settings" });
@@ -15260,8 +15820,20 @@ async function smartSearchModelsWithNotice(query, typeFilter) {
   const items = await smartSearchModels(query, typeFilter);
   return { items, notice: null };
 }
+function markDownloadJobPending(jobId) {
+  if (Number.isFinite(jobId) && jobId > 0) {
+    executingDownloadJobIds.add(jobId);
+  }
+}
+function clearDownloadJobPending(jobId) {
+  executingDownloadJobIds.delete(jobId);
+}
+function isDownloadJobActive(jobId) {
+  return activeDownloadControllers.has(jobId) || executingDownloadJobIds.has(jobId);
+}
 function abortActiveDownloadStream(jobId) {
   cancelledDownloadJobIds.add(jobId);
+  executingDownloadJobIds.delete(jobId);
   const controller = activeDownloadControllers.get(jobId);
   if (controller) {
     controller.abort();
@@ -15281,8 +15853,12 @@ function abortAllActiveDownloadStreams() {
   return count;
 }
 async function executeDownloadJob(jobId, params) {
-  const partPath = `${params.destinationPath}.part`;
+  if (activeDownloadControllers.has(jobId)) {
+    return;
+  }
+  const partPath = `${params.destinationPath}.part.${jobId}`;
   cancelledDownloadJobIds.delete(jobId);
+  executingDownloadJobIds.add(jobId);
   const abortController = new AbortController();
   activeDownloadControllers.set(jobId, abortController);
   let fileStream = null;
@@ -15525,6 +16101,7 @@ async function executeDownloadJob(jobId, params) {
     ).run(err?.message || "Download error", jobId);
   } finally {
     activeDownloadControllers.delete(jobId);
+    executingDownloadJobIds.delete(jobId);
     cancelledDownloadJobIds.delete(jobId);
   }
 }
@@ -15610,6 +16187,7 @@ async function startConfirmedModelDownload(params) {
   );
   const jobId = Number(info.lastInsertRowid);
   if (!scheduledIso) {
+    markDownloadJobPending(jobId);
     setImmediate(() => {
       executeDownloadJob(jobId, {
         provider: params.provider,
@@ -15625,12 +16203,13 @@ async function startConfirmedModelDownload(params) {
         characterAutomation: normalizedCharacterAutomation,
         mentionAutomation: normalizedMentionAutomation
       }).catch(() => {
+        clearDownloadJobPending(jobId);
       });
     });
   }
   return db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(jobId);
 }
-var activeDownloadControllers, cancelledDownloadJobIds;
+var activeDownloadControllers, executingDownloadJobIds, cancelledDownloadJobIds;
 var init_modelManagerService = __esm({
   "src/server/services/modelManagerService.ts"() {
     init_db();
@@ -15646,6 +16225,7 @@ var init_modelManagerService = __esm({
     init_characterDownloadAutomationService();
     init_pillSettings();
     activeDownloadControllers = /* @__PURE__ */ new Map();
+    executingDownloadJobIds = /* @__PURE__ */ new Set();
     cancelledDownloadJobIds = /* @__PURE__ */ new Set();
   }
 });
@@ -15826,8 +16406,13 @@ async function processDueScheduledDownloads() {
            WHERE id = ? AND status = 'scheduled'`
       ).run(job.id);
       if (claim.changes !== 1) continue;
+      markDownloadJobPending(job.id);
       logger.info("Scheduler", `Triggering scheduled download job #${job.id} (${job.model_name})`);
-      await runClaimedScheduledJob(job, false);
+      try {
+        await runClaimedScheduledJob(job, false);
+      } finally {
+        clearDownloadJobPending(job.id);
+      }
     }
   } catch (err) {
     logger.error("Scheduler", "Scheduled download tick failed", err);
@@ -15852,8 +16437,11 @@ function runScheduledDownloadNow(jobId) {
     throw new Error("Scheduled download could not be claimed.");
   }
   const updated = db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(jobId);
+  markDownloadJobPending(jobId);
   setImmediate(() => {
     runClaimedScheduledJob(job, true).catch(() => {
+    }).finally(() => {
+      clearDownloadJobPending(jobId);
     });
   });
   return updated;
@@ -15963,10 +16551,14 @@ async function drainRedownloadQueue() {
            SET status = 'downloading', error_message = NULL
            WHERE id = ? AND status IN ('queued', 'downloading')`
       ).run(next.jobId);
-      if (claim.changes === 0) continue;
+      if (claim.changes === 0) {
+        clearDownloadJobPending(next.jobId);
+        continue;
+      }
       try {
         await executeDownloadJob(next.jobId, next.execParams);
       } catch (err) {
+        clearDownloadJobPending(next.jobId);
         logger.warn(
           "Downloader",
           `Sequential redownload job #${next.jobId} (${next.execParams.safeFilename}) failed`,
@@ -16228,7 +16820,8 @@ function adoptStuckOrOrphanedJobs() {
   ).all();
   let adoptedCount = 0;
   for (const row of stuckRows) {
-    if (inMemoryIds.has(Number(row.id))) continue;
+    const jobId = Number(row.id);
+    if (inMemoryIds.has(jobId) || isDownloadJobActive(jobId)) continue;
     if (isProcessingRedownloadQueue && row.status === "downloading" && Number(row.bytes_downloaded) > 0) {
       continue;
     }
@@ -16238,7 +16831,7 @@ function adoptStuckOrOrphanedJobs() {
     if (fileExistsWithSize(destPath)) {
       db.prepare(
         `UPDATE download_jobs SET status = 'completed', completed_at = datetime('now') WHERE id = ?`
-      ).run(row.id);
+      ).run(jobId);
       continue;
     }
     let payload = null;
@@ -16249,9 +16842,10 @@ function adoptStuckOrOrphanedJobs() {
         payload = null;
       }
     }
-    db.prepare(`UPDATE download_jobs SET status = 'queued' WHERE id = ?`).run(row.id);
+    db.prepare(`UPDATE download_jobs SET status = 'queued' WHERE id = ?`).run(jobId);
+    markDownloadJobPending(jobId);
     redownloadQueue.push({
-      jobId: Number(row.id),
+      jobId,
       execParams: {
         provider: row.provider,
         modelName: row.model_name || safeFilename,
@@ -16312,6 +16906,17 @@ function ensureRedownloadQueueRunning() {
     });
   }
 }
+function cleanupPartFilesForJob(destinationPath, jobId) {
+  if (!destinationPath) return;
+  for (const candidate of [`${destinationPath}.part.${jobId}`, `${destinationPath}.part`]) {
+    if (fs27.existsSync(candidate)) {
+      try {
+        fs27.unlinkSync(candidate);
+      } catch {
+      }
+    }
+  }
+}
 function cancelDownloadJob(jobId) {
   const job = db.prepare("SELECT id, status, destination_path FROM download_jobs WHERE id = ?").get(jobId);
   if (!job) {
@@ -16326,15 +16931,7 @@ function cancelDownloadJob(jobId) {
     }
   }
   abortActiveDownloadStream(jobId);
-  if (job.destination_path) {
-    const partPath = `${job.destination_path}.part`;
-    if (fs27.existsSync(partPath)) {
-      try {
-        fs27.unlinkSync(partPath);
-      } catch {
-      }
-    }
-  }
+  cleanupPartFilesForJob(job.destination_path, jobId);
   db.prepare(`DELETE FROM download_jobs WHERE id = ?`).run(jobId);
   return { ok: true, deletedId: jobId };
 }
@@ -16346,15 +16943,7 @@ function cancelAllActiveAndQueuedDownloads() {
   abortAllActiveDownloadStreams();
   for (const row of activeOrQueuedRows) {
     abortActiveDownloadStream(row.id);
-    if (row.destination_path) {
-      const partPath = `${row.destination_path}.part`;
-      if (fs27.existsSync(partPath)) {
-        try {
-          fs27.unlinkSync(partPath);
-        } catch {
-        }
-      }
-    }
+    cleanupPartFilesForJob(row.destination_path, row.id);
   }
   const info = db.prepare(`DELETE FROM download_jobs WHERE status IN ('downloading', 'queued')`).run();
   return { ok: true, cancelledCount: Number(info.changes || activeOrQueuedRows.length) };
@@ -19529,6 +20118,7 @@ function buildSafeConfigSnapshot() {
     "save_uploaded_prompt_images",
     "save_civitai_import_images",
     "allow_civitai_share_uncharacterized",
+    "civitai_activity_notifications_enabled",
     "gallery_pill_colors_enabled",
     "pill_type_settings_json"
   ]);
@@ -19551,6 +20141,11 @@ function buildSafeConfigSnapshot() {
     allowCivitaiShareUncharacterized: getBoolSetting(
       "allow_civitai_share_uncharacterized",
       false,
+      settingsMap
+    ),
+    civitaiActivityNotificationsEnabled: getBoolSetting(
+      "civitai_activity_notifications_enabled",
+      true,
       settingsMap
     ),
     galleryPillColorsEnabled: getBoolSetting("gallery_pill_colors_enabled", false, settingsMap),
@@ -19640,6 +20235,7 @@ var init_systemRoutes = __esm({
           saveUploadedPromptImages,
           saveCivitaiImportImages,
           allowCivitaiShareUncharacterized,
+          civitaiActivityNotificationsEnabled,
           galleryPillColorsEnabled,
           pillTypeSettings
         } = req.body || {};
@@ -19691,6 +20287,12 @@ var init_systemRoutes = __esm({
           settingUpdates.push([
             "allow_civitai_share_uncharacterized",
             allowCivitaiShareUncharacterized ? "1" : "0"
+          ]);
+        }
+        if (civitaiActivityNotificationsEnabled !== void 0) {
+          settingUpdates.push([
+            "civitai_activity_notifications_enabled",
+            civitaiActivityNotificationsEnabled ? "1" : "0"
           ]);
         }
         if (galleryPillColorsEnabled !== void 0) {
@@ -21866,20 +22468,26 @@ async function startServer() {
           { getTaggerSettings: getTaggerSettings2, isTaggerModelDownloaded: isTaggerModelDownloaded2, startVisualTaggerQueue: startVisualTaggerQueue2 },
           { startDownloadScheduler: startDownloadScheduler2 },
           { scanAndCleanCopiedDownloads: scanAndCleanCopiedDownloads2, startModelCleanupScheduler: startModelCleanupScheduler2 },
-          { startLoraHeadshotWatcher: startLoraHeadshotWatcher2 }
+          { startLoraHeadshotWatcher: startLoraHeadshotWatcher2 },
+          {
+            startCivitaiActivityScheduler: startCivitaiActivityScheduler2,
+            stopCivitaiActivityScheduler: stopCivitaiActivityScheduler2
+          }
         ] = await Promise.all([
           Promise.resolve().then(() => (init_scannerService(), scannerService_exports)),
           Promise.resolve().then(() => (init_modelInventoryService(), modelInventoryService_exports)),
           Promise.resolve().then(() => (init_visualTaggerService(), visualTaggerService_exports)),
           Promise.resolve().then(() => (init_downloadSchedulerService(), downloadSchedulerService_exports)),
           Promise.resolve().then(() => (init_modelCleanupService(), modelCleanupService_exports)),
-          Promise.resolve().then(() => (init_characterDownloadAutomationService(), characterDownloadAutomationService_exports))
+          Promise.resolve().then(() => (init_characterDownloadAutomationService(), characterDownloadAutomationService_exports)),
+          Promise.resolve().then(() => (init_civitaiActivitySyncService(), civitaiActivitySyncService_exports))
         ]);
         backfillMissingImagePrompts2(false);
         startFilesystemWatcher2();
         startDownloadScheduler2();
         startLoraHeadshotWatcher2();
         startModelCleanupScheduler2();
+        startCivitaiActivityScheduler2();
         await runBackgroundThumbnailMigration2();
         await syncModelInventory2();
         await scanAndCleanCopiedDownloads2().catch(() => {
@@ -21909,6 +22517,8 @@ async function startServer() {
   });
   const shutdown = async () => {
     if (reconcileTimer) clearInterval(reconcileTimer);
+    await Promise.resolve().then(() => (init_civitaiActivitySyncService(), civitaiActivitySyncService_exports)).then((m) => m.stopCivitaiActivityScheduler()).catch(() => {
+    });
     httpServer.close();
     if (viteServer) {
       await viteServer.close().catch(() => {

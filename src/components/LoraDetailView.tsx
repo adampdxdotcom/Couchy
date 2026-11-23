@@ -16,6 +16,7 @@ import { api } from '../api/client.ts';
 import { formatBytes, getModelAvailabilityInfo } from '../shared/utils.ts';
 import type { ImageRecord, LoraCategory, LoraExplorerItem } from '../shared/types.ts';
 import { CharacterPortraitImage } from './character/CharacterPortraitImage.tsx';
+import { InlineEditableTitle } from './shared/InlineEditableTitle.tsx';
 
 interface LoraDetailViewProps {
   lora: LoraExplorerItem;
@@ -30,6 +31,7 @@ interface LoraDetailViewProps {
   onUpdateMentionConfig: (
     loraName: string,
     payload: {
+      name?: string;
       mentionEnabled?: boolean;
       nickname?: string | null;
       defaultModelStrength?: number;
@@ -202,7 +204,13 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
             )}
             <div className="space-y-1 min-w-0">
               <div className="flex flex-wrap items-center gap-2.5">
-                <h1 className="text-2xl font-display font-bold text-zinc-100">{lora.name}</h1>
+                <InlineEditableTitle
+                  value={lora.name}
+                  resetKey={lora.filename}
+                  editTooltip="Click to rename LoRA (local display name only)"
+                  ariaLabel="Rename LoRA"
+                  onCommit={(nextName) => onUpdateMentionConfig(lora.filename, { name: nextName })}
+                />
                 {lora.baseModel && (
                   <span className="px-2 py-0.5 text-[11px] font-mono bg-zinc-950 border border-zinc-700 text-indigo-300 rounded">
                     {lora.baseModel}

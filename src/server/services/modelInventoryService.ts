@@ -17,6 +17,7 @@ import type { ModelInventoryItem, ModelType } from '../../shared/types.ts';
 
 export interface LoraMentionConfigInput {
   loraName: string;
+  name?: unknown;
   mentionEnabled?: unknown;
   nickname?: unknown;
   defaultModelStrength?: unknown;
@@ -391,6 +392,7 @@ export function updateLoraVisibility(loraName: string, isHidden: boolean): void 
 export function updateLoraMentionConfig(input: LoraMentionConfigInput): void {
   const {
     loraName,
+    name,
     mentionEnabled,
     nickname,
     defaultModelStrength,
@@ -401,12 +403,13 @@ export function updateLoraMentionConfig(input: LoraMentionConfigInput): void {
 
   const existingRow = db
     .prepare(
-      `SELECT id, filename, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description
+      `SELECT id, name, filename, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description
        FROM models WHERE LOWER(filename) = LOWER(?)`
     )
     .get(loraName) as
     | {
         id: number;
+        name: string;
         filename: string;
         nickname: string | null;
         mention_enabled: number;
@@ -416,6 +419,15 @@ export function updateLoraMentionConfig(input: LoraMentionConfigInput): void {
         llm_description: string | null;
       }
     | undefined;
+
+  let nextName = existingRow?.name ?? loraName.replace(/\.(safetensors|pt|ckpt)$/i, '');
+  if (name !== undefined) {
+    const cleanName = typeof name === 'string' ? name.trim() : '';
+    if (!cleanName) {
+      throw new Error('Model name cannot be empty');
+    }
+    nextName = cleanName;
+  }
 
   const cleanNick =
     nickname !== undefined
@@ -463,7 +475,8 @@ export function updateLoraMentionConfig(input: LoraMentionConfigInput): void {
   if (existingRow) {
     db.prepare(
       `UPDATE models
-       SET nickname = ?,
+       SET name = ?,
+           nickname = ?,
            mention_enabled = ?,
            default_model_strength = ?,
            default_clip_strength = ?,
@@ -471,6 +484,7 @@ export function updateLoraMentionConfig(input: LoraMentionConfigInput): void {
            llm_description = ?
        WHERE id = ?`
     ).run(
+      nextName,
       cleanNick,
       isMention,
       cleanModelStr,
@@ -484,7 +498,7 @@ export function updateLoraMentionConfig(input: LoraMentionConfigInput): void {
       `INSERT INTO models (name, filename, model_type, lora_category, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description)
        VALUES (?, ?, 'lora', 'unclassified', ?, ?, ?, ?, ?, ?)`
     ).run(
-      loraName.replace(/\.(safetensors|pt|ckpt)$/i, ''),
+      nextName,
       loraName,
       cleanNick,
       isMention,
@@ -517,6 +531,7 @@ export function updateModelVisibility(modelId: number, isHidden: boolean): void 
 export function updateModelConfig(
   modelId: number,
   input: {
+    name?: unknown;
     mentionEnabled?: unknown;
     nickname?: unknown;
     llmDescription?: unknown;
@@ -525,12 +540,13 @@ export function updateModelConfig(
 ): void {
   const existingRow = db
     .prepare(
-      `SELECT id, filename, nickname, mention_enabled, llm_description, user_notes
+      `SELECT id, name, filename, nickname, mention_enabled, llm_description, user_notes
        FROM models WHERE id = ?`
     )
     .get(modelId) as
     | {
         id: number;
+        name: string;
         filename: string;
         nickname: string | null;
         mention_enabled: number;
@@ -541,6 +557,15 @@ export function updateModelConfig(
 
   if (!existingRow) {
     throw new Error(`Model #${modelId} not found`);
+  }
+
+  let nextName = existingRow.name;
+  if (input.name !== undefined) {
+    const cleanName = typeof input.name === 'string' ? input.name.trim() : '';
+    if (!cleanName) {
+      throw new Error('Model name cannot be empty');
+    }
+    nextName = cleanName;
   }
 
   const cleanNick =
@@ -582,11 +607,12 @@ export function updateModelConfig(
 
   db.prepare(
     `UPDATE models
-     SET nickname = ?,
+     SET name = ?,
+         nickname = ?,
          mention_enabled = ?,
          llm_description = ?,
          user_notes = ?
      WHERE id = ?`
-  ).run(cleanNick, isMention, cleanDetails, cleanUserNotes, modelId);
+  ).run(nextName, cleanNick, isMention, cleanDetails, cleanUserNotes, modelId);
   invalidateInstalledModelsCache();
 }

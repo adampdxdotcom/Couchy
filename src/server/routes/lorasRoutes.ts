@@ -63,6 +63,7 @@ lorasRouter.patch('/loras/mention-config', (req, res) => {
   try {
     const {
       loraName,
+      name,
       mentionEnabled,
       nickname,
       defaultModelStrength,
@@ -77,6 +78,7 @@ lorasRouter.patch('/loras/mention-config', (req, res) => {
 
     updateLoraMentionConfig({
       loraName: String(loraName),
+      name,
       mentionEnabled,
       nickname,
       defaultModelStrength,
