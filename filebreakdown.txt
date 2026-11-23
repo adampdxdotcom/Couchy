@@ -1,0 +1,275 @@
+# Couchy — Project File Breakdown
+# Updated: 2026-11-23
+
+## Root & Configuration
+- server.ts — Express HTTP server entry point, API router mounting, startup migrations/services, and Vite/static SPA serving.
+- index.html — Vite HTML entry template.
+- package.json — Dependencies, npm scripts (dev, build, lint, test), and TypeScript/Node configuration.
+- tsconfig.json — TypeScript compiler configuration.
+- vite.config.ts — Vite bundler configuration.
+- metadata.json — Applet metadata and capabilities.
+- Dockerfile — Production container image definition.
+- docker-compose.yml.example — Example Docker Compose deployment configuration.
+- .env.example — Documented runtime environment variables (paths, ComfyUI/LLM URLs, optional API keys).
+- README.md — User guide, installation instructions, Civitai integration guide, and technical reference.
+
+## Frontend Core & Hooks (src/)
+- src/main.tsx — React root entry point.
+- src/App.tsx — Top-level application shell, workspace routing, modal coordination, and Quick Gen integration.
+- src/index.css — Global Tailwind CSS import and theme styling.
+- src/api/client.ts — Typed frontend REST client for all `/api/*` endpoints.
+- src/hooks/useAppToasts.ts — Ephemeral toast notification queue and message log state.
+- src/hooks/useCivitaiNotifications.ts — Persistent header Civitai activity notifications (likes/comments) and mark-seen state.
+- src/hooks/useGalleryImageActions.ts — Rating, favorite, reject/undo, delete, and bulk gallery mutation handlers.
+- src/hooks/useLiveStatusPolling.ts — Live ComfyUI generation status, ghost card polling, and download status sync.
+- src/hooks/useWorkspaceData.ts — Central workspace data loading and refresh hook (images, characters, models, workflows, presets).
+
+## Shared Contracts & Utilities (src/shared/)
+- src/shared/types.ts — Shared TypeScript domain interfaces (images, models, LoRAs, characters, Civitai drafts, workflows, presets).
+- src/shared/apiTypes.ts — Shared API request/response payload interfaces.
+- src/shared/agentPromptDefaults.ts — Default Local LLM Agent system prompts and batch-expansion presets.
+- src/shared/pillSettings.ts — LoRA category definitions, default pill styling, and category color resolution.
+- src/shared/utils.ts — Pure shared formatting, aspect-ratio, model availability, and ghost-card helper utilities.
+
+## Frontend Components (src/components/)
+- src/components/TopNavHeader.tsx — Sticky workspace navigation bar, ComfyUI/LLM status pill, Civitai alert pill, and message dropdown.
+- src/components/FloatingQuickGenBar.tsx — Collapsible Quick Gen Box with Agent chat, Face Scan, image upload/paste, Civitai URL import, and `@mention` pills.
+- src/components/GalleryFilterBar.tsx — Multi-facet gallery search bar, filters (including Civitai Share Status), saved search presets, and sort/layout controls.
+- src/components/GalleryGridView.tsx — Grid/Masonry/Compact gallery viewport, pagination/infinite scroll, bulk action toolbar, and ghost progress cards.
+- src/components/ImageInspectorDrawer.tsx — Fullscreen image/stack inspector, hotkeys, curation actions, and Civitai Draft Share button/status pill.
+- src/components/CharacterExplorerView.tsx — Character roster and detail view coordinator.
+- src/components/GenerationStudioView.tsx — Multi-shot batch Generation Studio workspace.
+- src/components/LoraAndModelManagerView.tsx — Coordinator for LoRA Explorer, Base/Support Models Explorer, Presets, and Model Downloader.
+- src/components/LoraDetailView.tsx — Individual LoRA detail/config view with inline local rename, Civitai previews, `@mention` defaults, and character links.
+- src/components/ModelDownloadConfirmModal.tsx — Model download confirmation dialog (destination subfolder, `@mention`, and character automation options).
+- src/components/ModelDownloaderTab.tsx — Civitai, Hugging Face, and direct URL search + download queue tab.
+- src/components/WorkflowLibraryView.tsx — Workflow library, import, structured node editor, and validation workspace.
+- src/components/SystemAndBackupView.tsx — System configuration, toggles, stats, backups, cleanup, and Help viewer coordinator.
+
+### Shared UI Components (src/components/shared/)
+- src/components/shared/InlineEditableTitle.tsx — Reusable click-to-edit H1 title with inline pencil icon (`Enter`/blur to save, `Escape`/blank to revert).
+
+### Gallery Components (src/components/gallery/)
+- src/components/gallery/GhostCancelButton.tsx — Cancel button overlay for queued/active ghost cards.
+- src/components/gallery/PendingGhostOverlay.tsx — Active generation progress badge overlay attached to parent series cards.
+
+### Character Components (src/components/character/)
+- src/components/character/characterAddonStats.ts — Computes character-associated Base Models, addon LoRAs, and co-appearing friend statistics.
+- src/components/character/CharacterCard.tsx — Character roster grid card with portrait crop, stats, and linked LoRA count.
+- src/components/character/CharacterFavoriteAddonsCard.tsx — Top addon LoRAs, Base Models, and companion characters panel.
+- src/components/character/CharacterGallerySection.tsx — Character-filtered gallery preview grid and controls.
+- src/components/character/CharacterHighestRatedCard.tsx — Spotlight grid of top-rated images for a character.
+- src/components/character/CharacterImageTile.tsx — Reusable character gallery tile with rating/portrait actions.
+- src/components/character/CharacterLorasAndWorkflows.tsx — Linked LoRAs, trigger words, and preferred workflows manager.
+- src/components/character/CharacterPortraitImage.tsx — Zoom/focal-point aware portrait image renderer.
+- src/components/character/CharacterProfileHeader.tsx — Character profile header with inline name edit, bio/physical analysis, Civitai share toggle, and portrait cropper.
+- src/components/character/CharacterRosterView.tsx — Filterable/sortable character roster overview.
+- src/components/character/CharacterSuggestionsReview.tsx — Bulk confirm/reject review queue for metadata-matched character suggestions.
+- src/components/character/CreateCharacterModal.tsx — Modal for creating a new character profile.
+- src/components/character/MergeCharactersModal.tsx — Non-destructive character merge modal.
+- src/components/character/PortraitCropModal.tsx — Interactive focal-point and zoom portrait framing modal.
+
+### Generation Studio Components (src/components/generation/)
+- src/components/generation/BatchQueueHistory.tsx — Batch generation job history and per-shot status list.
+- src/components/generation/CharacterLoraStackPanel.tsx — Character picker and multi-LoRA strength stack controls.
+- src/components/generation/PromptTemplateEditor.tsx — Reusable Generation Studio prompt template selector/editor.
+- src/components/generation/ResolutionSelectorPanel.tsx — Aspect ratio, megapixel target, and batch count controls.
+- src/components/generation/WorkflowSelectionPanel.tsx — Workflow template selector for Generation Studio runs.
+
+### Inspector Components (src/components/inspector/)
+- src/components/inspector/useInspectorState.ts — Inspector state hook (keyboard shortcuts, loupe, notes, A/B compare, Civitai draft modal/activity sync).
+- src/components/inspector/InspectorSingleViewer.tsx — Single-image viewport with loupe and series navigation.
+- src/components/inspector/InspectorCharacterSection.tsx — Assigned and suggested characters panel inside Inspector.
+- src/components/inspector/InspectorPromptAndParamsSection.tsx — Copyable prompts, sampler/resolution stats, LoRA pills, and Base Model metadata.
+- src/components/inspector/InspectorTagsAndNotesSection.tsx — Custom tags, visual tags, collections, and personal notes editor.
+- src/components/inspector/InspectorWorkflowSection.tsx — Workflow reproduction (`Run Workflow`), inline `4x` ESRGAN upscale, and visual node summary.
+- src/components/inspector/CivitaiDraftModal.tsx — Draft-only Civitai upload confirmation modal with multi-resource preview, JPEG fallback, and post history.
+- src/components/inspector/ComparePickerModal.tsx — Stack/image picker modal for A/B split compare.
+- src/components/inspector/LoupeOverlay.tsx — 2x / 4x / 1:1 native zoom loupe overlay.
+- src/components/inspector/SeriesIterationsStrip.tsx — Horizontal series stack step switcher and poster controls.
+- src/components/inspector/SeriesMiniGalleryModal.tsx — Grid overview modal (`S`) for inspecting all shots in a Series Stack.
+- src/components/inspector/SplitCompareDiffDrawer.tsx — Prompt, parameter, and LoRA diff drawer for A/B Split Compare.
+- src/components/inspector/splitCompareUtils.ts — Diff computation utilities for comparing two images.
+- src/components/inspector/SplitCompareView.tsx — Side-by-side and draggable wipe A/B image comparison viewer.
+
+### Models & Downloader Components (src/components/models/)
+- src/components/models/BaseModelDetailView.tsx — Detail/config view for Base Models and Support Models with inline local rename, Civitai previews, and `@mention` settings.
+- src/components/models/BaseModelExplorerGrid.tsx — Card grid for Base Models and Support Models.
+- src/components/models/BaseModelExplorerTable.tsx — Dense table view for Base Models and Support Models.
+- src/components/models/LoraExplorerTab.tsx — LoRA Explorer tab with search, category filter, and Grid/Table toggle.
+- src/components/models/LoraExplorerGrid.tsx — LoRA Explorer card grid with inline `@mention`, `@nickname`, and visibility controls.
+- src/components/models/LoraExplorerTable.tsx — LoRA Explorer table view.
+- src/components/models/ModelInventoryTab.tsx — Base/Support Models Explorer & Missing Dependencies tab.
+- src/components/models/PresetsManagerTab.tsx — LoRA Presets manager tab.
+- src/components/models/PresetEditorPanel.tsx — Form/strip editor for creating and editing LoRA Presets.
+- src/components/models/PresetSelectableGrid.tsx — Click-to-select Base Model & LoRA grids inside Preset Editor.
+- src/components/models/useModelDownloaderState.ts — Downloader search, batch selection, and history polling state hook.
+- src/components/models/useModelDownloaderActions.ts — Download confirmation, batch download, cancellation, and redownload handlers.
+- src/components/models/DownloaderSearchBar.tsx — Search input supporting keywords, hashes, Civitai model/image URLs, and HF repos.
+- src/components/models/DownloaderBatchBar.tsx — Batch selection and Download All toolbar for multi-model results.
+- src/components/models/DownloaderPreviewCard.tsx — Search result card with version picker, preview thumbnails, and install badges.
+- src/components/models/DownloaderCardActions.tsx — Card-level download, schedule Early Access, and inspect actions.
+- src/components/models/RepoFilePickerList.tsx — Multi-file weight selector for Hugging Face repositories and Civitai versions.
+- src/components/models/CharacterLoraDownloadOptions.tsx — Inline character creation/automation options on LoRA download confirmation.
+- src/components/models/LoraMentionDownloadOptions.tsx — Inline `@mention` / `@nickname` options on LoRA download confirmation.
+- src/components/models/DownloadHistoryList.tsx — Active, scheduled, completed, and failed download job queue list.
+- src/components/models/downloaderUtils.ts — Helper utilities for downloader formatting and status checks.
+- src/components/models/earlyAccessUtils.ts — Civitai Early Access countdown and unlock-date formatting helpers.
+
+### Quick Gen Components (src/components/quickgen/)
+- src/components/quickgen/QuickGenAttachmentsBar.tsx — Attached Character, LoRA, Base Model, Preset, and uploaded reference pills bar.
+- src/components/quickgen/QuickGenConversationView.tsx — Inline Agent chat drawer with Proposed Prompt / Set Concept cards and shot expansion controls.
+- src/components/quickgen/QuickGenMentionPopover.tsx — `@Character`, `@LoRA`, `@Model`, and `@Preset` autocomplete popover.
+- src/components/quickgen/QuickGenSettingsPopover.tsx — Aspect ratio, megapixels, steps, and batch count popover.
+- src/components/quickgen/quickGenStackHelpers.ts — Helpers for preserving stack context across iterations and branches.
+- src/components/quickgen/quickGenUtils.ts — LoRA key normalization, pill extraction, and Base Model label resolution.
+- src/components/quickgen/useQuickGenAgentAndBatch.ts — Agent conversation and multi-shot expansion hook.
+- src/components/quickgen/useQuickGenAttachments.ts — Pill attachment, strength editing, and preset loading hook.
+- src/components/quickgen/useQuickGenMediaImport.ts — Clipboard/drop/upload 1MP interrogation, Face Scan, and Civitai URL import hook.
+- src/components/quickgen/useQuickGenMentions.ts — `@mention` trigger parsing and keyboard navigation hook.
+- src/components/quickgen/useQuickGenSubmit.ts — Quick Gen prompt compilation and submission hook.
+
+### System Components (src/components/system/)
+- src/components/system/WorkspacePreferencesSection.tsx — Top System preference toggles (1MP upload/Civitai archiving, Share 0-Character Images, Civitai Activity Notifications).
+- src/components/system/CollectionsAndScannerSection.tsx — Image directory scan triggers, scan job history, and collection maintenance.
+- src/components/system/ComfyUiConnectionSection.tsx — ComfyUI URL check, directory inspection, and Auto-Clean Copied Downloads settings.
+- src/components/system/DatabaseBackupSection.tsx — SQLite snapshot backups and portable JSON annotation export/import.
+- src/components/system/GenerationReadinessCard.tsx — ComfyUI node/model readiness diagnostics card.
+- src/components/system/HelpDocsChatPanel.tsx — "Ask the Docs" Local LLM Q&A sidebar inside System -> Help.
+- src/components/system/LibraryUsageRankingsCard.tsx — Library usage and Random Roll eligibility/odds rankings card.
+- src/components/system/LmStudioTemplatesSection.tsx — Local LLM endpoint presets, vision probe, and system/expansion prompt editors.
+- src/components/system/ModelCleanupSection.tsx — Cleanup tools for duplicate downloaded copies synced into ComfyUI models.
+- src/components/system/QuickGenAndPillsSection.tsx — Quick Gen Box visibility, pill color, and `@mention` type toggles.
+- src/components/system/StatsSection.tsx — Generation activity charts and storage breakdown tab.
+- src/components/system/StorageUsageCard.tsx — Disk storage usage breakdown card.
+- src/components/system/SystemHelpSection.tsx — Live `README.md` viewer with section navigation and copyable code blocks.
+- src/components/system/UsageRankList.tsx — Ranked list UI for Characters, Base Models, and LoRAs.
+- src/components/system/VisualTaggerSection.tsx — ONNX visual tagger (CPU/GPU, threshold, pause/resume, scan) controls.
+
+### Workflow Components (src/components/workflows/)
+- src/components/workflows/PowerLoraLoaderEditor.tsx — Interactive editor for `rgthree` Power Lora Loader slots.
+- src/components/workflows/WorkflowGraphInspector.tsx — Searchable structured workflow node/parameter editor.
+- src/components/workflows/WorkflowJsonModal.tsx — Raw JSON workflow import/edit modal with validation.
+- src/components/workflows/WorkflowModals.tsx — Workflow import, node mapping, and delete confirmation modals.
+- src/components/workflows/WorkflowReproductionHistory.tsx — History table of workflow reproduction runs.
+
+## Backend Core & Database (src/server/)
+- src/server/config.ts — Runtime configuration loader merging `.env` and persisted `app_settings`.
+- src/server/logger.ts — Rotating file and console logger (`couchy.log`).
+- src/server/db.ts — SQLite WAL initialization, pragmatic performance settings, and migration runner.
+- src/server/utils/httpError.ts — Typed HTTP error helper for Express routes.
+- src/server/db/migrationsCore.ts — Base schema creation (`images`, `models`, `characters`, `workflows`, etc.).
+- src/server/db/migrationsV2ToV14.ts — Incremental schema migrations v2 through v14.
+- src/server/db/migrationsV15ToV28.ts — Incremental schema migrations v15 through v28.
+- src/server/db/migrationsV29.ts — Migration v29 (`image_civitai_drafts` and sharing settings).
+- src/server/db/migrationsV30.ts — Migration v30 (Civitai draft/published activity sync columns & notification unseen tracking).
+- src/server/db/seedPromptsAndLlm.ts — Seeds default Agent prompts and Local LLM preset settings.
+- src/server/db/seedWorkflowsAndInstances.ts — Seeds built-in default Krea 2 workflows (`primary_workflow.json`, `upscale_workflow.json`).
+- src/server/workflows/primary_workflow.json — Cleaned base Krea 2 ComfyUI API workflow template.
+- src/server/workflows/upscale_workflow.json — Standalone `4x` ESRGAN ComfyUI API upscale template.
+- src/server/workflows/workflowPaths.ts — Resolves bundled workflow template paths across dev and compiled server builds.
+
+## Backend Express Routes (src/server/routes/)
+- src/server/routes/charactersRoutes.ts — Character CRUD, portrait crops, Face Scan embeddings, LoRA links, merge, and Civitai opt-in endpoints.
+- src/server/routes/comfyuiRoutes.ts — ComfyUI live status, object_info inspection, readiness check, and direct workflow test runs.
+- src/server/routes/generationRoutes.ts — Quick Gen submit, Random Roll, Generation Studio batches, Agent chat, image interrogation, and Face Scan endpoints.
+- src/server/routes/imagesRoutes.ts — Gallery query, single/bulk image actions, ZIP export, series stacks, and Civitai share/activity endpoints.
+- src/server/routes/lorasRoutes.ts — LoRA Explorer list, semantic classification, visibility toggle, `@mention` config, and local display-name rename.
+- src/server/routes/modelDownloadsRoutes.ts — Model search, URL/share resolution, download confirmation, batch redownload, and queue cancellation.
+- src/server/routes/modelsAndWorkflowsRoutes.ts — Combined router mounting models, LoRAs, presets, and workflows endpoints.
+- src/server/routes/modelsRoutes.ts — Model inventory, ComfyUI sync, Civitai enrichment/link-heal, visibility, config, and local display-name rename.
+- src/server/routes/presetsRoutes.ts — LoRA Presets CRUD endpoints.
+- src/server/routes/systemRoutes.ts — Health check, system config, stats, storage usage, backups, cleanup, visual tagger, and Help docs/Q&A endpoints.
+- src/server/routes/workflowsRoutes.ts — Workflow import, mapping, structured editing, validation, and export endpoints.
+
+## Backend Services (src/server/services/)
+- src/server/services/backupService.ts — Scheduled and manual SQLite integrity-verified snapshots plus JSON annotation export/import.
+- src/server/services/characterDownloadAutomationService.ts — Post-download character profile creation and portrait generation automation.
+- src/server/services/characterService.ts — Character profiles, aliases, LoRA links, assisted metadata identification, and merging.
+- src/server/services/comfyuiLiveMonitor.ts — Thin coordinator/facade for ComfyUI WebSocket/polling live monitor and ghost cards.
+- src/server/services/comfyuiService.ts — ComfyUI HTTP/WebSocket submission client and queue helpers.
+- src/server/services/downloadSchedulerService.ts — Scheduled download queue, Early Access retry logic, and orphan job adoption.
+- src/server/services/faceAlignmentUtils.ts — InsightFace SCRFD 5-point landmark alignment and affine crop helpers.
+- src/server/services/faceRecognitionService.ts — ONNX SCRFD + ArcFace face embedding extraction and character cosine matching.
+- src/server/services/fsWalkService.ts — Async filesystem directory traversal and model subfolder detection utilities.
+- src/server/services/galleryQueryService.ts — High-performance gallery filtering (including Civitai share status), sorting, stack collapsing, and LoRA explorer aggregation.
+- src/server/services/generationDispatchService.ts — Compiles prompts/workflows and dispatches single or multi-shot ComfyUI generation batches.
+- src/server/services/helpDocsService.ts — `README.md` indexing, section retrieval, and Ask-the-Docs RAG context builder.
+- src/server/services/huggingFaceMetadataService.ts — Hugging Face Hub repo file listing, SHA-256 LFS parsing, and metadata fallback.
+- src/server/services/libraryUsageStatsService.ts — Usage counts, roll scores, eligibility, and baseline odds across Characters, Base Models, and LoRAs.
+- src/server/services/loraClassifierService.ts — Heuristic and `.safetensors` header-based LoRA semantic category classification.
+- src/server/services/modelCleanupService.ts — Duplicate downloaded model detection and safe cleanup once verified in ComfyUI models directory.
+- src/server/services/modelDownloadConfirmationService.ts — Validates paths/overwrites/`@nickname` conflicts, creates `download_jobs`, and reserves immediate downloads.
+- src/server/services/modelDownloadExecutor.ts — Authoritative download lock/abort registry, `.com`/`.red` stream fallback, SHA-256 verification, and per-job `.part` atomic rename.
+- src/server/services/modelDownloadPaths.ts — ComfyUI model subfolder mappings and weight extension helpers.
+- src/server/services/modelDownloadPostProcess.ts — Post-download `models` upsert, LoRA classification, Civitai preview caching, ComfyUI sync, and automation hooks.
+- src/server/services/modelInventoryService.ts — Disk + ComfyUI `/object_info` inventory sync, visibility toggles, local display-name renames, and `@mention` config updates.
+- src/server/services/modelManagerService.ts — Backward-compatible facade re-exporting model search, confirmation/scheduling, and download execution controls.
+- src/server/services/modelRedownloadService.ts — Missing-model redownload queue orchestration and batch job cancellation.
+- src/server/services/modelSearchService.ts — Civitai hash/keyword search, Hugging Face search, direct URL resolution, and smart-search routing.
+- src/server/services/pngMetadataParser.ts — Pure PNG chunk parser extracting ComfyUI API/visual graphs, A1111 parameters, prompts, LoRAs, and Base Models.
+- src/server/services/presetsService.ts — CRUD and validation for LoRA Presets (1 optional Base Model + up to 5 LoRAs).
+- src/server/services/randomRollPromptService.ts — Local LLM prompt proposal builder and character/motif filtering for Random Roll.
+- src/server/services/randomRollService.ts — Random Roll eligibility selection, compatible Base/Style LoRA matching, and progressive batch dispatch.
+- src/server/services/readinessService.ts — First-run setup and ComfyUI custom-node/model readiness checks.
+- src/server/services/scannerService.ts — Directory scanner coordinator facade.
+- src/server/services/seriesService.ts — Series Stack creation, step attachment, branching, and exclusive poster management.
+- src/server/services/settingsService.ts — Persisted `app_settings` getter/setter helpers.
+- src/server/services/statsService.ts — Generation activity timeline aggregations (`day`/`week`/`month`/`year`).
+- src/server/services/storageStatsService.ts — Cached disk storage usage calculations across ComfyUI output/models and Couchy data directories.
+- src/server/services/visualTaggerService.ts — Local `wd-vit-tagger-v3` ONNX visual tagging worker and queue.
+- src/server/services/workflowCompilerService.ts — Deterministic Krea 2 ComfyUI API graph compiler (prompts, LoRAs, resolution, steps, inline `4x` ESRGAN).
+- src/server/services/workflowLibraryService.ts — Workflow import, node slot mapping, validation, and reproduction tracking.
+
+### Civitai Services (src/server/services/civitai/)
+- src/server/services/civitai/civitaiActivitySyncService.ts — Polls Civitai `/api/v1/images?postId=...` on Inspector load and every 15 minutes to sync publish state, reactions, comments, and unseen alerts.
+- src/server/services/civitai/civitaiDraftShareService.ts — End-to-end deterministic Civitai draft upload orchestrator (`publish: false`), JPEG EXIF fallback, and draft history persistence.
+- src/server/services/civitai/civitaiHttpAndParse.ts — Backward-compatible facade re-exporting Civitai URL/domain helpers, HTTP client, extractors, builders, and URL resolver.
+- src/server/services/civitai/civitaiHttpClient.ts — Civitai headers, `.com`/`.red` fallback fetchers, parent-model lookups, web-domain probing, and bounded LRU/in-flight caches.
+- src/server/services/civitai/civitaiImagePayload.ts — Pure in-memory PNG `parameters` metadata injector and JPEG + EXIF metadata encoder for Civitai uploads.
+- src/server/services/civitai/civitaiImageShareService.ts — Resolves Civitai `/images/:id` and `/posts/:id` URLs into Quick Gen prompts/LoRAs and Downloader Krea 2 model cards.
+- src/server/services/civitai/civitaiMcpClient.ts — Civitai REST/upload/MCP client (`initialize`, `whoami`, `upload_image`, `create_post`).
+- src/server/services/civitai/civitaiMetadataExtractors.ts — Early Access unlock parsing, HTML description cleanup, static preview extraction, and recommended-weight heuristics.
+- src/server/services/civitai/civitaiModelEnrichmentService.ts — Computes local SHA-256 hashes, caches model preview WebPs, heals `.com`/`.red` links, and caches installed-model index.
+- src/server/services/civitai/civitaiModelUrlResolver.ts — Resolves pasted Civitai model page or API download URLs into search cards.
+- src/server/services/civitai/civitaiShareEligibility.ts — Strict Civitai sharing eligibility validator (character opt-in gates, metadata provenance, and multi-resource resolution).
+- src/server/services/civitai/civitaiUrlAndDomain.ts — Pure Civitai URL/ID/share-URL parsing, `.com`/`.red` resolution, preview JSON parsing, and resource-type predicates.
+- src/server/services/civitai/civitaiVersionBuilders.ts — Normalized Civitai metadata, version file extraction, version option builders, and search-result card assembly.
+
+### Live Monitor Services (src/server/services/liveMonitor/)
+- src/server/services/liveMonitor/comfyuiTransportMonitor.ts — WebSocket + HTTP `/queue` and `/history` polling loop for active ComfyUI jobs.
+- src/server/services/liveMonitor/ghostCardAggregator.ts — Builds active/queued Ghost Card descriptors for the Gallery.
+- src/server/services/liveMonitor/jobCancelService.ts — Cancels running/queued ComfyUI and Couchy generation items cleanly.
+- src/server/services/liveMonitor/liveMonitorState.ts — Shared in-memory live progress state and subscriber registry.
+- src/server/services/liveMonitor/promptGraphUtils.ts — Extracts human-readable prompt/model summaries from queued ComfyUI graphs.
+- src/server/services/liveMonitor/seriesTargetResolver.ts — Matches finished ComfyUI outputs back to target Series Stacks.
+
+### Local LLM Services (src/server/services/llm/)
+- src/server/services/llm/batchExpansionService.ts — Multi-shot theme expansion into numbered shots with prompt verification.
+- src/server/services/llm/batchPromptVerification.ts — Validates and normalizes LLM-expanded multi-shot outputs.
+- src/server/services/llm/llmAgentService.ts — Quick Gen Agent conversational refinement, anchor recall, and LoRA/Preset selection.
+- src/server/services/llm/llmClientService.ts — Unified OpenAI-compatible `/v1` client and LM Studio vision capability detector.
+- src/server/services/llm/llmImageAnalysisService.ts — 1MP upload interrogation (Vision + uncensored tag audit, or tag-to-prose fallback) and portrait analysis.
+- src/server/services/llm/llmPromptUtils.ts — Shared LLM prompt formatting, tag-stripping, and XML tag extraction helpers.
+
+### Scanner Services (src/server/services/scanner/)
+- src/server/services/scanner/corruptRecordCleanup.ts — Prunes stale/missing image records cleanly.
+- src/server/services/scanner/derivedMetadataService.ts — Recomputes character suggestions, dependency statuses, and visual tags.
+- src/server/services/scanner/directoryScanService.ts — Walks configured ComfyUI output directories for new/updated images.
+- src/server/services/scanner/imageIndexer.ts — Indexes individual PNG/image files, thumbnails, and embedded metadata into SQLite.
+- src/server/services/scanner/scannerMediaUtils.ts — Fast PNG header/stat reading and WebP thumbnail generation utilities.
+- src/server/services/scanner/scannerPersistenceHelpers.ts — Transactional SQLite helpers for `image_metadata`, `image_loras`, and `image_models`.
+
+## Automated Tests (tests/)
+- tests/helpers/tempDb.ts — Isolated temporary SQLite database helper for Node test suites.
+- tests/batchExpansion.test.ts — Multi-shot LLM batch expansion and verification tests.
+- tests/civitaiDraftShare.test.ts — Civitai draft eligibility, PNG/JPEG metadata injection, and activity sync tests.
+- tests/civitaiParsers.test.ts — Pure Civitai HTML, weight, early-access, domain, and share-URL parser tests.
+- tests/downloadJobConcurrency.test.ts — Download job single-flight locking and per-job `.part` concurrency regression tests.
+- tests/libraryUsageStats.test.ts — Library usage rankings and Random Roll odds calculation tests.
+- tests/modelLocalRename.test.ts — Local display-name renaming tests for LoRAs, Base Models, and Support Models.
+- tests/pngMetadataParser.test.ts — ComfyUI and A1111 PNG metadata parser tests.
+- tests/randomRoll.test.ts — Random Roll eligibility, prompt sanitation, and progressive batch dispatch tests.
+- tests/readinessService.test.ts — Setup readiness and bundled workflow sanitation tests.
+- tests/systemConfigRoute.test.ts — System `/api/config` & `/api/health` validation and secret-redaction tests.
+- tests/workflowCompiler.test.ts — Krea 2 workflow compiler resolution, LoRA deduplication, and `4x` ESRGAN tests.
