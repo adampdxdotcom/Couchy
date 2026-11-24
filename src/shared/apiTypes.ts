@@ -263,6 +263,62 @@ export interface CivitaiShareLinkedCharacter {
   allowCivitaiShare: boolean;
 }
 
+export type CivitaiStackExclusionReason =
+  | 'standalone_upscale'
+  | 'uploaded_reference'
+  | 'missing_or_rejected'
+  | 'missing_native_metadata'
+  | 'character_restricted'
+  | 'uncharacterized_disabled';
+
+export interface CivitaiShareStackItem {
+  imageId: number;
+  stepOrder: number;
+  filename: string;
+  thumbnailUrl: string;
+  width: number;
+  height: number;
+  fileSizeBytes: number;
+  format: string;
+  isFavorite: boolean;
+  isPoster: boolean;
+  prefilledTitle: string;
+  prefilledDescription: string;
+  tags: string[];
+  recommendedDomain: CivitaiDomain;
+  recommendedModelVersionId: number | null;
+  candidateModelVersions: CivitaiModelVersionCandidate[];
+  embeddedResourceNames: string[];
+}
+
+export interface CivitaiShareExcludedItem {
+  imageId: number;
+  stepOrder: number;
+  filename: string;
+  reasonCode: CivitaiStackExclusionReason;
+  reason: string;
+}
+
+export interface CivitaiShareStackEligibility {
+  seriesId: number;
+  eligible: boolean;
+  exceedsLimit: boolean;
+  disabledReason: string | null;
+  totalMembers: number;
+  eligibleCount: number;
+  posterImageId: number | null;
+  representativeImageId: number | null;
+  prefilledTitle: string;
+  prefilledDescription: string;
+  prefilledTags: string[];
+  recommendedModelVersionId: number | null;
+  recommendedDomain: CivitaiDomain;
+  candidateModelVersions: CivitaiModelVersionCandidate[];
+  embeddedResourceNames: string[];
+  eligibleItems: CivitaiShareStackItem[];
+  excludedItems: CivitaiShareExcludedItem[];
+}
+
 export interface CivitaiShareEligibilityResponse {
   eligible: boolean;
   hasCivitaiKey: boolean;
@@ -284,6 +340,7 @@ export interface CivitaiShareEligibilityResponse {
   candidateModelVersions: CivitaiModelVersionCandidate[];
   embeddedResourceNames: string[];
   existingDrafts: CivitaiDraftRecord[];
+  stack?: CivitaiShareStackEligibility | null;
 }
 
 export interface CivitaiShareDraftRequest {
@@ -293,14 +350,20 @@ export interface CivitaiShareDraftRequest {
   modelVersionId?: number | null;
   targetDomain?: CivitaiDomain;
   uploadMode?: CivitaiShareUploadMode;
+  shareScope?: 'single' | 'stack';
+  selectedImageIds?: number[];
 }
 
 export interface CivitaiShareDraftResponse {
   ok: boolean;
+  shareScope?: 'single' | 'stack';
   postId: number;
   domain: CivitaiDomain;
   draftUrl: string;
   uploadMode: CivitaiShareUploadMode;
+  uploadedCount?: number;
+  jpegFallbackCount?: number;
   processingImageIds: number[];
   draft: CivitaiDraftRecord;
 }
+

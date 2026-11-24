@@ -192,7 +192,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   const refreshCivitaiShareStatus = useCallback(async () => {
     setIsLoadingShareStatus(true);
     try {
-      const res = await api.getImageCivitaiShareStatus(activeImage.id);
+      const res = await api.getImageCivitaiShareStatus(activeImage.id, seriesContextId);
       setCivitaiShareStatus(res);
       if (res.existingDrafts.some((d) => d.hasUnseenActivity)) {
         setUnseenCivitaiImageId(activeImage.id);
@@ -206,7 +206,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     } finally {
       setIsLoadingShareStatus(false);
     }
-  }, [activeImage.id, onUpdated]);
+  }, [activeImage.id, seriesContextId, onUpdated]);
 
   useEffect(() => {
     let cancelled = false;
@@ -216,7 +216,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     setUnseenCivitaiImageId(prevSummary?.hasUnseenActivity ? activeImage.id : null);
 
     api
-      .getImageCivitaiShareStatus(activeImage.id)
+      .getImageCivitaiShareStatus(activeImage.id, seriesContextId)
       .then(async (res) => {
         if (cancelled) return;
         setCivitaiShareStatus(res);
@@ -252,7 +252,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [activeImage.id, characterTagSig]);
+  }, [activeImage.id, seriesContextId, characterTagSig]);
 
   const civitaiVisualState = useMemo(() => {
     const drafts = civitaiShareStatus?.existingDrafts;
@@ -305,6 +305,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     };
   }, [civitaiShareStatus, activeImage.civitaiShareSummary, activeImage.id, unseenCivitaiImageId]);
 
+  const canOpenShareModal = Boolean(
+    civitaiShareStatus?.eligible || civitaiShareStatus?.stack?.eligible
+  );
   const nextUserPresetName = useMemo(() => resolveNextUserPresetName(presets), [presets]);
   const hasPresetModels = Boolean(
     activeImage.checkpointName?.trim() || (activeImage.loras && activeImage.loras.length > 0)
@@ -522,14 +525,14 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
                 <button
                   type="button"
-                  disabled={isLoadingShareStatus || !civitaiShareStatus?.eligible}
+                  disabled={isLoadingShareStatus || !canOpenShareModal}
                   onClick={() => {
-                    if (civitaiShareStatus?.eligible) {
+                    if (canOpenShareModal) {
                       setShowCivitaiDraftModal(true);
                     }
                   }}
                   className={`p-1.5 rounded-lg border shrink-0 transition-colors ${
-                    isLoadingShareStatus || !civitaiShareStatus?.eligible
+                    isLoadingShareStatus || !canOpenShareModal
                       ? civitaiVisualState.hasShare
                         ? civitaiVisualState.hasUnseenActivity
                           ? 'bg-amber-500/15 border-amber-500/40 text-amber-300/70 cursor-not-allowed'
@@ -550,14 +553,21 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                       ? 'Checking Civitai draft sharing eligibility...'
                       : !civitaiShareStatus
                       ? 'Unable to verify Civitai sharing status'
-                      : !civitaiShareStatus.eligible
-                      ? civitaiShareStatus.reasons.join(' ')
+                      : !canOpenShareModal
+                      ? [
+                          ...civitaiShareStatus.reasons,
+                          civitaiShareStatus.stack?.disabledReason,
+                        ]
+                          .filter(Boolean)
+                          .join(' ')
                       : civitaiVisualState.hasUnseenActivity
                       ? `New Civitai activity (${civitaiVisualState.reactionCount} likes · ${civitaiVisualState.commentCount} comments)`
                       : civitaiVisualState.status === 'published'
                       ? `Published on Civitai (${civitaiVisualState.reactionCount} likes · ${civitaiVisualState.commentCount} comments)`
                       : civitaiVisualState.hasShare
                       ? `Share on Civitai as Private Draft (${civitaiVisualState.totalDrafts} draft(s) already created)`
+                      : !civitaiShareStatus.eligible && civitaiShareStatus.stack?.eligible
+                      ? `Share stack on Civitai as Private Draft (${civitaiShareStatus.stack.eligibleCount} eligible images)`
                       : 'Share on Civitai as Private Draft'
                   }
                   aria-label="Share on Civitai as Private Draft"
@@ -877,13 +887,14 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
         />
       )}
 
-      {showCivitaiDraftModal && civitaiShareStatus?.eligible && (
+      {showCivitaiDraftModal && canOpenShareModal && civitaiShareStatus && (
         <CivitaiDraftModal
           image={activeImage}
           eligibility={civitaiShareStatus}
           onClose={() => setShowCivitaiDraftModal(false)}
           onDraftCreated={() => {
             void refreshCivitaiShareStatus();
+            void onUpdated();
           }}
           onPushToast={onPushToast}
         />

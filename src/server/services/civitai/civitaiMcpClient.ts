@@ -216,17 +216,26 @@ export class CivitaiMcpClient {
     detail?: string;
     tags?: string[];
     modelVersionId?: number | null;
-    image: { uuid: string; width: number; height: number };
+    image?: { uuid: string; width: number; height: number };
+    images?: Array<{ uuid: string; width: number; height: number }>;
   }): Promise<{ postId: number; processingImageIds: number[] }> {
+    const imageList =
+      Array.isArray(params.images) && params.images.length > 0
+        ? params.images
+        : params.image
+        ? [params.image]
+        : [];
+    if (imageList.length === 0 || imageList.length > 20) {
+      throw new Error(`Civitai create_post requires between 1 and 20 images (got ${imageList.length}).`);
+    }
+
     const args: Record<string, unknown> = {
-      images: [
-        {
-          uuid: params.image.uuid,
-          width: params.image.width,
-          height: params.image.height,
-          type: 'image',
-        },
-      ],
+      images: imageList.map((img) => ({
+        uuid: img.uuid,
+        width: img.width,
+        height: img.height,
+        type: 'image',
+      })),
       publish: false, // Always draft-only; never auto-publish
     };
     if (params.title && params.title.trim()) args.title = params.title.trim();

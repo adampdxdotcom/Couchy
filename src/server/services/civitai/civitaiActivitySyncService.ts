@@ -166,7 +166,7 @@ async function queryPostStatsAcrossDomains(
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       const res = await fetchFn(
-        `https://${domain}/api/v1/images?postId=${encodeURIComponent(String(postId))}&nsfw=X&limit=10`,
+        `https://${domain}/api/v1/images?postId=${encodeURIComponent(String(postId))}&nsfw=X&limit=20`,
         { headers, signal: controller.signal }
       );
       clearTimeout(timer);

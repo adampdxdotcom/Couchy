@@ -8624,7 +8624,7 @@ async function queryPostStatsAcrossDomains(postId, preferredDomain, fetchFn) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       const res = await fetchFn(
-        `https://${domain}/api/v1/images?postId=${encodeURIComponent(String(postId))}&nsfw=X&limit=10`,
+        `https://${domain}/api/v1/images?postId=${encodeURIComponent(String(postId))}&nsfw=X&limit=20`,
         { headers, signal: controller.signal }
       );
       clearTimeout(timer);
@@ -10565,7 +10565,7 @@ var init_comfyuiService = __esm({
   }
 });
 
-// src/server/services/civitai/civitaiShareEligibility.ts
+// src/server/services/civitai/civitaiShareCore.ts
 import fs16 from "fs";
 import path15 from "path";
 import sharp4 from "sharp";
@@ -10655,41 +10655,17 @@ async function inspectDiskImageNativeMetadata(diskPath) {
     };
   }
 }
-function buildPrefilledDescription(meta) {
-  if (!meta?.positive_prompt) return "";
-  return String(meta.positive_prompt).trim();
+function detectResourceDomain(civitaiUrl, downloadUrl) {
+  const parsedCivitai = parseIdsFromCivitaiUrl(civitaiUrl);
+  const parsedDownload = parseIdsFromCivitaiUrl(downloadUrl);
+  const domain = parsedCivitai.domain === "civitai.red" || parsedDownload.domain === "civitai.red" ? "civitai.red" : "civitai.com";
+  return {
+    modelId: parsedCivitai.modelId || parsedDownload.modelId,
+    versionId: parsedCivitai.versionId || parsedDownload.versionId,
+    domain
+  };
 }
-async function findEligibleSourceInSeries(imageId) {
-  const seriesRows = db.prepare(
-    `SELECT sib.image_id, i.relative_path, COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference
-       FROM image_series_items cur
-       JOIN image_series_items sib ON sib.series_id = cur.series_id
-       JOIN images i ON i.id = sib.image_id
-       WHERE cur.image_id = ?
-         AND sib.image_id != ?
-         AND i.is_missing = 0
-         AND COALESCE(i.is_uploaded_reference, 0) = 0
-       ORDER BY sib.step_order ASC, sib.image_id ASC`
-  ).all(imageId, imageId);
-  for (const row of seriesRows) {
-    const diskPath = resolveImageDiskPath(row);
-    const inspected = await inspectDiskImageNativeMetadata(diskPath);
-    if (inspected.fileExists && inspected.hasNativeMetadata) {
-      return row.image_id;
-    }
-  }
-  return null;
-}
-async function evaluateCivitaiShareEligibility(imageId) {
-  const imageRow = db.prepare(
-    `SELECT id, content_hash, relative_path, filename, file_size, width, height, format,
-              is_missing, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference
-       FROM images
-       WHERE id = ?`
-  ).get(imageId);
-  if (!imageRow) {
-    throw new Error("Image not found");
-  }
+async function inspectCoreImageShare(imageRow, hasCivitaiKey, allowUncharacterizedSetting) {
   const diskPath = resolveImageDiskPath(imageRow);
   const diskMeta = await inspectDiskImageNativeMetadata(diskPath);
   const fileSizeBytes = diskMeta.fileExists ? diskMeta.fileSizeBytes : Number(imageRow.file_size || 0);
@@ -10697,7 +10673,7 @@ async function evaluateCivitaiShareEligibility(imageId) {
     `SELECT positive_prompt, negative_prompt, seed, steps, cfg, sampler, scheduler, checkpoint_name
        FROM image_metadata
        WHERE image_id = ?`
-  ).get(imageId);
+  ).get(imageRow.id);
   const linkedCharsRaw = db.prepare(
     `SELECT c.id, c.name, ic.status, COALESCE(c.allow_civitai_share, 0) AS allow_civitai_share
        FROM image_characters ic
@@ -10712,21 +10688,36 @@ async function evaluateCivitaiShareEligibility(imageId) {
     status: c.status,
     allowCivitaiShare: Boolean(c.allow_civitai_share)
   }));
-  const allowUncharacterizedSetting = getBoolSetting("allow_civitai_share_uncharacterized", false);
-  const hasCivitaiKey = Boolean(appConfig.civitaiApiKey && appConfig.civitaiApiKey.trim());
   const reasons = [];
+  let exclusionCode = null;
+  let exclusionReason = null;
   if (!hasCivitaiKey) {
     reasons.push("CIVITAI_API_KEY is not configured in the server environment.");
   }
-  if (imageRow.is_missing || !diskMeta.fileExists) {
+  if (imageRow.is_missing || imageRow.is_rejected) {
+    const msg = imageRow.is_rejected ? "Image is marked rejected." : "Image file is missing on disk.";
+    reasons.push(msg);
+    exclusionCode = "missing_or_rejected";
+    exclusionReason = imageRow.is_rejected ? "Rejected image" : "Missing on disk";
+  } else if (imageRow.is_uploaded_reference) {
+    reasons.push("Uploaded inspiration/reference images cannot be shared on Civitai.");
+    exclusionCode = "uploaded_reference";
+    exclusionReason = "Uploaded inspiration reference";
+  } else if (!diskMeta.fileExists) {
     reasons.push("Image file is missing on disk.");
+    exclusionCode = "missing_or_rejected";
+    exclusionReason = "Missing on disk";
   } else if (!diskMeta.hasNativeMetadata) {
     if (diskMeta.isStandaloneUpscale) {
       reasons.push(
         "Standalone upscaled PNG lacks original generation metadata. Select the original source image instead."
       );
+      exclusionCode = "standalone_upscale";
+      exclusionReason = "Standalone upscale";
     } else {
       reasons.push("Image file on disk does not contain native generation metadata.");
+      exclusionCode = "missing_native_metadata";
+      exclusionReason = "Missing native metadata";
     }
   }
   if (linkedCharacters.length > 0) {
@@ -10734,11 +10725,18 @@ async function evaluateCivitaiShareEligibility(imageId) {
     if (blockedChars.length > 0) {
       const names = blockedChars.map((c) => c.status === "suggested" ? `${c.name} (suggested)` : c.name).join(", ");
       reasons.push(`Share on CivitAI is disabled for character(s): ${names}.`);
+      if (!exclusionCode) {
+        exclusionCode = "character_restricted";
+        exclusionReason = `Character sharing disabled (${names})`;
+      }
     }
   } else if (!allowUncharacterizedSetting) {
     reasons.push("Sharing 0-character images is disabled in System Preferences.");
+    if (!exclusionCode) {
+      exclusionCode = "uncharacterized_disabled";
+      exclusionReason = "0-character sharing disabled";
+    }
   }
-  const sourceOriginalImageId = diskMeta.isStandaloneUpscale || !diskMeta.hasNativeMetadata ? await findEligibleSourceInSeries(imageId) : null;
   const loraRows = db.prepare(
     `SELECT il.lora_name AS filename, m.name AS model_name, m.lora_category,
               m.civitai_id, m.civitai_version_id, m.civitai_url, m.download_url
@@ -10746,28 +10744,18 @@ async function evaluateCivitaiShareEligibility(imageId) {
        LEFT JOIN models m ON m.id = il.model_id OR LOWER(m.filename) = LOWER(il.lora_name)
        WHERE il.image_id = ?
        ORDER BY CASE WHEN m.lora_category = 'character' THEN 0 ELSE 1 END, il.id ASC`
-  ).all(imageId);
+  ).all(imageRow.id);
   const modelRows = db.prepare(
     `SELECT im.model_name AS filename, im.model_type, m.name AS display_name,
               m.civitai_id, m.civitai_version_id, m.civitai_url, m.download_url
        FROM image_models im
        LEFT JOIN models m ON m.id = im.model_id OR LOWER(m.filename) = LOWER(im.model_name)
        WHERE im.image_id = ? AND im.model_type IN ('checkpoint', 'diffusion')`
-  ).all(imageId);
+  ).all(imageRow.id);
   const candidateModelVersions = [];
   const seenVersionIds = /* @__PURE__ */ new Set();
   const embeddedResourceNamesSet = /* @__PURE__ */ new Set();
   let hasRedResource = false;
-  const detectResourceDomain = (civitaiUrl, downloadUrl) => {
-    const parsedCivitai = parseIdsFromCivitaiUrl(civitaiUrl);
-    const parsedDownload = parseIdsFromCivitaiUrl(downloadUrl);
-    const domain = parsedCivitai.domain === "civitai.red" || parsedDownload.domain === "civitai.red" ? "civitai.red" : "civitai.com";
-    return {
-      modelId: parsedCivitai.modelId || parsedDownload.modelId,
-      versionId: parsedCivitai.versionId || parsedDownload.versionId,
-      domain
-    };
-  };
   const pushCandidate = (rawVerId, civitaiUrl, downloadUrl, civitaiId, label, modelName, modelType, source) => {
     const parsed = detectResourceDomain(civitaiUrl, downloadUrl);
     if (parsed.domain === "civitai.red") {
@@ -10831,6 +10819,239 @@ async function evaluateCivitaiShareEligibility(imageId) {
        WHERE it.image_content_hash = ?
        ORDER BY t.name ASC`
   ).all(imageRow.content_hash);
+  const stem = path15.parse(imageRow.filename).name;
+  const defaultTitle = linkedCharacters.length > 0 ? `${linkedCharacters.map((c) => c.name).join(" & ")} \u2014 ${stem}` : stem;
+  return {
+    eligibleForContent: exclusionCode === null,
+    eligible: reasons.length === 0,
+    reasons,
+    exclusionCode,
+    exclusionReason,
+    hasNativeMetadata: diskMeta.hasNativeMetadata,
+    isStandaloneUpscale: diskMeta.isStandaloneUpscale,
+    fileSizeBytes,
+    width: Number(imageRow.width || 0),
+    height: Number(imageRow.height || 0),
+    format: String(imageRow.format || path15.extname(imageRow.filename).replace(/^\./, "")),
+    linkedCharacters,
+    prefilledTitle: defaultTitle,
+    prefilledDescription: metaRow?.positive_prompt ? String(metaRow.positive_prompt).trim() : "",
+    prefilledTags: tagRows.map((t) => t.name),
+    recommendedModelVersionId: candidateModelVersions[0]?.modelVersionId ?? null,
+    recommendedDomain,
+    candidateModelVersions,
+    embeddedResourceNames: Array.from(embeddedResourceNamesSet)
+  };
+}
+var GENERATION_NODE_RE, UPSCALE_NODE_RE, RED_VISUAL_TAG_RE;
+var init_civitaiShareCore = __esm({
+  "src/server/services/civitai/civitaiShareCore.ts"() {
+    init_db();
+    init_pngMetadataParser();
+    init_scannerService();
+    init_civitaiHttpAndParse();
+    GENERATION_NODE_RE = /KSampler|SamplerCustom|UNETLoader|CheckpointLoader|CLIPTextEncode|TextGenerate|RandomNoise|BasicGuider|CFGGuider/i;
+    UPSCALE_NODE_RE = /UpscaleModelLoader|ImageUpscaleWithModel/i;
+    RED_VISUAL_TAG_RE = /^(nude|completely_nude|topless|bottomless|nipples|areolae|pussy|penis|testicles|vaginal|anal|fellatio|cunnilingus|paizuri|sex|explicit|genitals|pubic_hair|cum|erection|nsfw)$/i;
+  }
+});
+
+// src/server/services/civitai/civitaiShareStackEligibility.ts
+async function evaluateCivitaiStackShareEligibility(imageId, options) {
+  const memberships = db.prepare(
+    `SELECT isi.series_id, s.poster_image_id,
+              (SELECT MAX(step_order) FROM image_series_items WHERE series_id = isi.series_id) AS max_step
+       FROM image_series_items isi
+       JOIN image_series s ON s.id = isi.series_id
+       WHERE isi.image_id = ?
+       ORDER BY (isi.series_id = COALESCE(?, -1)) DESC,
+                (s.poster_image_id = ?) DESC,
+                (isi.step_order = max_step) DESC,
+                isi.series_id DESC
+       LIMIT 1`
+  ).all(imageId, options.preferredSeriesId ?? null, imageId);
+  if (memberships.length === 0) {
+    return null;
+  }
+  const chosenSeriesId = memberships[0].series_id;
+  const seriesPosterId = memberships[0].poster_image_id;
+  const memberRows = db.prepare(
+    `SELECT isi.series_id, s.poster_image_id, isi.step_order,
+              i.id, i.content_hash, i.relative_path, i.filename, i.file_size,
+              i.width, i.height, i.format, i.is_missing,
+              COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference,
+              COALESCE(r.is_rejected, 0) AS is_rejected,
+              COALESCE(r.is_favorite, 0) AS is_favorite
+       FROM image_series_items isi
+       JOIN image_series s ON s.id = isi.series_id
+       JOIN images i ON i.id = isi.image_id
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE isi.series_id = ?
+       ORDER BY isi.step_order ASC, isi.image_id ASC`
+  ).all(chosenSeriesId);
+  if (memberRows.length < 2) {
+    return null;
+  }
+  const seenImageIds = /* @__PURE__ */ new Set();
+  const eligibleByStep = [];
+  const excludedItems = [];
+  for (const row of memberRows) {
+    if (seenImageIds.has(row.id)) continue;
+    seenImageIds.add(row.id);
+    const inspected = await inspectCoreImageShare(
+      row,
+      options.hasCivitaiKey,
+      options.allowUncharacterizedSetting
+    );
+    if (!inspected.eligibleForContent) {
+      excludedItems.push({
+        imageId: row.id,
+        stepOrder: row.step_order,
+        filename: row.filename,
+        reasonCode: inspected.exclusionCode || "missing_native_metadata",
+        reason: inspected.exclusionReason || inspected.reasons[0] || "Not eligible"
+      });
+      continue;
+    }
+    const hashParam = row.content_hash ? `?h=${String(row.content_hash).slice(0, 12)}` : "";
+    eligibleByStep.push({
+      imageId: row.id,
+      stepOrder: row.step_order,
+      filename: row.filename,
+      thumbnailUrl: `/api/images/${row.id}/thumbnail${hashParam}`,
+      width: inspected.width,
+      height: inspected.height,
+      fileSizeBytes: inspected.fileSizeBytes,
+      format: inspected.format,
+      isFavorite: Boolean(row.is_favorite),
+      isPoster: false,
+      prefilledTitle: inspected.prefilledTitle,
+      prefilledDescription: inspected.prefilledDescription,
+      tags: inspected.prefilledTags,
+      recommendedDomain: inspected.recommendedDomain,
+      recommendedModelVersionId: inspected.recommendedModelVersionId,
+      candidateModelVersions: inspected.candidateModelVersions,
+      embeddedResourceNames: inspected.embeddedResourceNames
+    });
+  }
+  const posterItem = (seriesPosterId ? eligibleByStep.find((item) => item.imageId === seriesPosterId && item.isFavorite) : void 0) || [...eligibleByStep].reverse().find((item) => item.isFavorite) || null;
+  if (posterItem) {
+    posterItem.isPoster = true;
+  }
+  const orderedEligible = posterItem ? [posterItem, ...eligibleByStep.filter((item) => item.imageId !== posterItem.imageId)] : eligibleByStep;
+  const representativeItem = posterItem || eligibleByStep[eligibleByStep.length - 1] || null;
+  const mergedTags = [];
+  const seenTagKeys = /* @__PURE__ */ new Set();
+  const orderedForMeta = representativeItem ? [representativeItem, ...orderedEligible.filter((i) => i.imageId !== representativeItem.imageId)] : orderedEligible;
+  const mergedCandidates = [];
+  const seenVersionIds = /* @__PURE__ */ new Set();
+  const embeddedResourcesSet = /* @__PURE__ */ new Set();
+  let recommendedDomain = "civitai.com";
+  for (const item of orderedForMeta) {
+    if (item.recommendedDomain === "civitai.red") {
+      recommendedDomain = "civitai.red";
+    }
+    for (const tag of item.tags) {
+      const key = tag.toLowerCase();
+      if (!seenTagKeys.has(key)) {
+        seenTagKeys.add(key);
+        mergedTags.push(tag);
+      }
+    }
+    for (const cand of item.candidateModelVersions) {
+      if (!seenVersionIds.has(cand.modelVersionId)) {
+        seenVersionIds.add(cand.modelVersionId);
+        mergedCandidates.push(cand);
+      }
+    }
+    for (const resName of item.embeddedResourceNames) {
+      embeddedResourcesSet.add(resName);
+    }
+  }
+  const eligibleCount = orderedEligible.length;
+  const exceedsLimit = eligibleCount > CIVITAI_MAX_POST_IMAGES;
+  let disabledReason = null;
+  if (!options.hasCivitaiKey) {
+    disabledReason = "CIVITAI_API_KEY is not configured in the server environment.";
+  } else if (exceedsLimit) {
+    disabledReason = `Civitai posts allow up to ${CIVITAI_MAX_POST_IMAGES} images (${eligibleCount} eligible in this stack).`;
+  } else if (eligibleCount === 1) {
+    disabledReason = "Requires at least 2 eligible images in this stack (1 eligible after exclusions).";
+  } else if (eligibleCount === 0) {
+    disabledReason = "No eligible images remain in this stack after exclusions.";
+  }
+  return {
+    seriesId: chosenSeriesId,
+    eligible: options.hasCivitaiKey && eligibleCount >= 2 && !exceedsLimit,
+    exceedsLimit,
+    disabledReason,
+    totalMembers: seenImageIds.size,
+    eligibleCount,
+    posterImageId: posterItem?.imageId ?? null,
+    representativeImageId: representativeItem?.imageId ?? null,
+    prefilledTitle: representativeItem?.prefilledTitle ?? "",
+    prefilledDescription: representativeItem?.prefilledDescription ?? "",
+    prefilledTags: mergedTags,
+    recommendedModelVersionId: representativeItem?.recommendedModelVersionId ?? mergedCandidates[0]?.modelVersionId ?? null,
+    recommendedDomain,
+    candidateModelVersions: mergedCandidates,
+    embeddedResourceNames: Array.from(embeddedResourcesSet),
+    eligibleItems: orderedEligible,
+    excludedItems
+  };
+}
+var CIVITAI_MAX_POST_IMAGES;
+var init_civitaiShareStackEligibility = __esm({
+  "src/server/services/civitai/civitaiShareStackEligibility.ts"() {
+    init_db();
+    init_civitaiShareCore();
+    CIVITAI_MAX_POST_IMAGES = 20;
+  }
+});
+
+// src/server/services/civitai/civitaiShareEligibility.ts
+async function findEligibleSourceInSeries(imageId) {
+  const seriesRows = db.prepare(
+    `SELECT sib.image_id, i.relative_path, COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference
+       FROM image_series_items cur
+       JOIN image_series_items sib ON sib.series_id = cur.series_id
+       JOIN images i ON i.id = sib.image_id
+       WHERE cur.image_id = ?
+         AND sib.image_id != ?
+         AND i.is_missing = 0
+         AND COALESCE(i.is_uploaded_reference, 0) = 0
+       ORDER BY sib.step_order ASC, sib.image_id ASC`
+  ).all(imageId, imageId);
+  for (const row of seriesRows) {
+    const diskPath = resolveImageDiskPath(row);
+    const inspected = await inspectDiskImageNativeMetadata(diskPath);
+    if (inspected.fileExists && inspected.hasNativeMetadata) {
+      return row.image_id;
+    }
+  }
+  return null;
+}
+async function evaluateCivitaiShareEligibility(imageId, options) {
+  const imageRow = db.prepare(
+    `SELECT i.id, i.content_hash, i.relative_path, i.filename, i.file_size,
+              i.width, i.height, i.format, i.is_missing,
+              COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference,
+              COALESCE(r.is_rejected, 0) AS is_rejected
+       FROM images i
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       WHERE i.id = ?`
+  ).get(imageId);
+  if (!imageRow) {
+    throw new Error("Image not found");
+  }
+  const allowUncharacterizedSetting = getBoolSetting("allow_civitai_share_uncharacterized", false);
+  const hasCivitaiKey = Boolean(appConfig.civitaiApiKey && appConfig.civitaiApiKey.trim());
+  const core = await inspectCoreImageShare(
+    imageRow,
+    hasCivitaiKey,
+    allowUncharacterizedSetting
+  );
+  const sourceOriginalImageId = core.isStandaloneUpscale || !core.hasNativeMetadata ? await findEligibleSourceInSeries(imageId) : null;
   const draftRows = db.prepare(
     `SELECT *
        FROM image_civitai_drafts
@@ -10838,43 +11059,44 @@ async function evaluateCivitaiShareEligibility(imageId) {
        ORDER BY id DESC`
   ).all(imageId, imageRow.content_hash);
   const existingDrafts = draftRows.map(mapDraftRowToRecord);
-  const defaultTitle = linkedCharacters.length > 0 ? `${linkedCharacters.map((c) => c.name).join(" & ")} \u2014 ${path15.parse(imageRow.filename).name}` : path15.parse(imageRow.filename).name;
-  return {
-    eligible: reasons.length === 0,
+  const stack = options?.includeStack === false ? null : await evaluateCivitaiStackShareEligibility(imageId, {
+    preferredSeriesId: options?.seriesId,
     hasCivitaiKey,
-    reasons,
-    hasNativeMetadata: diskMeta.hasNativeMetadata,
-    isStandaloneUpscale: diskMeta.isStandaloneUpscale,
+    allowUncharacterizedSetting
+  });
+  return {
+    eligible: core.eligible,
+    hasCivitaiKey,
+    reasons: core.reasons,
+    hasNativeMetadata: core.hasNativeMetadata,
+    isStandaloneUpscale: core.isStandaloneUpscale,
     sourceOriginalImageId,
-    fileSizeBytes,
-    width: Number(imageRow.width || 0),
-    height: Number(imageRow.height || 0),
-    format: String(imageRow.format || path15.extname(imageRow.filename).replace(/^\./, "")),
-    linkedCharacters,
+    fileSizeBytes: core.fileSizeBytes,
+    width: core.width,
+    height: core.height,
+    format: core.format,
+    linkedCharacters: core.linkedCharacters,
     allowUncharacterizedSetting,
-    prefilledTitle: defaultTitle,
-    prefilledDescription: buildPrefilledDescription(metaRow),
-    prefilledTags: tagRows.map((t) => t.name),
-    recommendedModelVersionId: candidateModelVersions[0]?.modelVersionId ?? null,
-    recommendedDomain,
-    candidateModelVersions,
-    embeddedResourceNames: Array.from(embeddedResourceNamesSet),
-    existingDrafts
+    prefilledTitle: core.prefilledTitle,
+    prefilledDescription: core.prefilledDescription,
+    prefilledTags: core.prefilledTags,
+    recommendedModelVersionId: core.recommendedModelVersionId,
+    recommendedDomain: core.recommendedDomain,
+    candidateModelVersions: core.candidateModelVersions,
+    embeddedResourceNames: core.embeddedResourceNames,
+    existingDrafts,
+    stack
   };
 }
-var GENERATION_NODE_RE, UPSCALE_NODE_RE, RED_VISUAL_TAG_RE;
 var init_civitaiShareEligibility = __esm({
   "src/server/services/civitai/civitaiShareEligibility.ts"() {
     init_db();
     init_config();
-    init_pngMetadataParser();
     init_scannerService();
     init_settingsService();
-    init_civitaiHttpAndParse();
     init_civitaiActivitySyncService();
-    GENERATION_NODE_RE = /KSampler|SamplerCustom|UNETLoader|CheckpointLoader|CLIPTextEncode|TextGenerate|RandomNoise|BasicGuider|CFGGuider/i;
-    UPSCALE_NODE_RE = /UpscaleModelLoader|ImageUpscaleWithModel/i;
-    RED_VISUAL_TAG_RE = /^(nude|completely_nude|topless|bottomless|nipples|areolae|pussy|penis|testicles|vaginal|anal|fellatio|cunnilingus|paizuri|sex|explicit|genitals|pubic_hair|cum|erection|nsfw)$/i;
+    init_civitaiShareCore();
+    init_civitaiShareStackEligibility();
   }
 });
 
@@ -11254,15 +11476,17 @@ var init_civitaiMcpClient = __esm({
         };
       }
       async createDraftPost(params) {
+        const imageList = Array.isArray(params.images) && params.images.length > 0 ? params.images : params.image ? [params.image] : [];
+        if (imageList.length === 0 || imageList.length > 20) {
+          throw new Error(`Civitai create_post requires between 1 and 20 images (got ${imageList.length}).`);
+        }
         const args = {
-          images: [
-            {
-              uuid: params.image.uuid,
-              width: params.image.width,
-              height: params.image.height,
-              type: "image"
-            }
-          ],
+          images: imageList.map((img) => ({
+            uuid: img.uuid,
+            width: img.width,
+            height: img.height,
+            type: "image"
+          })),
           publish: false
           // Always draft-only; never auto-publish
         };
@@ -11286,15 +11510,79 @@ var init_civitaiMcpClient = __esm({
 });
 
 // src/server/services/civitai/civitaiDraftShareService.ts
+async function resolveDraftDomain(params) {
+  let resolvedDomain = params.explicitDomain === "civitai.red" || params.explicitDomain === "civitai.com" ? params.explicitDomain : params.recommendedDomain;
+  if (!params.explicitDomain && resolvedDomain === "civitai.com" && !params.skipNetworkProbe) {
+    const candidatesToProbe = params.modelVersionId ? params.candidateModelVersions.filter((c) => c.modelVersionId === params.modelVersionId) : params.candidateModelVersions;
+    for (const cand of candidatesToProbe) {
+      if (cand.domain === "civitai.red") {
+        return "civitai.red";
+      }
+      if (cand.civitaiId) {
+        const probed = await probeCivitaiWebDomain(cand.civitaiId, "civitai.com");
+        if (probed === "civitai.red") {
+          return "civitai.red";
+        }
+      }
+    }
+  }
+  return resolvedDomain;
+}
+function normalizeTagList(rawTags) {
+  if (!Array.isArray(rawTags)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const clean = [];
+  for (const raw of rawTags) {
+    const trimmed = String(raw).trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      clean.push(trimmed);
+    }
+  }
+  return clean;
+}
+function resolveSelectedStackItems(eligibleItems, requestedIds) {
+  if (!Array.isArray(requestedIds)) {
+    return eligibleItems;
+  }
+  const eligibleIdSet = new Set(eligibleItems.map((i) => i.imageId));
+  const wantedIds = /* @__PURE__ */ new Set();
+  for (const rawId of requestedIds) {
+    const id = Number(rawId);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    if (!eligibleIdSet.has(id)) {
+      throw new CivitaiShareValidationError(
+        `Stack image #${id} is not eligible to share on Civitai.`
+      );
+    }
+    wantedIds.add(id);
+  }
+  const selected = eligibleItems.filter((item) => wantedIds.has(item.imageId));
+  if (selected.length === 0) {
+    throw new CivitaiShareValidationError("Select at least 1 eligible stack image to upload.");
+  }
+  if (selected.length > CIVITAI_MAX_POST_IMAGES) {
+    throw new CivitaiShareValidationError(
+      `Civitai posts allow up to ${CIVITAI_MAX_POST_IMAGES} images (${selected.length} selected).`
+    );
+  }
+  return selected;
+}
 async function shareImageAsCivitaiDraft(imageId, request = {}, deps) {
+  const shareScope = request.shareScope === "stack" ? "stack" : "single";
   const eligibility = await evaluateCivitaiShareEligibility(imageId);
+  if (shareScope === "stack") {
+    return shareStackAsCivitaiDraft(eligibility, request, deps);
+  }
   if (!eligibility.eligible) {
     throw new CivitaiShareValidationError(
       eligibility.reasons[0] || "This image is not eligible to share on Civitai."
     );
   }
   const imageRow = db.prepare(
-    `SELECT id, content_hash, relative_path, width, height, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference
+    `SELECT id, content_hash, relative_path, width, height
        FROM images WHERE id = ?`
   ).get(imageId);
   if (!imageRow) {
@@ -11316,25 +11604,15 @@ async function shareImageAsCivitaiDraft(imageId, request = {}, deps) {
     base64Data: prepared.base64Data,
     contentType: prepared.contentType
   });
-  const cleanTags = Array.isArray(request.tags) ? Array.from(new Set(request.tags.map((t) => String(t).trim()).filter(Boolean))) : eligibility.prefilledTags;
+  const cleanTags = Array.isArray(request.tags) ? normalizeTagList(request.tags) : eligibility.prefilledTags;
   const modelVersionId = request.modelVersionId === null ? null : request.modelVersionId !== void 0 && Number(request.modelVersionId) > 0 ? Number(request.modelVersionId) : eligibility.recommendedModelVersionId;
-  let resolvedDomain = request.targetDomain === "civitai.red" || request.targetDomain === "civitai.com" ? request.targetDomain : eligibility.recommendedDomain;
-  if (!request.targetDomain && resolvedDomain === "civitai.com" && !deps?.fetchFn) {
-    const candidatesToProbe = modelVersionId ? eligibility.candidateModelVersions.filter((c) => c.modelVersionId === modelVersionId) : eligibility.candidateModelVersions;
-    for (const cand of candidatesToProbe) {
-      if (cand.domain === "civitai.red") {
-        resolvedDomain = "civitai.red";
-        break;
-      }
-      if (cand.civitaiId) {
-        const probed = await probeCivitaiWebDomain(cand.civitaiId, "civitai.com");
-        if (probed === "civitai.red") {
-          resolvedDomain = "civitai.red";
-          break;
-        }
-      }
-    }
-  }
+  const resolvedDomain = await resolveDraftDomain({
+    explicitDomain: request.targetDomain,
+    recommendedDomain: eligibility.recommendedDomain,
+    candidateModelVersions: eligibility.candidateModelVersions,
+    modelVersionId,
+    skipNetworkProbe: Boolean(deps?.fetchFn)
+  });
   const title = (request.title ?? eligibility.prefilledTitle).trim();
   const detail = (request.detail ?? eligibility.prefilledDescription).trim();
   const created = await client.createDraftPost({
@@ -11342,11 +11620,13 @@ async function shareImageAsCivitaiDraft(imageId, request = {}, deps) {
     detail,
     tags: cleanTags,
     modelVersionId,
-    image: {
-      uuid: uploaded.uuid,
-      width: uploaded.width || prepared.width || 1024,
-      height: uploaded.height || prepared.height || 1024
-    }
+    images: [
+      {
+        uuid: uploaded.uuid,
+        width: uploaded.width || prepared.width || 1024,
+        height: uploaded.height || prepared.height || 1024
+      }
+    ]
   });
   const draftUrl = `https://${resolvedDomain}/posts/${created.postId}/edit`;
   const insertInfo = db.prepare(
@@ -11366,12 +11646,149 @@ async function shareImageAsCivitaiDraft(imageId, request = {}, deps) {
   const draft = mapDraftRowToRecord(row);
   return {
     ok: true,
+    shareScope: "single",
     postId: created.postId,
     domain: resolvedDomain,
     draftUrl,
     uploadMode,
+    uploadedCount: 1,
+    jpegFallbackCount: uploadMode === "jpeg_exif" ? 1 : 0,
     processingImageIds: created.processingImageIds,
     draft
+  };
+}
+async function shareStackAsCivitaiDraft(eligibility, request, deps) {
+  const stack = eligibility.stack;
+  if (!stack) {
+    throw new CivitaiShareValidationError("This image does not belong to a multi-image stack.");
+  }
+  if (!stack.eligible) {
+    throw new CivitaiShareValidationError(
+      stack.disabledReason || "This stack is not eligible to share on Civitai."
+    );
+  }
+  const selectedItems = resolveSelectedStackItems(stack.eligibleItems, request.selectedImageIds);
+  const representative = selectedItems.find((item) => item.isPoster) || [...selectedItems].sort((a, b) => b.stepOrder - a.stepOrder)[0];
+  const mergedTags = normalizeTagList(selectedItems.flatMap((i) => i.tags));
+  const cleanTags = Array.isArray(request.tags) ? normalizeTagList(request.tags) : mergedTags;
+  const selectedCandidates = [];
+  const seenCandidateIds = /* @__PURE__ */ new Set();
+  const orderedForCandidates = [
+    representative,
+    ...selectedItems.filter((i) => i.imageId !== representative.imageId)
+  ];
+  let recommendedDomain = "civitai.com";
+  for (const item of orderedForCandidates) {
+    if (item.recommendedDomain === "civitai.red") {
+      recommendedDomain = "civitai.red";
+    }
+    for (const cand of item.candidateModelVersions) {
+      if (!seenCandidateIds.has(cand.modelVersionId)) {
+        seenCandidateIds.add(cand.modelVersionId);
+        selectedCandidates.push(cand);
+      }
+    }
+  }
+  const modelVersionId = request.modelVersionId === null ? null : request.modelVersionId !== void 0 && Number(request.modelVersionId) > 0 ? Number(request.modelVersionId) : representative.recommendedModelVersionId ?? selectedCandidates[0]?.modelVersionId ?? null;
+  const resolvedDomain = await resolveDraftDomain({
+    explicitDomain: request.targetDomain,
+    recommendedDomain,
+    candidateModelVersions: selectedCandidates,
+    modelVersionId,
+    skipNetworkProbe: Boolean(deps?.fetchFn)
+  });
+  const title = (request.title ?? representative.prefilledTitle).trim();
+  const detail = (request.detail ?? representative.prefilledDescription).trim();
+  const initialMode = request.uploadMode === "jpeg_exif" ? "jpeg_exif" : "original_png";
+  const client = new CivitaiMcpClient(appConfig.civitaiApiKey, deps);
+  await client.initialize();
+  await client.verifyAccountReady();
+  const uploadedEntries = [];
+  let jpegFallbackCount = 0;
+  for (const item of selectedItems) {
+    const imageRow = db.prepare("SELECT id, content_hash, relative_path, width, height FROM images WHERE id = ?").get(item.imageId);
+    if (!imageRow) {
+      throw new CivitaiShareValidationError(`Stack image #${item.imageId} was not found.`);
+    }
+    const diskPath = resolveImageDiskPath(imageRow);
+    const width = Number(imageRow.width || item.width || 0);
+    const height = Number(imageRow.height || item.height || 0);
+    let usedMode = initialMode;
+    let prepared = await prepareCivitaiImagePayload(item.imageId, diskPath, width, height, initialMode);
+    let uploaded;
+    try {
+      uploaded = await client.uploadImage({
+        base64Data: prepared.base64Data,
+        contentType: prepared.contentType
+      });
+    } catch (err) {
+      if (err instanceof CivitaiPayloadTooLargeError && initialMode === "original_png") {
+        usedMode = "jpeg_exif";
+        jpegFallbackCount += 1;
+        prepared = await prepareCivitaiImagePayload(item.imageId, diskPath, width, height, "jpeg_exif");
+        uploaded = await client.uploadImage({
+          base64Data: prepared.base64Data,
+          contentType: prepared.contentType
+        });
+      } else {
+        throw err;
+      }
+    }
+    uploadedEntries.push({
+      imageId: item.imageId,
+      contentHash: imageRow.content_hash,
+      uploadMode: usedMode,
+      uploaded: {
+        uuid: uploaded.uuid,
+        width: uploaded.width || prepared.width || 1024,
+        height: uploaded.height || prepared.height || 1024
+      }
+    });
+  }
+  const created = await client.createDraftPost({
+    title,
+    detail,
+    tags: cleanTags,
+    modelVersionId,
+    images: uploadedEntries.map((e) => e.uploaded)
+  });
+  const draftUrl = `https://${resolvedDomain}/posts/${created.postId}/edit`;
+  const insertStmt = db.prepare(
+    `INSERT INTO image_civitai_drafts
+      (image_id, image_content_hash, civitai_post_id, draft_url, title, upload_mode, model_version_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  let firstRowId = 0;
+  const tx = db.transaction(() => {
+    for (const entry of uploadedEntries) {
+      const info = insertStmt.run(
+        entry.imageId,
+        entry.contentHash,
+        created.postId,
+        draftUrl,
+        title,
+        entry.uploadMode,
+        modelVersionId
+      );
+      if (firstRowId === 0) {
+        firstRowId = Number(info.lastInsertRowid);
+      }
+    }
+  });
+  tx();
+  const row = db.prepare("SELECT * FROM image_civitai_drafts WHERE id = ?").get(firstRowId);
+  const summaryMode = jpegFallbackCount === uploadedEntries.length ? "jpeg_exif" : initialMode;
+  return {
+    ok: true,
+    shareScope: "stack",
+    postId: created.postId,
+    domain: resolvedDomain,
+    draftUrl,
+    uploadMode: summaryMode,
+    uploadedCount: uploadedEntries.length,
+    jpegFallbackCount,
+    processingImageIds: created.processingImageIds,
+    draft: mapDraftRowToRecord(row)
   };
 }
 var CivitaiShareValidationError;
@@ -11383,6 +11800,7 @@ var init_civitaiDraftShareService = __esm({
     init_civitaiHttpAndParse();
     init_civitaiActivitySyncService();
     init_civitaiShareEligibility();
+    init_civitaiShareStackEligibility();
     init_civitaiImagePayload();
     init_civitaiMcpClient();
     CivitaiShareValidationError = class extends Error {
@@ -11747,9 +12165,11 @@ var init_imagesRoutes = __esm({
     imagesRouter.get("/:id/civitai-share", async (req, res) => {
       try {
         const imageId = Number(req.params.id);
+        const seriesIdRaw = req.query.seriesId !== void 0 ? Number(req.query.seriesId) : null;
+        const seriesId = seriesIdRaw && Number.isFinite(seriesIdRaw) ? seriesIdRaw : null;
         await syncCivitaiActivityForImage(imageId).catch(() => {
         });
-        const status = await evaluateCivitaiShareEligibility(imageId);
+        const status = await evaluateCivitaiShareEligibility(imageId, { seriesId });
         res.json(status);
       } catch (err) {
         const message = err?.message || "Failed to evaluate Civitai sharing eligibility";

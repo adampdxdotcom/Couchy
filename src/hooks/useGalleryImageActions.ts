@@ -31,6 +31,8 @@ interface UseGalleryImageActionsParams {
   lmStudioOnline: boolean;
   pushToast: (text: string, type?: AppToastMessage['type']) => void;
   onRefreshAll: () => Promise<void>;
+  beginRejectMutation?: (imageId: number, nextRejected: boolean) => number;
+  settleRejectMutation?: (imageId: number, token: number, committed: boolean) => void;
   setQuickGenPrefill: React.Dispatch<React.SetStateAction<QuickGenPrefill | null>>;
 }
 
@@ -53,6 +55,8 @@ export function useGalleryImageActions({
   lmStudioOnline,
   pushToast,
   onRefreshAll,
+  beginRejectMutation,
+  settleRejectMutation,
   setQuickGenPrefill,
 }: UseGalleryImageActionsParams) {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -267,6 +271,7 @@ export function useGalleryImageActions({
 
   const handleQuickReject = useCallback(
     async (id: number, nextRejected: boolean) => {
+      const mutationToken = beginRejectMutation ? beginRejectMutation(id, nextRejected) : 0;
       setAllImages((prev) =>
         prev.map((img) => (img.id === id ? { ...img, isRejected: nextRejected } : img))
       );
@@ -281,6 +286,9 @@ export function useGalleryImageActions({
       });
       try {
         await api.updateImageAnnotations(id, { isRejected: nextRejected });
+        if (settleRejectMutation && mutationToken) {
+          settleRejectMutation(id, mutationToken, true);
+        }
         if (!nextRejected && filters.rejectedMode === 'exclude') {
           await onRefreshAll();
         }
@@ -291,12 +299,23 @@ export function useGalleryImageActions({
           'info'
         );
       } catch (err: any) {
+        if (settleRejectMutation && mutationToken) {
+          settleRejectMutation(id, mutationToken, false);
+        }
         console.error('Failed to update rejection status:', err);
         pushToast('Failed to update rejection status', 'error');
         onRefreshAll();
       }
     },
-    [filters.rejectedMode, onRefreshAll, pushToast, setAllImages, setImages]
+    [
+      beginRejectMutation,
+      filters.rejectedMode,
+      onRefreshAll,
+      pushToast,
+      setAllImages,
+      setImages,
+      settleRejectMutation,
+    ]
   );
 
   const handleToggleSelect = useCallback(

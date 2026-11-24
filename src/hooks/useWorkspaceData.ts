@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client.ts';
 import { normalizePillTypeSettings } from '../shared/pillSettings.ts';
+import { OptimisticRejectionTracker } from './optimisticRejectionTracker.ts';
 import type {
   CharacterProfile,
   GalleryFilterState,
@@ -99,7 +100,29 @@ export function useWorkspaceData() {
   allImagesRef.current = allImages;
   const filterQuerySeqRef = useRef<number>(0);
   const filterAbortRef = useRef<AbortController | null>(null);
+  const metadataQuerySeqRef = useRef<number>(0);
+  const metadataAbortRef = useRef<AbortController | null>(null);
+  const rejectionTrackerRef = useRef<OptimisticRejectionTracker>(new OptimisticRejectionTracker());
   const prevQueryRef = useRef<string>(filters.query);
+
+  const beginRejectMutation = useCallback((imageId: number, nextRejected: boolean) => {
+    return rejectionTrackerRef.current.beginMutation(imageId, nextRejected);
+  }, []);
+
+  const settleRejectMutation = useCallback(
+    (imageId: number, token: number, committed: boolean) => {
+      rejectionTrackerRef.current.settleMutation(imageId, token, committed);
+    },
+    []
+  );
+
+  const cancelPendingMetadataQuery = useCallback(() => {
+    metadataQuerySeqRef.current += 1;
+    if (metadataAbortRef.current) {
+      metadataAbortRef.current.abort();
+      metadataAbortRef.current = null;
+    }
+  }, []);
 
   const cancelPendingFilterQuery = useCallback(() => {
     filterQuerySeqRef.current += 1;
@@ -110,11 +133,24 @@ export function useWorkspaceData() {
   }, []);
 
   const loadMetadataAndEntities = useCallback(async () => {
+    cancelPendingMetadataQuery();
+    const seq = metadataQuerySeqRef.current;
+    const controller = new AbortController();
+    metadataAbortRef.current = controller;
+    const queryTicket = rejectionTrackerRef.current.beginQuery();
+
     // Prioritize querying gallery images immediately so cards render without waiting for secondary metadata
     const imagesPromise = api
-      .queryImages({ rejectedMode: 'include', archivedMode: 'include' })
+      .queryImages(
+        { rejectedMode: 'include', archivedMode: 'include' },
+        { signal: controller.signal }
+      )
       .then((unfilteredRes) => {
-        const allItems = unfilteredRes.items || [];
+        if (seq !== metadataQuerySeqRef.current) return;
+        const allItems = rejectionTrackerRef.current.reconcileAllImages(
+          unfilteredRes.items || [],
+          queryTicket.startEpoch
+        );
         allImagesRef.current = allItems;
         setAllImages(allItems);
         if (isDefaultFilters(filtersRef.current)) {
@@ -122,11 +158,18 @@ export function useWorkspaceData() {
           setImages(allItems.filter((img) => !img.isRejected && !img.isArchived));
         }
       })
-      .catch((err) => {
+      .catch((err: any) => {
+        if (err?.name === 'AbortError' || seq !== metadataQuerySeqRef.current) return;
         console.error('Failed to query images:', err);
       })
       .finally(() => {
-        setIsLoadingImages(false);
+        rejectionTrackerRef.current.endQuery(queryTicket.queryId);
+        if (seq === metadataQuerySeqRef.current) {
+          if (metadataAbortRef.current === controller) {
+            metadataAbortRef.current = null;
+          }
+          setIsLoadingImages(false);
+        }
       });
 
     const metaPromise = Promise.allSettled([
@@ -153,7 +196,7 @@ export function useWorkspaceData() {
     });
 
     await Promise.allSettled([imagesPromise, metaPromise]);
-  }, [cancelPendingFilterQuery]);
+  }, [cancelPendingMetadataQuery, cancelPendingFilterQuery]);
 
   const loadFilteredImages = useCallback(
     async (targetFilters: GalleryFilterState, options?: { silent?: boolean }) => {
@@ -171,6 +214,7 @@ export function useWorkspaceData() {
 
       const controller = new AbortController();
       filterAbortRef.current = controller;
+      const queryTicket = rejectionTrackerRef.current.beginQuery();
 
       if (!options?.silent) {
         setIsLoadingImages(true);
@@ -178,11 +222,17 @@ export function useWorkspaceData() {
       try {
         const res = await api.queryImages(targetFilters, { signal: controller.signal });
         if (seq !== filterQuerySeqRef.current) return;
-        setImages(res.items || []);
+        const reconciled = rejectionTrackerRef.current.reconcileFilteredImages(
+          res.items || [],
+          queryTicket.startEpoch,
+          targetFilters.rejectedMode
+        );
+        setImages(reconciled);
       } catch (err: any) {
         if (err?.name === 'AbortError' || seq !== filterQuerySeqRef.current) return;
         console.error('Failed to query filtered images:', err);
       } finally {
+        rejectionTrackerRef.current.endQuery(queryTicket.queryId);
         if (seq === filterQuerySeqRef.current) {
           if (filterAbortRef.current === controller) {
             filterAbortRef.current = null;
@@ -197,9 +247,10 @@ export function useWorkspaceData() {
   useEffect(() => {
     loadMetadataAndEntities();
     return () => {
+      cancelPendingMetadataQuery();
       cancelPendingFilterQuery();
     };
-  }, [loadMetadataAndEntities, cancelPendingFilterQuery]);
+  }, [loadMetadataAndEntities, cancelPendingMetadataQuery, cancelPendingFilterQuery]);
 
   useEffect(() => {
     const queryChanged = prevQueryRef.current !== filters.query;
@@ -207,8 +258,8 @@ export function useWorkspaceData() {
 
     if (isDefaultFilters(filters)) {
       cancelPendingFilterQuery();
-      if (allImages.length > 0) {
-        setImages(allImages.filter((img) => !img.isRejected && !img.isArchived));
+      if (allImagesRef.current.length > 0) {
+        setImages(allImagesRef.current.filter((img) => !img.isRejected && !img.isArchived));
       }
       setIsLoadingImages(false);
       return;
@@ -217,17 +268,17 @@ export function useWorkspaceData() {
     // Debounce active text typing so intermediate keystrokes don't race; run filter toggles immediately
     const delayMs = queryChanged && filters.query.trim().length > 0 ? 180 : 0;
     if (delayMs === 0) {
-      void loadFilteredImages(filters, { silent: allImages.length > 0 });
+      void loadFilteredImages(filters, { silent: allImagesRef.current.length > 0 });
       return;
     }
 
     const timer = window.setTimeout(() => {
-      void loadFilteredImages(filters, { silent: allImages.length > 0 });
+      void loadFilteredImages(filters, { silent: allImagesRef.current.length > 0 });
     }, delayMs);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [filters, allImages, loadFilteredImages, cancelPendingFilterQuery]);
+  }, [filters, loadFilteredImages, cancelPendingFilterQuery]);
 
   const refreshWorkspaceData = useCallback(async () => {
     await loadMetadataAndEntities();
@@ -294,5 +345,7 @@ export function useWorkspaceData() {
     pillTypeSettings,
     loadMetadataAndEntities,
     refreshWorkspaceData,
+    beginRejectMutation,
+    settleRejectMutation,
   };
 }

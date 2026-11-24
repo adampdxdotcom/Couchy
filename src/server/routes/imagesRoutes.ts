@@ -487,8 +487,10 @@ imagesRouter.post('/:id/upscale', async (req, res) => {
 imagesRouter.get('/:id/civitai-share', async (req, res) => {
   try {
     const imageId = Number(req.params.id);
+    const seriesIdRaw = req.query.seriesId !== undefined ? Number(req.query.seriesId) : null;
+    const seriesId = seriesIdRaw && Number.isFinite(seriesIdRaw) ? seriesIdRaw : null;
     await syncCivitaiActivityForImage(imageId).catch(() => {});
-    const status = await evaluateCivitaiShareEligibility(imageId);
+    const status = await evaluateCivitaiShareEligibility(imageId, { seriesId });
     res.json(status);
   } catch (err: any) {
     const message = err?.message || 'Failed to evaluate Civitai sharing eligibility';

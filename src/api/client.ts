@@ -160,8 +160,10 @@ export const api = {
       apiWorkflowJson: string | null;
     }>(`/api/images/${id}${seriesId ? `?seriesId=${seriesId}` : ''}`),
 
-  getImageCivitaiShareStatus: (id: number) =>
-    requestJson<CivitaiShareEligibilityResponse>(`/api/images/${id}/civitai-share`),
+  getImageCivitaiShareStatus: (id: number, seriesId?: number | null) =>
+    requestJson<CivitaiShareEligibilityResponse>(
+      `/api/images/${id}/civitai-share${seriesId ? `?seriesId=${seriesId}` : ''}`
+    ),
 
   shareImageCivitaiDraft: (id: number, payload: CivitaiShareDraftRequest) =>
     requestJson<CivitaiShareDraftResponse>(`/api/images/${id}/civitai-share`, {

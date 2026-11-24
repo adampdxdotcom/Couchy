@@ -109,6 +109,8 @@ export default function App() {
     lmStudioOnline: livePolling.lmStudioStatus.online,
     pushToast: toasts.pushToast,
     onRefreshAll: refreshAll,
+    beginRejectMutation: workspace.beginRejectMutation,
+    settleRejectMutation: workspace.settleRejectMutation,
     setQuickGenPrefill,
   });
 
