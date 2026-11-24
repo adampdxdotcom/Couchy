@@ -27,6 +27,7 @@ Couchy bridges raw ComfyUI output folders and an organized creative studio—let
   - [Characters, Portrait Framing & Assisted Identification](#characters-portrait-framing--assisted-identification)
   - [Generation Studio](#generation-studio)
   - [LoRAs, Base Models, Presets & Downloader](#loras-base-models-presets--downloader)
+  - [Civitai Integration](#civitai-integration)
   - [Workflows & Structured Node Editor](#workflows--structured-node-editor)
   - [System Administration & In-App Help](#system-administration--in-app-help)
 - [Keyboard Shortcuts & Hotkeys](#keyboard-shortcuts--hotkeys)
@@ -314,6 +315,45 @@ Open **LoRAs & Models** for four integrated tabs:
 
 ---
 
+### Civitai Integration
+
+Couchy connects to both **`civitai.com`** and **`civitai.red`** using a hybrid of Civitai's public/authenticated REST APIs and **Civitai MCP** (`whoami`, `upload_image`, `create_post`, and `list_comments`). All API requests run server-side using your optional `CIVITAI_API_KEY` in `.env`—your key is never sent to the browser.
+
+#### The On / Off Switch (`Civitai Activity Notifications`)
+
+You can toggle live Civitai engagement tracking globally at any time under **System &rarr; Civitai Activity Notifications** *(**On** by default)*:
+
+- **When Turned On**:
+  - Runs Couchy's **15-minute background sync** (plus on-demand refreshes when opening the Image Inspector or clicking **Refresh Stats** on a LoRA).
+  - Shows the amber **Civitai Activity** indicator in the top Status Pill whenever shared posts receive new reactions or comments.
+  - Displays the **Civitai Feedback** section inside the desktop Image Inspector (`Published` / `Draft` state, separated Heart vs. Emoji reactions, and collapsible image/post comments).
+  - Displays creator attribution (`Uploaded by you` / `@creator`), download/Buzz stats, and collapsible model comments inside each Civitai-linked LoRA's **CivitAI Description** card.
+- **When Turned Off**:
+  - Pauses background model stats syncing and **hides all Civitai activity alerts, Inspector feedback breakdowns, LoRA engagement metrics, creator badges, and comment threads** across the UI.
+  - Preserves your local library, static Civitai/Hugging Face descriptions, external Civitai page links, and manual linking tools without visual clutter.
+
+#### Metrics & Data Pulled from Civitai
+
+| Surface | Sync Source | Metrics & Details Pulled |
+|---|---|---|
+| **Shared Posts & Images** *(Inspector & Gallery)* | Civitai REST (`/api/v1/images?postId=...`) & MCP `list_comments` (`image` / `post`) | - **Publish Status**: `Draft` vs. `Published` + direct image/post links<br>- **Reaction Breakdown**: **Heart** count shown separately from **Emoji** reactions (**Like**, **Laugh**, **Cry**)<br>- **Comments**: Comment count + plain-text comment threads (author `@username`, timestamp, pinned status, reaction/heart count, reply depth, and matched local stack image)<br>- **Unseen Delta**: Compares live totals against your last-seen counts to flag genuinely new activity |
+| **LoRA Models & Creator Uploads** *(LoRA Detail Page)* | Civitai REST (`/api/v1/models`, `/api/v1/model-versions/...`) & MCP `whoami` + `list_comments` (`model`) | - **Creator Attribution**: Author `@username` and automatic **`Uploaded by you`** highlight when matching your Civitai account<br>- **Model Totals**: **Downloads**, **Thumbs Up**, **Thumbs Down** *(shown when > 0)*, **Comments**, and **Total Buzz Tipped**<br>- **Matched Version Stats**: Version name, version downloads, version thumbs up, and version index (`1 of N`)<br>- **Model Comments**: Collapsible plain-text comment thread with author, timestamp, pinned badge, and reaction counts |
+
+#### Automatic Matching & Manual LoRA Linking
+
+- **15-Minute Creator Auto-Match**: When `CIVITAI_API_KEY` is configured and **Civitai Activity Notifications** is **On**, Couchy resolves your Civitai handle via `whoami`, scans your published models, and matches unlinked local LoRAs by **SHA-256 / AutoV2** file hashes—automatically linking Civitai URLs, model/version IDs, descriptions, non-destructive trigger words, and connected **Character** profiles.
+- **Manual Linking Fallback (`Link Civitai` / `Change Link`)**: If a local LoRA was re-saved or quantized and its file hash differs from Civitai, open the LoRA's **CivitAI Description** card and click **Link Civitai** to either:
+  1. **Paste URL / Version ID**: Enter any `civitai.com` or `civitai.red` model URL, download link, or numeric Version ID.
+  2. **My Civitai Uploads**: Browse your authenticated Civitai uploads list and bind the matching version in one click.
+
+#### Privacy & Read-Only Safety Guardrails
+
+- **Draft-Only Posting**: **Share to Civitai** always creates private drafts (`publish: false`)—Couchy never publishes posts, replies to comments, or modifies remote Civitai models.
+- **Strict Opt-In Sharing**: Per-character **`Share on CivitAI`** toggles and **Share 0-Character Images (Civitai)** in **System** default to **Off**.
+- **Public vs. Keyed Features**: Public REST lookups (linking by public URL/Version ID and refreshing public model stats) work without an API key; private draft uploads, MCP comment threads, `whoami`, and **My Civitai Uploads** require `CIVITAI_API_KEY`.
+
+---
+
 ### Workflows & Structured Node Editor
 
 *Compatibility note: Workflow compilation and inline `4x` ESRGAN upscaling target **Krea 2** ComfyUI API workflows.*
@@ -393,7 +433,7 @@ Couchy runs as a single Node.js service (React + TypeScript + Tailwind CSS front
   - **Visual Keyword Tagger**: `wd-vit-tagger-v3` (`data/local_models/wd-vit-tagger-v3`, `0.22` general / `0.18` compound thresholds for text fallback; also serves as an uncensored nudity/exposure audit during Vision interrogation).
   - **Face Scan**: InsightFace **SCRFD (`det_10g.onnx`)** 5-point landmark alignment + **ArcFace (`w600k_r50.onnx`)** 512-D embeddings (`data/local_models/insightface-buffalo-l`, cached in `character_face_embeddings` with `0.38` default cosine threshold).
 - **Local LLM Proxy**: Server-side `/v1/models` and `/v1/chat/completions` client (plus LM Studio `/api/v0/models` vision detection) with `90s` interrogation/expansion timeouts and ranked `README.md` retrieval for **Ask the Docs**.
-- **Civitai Integration (Downloader, URL Import, Draft Sharing & Activity Sync)**: Queries `civitai.com` and `civitai.red` REST APIs for model search, hash/URL lookup, link healing, and Krea 2 image/post prompt+LoRA import; posts deterministic private drafts (`publish: false`) via Civitai MCP with in-memory multi-LoRA metadata injection; and polls `/api/v1/images?postId=...` on Inspector load and every 15 minutes to track publish status, reactions, and comments in `image_civitai_drafts`.
+- **Civitai Integration (Downloader, URL Import, Draft Sharing & Activity Sync)**: Queries `civitai.com` and `civitai.red` REST APIs for model search, hash/URL lookup, link healing, creator upload discovery, and Krea 2 image/post prompt+LoRA import; posts deterministic private drafts (`publish: false`) via Civitai MCP with in-memory multi-LoRA metadata injection; and runs a **15-minute background sync** (gated by `civitai_activity_notifications_enabled`) that updates shared post reactions/comments in `image_civitai_drafts`, auto-matches creator LoRAs by hash, and caches model/version stats and MCP `model` comments on `models`.
 - **Core SQLite Domain Groups**:
   - *Images & Metadata*: `images`, `image_metadata`, `image_loras`, `image_models`, `image_visual_tags`, `image_workflows`, `image_civitai_drafts`
   - *Series & Generations*: `image_series`, `image_series_items`, `generation_batches`, `generation_items`, `reproduction_jobs`
