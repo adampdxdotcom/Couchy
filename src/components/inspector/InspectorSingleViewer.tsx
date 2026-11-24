@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronRight,
+  Columns2,
   Download,
   Loader2,
   Lock,
@@ -9,6 +10,7 @@ import {
   Minimize2,
   Search,
   Unlock,
+  X,
 } from 'lucide-react';
 import { formatBytes } from '../../shared/utils.ts';
 import {
@@ -31,6 +33,7 @@ interface InspectorSingleViewerProps {
   onClose: () => void;
   onPrev?: () => void;
   onNext?: () => void;
+  onEnterSplitMode?: () => void;
 }
 
 /**
@@ -48,6 +51,7 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
   onClose,
   onPrev,
   onNext,
+  onEnterSplitMode,
 }) => {
   const [framingMode, setFramingMode] = useState<ViewerFramingMode>('fit');
   const [singleLoupeMag, setSingleLoupeMag] = useState<LoupeMagnification>('2x');
@@ -327,6 +331,20 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
           : 'flex-1 min-h-0'
       }`}
     >
+      {/* Mobile Close Button in Upper-Right over Image Preview */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        className="lg:hidden absolute top-3 right-3 z-30 p-2 rounded-full bg-zinc-900/85 hover:bg-zinc-800 text-zinc-200 border border-zinc-700/60 shadow-lg backdrop-blur-xs cursor-pointer transition-colors"
+        title="Close Inspector (Esc)"
+        aria-label="Close Inspector"
+      >
+        <X className="w-4 h-4" />
+      </button>
+
       {/* Previous Image Arrow */}
       {onPrev && (
         <button
@@ -375,7 +393,7 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
           )}
 
         {loadedOriginalUrl !== activeImage.originalUrl && (
-          <div className="pointer-events-none absolute top-4 right-4 z-10 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-950/80 border border-zinc-700/70 text-[11px] font-mono text-zinc-300 backdrop-blur-sm">
+          <div className="pointer-events-none absolute top-4 right-14 lg:right-4 z-10 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-950/80 border border-zinc-700/70 text-[11px] font-mono text-zinc-300 backdrop-blur-sm">
             <Loader2 className="w-3 h-3 animate-spin text-indigo-400" />
             <span>Loading full-res…</span>
           </div>
@@ -460,7 +478,7 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
         className="shrink-0 w-full h-11 bg-zinc-950/95 border-t border-zinc-800/80 px-2.5 sm:px-4 flex items-center justify-between gap-2 text-xs text-zinc-400 backdrop-blur-md z-30 shadow-lg select-none"
       >
         <div className="flex items-center gap-1.5 sm:gap-2 font-mono tabular-nums truncate min-w-0 text-xs">
-          <span className="text-zinc-200 font-sans font-medium truncate max-w-[90px] sm:max-w-[180px] lg:max-w-xs">
+          <span className="text-zinc-200 font-sans font-medium truncate max-w-[72px] sm:max-w-[180px] lg:max-w-xs">
             {activeImage.filename}
           </span>
           <span aria-hidden="true" className="text-zinc-600 hidden sm:inline">·</span>
@@ -574,11 +592,25 @@ export const InspectorSingleViewer: React.FC<InspectorSingleViewerProps> = ({
             )}
           </div>
 
+          {/* A/B Split-Screen Compare Toggle (icon-only on mobile) */}
+          {onEnterSplitMode && (
+            <button
+              type="button"
+              onClick={onEnterSplitMode}
+              className="inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-indigo-500/60 text-zinc-200 hover:text-white text-xs font-medium cursor-pointer shrink-0 whitespace-nowrap transition-colors"
+              title="Enter A/B Split-Screen Comparison"
+              aria-label="Compare"
+            >
+              <Columns2 className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="hidden sm:inline">Compare</span>
+            </button>
+          )}
+
           {/* Viewport Full Screen Toggle */}
           <button
             type="button"
             onClick={() => onSetFullScreen((prev) => !prev)}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+            className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
               isFullScreen
                 ? 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500 text-white'
                 : 'bg-zinc-900 hover:bg-zinc-800 border-zinc-800 text-zinc-200'

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { BookmarkPlus, Columns2, Dices, ExternalLink, Heart, Keyboard, Loader2, MessageSquare, Play, RotateCcw, Share2, Star, Trash2, X } from 'lucide-react';
+import { BookmarkPlus, Dices, ExternalLink, Heart, Keyboard, Loader2, MessageSquare, Play, RotateCcw, Share2, Star, Trash2, X } from 'lucide-react';
 import { api } from '../api/client.ts';
 import { renderDependencyLabel } from './GalleryGridView.tsx';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
@@ -436,6 +436,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             onClose={onClose}
             onPrev={onPrev}
             onNext={onNext}
+            onEnterSplitMode={handleEnterSplitMode}
           />
 
           {/* Right Pane: Comprehensive Metadata, Character & Workflow Reproduction Inspector */}
@@ -656,18 +657,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
                 <button
                   type="button"
-                  onClick={handleEnterSplitMode}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-indigo-500/60 text-zinc-200 hover:text-white text-xs font-medium cursor-pointer shrink-0 transition-colors"
-                  title="Enter A/B Split-Screen Comparison"
-                >
-                  <Columns2 className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Compare</span>
-                </button>
-
-                <button
-                  type="button"
                   onClick={onClose}
-                  className="p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-100 cursor-pointer shrink-0"
+                  className="hidden lg:inline-flex p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-100 cursor-pointer shrink-0"
                   title="Close Inspector (Esc)"
                 >
                   <X className="w-4 h-4" />
