@@ -798,7 +798,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                       {isSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
                     </button>
 
-                    {((img.seriesCount || 1) > 1 || attachedGhost) && (
+                    {layout === 'compact' && ((img.seriesCount || 1) > 1 || attachedGhost) && (
                       <span
                         className={`inline-flex items-center gap-1 px-2 py-1 rounded-md bg-black/75 backdrop-blur-xs border text-[11px] font-mono font-semibold text-indigo-200 shadow-sm pointer-events-none ${
                           attachedGhost ? 'border-indigo-400/70' : 'border-indigo-500/40'
@@ -1042,18 +1042,47 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                         </>
                       )}
                     </div>
-                    {confirmedChars.length === 0 &&
-                      suggestedChars.length === 0 &&
-                      (showCivitaiReactions || img.rating > 0) && (
+                    {(() => {
+                      const hasStackBadge = (img.seriesCount || 1) > 1 || Boolean(attachedGhost);
+                      const showFooterRatings =
+                        confirmedChars.length === 0 &&
+                        suggestedChars.length === 0 &&
+                        (showCivitaiReactions || img.rating > 0);
+                      if (!hasStackBadge && !showFooterRatings) return null;
+                      return (
                         <div className="flex items-center gap-2 shrink-0">
-                          {renderCivitaiCounters()}
-                          {img.rating > 0 && (
-                            <span className="text-xs font-mono tabular-nums text-amber-400 shrink-0">
-                              ★ {img.rating}
+                          {showFooterRatings && (
+                            <>
+                              {renderCivitaiCounters()}
+                              {img.rating > 0 && (
+                                <span className="text-xs font-mono tabular-nums text-amber-400 shrink-0">
+                                  ★ {img.rating}
+                                </span>
+                              )}
+                            </>
+                          )}
+                          {hasStackBadge && (
+                            <span
+                              className={`inline-flex items-center gap-1 text-[11px] font-mono tabular-nums font-semibold ${
+                                attachedGhost ? 'text-indigo-300' : 'text-indigo-400'
+                              }`}
+                              title={
+                                attachedGhost
+                                  ? 'Generating new iteration onto this series stack'
+                                  : `${img.seriesCount} images stacked in this series`
+                              }
+                            >
+                              <Layers
+                                className={`w-3.5 h-3.5 ${attachedGhost ? 'animate-pulse' : ''}`}
+                              />
+                              <span>
+                                {attachedGhost ? `${img.seriesCount || 1} +1` : img.seriesCount}
+                              </span>
                             </span>
                           )}
                         </div>
-                      )}
+                      );
+                    })()}
                   </div>
                 </div>
               )}
