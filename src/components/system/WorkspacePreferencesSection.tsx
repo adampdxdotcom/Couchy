@@ -115,9 +115,9 @@ export const WorkspacePreferencesSection: React.FC<WorkspacePreferencesSectionPr
           </h2>
           <p
             className="text-[11px] text-zinc-400 leading-snug truncate"
-            title="Show a persistent header notification when shared Civitai posts get new likes/reactions or comments"
+            title="Show header alerts and gallery card counters for Civitai reactions & comments"
           >
-            Show a persistent header alert for new Civitai reactions &amp; comments.
+            Show header alerts and gallery card counters for Civitai reactions &amp; comments.
           </p>
         </div>
 

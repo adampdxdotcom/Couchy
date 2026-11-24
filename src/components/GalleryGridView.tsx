@@ -77,6 +77,7 @@ interface GalleryGridViewProps {
   loras?: LoraExplorerItem[];
   models?: ModelInventoryItem[];
   galleryPillColorsEnabled?: boolean;
+  civitaiActivityNotificationsEnabled?: boolean;
   pillTypeSettings?: PillTypeSettings;
   ghostItems?: QueuedGhostCardItem[];
   filters?: GalleryFilterState;
@@ -148,6 +149,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   loras = [],
   models = [],
   galleryPillColorsEnabled = false,
+  civitaiActivityNotificationsEnabled = true,
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   ghostItems = [],
   filters,
@@ -688,6 +690,57 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
           const confirmedChars = img.characters.filter((c) => c.status === 'confirmed');
           const suggestedChars = img.characters.filter((c) => c.status === 'suggested');
           const attachedGhost = attachedGhostsByCardId.get(img.id) || null;
+          const shareSummary = img.civitaiShareSummary ?? null;
+          const showCivitaiReactions = Boolean(
+            civitaiActivityNotificationsEnabled &&
+              shareSummary &&
+              shareSummary.status === 'published' &&
+              (shareSummary.reactionCount > 0 || shareSummary.commentCount > 0)
+          );
+
+          const renderCivitaiCounters = () => {
+            if (!showCivitaiReactions || !shareSummary) return null;
+            const titleText = `${
+              shareSummary.hasUnseenActivity ? 'New Civitai activity' : 'Civitai post activity'
+            }: ${shareSummary.reactionCount} reactions · ${shareSummary.commentCount} comments`;
+            const className = `inline-flex items-center gap-1.5 text-[11px] font-mono tabular-nums transition-colors ${
+              shareSummary.hasUnseenActivity
+                ? 'text-amber-300 hover:text-amber-200'
+                : 'text-emerald-400/90 hover:text-emerald-300'
+            }`;
+            const content = (
+              <>
+                {shareSummary.reactionCount > 0 && (
+                  <span className="inline-flex items-center gap-0.5">
+                    <Heart className="w-3 h-3" />
+                    {shareSummary.reactionCount}
+                  </span>
+                )}
+                {shareSummary.commentCount > 0 && (
+                  <span className="inline-flex items-center gap-0.5">
+                    <MessageSquare className="w-3 h-3" />
+                    {shareSummary.commentCount}
+                  </span>
+                )}
+              </>
+            );
+            return shareSummary.primaryUrl ? (
+              <a
+                href={shareSummary.primaryUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                title={titleText}
+                className={className}
+              >
+                {content}
+              </a>
+            ) : (
+              <span title={titleText} className={className}>
+                {content}
+              </span>
+            );
+          };
 
           return (
             <article
@@ -920,10 +973,15 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                           </button>
                         )}
                       </div>
-                      {img.rating > 0 && (
-                        <span className="text-xs font-mono tabular-nums text-amber-400 shrink-0">
-                          ★ {img.rating}
-                        </span>
+                      {(showCivitaiReactions || img.rating > 0) && (
+                        <div className="flex items-center gap-2 shrink-0">
+                          {renderCivitaiCounters()}
+                          {img.rating > 0 && (
+                            <span className="text-xs font-mono tabular-nums text-amber-400 shrink-0">
+                              ★ {img.rating}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}
@@ -986,10 +1044,15 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                     </div>
                     {confirmedChars.length === 0 &&
                       suggestedChars.length === 0 &&
-                      img.rating > 0 && (
-                        <span className="text-xs font-mono tabular-nums text-amber-400 shrink-0">
-                          ★ {img.rating}
-                        </span>
+                      (showCivitaiReactions || img.rating > 0) && (
+                        <div className="flex items-center gap-2 shrink-0">
+                          {renderCivitaiCounters()}
+                          {img.rating > 0 && (
+                            <span className="text-xs font-mono tabular-nums text-amber-400 shrink-0">
+                              ★ {img.rating}
+                            </span>
+                          )}
+                        </div>
                       )}
                   </div>
                 </div>

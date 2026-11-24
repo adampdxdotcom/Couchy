@@ -246,6 +246,9 @@ export default function App() {
             loras={workspace.visibleLoras}
             models={workspace.models}
             galleryPillColorsEnabled={workspace.healthData?.config?.galleryPillColorsEnabled === true}
+            civitaiActivityNotificationsEnabled={
+              workspace.healthData?.config?.civitaiActivityNotificationsEnabled !== false
+            }
             pillTypeSettings={workspace.pillTypeSettings}
             ghostItems={livePolling.activeGhostItems}
             filters={workspace.filters}
