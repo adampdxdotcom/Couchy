@@ -216,11 +216,51 @@ export type CivitaiShareFilterMode =
   | 'has_activity'
   | 'unseen_activity';
 
+export interface CivitaiReactionBreakdown {
+  heartCount: number;
+  likeCount: number;
+  laughCount: number;
+  cryCount: number;
+}
+
+export interface CivitaiPostImageStats {
+  civitaiImageId: number;
+  index: number;
+  localImageId: number | null;
+  url: string;
+  heartCount: number;
+  likeCount: number;
+  laughCount: number;
+  cryCount: number;
+  commentCount: number;
+}
+
+export interface CivitaiCommentRecord {
+  id: number;
+  targetType: 'image' | 'post';
+  civitaiPostId: number;
+  civitaiImageId: number | null;
+  localImageId: number | null;
+  localFilename?: string | null;
+  localThumbnailUrl?: string | null;
+  civitaiUrl: string;
+  authorUsername: string;
+  authorAvatarUrl: string | null;
+  content: string;
+  createdAt: string | null;
+  reactionCount: number;
+  heartCount: number;
+  parentCommentId: number | null;
+  depth: number;
+  isPinned?: boolean;
+}
+
 export interface CivitaiShareSummary {
   status: CivitaiPostStatus;
   totalDrafts: number;
   publishedCount: number;
   reactionCount: number;
+  reactionBreakdown?: CivitaiReactionBreakdown;
   commentCount: number;
   hasActivity: boolean;
   hasUnseenActivity: boolean;
@@ -238,11 +278,15 @@ export interface CivitaiDraftRecord {
   civitaiImageId: number | null;
   publishedUrl: string | null;
   reactionCount: number;
+  reactionBreakdown: CivitaiReactionBreakdown;
   commentCount: number;
   seenReactionCount: number;
   seenCommentCount: number;
   hasUnseenActivity: boolean;
   statsSyncedAt: string | null;
+  commentsSyncedAt: string | null;
+  postImages: CivitaiPostImageStats[];
+  comments: CivitaiCommentRecord[];
   createdAt: string;
 }
 

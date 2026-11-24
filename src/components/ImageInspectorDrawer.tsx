@@ -8,6 +8,7 @@ import { SplitCompareView } from './inspector/SplitCompareView.tsx';
 import { ComparePickerModal } from './inspector/ComparePickerModal.tsx';
 import { CivitaiDraftModal } from './inspector/CivitaiDraftModal.tsx';
 import { InspectorSingleViewer } from './inspector/InspectorSingleViewer.tsx';
+import { InspectorCivitaiFeedbackSection } from './inspector/InspectorCivitaiFeedbackSection.tsx';
 import { InspectorCharacterSection } from './inspector/InspectorCharacterSection.tsx';
 import { InspectorWorkflowSection } from './inspector/InspectorWorkflowSection.tsx';
 import {
@@ -17,7 +18,11 @@ import {
 import { InspectorTagsAndNotesSection } from './inspector/InspectorTagsAndNotesSection.tsx';
 import { useInspectorState } from './inspector/useInspectorState.ts';
 import { MAX_SYSTEM_LORAS, normalizeLoraKey } from './quickgen/quickGenUtils.ts';
-import type { CivitaiShareEligibilityResponse } from '../shared/apiTypes.ts';
+import type {
+  CivitaiCommentRecord,
+  CivitaiReactionBreakdown,
+  CivitaiShareEligibilityResponse,
+} from '../shared/apiTypes.ts';
 import type {
   CharacterProfile,
   ImageRecord,
@@ -53,6 +58,7 @@ interface ImageInspectorDrawerProps {
   onFilterByLora: (loraFilename: string) => void;
   onFilterByCharacter: (characterId: number) => void;
   visualTaggerEnabled?: boolean;
+  civitaiActivityNotificationsEnabled?: boolean;
   onFilterByVisualKeyword?: (keyword: string) => void;
   onCancelGhost?: (ghost: QueuedGhostCardItem) => Promise<void> | void;
 }
@@ -103,6 +109,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   onFilterByLora,
   onFilterByCharacter,
   visualTaggerEnabled = false,
+  civitaiActivityNotificationsEnabled = true,
   onFilterByVisualKeyword,
   onCancelGhost,
 }) => {
@@ -176,6 +183,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   const [civitaiShareStatus, setCivitaiShareStatus] =
     useState<CivitaiShareEligibilityResponse | null>(null);
   const [isLoadingShareStatus, setIsLoadingShareStatus] = useState(false);
+  const [isRefreshingFeedback, setIsRefreshingFeedback] = useState(false);
   const [showCivitaiDraftModal, setShowCivitaiDraftModal] = useState(false);
   const [unseenCivitaiImageId, setUnseenCivitaiImageId] = useState<number | null>(null);
 
@@ -254,20 +262,58 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     };
   }, [activeImage.id, seriesContextId, characterTagSig]);
 
+  const handleRefreshCivitaiFeedback = useCallback(async () => {
+    if (isRefreshingFeedback) return;
+    setIsRefreshingFeedback(true);
+    try {
+      const res = await api.getImageCivitaiShareStatus(activeImage.id, seriesContextId, true);
+      setCivitaiShareStatus(res);
+      void onUpdated();
+    } catch {
+      onPushToast?.('Failed to refresh Civitai feedback.', 'warning');
+    } finally {
+      setIsRefreshingFeedback(false);
+    }
+  }, [activeImage.id, isRefreshingFeedback, onPushToast, onUpdated, seriesContextId]);
+
   const civitaiVisualState = useMemo(() => {
+    const emptyBreakdown: CivitaiReactionBreakdown = {
+      heartCount: 0,
+      likeCount: 0,
+      laughCount: 0,
+      cryCount: 0,
+    };
     const drafts = civitaiShareStatus?.existingDrafts;
     const summary = activeImage.civitaiShareSummary ?? null;
     if (drafts && drafts.length > 0) {
       const publishedDrafts = drafts.filter((d) => d.status === 'published');
       const isPublished = publishedDrafts.length > 0;
       const seenPostIds = new Set<number>();
+      const seenCommentKeys = new Set<string>();
+      const comments: CivitaiCommentRecord[] = [];
       let reactionCount = 0;
       let commentCount = 0;
+      let heartCount = 0;
+      let likeCount = 0;
+      let laughCount = 0;
+      let cryCount = 0;
+
       for (const d of publishedDrafts) {
         if (!seenPostIds.has(d.civitaiPostId)) {
           seenPostIds.add(d.civitaiPostId);
           reactionCount += d.reactionCount;
           commentCount += d.commentCount;
+          heartCount += d.reactionBreakdown?.heartCount || 0;
+          likeCount += d.reactionBreakdown?.likeCount || 0;
+          laughCount += d.reactionBreakdown?.laughCount || 0;
+          cryCount += d.reactionBreakdown?.cryCount || 0;
+          for (const c of d.comments || []) {
+            const key = `${c.targetType}:${c.id}`;
+            if (!seenCommentKeys.has(key)) {
+              seenCommentKeys.add(key);
+              comments.push(c);
+            }
+          }
         }
       }
       const primary = publishedDrafts[0] || drafts[0];
@@ -276,7 +322,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
         status: (isPublished ? 'published' : 'draft') as 'draft' | 'published',
         totalDrafts: drafts.length,
         reactionCount,
+        reactionBreakdown: { heartCount, likeCount, laughCount, cryCount },
         commentCount,
+        comments,
         hasUnseenActivity:
           unseenCivitaiImageId === activeImage.id || drafts.some((d) => d.hasUnseenActivity),
         primaryUrl: primary.publishedUrl || primary.draftUrl,
@@ -288,7 +336,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
         status: summary.status,
         totalDrafts: summary.totalDrafts,
         reactionCount: summary.reactionCount,
+        reactionBreakdown: summary.reactionBreakdown ?? emptyBreakdown,
         commentCount: summary.commentCount,
+        comments: [] as CivitaiCommentRecord[],
         hasUnseenActivity:
           unseenCivitaiImageId === activeImage.id || summary.hasUnseenActivity,
         primaryUrl: summary.primaryUrl,
@@ -299,11 +349,24 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
       status: null as 'draft' | 'published' | null,
       totalDrafts: 0,
       reactionCount: 0,
+      reactionBreakdown: emptyBreakdown,
       commentCount: 0,
+      comments: [] as CivitaiCommentRecord[],
       hasUnseenActivity: false,
       primaryUrl: null as string | null,
     };
   }, [civitaiShareStatus, activeImage.civitaiShareSummary, activeImage.id, unseenCivitaiImageId]);
+
+  const hasCivitaiFeedback =
+    civitaiVisualState.reactionCount > 0 ||
+    civitaiVisualState.commentCount > 0 ||
+    civitaiVisualState.comments.length > 0;
+  const showDesktopFeedbackSection = Boolean(
+    civitaiActivityNotificationsEnabled &&
+      civitaiVisualState.hasShare &&
+      civitaiVisualState.primaryUrl &&
+      hasCivitaiFeedback
+  );
 
   const canOpenShareModal = Boolean(
     civitaiShareStatus?.eligible || civitaiShareStatus?.stack?.eligible
@@ -585,8 +648,10 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                     href={civitaiVisualState.primaryUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={`inline-flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-1 rounded-md border text-[10px] sm:text-[11px] font-medium shrink-0 transition-colors ${
-                      civitaiVisualState.hasUnseenActivity
+                    className={`${
+                      showDesktopFeedbackSection ? 'inline-flex lg:hidden' : 'inline-flex'
+                    } items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-1 rounded-md border text-[10px] sm:text-[11px] font-medium shrink-0 transition-colors ${
+                      civitaiActivityNotificationsEnabled && civitaiVisualState.hasUnseenActivity
                         ? 'bg-amber-500/15 border-amber-500/45 text-amber-200 hover:bg-amber-500/25'
                         : civitaiVisualState.status === 'published'
                         ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/25'
@@ -598,28 +663,29 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                         : 'Open draft editor on Civitai'
                     }
                   >
-                    {civitaiVisualState.hasUnseenActivity && (
+                    {civitaiActivityNotificationsEnabled && civitaiVisualState.hasUnseenActivity && (
                       <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
                     )}
                     {civitaiVisualState.status === 'published' ? (
                       <>
                         <span>Published</span>
-                        {(civitaiVisualState.reactionCount > 0 || civitaiVisualState.commentCount > 0) && (
-                          <span className="inline-flex items-center gap-1 sm:gap-1.5 font-mono tabular-nums text-[10px] opacity-90">
-                            {civitaiVisualState.reactionCount > 0 && (
-                              <span className="inline-flex items-center gap-0.5">
-                                <Heart className="w-2.5 h-2.5" />
-                                {civitaiVisualState.reactionCount}
-                              </span>
-                            )}
-                            {civitaiVisualState.commentCount > 0 && (
-                              <span className="inline-flex items-center gap-0.5">
-                                <MessageSquare className="w-2.5 h-2.5" />
-                                {civitaiVisualState.commentCount}
-                              </span>
-                            )}
-                          </span>
-                        )}
+                        {civitaiActivityNotificationsEnabled &&
+                          (civitaiVisualState.reactionCount > 0 || civitaiVisualState.commentCount > 0) && (
+                            <span className="inline-flex items-center gap-1 sm:gap-1.5 font-mono tabular-nums text-[10px] opacity-90">
+                              {civitaiVisualState.reactionCount > 0 && (
+                                <span className="inline-flex items-center gap-0.5">
+                                  <Heart className="w-2.5 h-2.5" />
+                                  {civitaiVisualState.reactionCount}
+                                </span>
+                              )}
+                              {civitaiVisualState.commentCount > 0 && (
+                                <span className="inline-flex items-center gap-0.5">
+                                  <MessageSquare className="w-2.5 h-2.5" />
+                                  {civitaiVisualState.commentCount}
+                                </span>
+                              )}
+                            </span>
+                          )}
                       </>
                     ) : (
                       <span>Draft</span>
@@ -691,6 +757,32 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
 
             {/* Inspector Body (independent scroll container) */}
             <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-4 sm:p-5 pb-8 space-y-5 text-xs min-w-0">
+              {showDesktopFeedbackSection && civitaiVisualState.status && civitaiVisualState.primaryUrl && (
+                <InspectorCivitaiFeedbackSection
+                  activeImageId={activeImage.id}
+                  status={civitaiVisualState.status}
+                  primaryUrl={civitaiVisualState.primaryUrl}
+                  hasUnseenActivity={civitaiVisualState.hasUnseenActivity}
+                  reactionCount={civitaiVisualState.reactionCount}
+                  reactionBreakdown={civitaiVisualState.reactionBreakdown}
+                  commentCount={civitaiVisualState.commentCount}
+                  comments={civitaiVisualState.comments}
+                  hasCivitaiKey={Boolean(civitaiShareStatus?.hasCivitaiKey)}
+                  isRefreshing={isRefreshingFeedback}
+                  onRefresh={() => void handleRefreshCivitaiFeedback()}
+                  onNavigateToImage={(targetId) => {
+                    const isSameSeries = (activeImage.seriesItems || []).some(
+                      (s) => s.imageId === targetId
+                    );
+                    if (isSameSeries) {
+                      setSelectedIterationId(targetId);
+                    } else {
+                      onNavigateToImage?.(targetId);
+                    }
+                  }}
+                />
+              )}
+
               <InspectorCharacterSection
                 activeImage={activeImage}
                 characters={characters}

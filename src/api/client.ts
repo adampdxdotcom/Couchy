@@ -160,10 +160,15 @@ export const api = {
       apiWorkflowJson: string | null;
     }>(`/api/images/${id}${seriesId ? `?seriesId=${seriesId}` : ''}`),
 
-  getImageCivitaiShareStatus: (id: number, seriesId?: number | null) =>
-    requestJson<CivitaiShareEligibilityResponse>(
-      `/api/images/${id}/civitai-share${seriesId ? `?seriesId=${seriesId}` : ''}`
-    ),
+  getImageCivitaiShareStatus: (id: number, seriesId?: number | null, refresh = false) => {
+    const params = new URLSearchParams();
+    if (seriesId) params.set('seriesId', String(seriesId));
+    if (refresh) params.set('refresh', '1');
+    const qs = params.toString();
+    return requestJson<CivitaiShareEligibilityResponse>(
+      `/api/images/${id}/civitai-share${qs ? `?${qs}` : ''}`
+    );
+  },
 
   shareImageCivitaiDraft: (id: number, payload: CivitaiShareDraftRequest) =>
     requestJson<CivitaiShareDraftResponse>(`/api/images/${id}/civitai-share`, {

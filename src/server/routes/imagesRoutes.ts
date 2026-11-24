@@ -489,7 +489,11 @@ imagesRouter.get('/:id/civitai-share', async (req, res) => {
     const imageId = Number(req.params.id);
     const seriesIdRaw = req.query.seriesId !== undefined ? Number(req.query.seriesId) : null;
     const seriesId = seriesIdRaw && Number.isFinite(seriesIdRaw) ? seriesIdRaw : null;
-    await syncCivitaiActivityForImage(imageId).catch(() => {});
+    const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    await syncCivitaiActivityForImage(
+      imageId,
+      forceRefresh ? { minIntervalMs: 0, syncComments: true } : { syncComments: true }
+    ).catch(() => {});
     const status = await evaluateCivitaiShareEligibility(imageId, { seriesId });
     res.json(status);
   } catch (err: any) {

@@ -256,4 +256,172 @@ export class CivitaiMcpClient {
       : [];
     return { postId, processingImageIds };
   }
+
+  /**
+   * Calls Civitai MCP `list_comments` for an image or post entity and normalizes the thread.
+   */
+  async listComments(params: {
+    entityType: 'image' | 'post';
+    entityId: number;
+    depth?: number;
+    sort?: 'Oldest' | 'Newest';
+    includeFull?: boolean;
+  }): Promise<NormalizedMcpComment[]> {
+    const res = await this.callTool<any>('list_comments', {
+      entityType: params.entityType,
+      entityId: params.entityId,
+      depth: params.depth ?? 2,
+      sort: params.sort ?? 'Newest',
+      includeFull: params.includeFull ?? true,
+    });
+    return normalizeCivitaiMcpComments(res);
+  }
 }
+
+export interface NormalizedMcpComment {
+  id: number;
+  authorUsername: string;
+  authorAvatarUrl: string | null;
+  content: string;
+  createdAt: string | null;
+  reactionCount: number;
+  heartCount: number;
+  parentCommentId: number | null;
+  depth: number;
+  isPinned: boolean;
+}
+
+/**
+ * Strips restricted HTML tags returned by Civitai comments into clean plain text.
+ */
+export function stripCivitaiCommentHtml(raw: string): string {
+  return String(raw || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function sumCommentReactions(raw: any): { reactionCount: number; heartCount: number } {
+  if (!raw || typeof raw !== 'object') return { reactionCount: 0, heartCount: 0 };
+  if (Array.isArray(raw.reactions)) {
+    let total = 0;
+    let hearts = 0;
+    for (const r of raw.reactions) {
+      const cnt = Math.max(0, Number(r?.count ?? r?.total ?? 1));
+      total += cnt;
+      if (String(r?.reaction || '').toLowerCase() === 'heart') {
+        hearts += cnt;
+      }
+    }
+    return { reactionCount: total, heartCount: hearts };
+  }
+  const stats = raw.stats && typeof raw.stats === 'object' ? raw.stats : raw;
+  const heartCount = Math.max(0, Number(stats.heartCount || 0));
+  const likeCount = Math.max(0, Number(stats.likeCount || 0));
+  const laughCount = Math.max(0, Number(stats.laughCount || 0));
+  const cryCount = Math.max(0, Number(stats.cryCount || 0));
+  const explicitTotal = Number(raw.reactionCount ?? stats.reactionCount ?? 0);
+  const sum = heartCount + likeCount + laughCount + cryCount;
+  return {
+    reactionCount: Math.max(sum, Number.isFinite(explicitTotal) ? explicitTotal : 0),
+    heartCount,
+  };
+}
+
+/**
+ * Flattens structured Civitai `list_comments` payloads (with nested replies) into normalized entries.
+ */
+export function normalizeCivitaiMcpComments(payload: any): NormalizedMcpComment[] {
+  const candidates: any[] = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.comments)
+    ? payload.comments
+    : Array.isArray(payload?.items)
+    ? payload.items
+    : Array.isArray(payload?.threads)
+    ? payload.threads
+    : Array.isArray(payload?.results)
+    ? payload.results
+    : Array.isArray(payload?.data)
+    ? payload.data
+    : [];
+
+  const out: NormalizedMcpComment[] = [];
+  const seenIds = new Set<number>();
+
+  const visit = (item: any, depth: number, parentId: number | null) => {
+    if (!item || typeof item !== 'object') return;
+    const id = Number(item.id ?? item.commentId ?? 0);
+    const text = stripCivitaiCommentHtml(
+      item.content ?? item.body ?? item.text ?? item.message ?? ''
+    );
+    const authorUsername = String(
+      item.user?.username ??
+        item.author?.username ??
+        (typeof item.author === 'string' ? item.author : '') ??
+        item.username ??
+        'Civitai User'
+    ).trim();
+    const authorAvatarUrl =
+      typeof item.user?.image === 'string'
+        ? item.user.image
+        : typeof item.author?.image === 'string'
+        ? item.author.image
+        : null;
+    const createdAt =
+      typeof item.createdAt === 'string'
+        ? item.createdAt
+        : typeof item.created_at === 'string'
+        ? item.created_at
+        : null;
+    const resolvedParent =
+      item.parentId != null
+        ? Number(item.parentId)
+        : item.parentCommentId != null
+        ? Number(item.parentCommentId)
+        : parentId;
+
+    const { reactionCount, heartCount } = sumCommentReactions(item);
+
+    if (Number.isInteger(id) && id > 0 && text && !seenIds.has(id) && !item.hidden) {
+      seenIds.add(id);
+      out.push({
+        id,
+        authorUsername: authorUsername || 'Civitai User',
+        authorAvatarUrl,
+        content: text,
+        createdAt,
+        reactionCount,
+        heartCount,
+        parentCommentId: resolvedParent && Number.isInteger(resolvedParent) ? resolvedParent : null,
+        depth,
+        isPinned: Boolean(item.pinned ?? item.isPinned),
+      });
+    }
+
+    const nested = Array.isArray(item.replies)
+      ? item.replies
+      : Array.isArray(item.children)
+      ? item.children
+      : Array.isArray(item.comments)
+      ? item.comments
+      : [];
+    for (const child of nested) {
+      visit(child, Math.min(depth + 1, 3), Number.isInteger(id) && id > 0 ? id : parentId);
+    }
+  };
+
+  for (const item of candidates) {
+    visit(item, 0, null);
+  }
+  return out;
+}
+

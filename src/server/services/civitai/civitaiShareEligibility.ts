@@ -3,6 +3,7 @@ import { appConfig } from '../../config.ts';
 import { resolveImageDiskPath } from '../scannerService.ts';
 import { getBoolSetting } from '../settingsService.ts';
 import { mapDraftRowToRecord } from './civitaiActivitySyncService.ts';
+import { enrichCommentsWithLocalImages } from './civitaiCommentsService.ts';
 import {
   classifyPromptGraphMetadata,
   inspectCoreImageShare,
@@ -93,7 +94,13 @@ export async function evaluateCivitaiShareEligibility(
     )
     .all(imageId, imageRow.content_hash) as any[];
 
-  const existingDrafts: CivitaiDraftRecord[] = draftRows.map(mapDraftRowToRecord);
+  const existingDrafts: CivitaiDraftRecord[] = draftRows.map((row) => {
+    const mapped = mapDraftRowToRecord(row);
+    return {
+      ...mapped,
+      comments: enrichCommentsWithLocalImages(mapped.comments),
+    };
+  });
 
   const stack =
     options?.includeStack === false

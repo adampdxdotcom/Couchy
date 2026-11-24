@@ -1005,6 +1005,28 @@ var init_migrationsV30 = __esm({
   }
 });
 
+// src/server/db/migrationsV31.ts
+var migrationsV31;
+var init_migrationsV31 = __esm({
+  "src/server/db/migrationsV31.ts"() {
+    migrationsV31 = [
+      {
+        version: 31,
+        name: "civitai_feedback_details",
+        sql: `
+      ALTER TABLE image_civitai_drafts ADD COLUMN heart_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE image_civitai_drafts ADD COLUMN like_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE image_civitai_drafts ADD COLUMN laugh_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE image_civitai_drafts ADD COLUMN cry_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE image_civitai_drafts ADD COLUMN post_images_json TEXT;
+      ALTER TABLE image_civitai_drafts ADD COLUMN comments_json TEXT;
+      ALTER TABLE image_civitai_drafts ADD COLUMN comments_synced_at TEXT;
+    `
+      }
+    ];
+  }
+});
+
 // src/shared/agentPromptDefaults.ts
 var DEFAULT_CONVERSATION_SYSTEM_PROMPT, DEFAULT_BATCH_EXPANSION_PROMPT;
 var init_agentPromptDefaults = __esm({
@@ -1446,6 +1468,7 @@ var init_db = __esm({
     init_migrationsV15ToV28();
     init_migrationsV29();
     init_migrationsV30();
+    init_migrationsV31();
     init_seedPromptsAndLlm();
     init_seedWorkflowsAndInstances();
     db = new Database(appConfig.databasePath);
@@ -1457,7 +1480,8 @@ var init_db = __esm({
       ...migrationsV2ToV14,
       ...migrationsV15ToV28,
       ...migrationsV29,
-      ...migrationsV30
+      ...migrationsV30,
+      ...migrationsV31
     ];
   }
 });
@@ -8517,6 +8541,389 @@ var init_visualTaggerService = __esm({
   }
 });
 
+// src/server/services/civitai/civitaiMcpClient.ts
+function isSizeLimitErrorMessage(status, message) {
+  if (status === 413) return true;
+  return /too large|payload.*large|size limit|exceeds.*(mb|mib|bytes|size)|max.*size|413/i.test(
+    message
+  );
+}
+function parseMcpResponseBody(rawText) {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    throw new Error("Empty response from Civitai MCP server.");
+  }
+  if (trimmed.startsWith("{")) {
+    return JSON.parse(trimmed);
+  }
+  const dataLines = trimmed.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).filter(Boolean);
+  for (let i = dataLines.length - 1; i >= 0; i--) {
+    try {
+      return JSON.parse(dataLines[i]);
+    } catch {
+    }
+  }
+  throw new Error(`Unexpected Civitai MCP response format: ${trimmed.slice(0, 200)}`);
+}
+function extractToolResultPayload(toolResult) {
+  if (!toolResult || typeof toolResult !== "object") return toolResult;
+  if (toolResult.structuredContent && typeof toolResult.structuredContent === "object") {
+    return toolResult.structuredContent;
+  }
+  const firstText = Array.isArray(toolResult.content) ? toolResult.content.find((c) => c?.type === "text" && typeof c.text === "string")?.text : void 0;
+  if (typeof firstText === "string") {
+    const trimmed = firstText.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return { message: firstText };
+      }
+    }
+    return { message: firstText };
+  }
+  return toolResult;
+}
+function stripCivitaiCommentHtml(raw) {
+  return String(raw || "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+function sumCommentReactions(raw) {
+  if (!raw || typeof raw !== "object") return { reactionCount: 0, heartCount: 0 };
+  if (Array.isArray(raw.reactions)) {
+    let total = 0;
+    let hearts = 0;
+    for (const r of raw.reactions) {
+      const cnt = Math.max(0, Number(r?.count ?? r?.total ?? 1));
+      total += cnt;
+      if (String(r?.reaction || "").toLowerCase() === "heart") {
+        hearts += cnt;
+      }
+    }
+    return { reactionCount: total, heartCount: hearts };
+  }
+  const stats = raw.stats && typeof raw.stats === "object" ? raw.stats : raw;
+  const heartCount = Math.max(0, Number(stats.heartCount || 0));
+  const likeCount = Math.max(0, Number(stats.likeCount || 0));
+  const laughCount = Math.max(0, Number(stats.laughCount || 0));
+  const cryCount = Math.max(0, Number(stats.cryCount || 0));
+  const explicitTotal = Number(raw.reactionCount ?? stats.reactionCount ?? 0);
+  const sum = heartCount + likeCount + laughCount + cryCount;
+  return {
+    reactionCount: Math.max(sum, Number.isFinite(explicitTotal) ? explicitTotal : 0),
+    heartCount
+  };
+}
+function normalizeCivitaiMcpComments(payload) {
+  const candidates = Array.isArray(payload) ? payload : Array.isArray(payload?.comments) ? payload.comments : Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.threads) ? payload.threads : Array.isArray(payload?.results) ? payload.results : Array.isArray(payload?.data) ? payload.data : [];
+  const out = [];
+  const seenIds = /* @__PURE__ */ new Set();
+  const visit = (item, depth, parentId) => {
+    if (!item || typeof item !== "object") return;
+    const id = Number(item.id ?? item.commentId ?? 0);
+    const text = stripCivitaiCommentHtml(
+      item.content ?? item.body ?? item.text ?? item.message ?? ""
+    );
+    const authorUsername = String(
+      item.user?.username ?? item.author?.username ?? (typeof item.author === "string" ? item.author : "") ?? item.username ?? "Civitai User"
+    ).trim();
+    const authorAvatarUrl = typeof item.user?.image === "string" ? item.user.image : typeof item.author?.image === "string" ? item.author.image : null;
+    const createdAt = typeof item.createdAt === "string" ? item.createdAt : typeof item.created_at === "string" ? item.created_at : null;
+    const resolvedParent = item.parentId != null ? Number(item.parentId) : item.parentCommentId != null ? Number(item.parentCommentId) : parentId;
+    const { reactionCount, heartCount } = sumCommentReactions(item);
+    if (Number.isInteger(id) && id > 0 && text && !seenIds.has(id) && !item.hidden) {
+      seenIds.add(id);
+      out.push({
+        id,
+        authorUsername: authorUsername || "Civitai User",
+        authorAvatarUrl,
+        content: text,
+        createdAt,
+        reactionCount,
+        heartCount,
+        parentCommentId: resolvedParent && Number.isInteger(resolvedParent) ? resolvedParent : null,
+        depth,
+        isPinned: Boolean(item.pinned ?? item.isPinned)
+      });
+    }
+    const nested = Array.isArray(item.replies) ? item.replies : Array.isArray(item.children) ? item.children : Array.isArray(item.comments) ? item.comments : [];
+    for (const child of nested) {
+      visit(child, Math.min(depth + 1, 3), Number.isInteger(id) && id > 0 ? id : parentId);
+    }
+  };
+  for (const item of candidates) {
+    visit(item, 0, null);
+  }
+  return out;
+}
+var CIVITAI_MCP_URL, CivitaiPayloadTooLargeError, CivitaiMcpClient;
+var init_civitaiMcpClient = __esm({
+  "src/server/services/civitai/civitaiMcpClient.ts"() {
+    CIVITAI_MCP_URL = "https://mcp.civitai.com/mcp";
+    CivitaiPayloadTooLargeError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.code = "PAYLOAD_TOO_LARGE";
+        this.name = "CivitaiPayloadTooLargeError";
+      }
+    };
+    CivitaiMcpClient = class {
+      constructor(apiKey, deps) {
+        this.sessionId = null;
+        this.nextId = 1;
+        this.apiKey = apiKey.trim();
+        this.endpointUrl = deps?.endpointUrl || CIVITAI_MCP_URL;
+        this.fetchFn = deps?.fetchFn || fetch;
+      }
+      async postJsonRpc(body) {
+        const headers = {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${this.apiKey}`
+        };
+        if (this.sessionId) {
+          headers["mcp-session-id"] = this.sessionId;
+        }
+        const res = await this.fetchFn(this.endpointUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body)
+        });
+        const sid = res.headers.get("mcp-session-id");
+        if (sid) this.sessionId = sid;
+        const text = await res.text();
+        if (!res.ok) {
+          if (isSizeLimitErrorMessage(res.status, text)) {
+            throw new CivitaiPayloadTooLargeError(
+              `Civitai rejected image upload due to file size limits (HTTP ${res.status}).`
+            );
+          }
+          throw new Error(`Civitai MCP HTTP ${res.status}: ${text.slice(0, 300)}`);
+        }
+        if (!text.trim()) {
+          return { status: res.status, envelope: null };
+        }
+        const envelope = parseMcpResponseBody(text);
+        if (envelope.error) {
+          const msg = envelope.error.message || "Civitai MCP JSON-RPC error";
+          if (isSizeLimitErrorMessage(res.status, msg)) {
+            throw new CivitaiPayloadTooLargeError(msg);
+          }
+          throw new Error(msg);
+        }
+        return { status: res.status, envelope };
+      }
+      async initialize() {
+        await this.postJsonRpc({
+          jsonrpc: "2.0",
+          id: this.nextId++,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "couchy", version: "0.1.0" }
+          }
+        });
+        await this.postJsonRpc({
+          jsonrpc: "2.0",
+          method: "notifications/initialized"
+        });
+      }
+      async callTool(name, args) {
+        const { envelope } = await this.postJsonRpc({
+          jsonrpc: "2.0",
+          id: this.nextId++,
+          method: "tools/call",
+          params: { name, arguments: args }
+        });
+        const result = envelope?.result;
+        const payload = extractToolResultPayload(result);
+        if (result?.isError) {
+          const errMsg = typeof payload?.message === "string" ? payload.message : typeof payload?.error === "string" ? payload.error : JSON.stringify(payload || "Civitai tool call failed");
+          if (isSizeLimitErrorMessage(400, errMsg)) {
+            throw new CivitaiPayloadTooLargeError(errMsg);
+          }
+          throw new Error(errMsg);
+        }
+        return payload;
+      }
+      async verifyAccountReady() {
+        const info = await this.callTool("whoami", {});
+        if (info?.muted === true || info?.isMuted === true) {
+          throw new Error("Your Civitai account is currently muted and cannot create posts.");
+        }
+        if (info?.isOnboarded === false) {
+          throw new Error(
+            "Your Civitai account has not completed onboarding. Sign in on civitai.com once to accept terms before creating drafts."
+          );
+        }
+      }
+      async uploadImage(params) {
+        const res = await this.callTool("upload_image", {
+          data: params.base64Data,
+          contentType: params.contentType
+        });
+        const uuid = res?.uuid || res?.id || res?.imageUuid;
+        if (!uuid || typeof uuid !== "string") {
+          throw new Error("Civitai upload_image did not return an image UUID.");
+        }
+        return {
+          uuid,
+          width: typeof res.width === "number" ? res.width : void 0,
+          height: typeof res.height === "number" ? res.height : void 0
+        };
+      }
+      async createDraftPost(params) {
+        const imageList = Array.isArray(params.images) && params.images.length > 0 ? params.images : params.image ? [params.image] : [];
+        if (imageList.length === 0 || imageList.length > 20) {
+          throw new Error(`Civitai create_post requires between 1 and 20 images (got ${imageList.length}).`);
+        }
+        const args = {
+          images: imageList.map((img) => ({
+            uuid: img.uuid,
+            width: img.width,
+            height: img.height,
+            type: "image"
+          })),
+          publish: false
+          // Always draft-only; never auto-publish
+        };
+        if (params.title && params.title.trim()) args.title = params.title.trim();
+        if (params.detail && params.detail.trim()) args.detail = params.detail.trim();
+        if (Array.isArray(params.tags) && params.tags.length > 0) args.tags = params.tags;
+        if (params.modelVersionId && Number(params.modelVersionId) > 0) {
+          args.modelVersionId = Number(params.modelVersionId);
+        }
+        const res = await this.callTool("create_post", args);
+        const rawPostId = res?.id ?? res?.postId ?? res?.post?.id;
+        const postId = Number(rawPostId);
+        if (!Number.isInteger(postId) || postId <= 0) {
+          throw new Error("Civitai create_post did not return a valid post ID.");
+        }
+        const processingImageIds = Array.isArray(res?.processingImageIds) ? res.processingImageIds.map(Number).filter(Number.isFinite) : [];
+        return { postId, processingImageIds };
+      }
+      /**
+       * Calls Civitai MCP `list_comments` for an image or post entity and normalizes the thread.
+       */
+      async listComments(params) {
+        const res = await this.callTool("list_comments", {
+          entityType: params.entityType,
+          entityId: params.entityId,
+          depth: params.depth ?? 2,
+          sort: params.sort ?? "Newest",
+          includeFull: params.includeFull ?? true
+        });
+        return normalizeCivitaiMcpComments(res);
+      }
+    };
+  }
+});
+
+// src/server/services/civitai/civitaiCommentsService.ts
+async function fetchPostCommentsViaMcp(params) {
+  let listFn = params.listCommentsFn;
+  if (!listFn) {
+    const key = params.apiKey?.trim();
+    if (!key) {
+      return { ok: false, comments: [] };
+    }
+    const client = new CivitaiMcpClient(key, { fetchFn: params.fetchFn });
+    await client.initialize();
+    listFn = ({ entityType, entityId }) => client.listComments({ entityType, entityId, depth: 2, sort: "Newest", includeFull: true });
+  }
+  const collected = [];
+  const seenKeys = /* @__PURE__ */ new Set();
+  let anySucceeded = false;
+  for (const img of params.postImages) {
+    if (img.commentCount <= 0) continue;
+    try {
+      const items = await listFn({ entityType: "image", entityId: img.civitaiImageId });
+      anySucceeded = true;
+      for (const c of items) {
+        const dedupeKey = `image:${c.id}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+        collected.push({
+          id: c.id,
+          targetType: "image",
+          civitaiPostId: params.postId,
+          civitaiImageId: img.civitaiImageId,
+          localImageId: img.localImageId ?? null,
+          civitaiUrl: `https://${params.domain}/images/${img.civitaiImageId}`,
+          authorUsername: c.authorUsername,
+          authorAvatarUrl: c.authorAvatarUrl,
+          content: c.content,
+          createdAt: c.createdAt,
+          reactionCount: c.reactionCount,
+          heartCount: c.heartCount,
+          parentCommentId: c.parentCommentId,
+          depth: c.depth,
+          isPinned: c.isPinned
+        });
+      }
+    } catch {
+    }
+  }
+  try {
+    const postComments = await listFn({ entityType: "post", entityId: params.postId });
+    anySucceeded = true;
+    for (const c of postComments) {
+      const dedupeKey = `post:${c.id}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+      collected.push({
+        id: c.id,
+        targetType: "post",
+        civitaiPostId: params.postId,
+        civitaiImageId: null,
+        localImageId: null,
+        civitaiUrl: `https://${params.domain}/posts/${params.postId}`,
+        authorUsername: c.authorUsername,
+        authorAvatarUrl: c.authorAvatarUrl,
+        content: c.content,
+        createdAt: c.createdAt,
+        reactionCount: c.reactionCount,
+        heartCount: c.heartCount,
+        parentCommentId: c.parentCommentId,
+        depth: c.depth,
+        isPinned: c.isPinned
+      });
+    }
+  } catch {
+  }
+  return { ok: anySucceeded, comments: collected };
+}
+function enrichCommentsWithLocalImages(comments) {
+  if (!comments || comments.length === 0) return [];
+  const localIds = Array.from(
+    new Set(
+      comments.map((c) => c.localImageId).filter((id) => typeof id === "number" && Number.isInteger(id) && id > 0)
+    )
+  );
+  const infoById = /* @__PURE__ */ new Map();
+  if (localIds.length > 0) {
+    const placeholders = localIds.map(() => "?").join(",");
+    const rows = db.prepare(`SELECT id, filename FROM images WHERE id IN (${placeholders})`).all(...localIds);
+    for (const row of rows) {
+      infoById.set(Number(row.id), { filename: String(row.filename || "") });
+    }
+  }
+  return comments.map((c) => {
+    const localInfo = c.localImageId ? infoById.get(c.localImageId) : void 0;
+    return {
+      ...c,
+      localFilename: localInfo?.filename ?? c.localFilename ?? null,
+      localThumbnailUrl: c.localImageId && localInfo ? `/api/images/${c.localImageId}/thumbnail` : c.localThumbnailUrl ?? null
+    };
+  });
+}
+var init_civitaiCommentsService = __esm({
+  "src/server/services/civitai/civitaiCommentsService.ts"() {
+    init_db();
+    init_civitaiMcpClient();
+  }
+});
+
 // src/server/services/civitai/civitaiActivitySyncService.ts
 var civitaiActivitySyncService_exports = {};
 __export(civitaiActivitySyncService_exports, {
@@ -8540,8 +8947,27 @@ function parseSqliteUtcMs(raw) {
 function inferDomainFromDraftUrl(url) {
   return String(url || "").toLowerCase().includes("civitai.red") ? "civitai.red" : "civitai.com";
 }
+function safeParseJsonArray(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 function mapDraftRowToRecord(row) {
   const status = row.status === "published" ? "published" : "draft";
+  const heartCount = Math.max(0, Number(row.heart_count || 0));
+  const likeCount = Math.max(0, Number(row.like_count || 0));
+  const laughCount = Math.max(0, Number(row.laugh_count || 0));
+  const cryCount = Math.max(0, Number(row.cry_count || 0));
+  const reactionBreakdown = {
+    heartCount,
+    likeCount,
+    laughCount,
+    cryCount
+  };
   const reactionCount = Math.max(0, Number(row.reaction_count || 0));
   const commentCount = Math.max(0, Number(row.comment_count || 0));
   const seenReactionCount = Math.max(0, Number(row.seen_reaction_count || 0));
@@ -8558,11 +8984,15 @@ function mapDraftRowToRecord(row) {
     civitaiImageId: row.civitai_image_id ? Number(row.civitai_image_id) : null,
     publishedUrl: row.published_url ? String(row.published_url) : null,
     reactionCount,
+    reactionBreakdown,
     commentCount,
     seenReactionCount,
     seenCommentCount,
     hasUnseenActivity,
     statsSyncedAt: row.stats_synced_at ? String(row.stats_synced_at) : null,
+    commentsSyncedAt: row.comments_synced_at ? String(row.comments_synced_at) : null,
+    postImages: safeParseJsonArray(row.post_images_json),
+    comments: safeParseJsonArray(row.comments_json),
     createdAt: String(row.created_at || "")
   };
 }
@@ -8574,6 +9004,10 @@ function summarizeCivitaiDraftRows(rows) {
   const seenPostIds = /* @__PURE__ */ new Set();
   let reactionCount = 0;
   let commentCount = 0;
+  let heartCount = 0;
+  let likeCount = 0;
+  let laughCount = 0;
+  let cryCount = 0;
   let hasUnseenActivity = false;
   for (const r of publishedRows) {
     const pid = Number(r.civitai_post_id);
@@ -8588,6 +9022,10 @@ function summarizeCivitaiDraftRows(rows) {
       seenPostIds.add(pid);
       reactionCount += rCnt;
       commentCount += cCnt;
+      heartCount += Math.max(0, Number(r.heart_count || 0));
+      likeCount += Math.max(0, Number(r.like_count || 0));
+      laughCount += Math.max(0, Number(r.laugh_count || 0));
+      cryCount += Math.max(0, Number(r.cry_count || 0));
     }
   }
   const primaryRow = publishedRows[0] || sorted[0];
@@ -8597,6 +9035,7 @@ function summarizeCivitaiDraftRows(rows) {
     totalDrafts: sorted.length,
     publishedCount: publishedRows.length,
     reactionCount,
+    reactionBreakdown: { heartCount, likeCount, laughCount, cryCount },
     commentCount,
     hasActivity: status === "published" && (reactionCount > 0 || commentCount > 0),
     hasUnseenActivity,
@@ -8604,17 +9043,56 @@ function summarizeCivitaiDraftRows(rows) {
   };
 }
 function extractCivitaiPostStats(items, domain, postId) {
-  let reactionCount = 0;
+  const sortedItems = [...items].sort((a, b) => {
+    const idxA = typeof a?.index === "number" ? a.index : null;
+    const idxB = typeof b?.index === "number" ? b.index : null;
+    if (idxA !== null && idxB !== null && idxA !== idxB) return idxA - idxB;
+    return Number(a?.id || 0) - Number(b?.id || 0);
+  });
+  let heartCount = 0;
+  let likeCount = 0;
+  let laughCount = 0;
+  let cryCount = 0;
   let commentCount = 0;
-  const firstId = Number(items[0]?.id || 0);
-  const civitaiImageId = Number.isInteger(firstId) && firstId > 0 ? firstId : null;
-  for (const item of items) {
+  const postImages = [];
+  sortedItems.forEach((item, idx) => {
     const stats = item?.stats || {};
-    reactionCount += Math.max(0, Number(stats.likeCount || 0)) + Math.max(0, Number(stats.heartCount || 0)) + Math.max(0, Number(stats.laughCount || 0)) + Math.max(0, Number(stats.cryCount || 0));
-    commentCount += Math.max(0, Number(stats.commentCount || 0));
-  }
-  const publishedUrl = civitaiImageId ? `https://${domain}/images/${civitaiImageId}` : `https://${domain}/posts/${postId}`;
-  return { civitaiImageId, publishedUrl, reactionCount, commentCount };
+    const itemHeart = Math.max(0, Number(stats.heartCount || 0));
+    const itemLike = Math.max(0, Number(stats.likeCount || 0));
+    const itemLaugh = Math.max(0, Number(stats.laughCount || 0));
+    const itemCry = Math.max(0, Number(stats.cryCount || 0));
+    const itemComment = Math.max(0, Number(stats.commentCount || 0));
+    heartCount += itemHeart;
+    likeCount += itemLike;
+    laughCount += itemLaugh;
+    cryCount += itemCry;
+    commentCount += itemComment;
+    const itemId = Number(item?.id || 0);
+    if (Number.isInteger(itemId) && itemId > 0) {
+      postImages.push({
+        civitaiImageId: itemId,
+        index: typeof item?.index === "number" ? item.index : idx,
+        localImageId: null,
+        url: `https://${domain}/images/${itemId}`,
+        heartCount: itemHeart,
+        likeCount: itemLike,
+        laughCount: itemLaugh,
+        cryCount: itemCry,
+        commentCount: itemComment
+      });
+    }
+  });
+  const firstId = postImages[0]?.civitaiImageId ?? null;
+  const reactionCount = heartCount + likeCount + laughCount + cryCount;
+  const publishedUrl = firstId ? `https://${domain}/images/${firstId}` : `https://${domain}/posts/${postId}`;
+  return {
+    civitaiImageId: firstId,
+    publishedUrl,
+    reactionCount,
+    reactionBreakdown: { heartCount, likeCount, laughCount, cryCount },
+    commentCount,
+    postImages
+  };
 }
 async function queryPostStatsAcrossDomains(postId, preferredDomain, fetchFn) {
   const domains = preferredDomain === "civitai.red" ? ["civitai.red", "civitai.com"] : ["civitai.com", "civitai.red"];
@@ -8642,7 +9120,7 @@ async function queryPostStatsAcrossDomains(postId, preferredDomain, fetchFn) {
   }
   return null;
 }
-async function syncPostIdStats(postId, sampleDraftRow, deps) {
+async function syncPostIdStats(postId, sampleDraftRow, deps, options) {
   const fetchFn = deps?.fetchFn || fetch;
   const preferredDomain = inferDomainFromDraftUrl(
     sampleDraftRow.published_url || sampleDraftRow.draft_url
@@ -8656,21 +9134,95 @@ async function syncPostIdStats(postId, sampleDraftRow, deps) {
     ).run(postId);
     return false;
   }
+  const draftRowsForPost = db.prepare(
+    `SELECT id, image_id
+       FROM image_civitai_drafts
+       WHERE civitai_post_id = ?
+       ORDER BY id ASC`
+  ).all(postId);
+  const mappedPostImages = live.postImages.map((pi, idx) => {
+    let localImageId = null;
+    if (draftRowsForPost.length === 1 && idx === 0) {
+      localImageId = Number(draftRowsForPost[0].image_id);
+    } else if (live.postImages.length === draftRowsForPost.length) {
+      localImageId = Number(draftRowsForPost[idx].image_id);
+    }
+    return { ...pi, localImageId };
+  });
   const prevStatus = sampleDraftRow.status === "published" ? "published" : "draft";
   const prevImgId = sampleDraftRow.civitai_image_id ? Number(sampleDraftRow.civitai_image_id) : null;
   const prevReactions = Number(sampleDraftRow.reaction_count || 0);
   const prevComments = Number(sampleDraftRow.comment_count || 0);
-  const changed = prevStatus !== "published" || prevImgId !== live.civitaiImageId || prevReactions !== live.reactionCount || prevComments !== live.commentCount;
-  db.prepare(
+  const prevHeart = Number(sampleDraftRow.heart_count || 0);
+  const prevLike = Number(sampleDraftRow.like_count || 0);
+  const prevLaugh = Number(sampleDraftRow.laugh_count || 0);
+  const prevCry = Number(sampleDraftRow.cry_count || 0);
+  let nextCommentCount = live.commentCount;
+  let commentsJsonToSave = null;
+  let shouldUpdateComments = false;
+  const canQueryComments = Boolean(deps?.listCommentsFn || appConfig.civitaiApiKey?.trim());
+  const needsCommentsSync = Boolean(options?.syncComments) && canQueryComments && (live.commentCount > 0 || live.commentCount !== prevComments || !sampleDraftRow.comments_synced_at);
+  if (needsCommentsSync) {
+    try {
+      const commentResult = await fetchPostCommentsViaMcp({
+        postId,
+        domain: live.domain,
+        postImages: mappedPostImages,
+        apiKey: appConfig.civitaiApiKey,
+        fetchFn,
+        listCommentsFn: deps?.listCommentsFn
+      });
+      if (commentResult.ok) {
+        shouldUpdateComments = true;
+        commentsJsonToSave = JSON.stringify(commentResult.comments);
+        nextCommentCount = Math.max(live.commentCount, commentResult.comments.length);
+      }
+    } catch {
+    }
+  }
+  const changed = prevStatus !== "published" || prevImgId !== live.civitaiImageId || prevReactions !== live.reactionCount || prevComments !== nextCommentCount || prevHeart !== live.reactionBreakdown.heartCount || prevLike !== live.reactionBreakdown.likeCount || prevLaugh !== live.reactionBreakdown.laughCount || prevCry !== live.reactionBreakdown.cryCount || shouldUpdateComments && commentsJsonToSave !== (sampleDraftRow.comments_json || null);
+  const postImagesJson = JSON.stringify(mappedPostImages);
+  const updateRowStmt = db.prepare(
     `UPDATE image_civitai_drafts
      SET status = 'published',
          civitai_image_id = COALESCE(?, civitai_image_id),
          published_url = ?,
          reaction_count = ?,
+         heart_count = ?,
+         like_count = ?,
+         laugh_count = ?,
+         cry_count = ?,
          comment_count = ?,
+         post_images_json = ?,
+         comments_json = CASE WHEN ? = 1 THEN ? ELSE comments_json END,
+         comments_synced_at = CASE WHEN ? = 1 THEN datetime('now') ELSE comments_synced_at END,
          stats_synced_at = datetime('now')
-     WHERE civitai_post_id = ?`
-  ).run(live.civitaiImageId, live.publishedUrl, live.reactionCount, live.commentCount, postId);
+     WHERE id = ?`
+  );
+  const tx = db.transaction(() => {
+    for (let i = 0; i < draftRowsForPost.length; i++) {
+      const row = draftRowsForPost[i];
+      const matched = mappedPostImages.find((pi) => pi.localImageId === Number(row.image_id));
+      const rowCivitaiImageId = matched?.civitaiImageId ?? live.civitaiImageId;
+      const rowPublishedUrl = matched?.url ?? live.publishedUrl;
+      updateRowStmt.run(
+        rowCivitaiImageId,
+        rowPublishedUrl,
+        live.reactionCount,
+        live.reactionBreakdown.heartCount,
+        live.reactionBreakdown.likeCount,
+        live.reactionBreakdown.laughCount,
+        live.reactionBreakdown.cryCount,
+        nextCommentCount,
+        postImagesJson,
+        shouldUpdateComments ? 1 : 0,
+        commentsJsonToSave,
+        shouldUpdateComments ? 1 : 0,
+        row.id
+      );
+    }
+  });
+  tx();
   return changed;
 }
 async function syncCivitaiActivityForImage(imageId, options) {
@@ -8683,6 +9235,7 @@ async function syncCivitaiActivityForImage(imageId, options) {
   ).all(imageId, imageRow.content_hash);
   if (draftRows.length === 0) return { syncedPosts: 0, changed: false };
   const minIntervalMs = options?.minIntervalMs ?? DEFAULT_INSPECTOR_MIN_INTERVAL_MS;
+  const syncComments = options?.syncComments ?? true;
   const nowMs = Date.now();
   const seenPosts = /* @__PURE__ */ new Set();
   let syncedPosts = 0;
@@ -8691,11 +9244,13 @@ async function syncCivitaiActivityForImage(imageId, options) {
     const postId = Number(row.civitai_post_id);
     if (!postId || seenPosts.has(postId)) continue;
     seenPosts.add(postId);
+    const needsBreakdownBackfill = row.status === "published" && Number(row.reaction_count || 0) > 0 && Number(row.heart_count || 0) + Number(row.like_count || 0) + Number(row.laugh_count || 0) + Number(row.cry_count || 0) === 0;
+    const needsCommentBackfill = syncComments && row.status === "published" && (!row.comments_synced_at || Number(row.comment_count || 0) > 0 && !row.comments_json);
     const lastSyncMs = parseSqliteUtcMs(row.stats_synced_at);
-    if (minIntervalMs > 0 && lastSyncMs > 0 && nowMs - lastSyncMs < minIntervalMs) {
+    if (!needsBreakdownBackfill && !needsCommentBackfill && minIntervalMs > 0 && lastSyncMs > 0 && nowMs - lastSyncMs < minIntervalMs) {
       continue;
     }
-    const changed = await syncPostIdStats(postId, row, options?.deps);
+    const changed = await syncPostIdStats(postId, row, options?.deps, { syncComments });
     syncedPosts += 1;
     if (changed) anyChanged = true;
   }
@@ -8747,11 +9302,12 @@ async function syncAllCivitaiShareActivity(options) {
       const postId = Number(row.civitai_post_id);
       if (!postId || seenPosts.has(postId)) continue;
       seenPosts.add(postId);
+      const needsBreakdownBackfill = row.status === "published" && Number(row.reaction_count || 0) > 0 && Number(row.heart_count || 0) + Number(row.like_count || 0) + Number(row.laugh_count || 0) + Number(row.cry_count || 0) === 0;
       const lastSyncMs = parseSqliteUtcMs(row.stats_synced_at);
-      if (minIntervalMs > 0 && lastSyncMs > 0 && nowMs - lastSyncMs < minIntervalMs) {
+      if (!needsBreakdownBackfill && minIntervalMs > 0 && lastSyncMs > 0 && nowMs - lastSyncMs < minIntervalMs) {
         continue;
       }
-      const changed = await syncPostIdStats(postId, row, options?.deps);
+      const changed = await syncPostIdStats(postId, row, options?.deps, { syncComments: true });
       checkedPosts += 1;
       if (changed) changedPosts += 1;
       if (!options?.deps?.fetchFn) {
@@ -8797,6 +9353,7 @@ var init_civitaiActivitySyncService = __esm({
     init_logger();
     init_comfyuiLiveMonitor();
     init_civitaiHttpAndParse();
+    init_civitaiCommentsService();
     DEFAULT_BACKGROUND_INTERVAL_MS = 15 * 60 * 1e3;
     DEFAULT_INSPECTOR_MIN_INTERVAL_MS = 2 * 60 * 1e3;
     REQUEST_TIMEOUT_MS = 8e3;
@@ -11058,7 +11615,13 @@ async function evaluateCivitaiShareEligibility(imageId, options) {
        WHERE image_id = ? OR image_content_hash = ?
        ORDER BY id DESC`
   ).all(imageId, imageRow.content_hash);
-  const existingDrafts = draftRows.map(mapDraftRowToRecord);
+  const existingDrafts = draftRows.map((row) => {
+    const mapped = mapDraftRowToRecord(row);
+    return {
+      ...mapped,
+      comments: enrichCommentsWithLocalImages(mapped.comments)
+    };
+  });
   const stack = options?.includeStack === false ? null : await evaluateCivitaiStackShareEligibility(imageId, {
     preferredSeriesId: options?.seriesId,
     hasCivitaiKey,
@@ -11095,6 +11658,7 @@ var init_civitaiShareEligibility = __esm({
     init_scannerService();
     init_settingsService();
     init_civitaiActivitySyncService();
+    init_civitaiCommentsService();
     init_civitaiShareCore();
     init_civitaiShareStackEligibility();
   }
@@ -11312,200 +11876,6 @@ var init_civitaiImagePayload = __esm({
     init_civitaiHttpAndParse();
     MAX_FALLBACK_JPEG_BYTES = 9.5 * 1024 * 1024;
     PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  }
-});
-
-// src/server/services/civitai/civitaiMcpClient.ts
-function isSizeLimitErrorMessage(status, message) {
-  if (status === 413) return true;
-  return /too large|payload.*large|size limit|exceeds.*(mb|mib|bytes|size)|max.*size|413/i.test(
-    message
-  );
-}
-function parseMcpResponseBody(rawText) {
-  const trimmed = rawText.trim();
-  if (!trimmed) {
-    throw new Error("Empty response from Civitai MCP server.");
-  }
-  if (trimmed.startsWith("{")) {
-    return JSON.parse(trimmed);
-  }
-  const dataLines = trimmed.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).filter(Boolean);
-  for (let i = dataLines.length - 1; i >= 0; i--) {
-    try {
-      return JSON.parse(dataLines[i]);
-    } catch {
-    }
-  }
-  throw new Error(`Unexpected Civitai MCP response format: ${trimmed.slice(0, 200)}`);
-}
-function extractToolResultPayload(toolResult) {
-  if (!toolResult || typeof toolResult !== "object") return toolResult;
-  if (toolResult.structuredContent && typeof toolResult.structuredContent === "object") {
-    return toolResult.structuredContent;
-  }
-  const firstText = Array.isArray(toolResult.content) ? toolResult.content.find((c) => c?.type === "text" && typeof c.text === "string")?.text : void 0;
-  if (typeof firstText === "string") {
-    const trimmed = firstText.trim();
-    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        return { message: firstText };
-      }
-    }
-    return { message: firstText };
-  }
-  return toolResult;
-}
-var CIVITAI_MCP_URL, CivitaiPayloadTooLargeError, CivitaiMcpClient;
-var init_civitaiMcpClient = __esm({
-  "src/server/services/civitai/civitaiMcpClient.ts"() {
-    CIVITAI_MCP_URL = "https://mcp.civitai.com/mcp";
-    CivitaiPayloadTooLargeError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.code = "PAYLOAD_TOO_LARGE";
-        this.name = "CivitaiPayloadTooLargeError";
-      }
-    };
-    CivitaiMcpClient = class {
-      constructor(apiKey, deps) {
-        this.sessionId = null;
-        this.nextId = 1;
-        this.apiKey = apiKey.trim();
-        this.endpointUrl = deps?.endpointUrl || CIVITAI_MCP_URL;
-        this.fetchFn = deps?.fetchFn || fetch;
-      }
-      async postJsonRpc(body) {
-        const headers = {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          Authorization: `Bearer ${this.apiKey}`
-        };
-        if (this.sessionId) {
-          headers["mcp-session-id"] = this.sessionId;
-        }
-        const res = await this.fetchFn(this.endpointUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body)
-        });
-        const sid = res.headers.get("mcp-session-id");
-        if (sid) this.sessionId = sid;
-        const text = await res.text();
-        if (!res.ok) {
-          if (isSizeLimitErrorMessage(res.status, text)) {
-            throw new CivitaiPayloadTooLargeError(
-              `Civitai rejected image upload due to file size limits (HTTP ${res.status}).`
-            );
-          }
-          throw new Error(`Civitai MCP HTTP ${res.status}: ${text.slice(0, 300)}`);
-        }
-        if (!text.trim()) {
-          return { status: res.status, envelope: null };
-        }
-        const envelope = parseMcpResponseBody(text);
-        if (envelope.error) {
-          const msg = envelope.error.message || "Civitai MCP JSON-RPC error";
-          if (isSizeLimitErrorMessage(res.status, msg)) {
-            throw new CivitaiPayloadTooLargeError(msg);
-          }
-          throw new Error(msg);
-        }
-        return { status: res.status, envelope };
-      }
-      async initialize() {
-        await this.postJsonRpc({
-          jsonrpc: "2.0",
-          id: this.nextId++,
-          method: "initialize",
-          params: {
-            protocolVersion: "2025-03-26",
-            capabilities: {},
-            clientInfo: { name: "couchy", version: "0.1.0" }
-          }
-        });
-        await this.postJsonRpc({
-          jsonrpc: "2.0",
-          method: "notifications/initialized"
-        });
-      }
-      async callTool(name, args) {
-        const { envelope } = await this.postJsonRpc({
-          jsonrpc: "2.0",
-          id: this.nextId++,
-          method: "tools/call",
-          params: { name, arguments: args }
-        });
-        const result = envelope?.result;
-        const payload = extractToolResultPayload(result);
-        if (result?.isError) {
-          const errMsg = typeof payload?.message === "string" ? payload.message : typeof payload?.error === "string" ? payload.error : JSON.stringify(payload || "Civitai tool call failed");
-          if (isSizeLimitErrorMessage(400, errMsg)) {
-            throw new CivitaiPayloadTooLargeError(errMsg);
-          }
-          throw new Error(errMsg);
-        }
-        return payload;
-      }
-      async verifyAccountReady() {
-        const info = await this.callTool("whoami", {});
-        if (info?.muted === true || info?.isMuted === true) {
-          throw new Error("Your Civitai account is currently muted and cannot create posts.");
-        }
-        if (info?.isOnboarded === false) {
-          throw new Error(
-            "Your Civitai account has not completed onboarding. Sign in on civitai.com once to accept terms before creating drafts."
-          );
-        }
-      }
-      async uploadImage(params) {
-        const res = await this.callTool("upload_image", {
-          data: params.base64Data,
-          contentType: params.contentType
-        });
-        const uuid = res?.uuid || res?.id || res?.imageUuid;
-        if (!uuid || typeof uuid !== "string") {
-          throw new Error("Civitai upload_image did not return an image UUID.");
-        }
-        return {
-          uuid,
-          width: typeof res.width === "number" ? res.width : void 0,
-          height: typeof res.height === "number" ? res.height : void 0
-        };
-      }
-      async createDraftPost(params) {
-        const imageList = Array.isArray(params.images) && params.images.length > 0 ? params.images : params.image ? [params.image] : [];
-        if (imageList.length === 0 || imageList.length > 20) {
-          throw new Error(`Civitai create_post requires between 1 and 20 images (got ${imageList.length}).`);
-        }
-        const args = {
-          images: imageList.map((img) => ({
-            uuid: img.uuid,
-            width: img.width,
-            height: img.height,
-            type: "image"
-          })),
-          publish: false
-          // Always draft-only; never auto-publish
-        };
-        if (params.title && params.title.trim()) args.title = params.title.trim();
-        if (params.detail && params.detail.trim()) args.detail = params.detail.trim();
-        if (Array.isArray(params.tags) && params.tags.length > 0) args.tags = params.tags;
-        if (params.modelVersionId && Number(params.modelVersionId) > 0) {
-          args.modelVersionId = Number(params.modelVersionId);
-        }
-        const res = await this.callTool("create_post", args);
-        const rawPostId = res?.id ?? res?.postId ?? res?.post?.id;
-        const postId = Number(rawPostId);
-        if (!Number.isInteger(postId) || postId <= 0) {
-          throw new Error("Civitai create_post did not return a valid post ID.");
-        }
-        const processingImageIds = Array.isArray(res?.processingImageIds) ? res.processingImageIds.map(Number).filter(Number.isFinite) : [];
-        return { postId, processingImageIds };
-      }
-    };
   }
 });
 
@@ -12167,7 +12537,11 @@ var init_imagesRoutes = __esm({
         const imageId = Number(req.params.id);
         const seriesIdRaw = req.query.seriesId !== void 0 ? Number(req.query.seriesId) : null;
         const seriesId = seriesIdRaw && Number.isFinite(seriesIdRaw) ? seriesIdRaw : null;
-        await syncCivitaiActivityForImage(imageId).catch(() => {
+        const forceRefresh = req.query.refresh === "1" || req.query.refresh === "true";
+        await syncCivitaiActivityForImage(
+          imageId,
+          forceRefresh ? { minIntervalMs: 0, syncComments: true } : { syncComments: true }
+        ).catch(() => {
         });
         const status = await evaluateCivitaiShareEligibility(imageId, { seriesId });
         res.json(status);

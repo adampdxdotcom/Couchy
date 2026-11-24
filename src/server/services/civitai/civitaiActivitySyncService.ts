@@ -3,7 +3,17 @@ import { appConfig } from '../../config.ts';
 import { logger } from '../../logger.ts';
 import { notifyWorkspaceDataChanged } from '../comfyuiLiveMonitor.ts';
 import { getCivitaiHeaders, type CivitaiDomain } from './civitaiHttpAndParse.ts';
-import type { CivitaiDraftRecord, CivitaiShareSummary } from '../../../shared/apiTypes.ts';
+import {
+  fetchPostCommentsViaMcp,
+  type ListCommentsFn,
+} from './civitaiCommentsService.ts';
+import type {
+  CivitaiCommentRecord,
+  CivitaiDraftRecord,
+  CivitaiPostImageStats,
+  CivitaiReactionBreakdown,
+  CivitaiShareSummary,
+} from '../../../shared/apiTypes.ts';
 
 const DEFAULT_BACKGROUND_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_INSPECTOR_MIN_INTERVAL_MS = 2 * 60 * 1000;
@@ -15,6 +25,7 @@ let isSyncRunning = false;
 
 export interface CivitaiActivitySyncDeps {
   fetchFn?: typeof fetch;
+  listCommentsFn?: ListCommentsFn;
 }
 
 function parseSqliteUtcMs(raw: string | null | undefined): number {
@@ -29,11 +40,31 @@ function inferDomainFromDraftUrl(url: string | null | undefined): CivitaiDomain 
   return String(url || '').toLowerCase().includes('civitai.red') ? 'civitai.red' : 'civitai.com';
 }
 
+function safeParseJsonArray<T>(raw: unknown): T[] {
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Maps a raw `image_civitai_drafts` SQLite row into a typed `CivitaiDraftRecord`.
  */
 export function mapDraftRowToRecord(row: any): CivitaiDraftRecord {
   const status = row.status === 'published' ? 'published' : 'draft';
+  const heartCount = Math.max(0, Number(row.heart_count || 0));
+  const likeCount = Math.max(0, Number(row.like_count || 0));
+  const laughCount = Math.max(0, Number(row.laugh_count || 0));
+  const cryCount = Math.max(0, Number(row.cry_count || 0));
+  const reactionBreakdown: CivitaiReactionBreakdown = {
+    heartCount,
+    likeCount,
+    laughCount,
+    cryCount,
+  };
   const reactionCount = Math.max(0, Number(row.reaction_count || 0));
   const commentCount = Math.max(0, Number(row.comment_count || 0));
   const seenReactionCount = Math.max(0, Number(row.seen_reaction_count || 0));
@@ -53,11 +84,15 @@ export function mapDraftRowToRecord(row: any): CivitaiDraftRecord {
     civitaiImageId: row.civitai_image_id ? Number(row.civitai_image_id) : null,
     publishedUrl: row.published_url ? String(row.published_url) : null,
     reactionCount,
+    reactionBreakdown,
     commentCount,
     seenReactionCount,
     seenCommentCount,
     hasUnseenActivity,
     statsSyncedAt: row.stats_synced_at ? String(row.stats_synced_at) : null,
+    commentsSyncedAt: row.comments_synced_at ? String(row.comments_synced_at) : null,
+    postImages: safeParseJsonArray<CivitaiPostImageStats>(row.post_images_json),
+    comments: safeParseJsonArray<CivitaiCommentRecord>(row.comments_json),
     createdAt: String(row.created_at || ''),
   };
 }
@@ -76,6 +111,10 @@ export function summarizeCivitaiDraftRows(rows: any[]): CivitaiShareSummary | nu
   const seenPostIds = new Set<number>();
   let reactionCount = 0;
   let commentCount = 0;
+  let heartCount = 0;
+  let likeCount = 0;
+  let laughCount = 0;
+  let cryCount = 0;
   let hasUnseenActivity = false;
 
   for (const r of publishedRows) {
@@ -91,6 +130,10 @@ export function summarizeCivitaiDraftRows(rows: any[]): CivitaiShareSummary | nu
       seenPostIds.add(pid);
       reactionCount += rCnt;
       commentCount += cCnt;
+      heartCount += Math.max(0, Number(r.heart_count || 0));
+      likeCount += Math.max(0, Number(r.like_count || 0));
+      laughCount += Math.max(0, Number(r.laugh_count || 0));
+      cryCount += Math.max(0, Number(r.cry_count || 0));
     }
   }
 
@@ -102,6 +145,7 @@ export function summarizeCivitaiDraftRows(rows: any[]): CivitaiShareSummary | nu
     totalDrafts: sorted.length,
     publishedCount: publishedRows.length,
     reactionCount,
+    reactionBreakdown: { heartCount, likeCount, laughCount, cryCount },
     commentCount,
     hasActivity: status === 'published' && (reactionCount > 0 || commentCount > 0),
     hasUnseenActivity,
@@ -110,7 +154,8 @@ export function summarizeCivitaiDraftRows(rows: any[]): CivitaiShareSummary | nu
 }
 
 /**
- * Extracts total reactions, comment count, and primary image ID from Civitai `/api/v1/images?postId=...` items.
+ * Extracts total reactions, detailed reaction breakdown, per-image stats, and comment count
+ * from Civitai `/api/v1/images?postId=...` items.
  */
 export function extractCivitaiPostStats(
   items: any[],
@@ -120,28 +165,68 @@ export function extractCivitaiPostStats(
   civitaiImageId: number | null;
   publishedUrl: string;
   reactionCount: number;
+  reactionBreakdown: CivitaiReactionBreakdown;
   commentCount: number;
+  postImages: CivitaiPostImageStats[];
 } {
-  let reactionCount = 0;
+  const sortedItems = [...items].sort((a, b) => {
+    const idxA = typeof a?.index === 'number' ? a.index : null;
+    const idxB = typeof b?.index === 'number' ? b.index : null;
+    if (idxA !== null && idxB !== null && idxA !== idxB) return idxA - idxB;
+    return Number(a?.id || 0) - Number(b?.id || 0);
+  });
+
+  let heartCount = 0;
+  let likeCount = 0;
+  let laughCount = 0;
+  let cryCount = 0;
   let commentCount = 0;
-  const firstId = Number(items[0]?.id || 0);
-  const civitaiImageId = Number.isInteger(firstId) && firstId > 0 ? firstId : null;
+  const postImages: CivitaiPostImageStats[] = [];
 
-  for (const item of items) {
+  sortedItems.forEach((item, idx) => {
     const stats = item?.stats || {};
-    reactionCount +=
-      Math.max(0, Number(stats.likeCount || 0)) +
-      Math.max(0, Number(stats.heartCount || 0)) +
-      Math.max(0, Number(stats.laughCount || 0)) +
-      Math.max(0, Number(stats.cryCount || 0));
-    commentCount += Math.max(0, Number(stats.commentCount || 0));
-  }
+    const itemHeart = Math.max(0, Number(stats.heartCount || 0));
+    const itemLike = Math.max(0, Number(stats.likeCount || 0));
+    const itemLaugh = Math.max(0, Number(stats.laughCount || 0));
+    const itemCry = Math.max(0, Number(stats.cryCount || 0));
+    const itemComment = Math.max(0, Number(stats.commentCount || 0));
 
-  const publishedUrl = civitaiImageId
-    ? `https://${domain}/images/${civitaiImageId}`
+    heartCount += itemHeart;
+    likeCount += itemLike;
+    laughCount += itemLaugh;
+    cryCount += itemCry;
+    commentCount += itemComment;
+
+    const itemId = Number(item?.id || 0);
+    if (Number.isInteger(itemId) && itemId > 0) {
+      postImages.push({
+        civitaiImageId: itemId,
+        index: typeof item?.index === 'number' ? item.index : idx,
+        localImageId: null,
+        url: `https://${domain}/images/${itemId}`,
+        heartCount: itemHeart,
+        likeCount: itemLike,
+        laughCount: itemLaugh,
+        cryCount: itemCry,
+        commentCount: itemComment,
+      });
+    }
+  });
+
+  const firstId = postImages[0]?.civitaiImageId ?? null;
+  const reactionCount = heartCount + likeCount + laughCount + cryCount;
+  const publishedUrl = firstId
+    ? `https://${domain}/images/${firstId}`
     : `https://${domain}/posts/${postId}`;
 
-  return { civitaiImageId, publishedUrl, reactionCount, commentCount };
+  return {
+    civitaiImageId: firstId,
+    publishedUrl,
+    reactionCount,
+    reactionBreakdown: { heartCount, likeCount, laughCount, cryCount },
+    commentCount,
+    postImages,
+  };
 }
 
 async function queryPostStatsAcrossDomains(
@@ -153,7 +238,9 @@ async function queryPostStatsAcrossDomains(
   civitaiImageId: number | null;
   publishedUrl: string;
   reactionCount: number;
+  reactionBreakdown: CivitaiReactionBreakdown;
   commentCount: number;
+  postImages: CivitaiPostImageStats[];
 } | null> {
   const domains: CivitaiDomain[] =
     preferredDomain === 'civitai.red'
@@ -188,13 +275,14 @@ async function queryPostStatsAcrossDomains(
 }
 
 /**
- * Syncs live publish status and reaction/comment counts for a single `civitai_post_id` across
- * any matching draft rows in SQLite. Returns true if status or counts changed.
+ * Syncs live publish status, reaction breakdowns, per-image post mappings, and optionally MCP comments
+ * for a single `civitai_post_id` across matching draft rows in SQLite.
  */
 async function syncPostIdStats(
   postId: number,
   sampleDraftRow: any,
-  deps?: CivitaiActivitySyncDeps
+  deps?: CivitaiActivitySyncDeps,
+  options?: { syncComments?: boolean }
 ): Promise<boolean> {
   const fetchFn = deps?.fetchFn || fetch;
   const preferredDomain = inferDomainFromDraftUrl(
@@ -211,38 +299,134 @@ async function syncPostIdStats(
     return false;
   }
 
+  // Match Civitai post images to local Couchy draft rows in upload order (id ASC)
+  const draftRowsForPost = db
+    .prepare(
+      `SELECT id, image_id
+       FROM image_civitai_drafts
+       WHERE civitai_post_id = ?
+       ORDER BY id ASC`
+    )
+    .all(postId) as Array<{ id: number; image_id: number }>;
+
+  const mappedPostImages = live.postImages.map((pi, idx) => {
+    let localImageId: number | null = null;
+    if (draftRowsForPost.length === 1 && idx === 0) {
+      localImageId = Number(draftRowsForPost[0].image_id);
+    } else if (live.postImages.length === draftRowsForPost.length) {
+      localImageId = Number(draftRowsForPost[idx].image_id);
+    }
+    return { ...pi, localImageId };
+  });
+
   const prevStatus = sampleDraftRow.status === 'published' ? 'published' : 'draft';
   const prevImgId = sampleDraftRow.civitai_image_id ? Number(sampleDraftRow.civitai_image_id) : null;
   const prevReactions = Number(sampleDraftRow.reaction_count || 0);
   const prevComments = Number(sampleDraftRow.comment_count || 0);
+  const prevHeart = Number(sampleDraftRow.heart_count || 0);
+  const prevLike = Number(sampleDraftRow.like_count || 0);
+  const prevLaugh = Number(sampleDraftRow.laugh_count || 0);
+  const prevCry = Number(sampleDraftRow.cry_count || 0);
+
+  let nextCommentCount = live.commentCount;
+  let commentsJsonToSave: string | null = null;
+  let shouldUpdateComments = false;
+
+  const canQueryComments = Boolean(deps?.listCommentsFn || appConfig.civitaiApiKey?.trim());
+  const needsCommentsSync =
+    Boolean(options?.syncComments) &&
+    canQueryComments &&
+    (live.commentCount > 0 ||
+      live.commentCount !== prevComments ||
+      !sampleDraftRow.comments_synced_at);
+
+  if (needsCommentsSync) {
+    try {
+      const commentResult = await fetchPostCommentsViaMcp({
+        postId,
+        domain: live.domain,
+        postImages: mappedPostImages,
+        apiKey: appConfig.civitaiApiKey,
+        fetchFn,
+        listCommentsFn: deps?.listCommentsFn,
+      });
+      if (commentResult.ok) {
+        shouldUpdateComments = true;
+        commentsJsonToSave = JSON.stringify(commentResult.comments);
+        nextCommentCount = Math.max(live.commentCount, commentResult.comments.length);
+      }
+    } catch {
+      // Preserve existing cached comments if MCP query fails
+    }
+  }
 
   const changed =
     prevStatus !== 'published' ||
     prevImgId !== live.civitaiImageId ||
     prevReactions !== live.reactionCount ||
-    prevComments !== live.commentCount;
+    prevComments !== nextCommentCount ||
+    prevHeart !== live.reactionBreakdown.heartCount ||
+    prevLike !== live.reactionBreakdown.likeCount ||
+    prevLaugh !== live.reactionBreakdown.laughCount ||
+    prevCry !== live.reactionBreakdown.cryCount ||
+    (shouldUpdateComments && commentsJsonToSave !== (sampleDraftRow.comments_json || null));
 
-  db.prepare(
+  const postImagesJson = JSON.stringify(mappedPostImages);
+
+  const updateRowStmt = db.prepare(
     `UPDATE image_civitai_drafts
      SET status = 'published',
          civitai_image_id = COALESCE(?, civitai_image_id),
          published_url = ?,
          reaction_count = ?,
+         heart_count = ?,
+         like_count = ?,
+         laugh_count = ?,
+         cry_count = ?,
          comment_count = ?,
+         post_images_json = ?,
+         comments_json = CASE WHEN ? = 1 THEN ? ELSE comments_json END,
+         comments_synced_at = CASE WHEN ? = 1 THEN datetime('now') ELSE comments_synced_at END,
          stats_synced_at = datetime('now')
-     WHERE civitai_post_id = ?`
-  ).run(live.civitaiImageId, live.publishedUrl, live.reactionCount, live.commentCount, postId);
+     WHERE id = ?`
+  );
+
+  const tx = db.transaction(() => {
+    for (let i = 0; i < draftRowsForPost.length; i++) {
+      const row = draftRowsForPost[i];
+      const matched = mappedPostImages.find((pi) => pi.localImageId === Number(row.image_id));
+      const rowCivitaiImageId = matched?.civitaiImageId ?? live.civitaiImageId;
+      const rowPublishedUrl = matched?.url ?? live.publishedUrl;
+
+      updateRowStmt.run(
+        rowCivitaiImageId,
+        rowPublishedUrl,
+        live.reactionCount,
+        live.reactionBreakdown.heartCount,
+        live.reactionBreakdown.likeCount,
+        live.reactionBreakdown.laughCount,
+        live.reactionBreakdown.cryCount,
+        nextCommentCount,
+        postImagesJson,
+        shouldUpdateComments ? 1 : 0,
+        commentsJsonToSave,
+        shouldUpdateComments ? 1 : 0,
+        row.id
+      );
+    }
+  });
+  tx();
 
   return changed;
 }
 
 /**
- * Refreshes Civitai publish status and reaction/comment stats for a specific image's drafts
- * when opening the Image Inspector (throttled per-draft by `minIntervalMs`).
+ * Refreshes Civitai publish status, reaction breakdown, and MCP comment threads for a specific image's
+ * drafts when opening the Image Inspector (throttled per-draft by `minIntervalMs`).
  */
 export async function syncCivitaiActivityForImage(
   imageId: number,
-  options?: { minIntervalMs?: number; deps?: CivitaiActivitySyncDeps }
+  options?: { minIntervalMs?: number; syncComments?: boolean; deps?: CivitaiActivitySyncDeps }
 ): Promise<{ syncedPosts: number; changed: boolean }> {
   const imageRow = db
     .prepare('SELECT id, content_hash FROM images WHERE id = ?')
@@ -260,6 +444,7 @@ export async function syncCivitaiActivityForImage(
   if (draftRows.length === 0) return { syncedPosts: 0, changed: false };
 
   const minIntervalMs = options?.minIntervalMs ?? DEFAULT_INSPECTOR_MIN_INTERVAL_MS;
+  const syncComments = options?.syncComments ?? true;
   const nowMs = Date.now();
   const seenPosts = new Set<number>();
   let syncedPosts = 0;
@@ -270,12 +455,31 @@ export async function syncCivitaiActivityForImage(
     if (!postId || seenPosts.has(postId)) continue;
     seenPosts.add(postId);
 
+    const needsBreakdownBackfill =
+      row.status === 'published' &&
+      Number(row.reaction_count || 0) > 0 &&
+      Number(row.heart_count || 0) +
+        Number(row.like_count || 0) +
+        Number(row.laugh_count || 0) +
+        Number(row.cry_count || 0) ===
+        0;
+    const needsCommentBackfill =
+      syncComments &&
+      row.status === 'published' &&
+      (!row.comments_synced_at || (Number(row.comment_count || 0) > 0 && !row.comments_json));
+
     const lastSyncMs = parseSqliteUtcMs(row.stats_synced_at);
-    if (minIntervalMs > 0 && lastSyncMs > 0 && nowMs - lastSyncMs < minIntervalMs) {
+    if (
+      !needsBreakdownBackfill &&
+      !needsCommentBackfill &&
+      minIntervalMs > 0 &&
+      lastSyncMs > 0 &&
+      nowMs - lastSyncMs < minIntervalMs
+    ) {
       continue;
     }
 
-    const changed = await syncPostIdStats(postId, row, options?.deps);
+    const changed = await syncPostIdStats(postId, row, options?.deps, { syncComments });
     syncedPosts += 1;
     if (changed) anyChanged = true;
   }
@@ -360,12 +564,25 @@ export async function syncAllCivitaiShareActivity(options?: {
       if (!postId || seenPosts.has(postId)) continue;
       seenPosts.add(postId);
 
+      const needsBreakdownBackfill =
+        row.status === 'published' &&
+        Number(row.reaction_count || 0) > 0 &&
+        Number(row.heart_count || 0) +
+          Number(row.like_count || 0) +
+          Number(row.laugh_count || 0) +
+          Number(row.cry_count || 0) ===
+          0;
       const lastSyncMs = parseSqliteUtcMs(row.stats_synced_at);
-      if (minIntervalMs > 0 && lastSyncMs > 0 && nowMs - lastSyncMs < minIntervalMs) {
+      if (
+        !needsBreakdownBackfill &&
+        minIntervalMs > 0 &&
+        lastSyncMs > 0 &&
+        nowMs - lastSyncMs < minIntervalMs
+      ) {
         continue;
       }
 
-      const changed = await syncPostIdStats(postId, row, options?.deps);
+      const changed = await syncPostIdStats(postId, row, options?.deps, { syncComments: true });
       checkedPosts += 1;
       if (changed) changedPosts += 1;
 

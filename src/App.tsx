@@ -463,6 +463,9 @@ export default function App() {
             setActiveTab('gallery');
           }}
           visualTaggerEnabled={Boolean(workspace.healthData?.visualTagger?.enabled)}
+          civitaiActivityNotificationsEnabled={
+            workspace.healthData?.config?.civitaiActivityNotificationsEnabled !== false
+          }
           onFilterByVisualKeyword={(keyword) => {
             workspace.setFilters({
               ...INITIAL_FILTERS,
