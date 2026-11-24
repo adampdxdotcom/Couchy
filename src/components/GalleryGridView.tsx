@@ -360,35 +360,6 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
 
   return (
     <div className="px-6 py-5 space-y-6">
-      {/* Selection & Result Summary Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-4 text-xs text-zinc-400">
-        <div className="flex items-center gap-3">
-          <span>
-            Showing <strong className="font-mono tabular-nums text-zinc-200">{pagedImages.length}</strong> of{' '}
-            <strong className="font-mono tabular-nums text-zinc-200">{images.length}</strong> indexed images
-            {visibleGhostItems.length > 0 && (
-              <span className="text-indigo-300 font-mono tabular-nums">
-                {' '}· {visibleGhostItems.length} in queue
-              </span>
-            )}
-          </span>
-          <span aria-hidden="true">·</span>
-          <button
-            type="button"
-            onClick={selectedIds.size === images.length ? onClearSelection : onSelectAll}
-            className="text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer"
-          >
-            {selectedIds.size === images.length ? 'Deselect All' : 'Select All Matching'}
-          </button>
-          {selectedIds.size > 0 && (
-            <>
-              <span aria-hidden="true">·</span>
-              <span className="text-zinc-200 font-mono tabular-nums">{selectedIds.size} selected</span>
-            </>
-          )}
-        </div>
-      </div>
-
       {/* Multi-Select Floating Bulk Operations Bar */}
       {selectedIds.size > 0 && (
         <div className="bg-zinc-900 border border-indigo-500/50 rounded-xl p-3.5 flex flex-wrap items-center justify-between gap-3 shadow-lg">
