@@ -446,9 +446,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             }`}
           >
             {/* Inspector Header */}
-            <div className="shrink-0 z-10 bg-zinc-900/95 backdrop-blur-xs border-b border-zinc-800 px-4 sm:px-5 py-3.5 flex items-center justify-between gap-2 sm:gap-3">
-              <div className="flex flex-wrap items-center gap-2 sm:gap-3 min-w-0">
-                <div className="flex items-center gap-1 shrink-0" title="Rate 1–5 (Keys 1–5, 0 to clear)">
+            <div className="shrink-0 z-10 bg-zinc-900/95 backdrop-blur-xs border-b border-zinc-800 px-3 sm:px-5 py-3 sm:py-3.5 flex items-center justify-between gap-2 sm:gap-3">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2.5 min-w-0">
+                <div className="flex items-center gap-0.5 sm:gap-1 shrink-0" title="Rate 1–5 (Keys 1–5, 0 to clear)">
                   {[1, 2, 3, 4, 5].map((star) => (
                     <button
                       key={star}
@@ -458,7 +458,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                       title={`Rate ${star} star${star === 1 ? '' : 's'} (Key ${star})`}
                     >
                       <Star
-                        className={`w-4 h-4 ${
+                        className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
                           star <= activeImage.rating
                             ? 'fill-amber-400 text-amber-400'
                             : 'text-zinc-500 hover:text-amber-300'
@@ -482,7 +482,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                       : 'Toggle Favorite (F)'
                   }
                 >
-                  <Heart className={`w-4 h-4 ${activeImage.isFavorite ? 'fill-rose-400' : ''}`} />
+                  <Heart className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${activeImage.isFavorite ? 'fill-rose-400' : ''}`} />
                 </button>
 
                 <button
@@ -501,9 +501,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   }
                 >
                   {isCreatingPreset ? (
-                    <Loader2 className="w-4 h-4 animate-spin text-fuchsia-400" />
+                    <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin text-fuchsia-400" />
                   ) : (
-                    <BookmarkPlus className="w-4 h-4" />
+                    <BookmarkPlus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   )}
                 </button>
 
@@ -521,7 +521,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                       : 'Reject Image & Advance (X / Delete)'
                   }
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Trash2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                 </button>
 
                 <button
@@ -574,9 +574,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   aria-label="Share on Civitai as Private Draft"
                 >
                   {isLoadingShareStatus ? (
-                    <Loader2 className="w-4 h-4 animate-spin text-zinc-500" />
+                    <Loader2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 animate-spin text-zinc-500" />
                   ) : (
-                    <Share2 className="w-4 h-4" />
+                    <Share2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   )}
                 </button>
 
@@ -585,7 +585,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                     href={civitaiVisualState.primaryUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-[11px] font-medium shrink-0 transition-colors ${
+                    className={`inline-flex items-center gap-1 sm:gap-1.5 px-1.5 sm:px-2 py-1 rounded-md border text-[10px] sm:text-[11px] font-medium shrink-0 transition-colors ${
                       civitaiVisualState.hasUnseenActivity
                         ? 'bg-amber-500/15 border-amber-500/45 text-amber-200 hover:bg-amber-500/25'
                         : civitaiVisualState.status === 'published'
@@ -605,7 +605,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                       <>
                         <span>Published</span>
                         {(civitaiVisualState.reactionCount > 0 || civitaiVisualState.commentCount > 0) && (
-                          <span className="inline-flex items-center gap-1.5 font-mono tabular-nums text-[10px] opacity-90">
+                          <span className="inline-flex items-center gap-1 sm:gap-1.5 font-mono tabular-nums text-[10px] opacity-90">
                             {civitaiVisualState.reactionCount > 0 && (
                               <span className="inline-flex items-center gap-0.5">
                                 <Heart className="w-2.5 h-2.5" />
@@ -628,7 +628,9 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                   </a>
                 )}
 
-                {renderDependencyLabel(activeImage.dependencyStatus)}
+                <span className="hidden lg:inline-flex shrink-0">
+                  {renderDependencyLabel(activeImage.dependencyStatus)}
+                </span>
 
                 {activeImage.isRandomRoll && (
                   <span
@@ -641,7 +643,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 )}
               </div>
 
-              <div className="relative flex items-center gap-1.5 sm:gap-2 shrink-0">
+              <div className="relative hidden lg:flex items-center gap-1.5 sm:gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={() => setShowShortcutsHelp((prev) => !prev)}
@@ -658,7 +660,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                 <button
                   type="button"
                   onClick={onClose}
-                  className="hidden lg:inline-flex p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-100 cursor-pointer shrink-0"
+                  className="p-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-zinc-400 hover:text-zinc-100 cursor-pointer shrink-0"
                   title="Close Inspector (Esc)"
                 >
                   <X className="w-4 h-4" />
