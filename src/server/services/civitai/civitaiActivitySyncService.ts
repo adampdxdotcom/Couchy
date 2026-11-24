@@ -7,6 +7,10 @@ import {
   fetchPostCommentsViaMcp,
   type ListCommentsFn,
 } from './civitaiCommentsService.ts';
+import {
+  autoMatchOwnCivitaiUploads,
+  syncLinkedModelsCivitaiStats,
+} from './civitaiCreatorModelsService.ts';
 import type {
   CivitaiCommentRecord,
   CivitaiDraftRecord,
@@ -534,13 +538,31 @@ export function markAllCivitaiActivitySeen(): number {
   return info.changes;
 }
 
+function isCivitaiNotificationsEnabledInDb(): boolean {
+  try {
+    const row = db
+      .prepare(`SELECT value FROM app_settings WHERE key = 'civitai_activity_notifications_enabled'`)
+      .get() as { value: string } | undefined;
+    return row ? row.value !== '0' : true;
+  } catch {
+    return true;
+  }
+}
+
 /**
- * Sweeps all Civitai draft/published rows in `image_civitai_drafts` gently in the background.
+ * Sweeps all Civitai draft/published rows and linked LoRAs/models gently in the background.
  */
 export async function syncAllCivitaiShareActivity(options?: {
   minIntervalMs?: number;
+  includeModels?: boolean;
   deps?: CivitaiActivitySyncDeps;
-}): Promise<{ checkedPosts: number; changedPosts: number }> {
+}): Promise<{
+  checkedPosts: number;
+  changedPosts: number;
+  checkedModels?: number;
+  changedModels?: number;
+  newlyLinkedModels?: number;
+}> {
   if (isSyncRunning) return { checkedPosts: 0, changedPosts: 0 };
   if (!options?.deps?.fetchFn && !appConfig.civitaiApiKey?.trim()) {
     return { checkedPosts: 0, changedPosts: 0 };
@@ -591,9 +613,46 @@ export async function syncAllCivitaiShareActivity(options?: {
       }
     }
 
-    if (changedPosts > 0) {
+    let checkedModels = 0;
+    let changedModels = 0;
+    let newlyLinkedModels = 0;
+    const shouldSyncModels =
+      (options?.includeModels ?? !options?.deps?.fetchFn) && isCivitaiNotificationsEnabledInDb();
+
+    if (shouldSyncModels) {
+      const matchRes = await autoMatchOwnCivitaiUploads({
+        deps: {
+          fetchFn: options?.deps?.fetchFn,
+          listCommentsFn: options?.deps?.listCommentsFn,
+        },
+      });
+      newlyLinkedModels = matchRes.newlyLinkedCount;
+
+      const modelStatsRes = await syncLinkedModelsCivitaiStats({
+        minIntervalMs,
+        deps: {
+          fetchFn: options?.deps?.fetchFn,
+          listCommentsFn: options?.deps?.listCommentsFn,
+        },
+      });
+      checkedModels = modelStatsRes.checkedModels;
+      changedModels = modelStatsRes.changedModels;
+    }
+
+    if (
+      changedPosts > 0 ||
+      changedModels > 0 ||
+      newlyLinkedModels > 0
+    ) {
       notifyWorkspaceDataChanged();
     }
+    return {
+      checkedPosts,
+      changedPosts,
+      checkedModels,
+      changedModels,
+      newlyLinkedModels,
+    };
   } catch (err) {
     logger.warn('CivitaiSync', 'Background Civitai activity check failed', err);
   } finally {

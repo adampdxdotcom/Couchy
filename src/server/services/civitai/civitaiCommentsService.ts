@@ -4,7 +4,7 @@ import type { CivitaiDomain } from './civitaiHttpAndParse.ts';
 import type { CivitaiCommentRecord, CivitaiPostImageStats } from '../../../shared/apiTypes.ts';
 
 export type ListCommentsFn = (params: {
-  entityType: 'image' | 'post';
+  entityType: 'image' | 'post' | 'model';
   entityId: number;
 }) => Promise<NormalizedMcpComment[]>;
 
@@ -100,6 +100,53 @@ export async function fetchPostCommentsViaMcp(params: {
   }
 
   return { ok: anySucceeded, comments: collected };
+}
+
+/**
+ * Fetches comment threads via Civitai MCP (`list_comments`) for a Civitai model page (`entityType: 'model'`).
+ */
+export async function fetchModelCommentsViaMcp(params: {
+  modelId: number;
+  domain: CivitaiDomain;
+  apiKey?: string;
+  fetchFn?: typeof fetch;
+  listCommentsFn?: ListCommentsFn;
+}): Promise<{ ok: boolean; comments: CivitaiCommentRecord[] }> {
+  let listFn = params.listCommentsFn;
+  if (!listFn) {
+    const key = params.apiKey?.trim();
+    if (!key) {
+      return { ok: false, comments: [] };
+    }
+    const client = new CivitaiMcpClient(key, { fetchFn: params.fetchFn });
+    await client.initialize();
+    listFn = ({ entityType, entityId }) =>
+      client.listComments({ entityType, entityId, depth: 2, sort: 'Newest', includeFull: true });
+  }
+
+  try {
+    const items = await listFn({ entityType: 'model', entityId: params.modelId });
+    const comments: CivitaiCommentRecord[] = items.map((c) => ({
+      id: c.id,
+      targetType: 'model',
+      civitaiPostId: 0,
+      civitaiImageId: null,
+      localImageId: null,
+      civitaiUrl: `https://${params.domain}/models/${params.modelId}`,
+      authorUsername: c.authorUsername,
+      authorAvatarUrl: c.authorAvatarUrl,
+      content: c.content,
+      createdAt: c.createdAt,
+      reactionCount: c.reactionCount,
+      heartCount: c.heartCount,
+      parentCommentId: c.parentCommentId,
+      depth: c.depth,
+      isPinned: c.isPinned,
+    }));
+    return { ok: true, comments };
+  } catch {
+    return { ok: false, comments: [] };
+  }
 }
 
 /**

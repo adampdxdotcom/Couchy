@@ -13,6 +13,10 @@ import {
   healExistingCivitaiLinks,
   resolveSafeModelPreviewPath,
 } from '../services/civitai/civitaiModelEnrichmentService.ts';
+import {
+  listMyCivitaiUploads,
+  syncLinkedModelsCivitaiStats,
+} from '../services/civitai/civitaiCreatorModelsService.ts';
 
 export const modelsRouter = Router();
 
@@ -82,6 +86,95 @@ modelsRouter.post('/models/:id/civitai-fetch', async (req, res) => {
   } catch (err: any) {
     const status = typeof err?.statusCode === 'number' ? err.statusCode : 500;
     res.status(status).json({ error: err?.message || 'Failed to fetch model details' });
+  }
+});
+
+/**
+ * GET /api/models/civitai-uploads
+ * Resolves the authenticated Civitai user via `whoami` and lists their uploaded models/versions.
+ */
+modelsRouter.get('/models/civitai-uploads', async (req, res) => {
+  try {
+    const forceRefresh = req.query.refresh === '1';
+    const result = await listMyCivitaiUploads({ forceRefresh });
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to load Civitai uploads' });
+  }
+});
+
+/**
+ * POST /api/models/:id/civitai-link
+ * Explicitly binds a local model/LoRA to a Civitai URL or Version ID and syncs metadata, stats, and comments.
+ */
+modelsRouter.post('/models/:id/civitai-link', async (req, res) => {
+  try {
+    const modelId = Number(req.params.id);
+    if (!Number.isFinite(modelId) || modelId <= 0) {
+      res.status(400).json({ error: 'Valid numeric model ID is required' });
+      return;
+    }
+    const { input, versionId, modelId: civitaiModelId, domain } = req.body || {};
+    if (
+      !String(input || '').trim() &&
+      !String(versionId || '').trim() &&
+      !String(civitaiModelId || '').trim()
+    ) {
+      res.status(400).json({ error: 'Provide a Civitai URL or Model Version ID.' });
+      return;
+    }
+
+    const result = await fetchAndEnrichModelFromCivitai(modelId, {
+      allowHuggingFaceFallback: false,
+      explicitLinkInput: typeof input === 'string' ? input : undefined,
+      explicitVersionId: versionId ? String(versionId) : undefined,
+      explicitModelId: civitaiModelId ? String(civitaiModelId) : undefined,
+      explicitDomain: domain === 'civitai.red' ? 'civitai.red' : undefined,
+    });
+    res.json({
+      ok: true,
+      civitaiUrl: result.meta.civitaiUrl,
+      civitaiId: result.meta.civitaiId,
+      civitaiVersionId: result.meta.civitaiVersionId,
+      baseModel: result.meta.baseModel,
+      creatorUsername: result.creatorUsername,
+      isOwnUpload: result.isOwnUpload,
+      stats: result.stats,
+      filledTriggerWord: result.filledTriggerWord,
+      filledDefaultStrength: result.filledDefaultStrength,
+    });
+  } catch (err: any) {
+    const status = typeof err?.statusCode === 'number' ? err.statusCode : 500;
+    res.status(status).json({ error: err?.message || 'Failed to link Civitai model' });
+  }
+});
+
+/**
+ * POST /api/models/:id/civitai-stats-refresh
+ * Refreshes live Civitai model/version engagement stats and MCP comments for a single model.
+ */
+modelsRouter.post('/models/:id/civitai-stats-refresh', async (req, res) => {
+  try {
+    const modelId = Number(req.params.id);
+    if (!Number.isFinite(modelId) || modelId <= 0) {
+      res.status(400).json({ error: 'Valid numeric model ID is required' });
+      return;
+    }
+    const syncRes = await syncLinkedModelsCivitaiStats({
+      onlyModelId: modelId,
+      minIntervalMs: 0,
+    });
+    res.json({
+      ok: true,
+      checkedModels: syncRes.checkedModels,
+      stats: syncRes.latestStats ?? null,
+      comments: syncRes.latestComments ?? [],
+      creatorUsername: syncRes.creatorUsername ?? null,
+      isOwnUpload: Boolean(syncRes.isOwnUpload),
+      syncedAt: syncRes.syncedAt ?? null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to refresh Civitai model stats' });
   }
 });
 

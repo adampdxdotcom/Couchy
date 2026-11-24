@@ -237,7 +237,7 @@ export interface CivitaiPostImageStats {
 
 export interface CivitaiCommentRecord {
   id: number;
-  targetType: 'image' | 'post';
+  targetType: 'image' | 'post' | 'model';
   civitaiPostId: number;
   civitaiImageId: number | null;
   localImageId: number | null;
@@ -253,6 +253,55 @@ export interface CivitaiCommentRecord {
   parentCommentId: number | null;
   depth: number;
   isPinned?: boolean;
+}
+
+export interface CivitaiModelVersionStats {
+  versionId: string;
+  versionName: string;
+  downloadCount: number;
+  thumbsUpCount: number;
+  thumbsDownCount: number;
+}
+
+export interface CivitaiModelStatsSummary {
+  downloadCount: number;
+  thumbsUpCount: number;
+  thumbsDownCount: number;
+  commentCount: number;
+  tippedAmountCount: number;
+  totalVersionsCount: number;
+  matchedVersion?: CivitaiModelVersionStats | null;
+}
+
+export interface CivitaiMyUploadVersionItem {
+  versionId: string;
+  versionName: string;
+  baseModel: string | null;
+  civitaiUrl: string | null;
+  downloadCount: number;
+  thumbsUpCount: number;
+  thumbsDownCount: number;
+  hashes: string[];
+  alreadyLinkedModelId?: number | null;
+  alreadyLinkedFilename?: string | null;
+}
+
+export interface CivitaiMyUploadModelItem {
+  civitaiId: string;
+  name: string;
+  type: string;
+  creatorUsername: string;
+  domain: CivitaiDomain;
+  civitaiUrl: string;
+  previewUrl: string | null;
+  stats: {
+    downloadCount: number;
+    thumbsUpCount: number;
+    thumbsDownCount: number;
+    commentCount: number;
+    tippedAmountCount: number;
+  };
+  versions: CivitaiMyUploadVersionItem[];
 }
 
 export interface CivitaiShareSummary {

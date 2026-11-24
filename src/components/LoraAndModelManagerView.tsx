@@ -23,6 +23,7 @@ interface LoraAndModelManagerViewProps {
   presets?: LoraPreset[];
   allImages: ImageRecord[];
   pillTypeSettings?: PillTypeSettings;
+  civitaiActivityNotificationsEnabled?: boolean;
   onRefresh: () => Promise<void>;
   onOpenImage: (img: ImageRecord) => void;
   onFilterGalleryByLora: (loraFilename: string) => void;
@@ -41,6 +42,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   presets = [],
   allImages,
   pillTypeSettings,
+  civitaiActivityNotificationsEnabled = true,
   onRefresh,
   onOpenImage,
   onFilterGalleryByLora,
@@ -53,6 +55,8 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   const [highlightedModelFilename, setHighlightedModelFilename] = useState<string | null>(null);
   const [impactReport, setImpactReport] = useState<any | null>(null);
   const [fetchingModelId, setFetchingModelId] = useState<number | null>(null);
+  const [refreshingStatsModelId, setRefreshingStatsModelId] = useState<number | null>(null);
+  const [linkingModelId, setLinkingModelId] = useState<number | null>(null);
   const [isHealingLinks, setIsHealingLinks] = useState(false);
   const [isSyncingModels, setIsSyncingModels] = useState(false);
 
@@ -114,6 +118,49 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
       );
     } finally {
       setFetchingModelId(null);
+    }
+  };
+
+  const handleRefreshModelStats = async (modelId: number) => {
+    setRefreshingStatsModelId(modelId);
+    try {
+      const res = await api.refreshModelCivitaiStats(modelId);
+      await onRefresh();
+      if (res.checkedModels > 0) {
+        onPushToast?.('Refreshed Civitai upload stats and comments', 'success');
+      } else {
+        onPushToast?.('Could not reach Civitai stats for this model right now', 'warning');
+      }
+    } catch (err: any) {
+      onPushToast?.(err?.message || 'Failed to refresh Civitai stats', 'error');
+    } finally {
+      setRefreshingStatsModelId(null);
+    }
+  };
+
+  const handleLinkCivitaiModel = async (
+    modelId: number,
+    payload: {
+      input?: string;
+      versionId?: string;
+      modelId?: string;
+      domain?: 'civitai.com' | 'civitai.red';
+    }
+  ) => {
+    setLinkingModelId(modelId);
+    try {
+      const res = await api.linkModelToCivitai(modelId, payload);
+      await onRefresh();
+      const notes: string[] = [];
+      if (res.isOwnUpload) notes.push('uploaded by you');
+      if (res.baseModel) notes.push(res.baseModel);
+      if (res.filledTriggerWord) notes.push('trigger word auto-filled');
+      onPushToast?.(
+        `Linked to Civitai${notes.length > 0 ? ` (${notes.join(', ')})` : ''}`,
+        'success'
+      );
+    } finally {
+      setLinkingModelId(null);
     }
   };
 
@@ -286,6 +333,13 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
         isFetchingCivitai={Boolean(
           selectedLora.modelId && fetchingModelId === selectedLora.modelId
         )}
+        isRefreshingStats={Boolean(
+          selectedLora.modelId && refreshingStatsModelId === selectedLora.modelId
+        )}
+        isLinkingCivitai={Boolean(
+          selectedLora.modelId && linkingModelId === selectedLora.modelId
+        )}
+        civitaiActivityNotificationsEnabled={civitaiActivityNotificationsEnabled}
         onBack={() => {
           setSelectedLoraName(null);
           setImpactReport(null);
@@ -293,6 +347,8 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
         onLoadImpact={handleLoadImpact}
         onFilterGalleryByLora={onFilterGalleryByLora}
         onFetchFromCivitai={handleFetchFromCivitai}
+        onRefreshStats={handleRefreshModelStats}
+        onLinkCivitaiModel={handleLinkCivitaiModel}
         onToggleVisibility={handleToggleLoraVisibility}
         onUpdateMentionConfig={handleUpdateMentionConfig}
         onRefresh={onRefresh}

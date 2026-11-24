@@ -6,10 +6,8 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
-  FileText,
   Layers,
   RefreshCw,
-  Sparkles,
   X,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
@@ -17,16 +15,31 @@ import { formatBytes, getModelAvailabilityInfo } from '../shared/utils.ts';
 import type { ImageRecord, LoraCategory, LoraExplorerItem } from '../shared/types.ts';
 import { CharacterPortraitImage } from './character/CharacterPortraitImage.tsx';
 import { InlineEditableTitle } from './shared/InlineEditableTitle.tsx';
+import { LoraCivitaiDescriptionCard } from './models/LoraCivitaiDescriptionCard.tsx';
+import { LinkCivitaiModelModal } from './models/LinkCivitaiModelModal.tsx';
 
 interface LoraDetailViewProps {
   lora: LoraExplorerItem;
   allImages: ImageRecord[];
   impactReport: any | null;
   isFetchingCivitai: boolean;
+  isRefreshingStats?: boolean;
+  isLinkingCivitai?: boolean;
+  civitaiActivityNotificationsEnabled?: boolean;
   onBack: () => void;
   onLoadImpact: (filename: string) => void;
   onFilterGalleryByLora: (filename: string) => void;
   onFetchFromCivitai: (modelId: number) => void;
+  onRefreshStats?: (modelId: number) => Promise<void>;
+  onLinkCivitaiModel?: (
+    modelId: number,
+    payload: {
+      input?: string;
+      versionId?: string;
+      modelId?: string;
+      domain?: 'civitai.com' | 'civitai.red';
+    }
+  ) => Promise<void>;
   onToggleVisibility: (loraName: string, isHidden: boolean) => Promise<void>;
   onUpdateMentionConfig: (
     loraName: string,
@@ -57,10 +70,15 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
   allImages,
   impactReport,
   isFetchingCivitai,
+  isRefreshingStats = false,
+  isLinkingCivitai = false,
+  civitaiActivityNotificationsEnabled = true,
   onBack,
   onLoadImpact,
   onFilterGalleryByLora,
   onFetchFromCivitai,
+  onRefreshStats,
+  onLinkCivitaiModel,
   onToggleVisibility,
   onUpdateMentionConfig,
   onRefresh,
@@ -70,6 +88,7 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
   onPushToast,
 }) => {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [showLinkModal, setShowLinkModal] = useState(false);
   const avail = getModelAvailabilityInfo(lora);
 
   const associatedImages = allImages.filter((img) =>
@@ -574,68 +593,19 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
       </div>
 
       {/* Dedicated Source Description Area (Civitai or Hugging Face Model Card) */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <FileText className="w-4 h-4 text-indigo-400" />
-            <h2 className="text-sm font-display font-semibold text-zinc-100">
-              {!lora.civitaiUrl && lora.hfRepoId
-                ? 'Hugging Face Model Card'
-                : 'CivitAI Description'}
-            </h2>
-          </div>
-          <div className="flex items-center gap-3 text-[11px] font-mono text-zinc-500">
-            {lora.civitaiFetchedAt && (
-              <span>Synced {new Date(lora.civitaiFetchedAt + 'Z').toLocaleDateString()}</span>
-            )}
-            {lora.civitaiUrl && (
-              <a
-                href={lora.civitaiUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 font-sans"
-              >
-                <span>Open original page</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
-            {lora.hfRepoId && (
-              <a
-                href={`https://huggingface.co/${lora.hfRepoId}`}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center gap-1 text-amber-300 hover:text-amber-200 font-sans"
-              >
-                <span>Open on Hugging Face</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
-          </div>
-        </div>
-
-        {lora.civitaiDescription ? (
-          <div className="bg-zinc-950 border border-zinc-800/80 rounded-lg p-4 max-h-80 overflow-y-auto text-xs leading-relaxed text-zinc-300 whitespace-pre-wrap break-words">
-            {lora.civitaiDescription}
-          </div>
-        ) : (
-          <div className="bg-zinc-950/60 border border-zinc-800/70 rounded-lg px-4 py-4 flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-400">
-            <span className="flex items-center gap-2">
-              <Sparkles className="w-3.5 h-3.5 text-zinc-500" />
-              <span>No Civitai or Hugging Face description stored yet for this LoRA.</span>
-            </span>
-            {lora.modelId && (
-              <button
-                type="button"
-                disabled={isFetchingCivitai}
-                onClick={() => onFetchFromCivitai(lora.modelId!)}
-                className="text-indigo-400 hover:text-indigo-300 font-medium cursor-pointer disabled:opacity-50"
-              >
-                {isFetchingCivitai ? 'Fetching...' : 'Fetch Details now'}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      <LoraCivitaiDescriptionCard
+        lora={lora}
+        civitaiActivityNotificationsEnabled={civitaiActivityNotificationsEnabled}
+        isFetchingCivitai={isFetchingCivitai}
+        isRefreshingStats={isRefreshingStats}
+        onFetchFromCivitai={onFetchFromCivitai}
+        onRefreshStats={async (id) => {
+          if (onRefreshStats) {
+            await onRefreshStats(id);
+          }
+        }}
+        onOpenLinkModal={() => setShowLinkModal(true)}
+      />
 
       {/* Model Usage Impact Report */}
       {impactReport && (
@@ -746,6 +716,19 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
             onClick={(e) => e.stopPropagation()}
           />
         </div>
+      )}
+      {/* Manual Civitai Link Modal (Paste URL/Version ID or My Uploads) */}
+      {showLinkModal && lora.modelId && (
+        <LinkCivitaiModelModal
+          lora={lora}
+          isSubmitting={isLinkingCivitai}
+          onClose={() => setShowLinkModal(false)}
+          onLink={async (payload) => {
+            if (onLinkCivitaiModel) {
+              await onLinkCivitaiModel(lora.modelId!, payload);
+            }
+          }}
+        />
       )}
     </div>
   );

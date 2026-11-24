@@ -4,6 +4,7 @@ import { resolveCivitaiDomain, type CivitaiDomain } from './civitaiUrlAndDomain.
 export interface CivitaiFetchOptions {
   bypassCache?: boolean;
   ttlMs?: number;
+  fetchFn?: typeof fetch;
 }
 
 const CIVITAI_CACHE_MAX_ENTRIES = 250;
@@ -111,7 +112,8 @@ export async function fetchCivitaiJsonWithFallback(
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
-        const res = await fetch(`https://${domain}${cleanPath}`, {
+        const fetcher = options?.fetchFn || fetch;
+        const res = await fetcher(`https://${domain}${cleanPath}`, {
           headers,
           signal: controller.signal,
         });

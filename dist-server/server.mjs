@@ -1027,6 +1027,26 @@ var init_migrationsV31 = __esm({
   }
 });
 
+// src/server/db/migrationsV32.ts
+var migrationsV32;
+var init_migrationsV32 = __esm({
+  "src/server/db/migrationsV32.ts"() {
+    migrationsV32 = [
+      {
+        version: 32,
+        name: "civitai_model_stats_and_creator_matching",
+        sql: `
+      ALTER TABLE models ADD COLUMN civitai_creator_username TEXT;
+      ALTER TABLE models ADD COLUMN is_own_civitai_upload INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE models ADD COLUMN civitai_stats_json TEXT;
+      ALTER TABLE models ADD COLUMN civitai_comments_json TEXT;
+      ALTER TABLE models ADD COLUMN civitai_stats_synced_at TEXT;
+    `
+      }
+    ];
+  }
+});
+
 // src/shared/agentPromptDefaults.ts
 var DEFAULT_CONVERSATION_SYSTEM_PROMPT, DEFAULT_BATCH_EXPANSION_PROMPT;
 var init_agentPromptDefaults = __esm({
@@ -1469,6 +1489,7 @@ var init_db = __esm({
     init_migrationsV29();
     init_migrationsV30();
     init_migrationsV31();
+    init_migrationsV32();
     init_seedPromptsAndLlm();
     init_seedWorkflowsAndInstances();
     db = new Database(appConfig.databasePath);
@@ -1481,7 +1502,8 @@ var init_db = __esm({
       ...migrationsV15ToV28,
       ...migrationsV29,
       ...migrationsV30,
-      ...migrationsV31
+      ...migrationsV31,
+      ...migrationsV32
     ];
   }
 });
@@ -2853,7 +2875,8 @@ async function fetchCivitaiJsonWithFallback(apiPath, headers = getCivitaiHeaders
       try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
-        const res = await fetch(`https://${domain}${cleanPath}`, {
+        const fetcher = options?.fetchFn || fetch;
+        const res = await fetcher(`https://${domain}${cleanPath}`, {
           headers,
           signal: controller.signal
         });
@@ -3722,6 +3745,528 @@ var init_civitaiHttpAndParse = __esm({
   }
 });
 
+// src/server/services/civitai/civitaiMcpClient.ts
+function isSizeLimitErrorMessage(status, message) {
+  if (status === 413) return true;
+  return /too large|payload.*large|size limit|exceeds.*(mb|mib|bytes|size)|max.*size|413/i.test(
+    message
+  );
+}
+function parseMcpResponseBody(rawText) {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    throw new Error("Empty response from Civitai MCP server.");
+  }
+  if (trimmed.startsWith("{")) {
+    return JSON.parse(trimmed);
+  }
+  const dataLines = trimmed.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).filter(Boolean);
+  for (let i = dataLines.length - 1; i >= 0; i--) {
+    try {
+      return JSON.parse(dataLines[i]);
+    } catch {
+    }
+  }
+  throw new Error(`Unexpected Civitai MCP response format: ${trimmed.slice(0, 200)}`);
+}
+function extractToolResultPayload(toolResult) {
+  if (!toolResult || typeof toolResult !== "object") return toolResult;
+  if (toolResult.structuredContent && typeof toolResult.structuredContent === "object") {
+    return toolResult.structuredContent;
+  }
+  const firstText = Array.isArray(toolResult.content) ? toolResult.content.find((c) => c?.type === "text" && typeof c.text === "string")?.text : void 0;
+  if (typeof firstText === "string") {
+    const trimmed = firstText.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return { message: firstText };
+      }
+    }
+    return { message: firstText };
+  }
+  return toolResult;
+}
+function stripCivitaiCommentHtml(raw) {
+  return String(raw || "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+function sumCommentReactions(raw) {
+  if (!raw || typeof raw !== "object") return { reactionCount: 0, heartCount: 0 };
+  if (Array.isArray(raw.reactions)) {
+    let total = 0;
+    let hearts = 0;
+    for (const r of raw.reactions) {
+      const cnt = Math.max(0, Number(r?.count ?? r?.total ?? 1));
+      total += cnt;
+      if (String(r?.reaction || "").toLowerCase() === "heart") {
+        hearts += cnt;
+      }
+    }
+    return { reactionCount: total, heartCount: hearts };
+  }
+  const stats = raw.stats && typeof raw.stats === "object" ? raw.stats : raw;
+  const heartCount = Math.max(0, Number(stats.heartCount || 0));
+  const likeCount = Math.max(0, Number(stats.likeCount || 0));
+  const laughCount = Math.max(0, Number(stats.laughCount || 0));
+  const cryCount = Math.max(0, Number(stats.cryCount || 0));
+  const explicitTotal = Number(raw.reactionCount ?? stats.reactionCount ?? 0);
+  const sum = heartCount + likeCount + laughCount + cryCount;
+  return {
+    reactionCount: Math.max(sum, Number.isFinite(explicitTotal) ? explicitTotal : 0),
+    heartCount
+  };
+}
+function normalizeCivitaiMcpComments(payload) {
+  const candidates = Array.isArray(payload) ? payload : Array.isArray(payload?.comments) ? payload.comments : Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.threads) ? payload.threads : Array.isArray(payload?.results) ? payload.results : Array.isArray(payload?.data) ? payload.data : [];
+  const out = [];
+  const seenIds = /* @__PURE__ */ new Set();
+  const visit = (item, depth, parentId) => {
+    if (!item || typeof item !== "object") return;
+    const id = Number(item.id ?? item.commentId ?? 0);
+    const text = stripCivitaiCommentHtml(
+      item.content ?? item.body ?? item.text ?? item.message ?? ""
+    );
+    const authorUsername = String(
+      item.user?.username ?? item.author?.username ?? (typeof item.author === "string" ? item.author : "") ?? item.username ?? "Civitai User"
+    ).trim();
+    const authorAvatarUrl = typeof item.user?.image === "string" ? item.user.image : typeof item.author?.image === "string" ? item.author.image : null;
+    const createdAt = typeof item.createdAt === "string" ? item.createdAt : typeof item.created_at === "string" ? item.created_at : null;
+    const resolvedParent = item.parentId != null ? Number(item.parentId) : item.parentCommentId != null ? Number(item.parentCommentId) : parentId;
+    const { reactionCount, heartCount } = sumCommentReactions(item);
+    if (Number.isInteger(id) && id > 0 && text && !seenIds.has(id) && !item.hidden) {
+      seenIds.add(id);
+      out.push({
+        id,
+        authorUsername: authorUsername || "Civitai User",
+        authorAvatarUrl,
+        content: text,
+        createdAt,
+        reactionCount,
+        heartCount,
+        parentCommentId: resolvedParent && Number.isInteger(resolvedParent) ? resolvedParent : null,
+        depth,
+        isPinned: Boolean(item.pinned ?? item.isPinned)
+      });
+    }
+    const nested = Array.isArray(item.replies) ? item.replies : Array.isArray(item.children) ? item.children : Array.isArray(item.comments) ? item.comments : [];
+    for (const child of nested) {
+      visit(child, Math.min(depth + 1, 3), Number.isInteger(id) && id > 0 ? id : parentId);
+    }
+  };
+  for (const item of candidates) {
+    visit(item, 0, null);
+  }
+  return out;
+}
+var CIVITAI_MCP_URL, CivitaiPayloadTooLargeError, CivitaiMcpClient;
+var init_civitaiMcpClient = __esm({
+  "src/server/services/civitai/civitaiMcpClient.ts"() {
+    CIVITAI_MCP_URL = "https://mcp.civitai.com/mcp";
+    CivitaiPayloadTooLargeError = class extends Error {
+      constructor(message) {
+        super(message);
+        this.code = "PAYLOAD_TOO_LARGE";
+        this.name = "CivitaiPayloadTooLargeError";
+      }
+    };
+    CivitaiMcpClient = class {
+      constructor(apiKey, deps) {
+        this.sessionId = null;
+        this.nextId = 1;
+        this.apiKey = apiKey.trim();
+        this.endpointUrl = deps?.endpointUrl || CIVITAI_MCP_URL;
+        this.fetchFn = deps?.fetchFn || fetch;
+      }
+      async postJsonRpc(body) {
+        const headers = {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${this.apiKey}`
+        };
+        if (this.sessionId) {
+          headers["mcp-session-id"] = this.sessionId;
+        }
+        const res = await this.fetchFn(this.endpointUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body)
+        });
+        const sid = res.headers.get("mcp-session-id");
+        if (sid) this.sessionId = sid;
+        const text = await res.text();
+        if (!res.ok) {
+          if (isSizeLimitErrorMessage(res.status, text)) {
+            throw new CivitaiPayloadTooLargeError(
+              `Civitai rejected image upload due to file size limits (HTTP ${res.status}).`
+            );
+          }
+          throw new Error(`Civitai MCP HTTP ${res.status}: ${text.slice(0, 300)}`);
+        }
+        if (!text.trim()) {
+          return { status: res.status, envelope: null };
+        }
+        const envelope = parseMcpResponseBody(text);
+        if (envelope.error) {
+          const msg = envelope.error.message || "Civitai MCP JSON-RPC error";
+          if (isSizeLimitErrorMessage(res.status, msg)) {
+            throw new CivitaiPayloadTooLargeError(msg);
+          }
+          throw new Error(msg);
+        }
+        return { status: res.status, envelope };
+      }
+      async initialize() {
+        await this.postJsonRpc({
+          jsonrpc: "2.0",
+          id: this.nextId++,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-03-26",
+            capabilities: {},
+            clientInfo: { name: "couchy", version: "0.1.0" }
+          }
+        });
+        await this.postJsonRpc({
+          jsonrpc: "2.0",
+          method: "notifications/initialized"
+        });
+      }
+      async callTool(name, args) {
+        const { envelope } = await this.postJsonRpc({
+          jsonrpc: "2.0",
+          id: this.nextId++,
+          method: "tools/call",
+          params: { name, arguments: args }
+        });
+        const result = envelope?.result;
+        const payload = extractToolResultPayload(result);
+        if (result?.isError) {
+          const errMsg = typeof payload?.message === "string" ? payload.message : typeof payload?.error === "string" ? payload.error : JSON.stringify(payload || "Civitai tool call failed");
+          if (isSizeLimitErrorMessage(400, errMsg)) {
+            throw new CivitaiPayloadTooLargeError(errMsg);
+          }
+          throw new Error(errMsg);
+        }
+        return payload;
+      }
+      async getWhoAmI() {
+        const info = await this.callTool("whoami", {});
+        const username = typeof info?.username === "string" && info.username.trim() ? info.username.trim() : typeof info?.user?.username === "string" && info.user.username.trim() ? info.user.username.trim() : null;
+        return {
+          username,
+          muted: Boolean(info?.muted ?? info?.isMuted),
+          isOnboarded: info?.isOnboarded !== false
+        };
+      }
+      async verifyAccountReady() {
+        const info = await this.getWhoAmI();
+        if (info.muted) {
+          throw new Error("Your Civitai account is currently muted and cannot create posts.");
+        }
+        if (info.isOnboarded === false) {
+          throw new Error(
+            "Your Civitai account has not completed onboarding. Sign in on civitai.com once to accept terms before creating drafts."
+          );
+        }
+      }
+      async uploadImage(params) {
+        const res = await this.callTool("upload_image", {
+          data: params.base64Data,
+          contentType: params.contentType
+        });
+        const uuid = res?.uuid || res?.id || res?.imageUuid;
+        if (!uuid || typeof uuid !== "string") {
+          throw new Error("Civitai upload_image did not return an image UUID.");
+        }
+        return {
+          uuid,
+          width: typeof res.width === "number" ? res.width : void 0,
+          height: typeof res.height === "number" ? res.height : void 0
+        };
+      }
+      async createDraftPost(params) {
+        const imageList = Array.isArray(params.images) && params.images.length > 0 ? params.images : params.image ? [params.image] : [];
+        if (imageList.length === 0 || imageList.length > 20) {
+          throw new Error(`Civitai create_post requires between 1 and 20 images (got ${imageList.length}).`);
+        }
+        const args = {
+          images: imageList.map((img) => ({
+            uuid: img.uuid,
+            width: img.width,
+            height: img.height,
+            type: "image"
+          })),
+          publish: false
+          // Always draft-only; never auto-publish
+        };
+        if (params.title && params.title.trim()) args.title = params.title.trim();
+        if (params.detail && params.detail.trim()) args.detail = params.detail.trim();
+        if (Array.isArray(params.tags) && params.tags.length > 0) args.tags = params.tags;
+        if (params.modelVersionId && Number(params.modelVersionId) > 0) {
+          args.modelVersionId = Number(params.modelVersionId);
+        }
+        const res = await this.callTool("create_post", args);
+        const rawPostId = res?.id ?? res?.postId ?? res?.post?.id;
+        const postId = Number(rawPostId);
+        if (!Number.isInteger(postId) || postId <= 0) {
+          throw new Error("Civitai create_post did not return a valid post ID.");
+        }
+        const processingImageIds = Array.isArray(res?.processingImageIds) ? res.processingImageIds.map(Number).filter(Number.isFinite) : [];
+        return { postId, processingImageIds };
+      }
+      /**
+       * Calls Civitai MCP `list_comments` for an image, post, or model entity and normalizes the thread.
+       */
+      async listComments(params) {
+        const res = await this.callTool("list_comments", {
+          entityType: params.entityType,
+          entityId: params.entityId,
+          depth: params.depth ?? 2,
+          sort: params.sort ?? "Newest",
+          includeFull: params.includeFull ?? true
+        });
+        return normalizeCivitaiMcpComments(res);
+      }
+    };
+  }
+});
+
+// src/server/services/civitai/civitaiCommentsService.ts
+async function fetchPostCommentsViaMcp(params) {
+  let listFn = params.listCommentsFn;
+  if (!listFn) {
+    const key = params.apiKey?.trim();
+    if (!key) {
+      return { ok: false, comments: [] };
+    }
+    const client = new CivitaiMcpClient(key, { fetchFn: params.fetchFn });
+    await client.initialize();
+    listFn = ({ entityType, entityId }) => client.listComments({ entityType, entityId, depth: 2, sort: "Newest", includeFull: true });
+  }
+  const collected = [];
+  const seenKeys = /* @__PURE__ */ new Set();
+  let anySucceeded = false;
+  for (const img of params.postImages) {
+    if (img.commentCount <= 0) continue;
+    try {
+      const items = await listFn({ entityType: "image", entityId: img.civitaiImageId });
+      anySucceeded = true;
+      for (const c of items) {
+        const dedupeKey = `image:${c.id}`;
+        if (seenKeys.has(dedupeKey)) continue;
+        seenKeys.add(dedupeKey);
+        collected.push({
+          id: c.id,
+          targetType: "image",
+          civitaiPostId: params.postId,
+          civitaiImageId: img.civitaiImageId,
+          localImageId: img.localImageId ?? null,
+          civitaiUrl: `https://${params.domain}/images/${img.civitaiImageId}`,
+          authorUsername: c.authorUsername,
+          authorAvatarUrl: c.authorAvatarUrl,
+          content: c.content,
+          createdAt: c.createdAt,
+          reactionCount: c.reactionCount,
+          heartCount: c.heartCount,
+          parentCommentId: c.parentCommentId,
+          depth: c.depth,
+          isPinned: c.isPinned
+        });
+      }
+    } catch {
+    }
+  }
+  try {
+    const postComments = await listFn({ entityType: "post", entityId: params.postId });
+    anySucceeded = true;
+    for (const c of postComments) {
+      const dedupeKey = `post:${c.id}`;
+      if (seenKeys.has(dedupeKey)) continue;
+      seenKeys.add(dedupeKey);
+      collected.push({
+        id: c.id,
+        targetType: "post",
+        civitaiPostId: params.postId,
+        civitaiImageId: null,
+        localImageId: null,
+        civitaiUrl: `https://${params.domain}/posts/${params.postId}`,
+        authorUsername: c.authorUsername,
+        authorAvatarUrl: c.authorAvatarUrl,
+        content: c.content,
+        createdAt: c.createdAt,
+        reactionCount: c.reactionCount,
+        heartCount: c.heartCount,
+        parentCommentId: c.parentCommentId,
+        depth: c.depth,
+        isPinned: c.isPinned
+      });
+    }
+  } catch {
+  }
+  return { ok: anySucceeded, comments: collected };
+}
+async function fetchModelCommentsViaMcp(params) {
+  let listFn = params.listCommentsFn;
+  if (!listFn) {
+    const key = params.apiKey?.trim();
+    if (!key) {
+      return { ok: false, comments: [] };
+    }
+    const client = new CivitaiMcpClient(key, { fetchFn: params.fetchFn });
+    await client.initialize();
+    listFn = ({ entityType, entityId }) => client.listComments({ entityType, entityId, depth: 2, sort: "Newest", includeFull: true });
+  }
+  try {
+    const items = await listFn({ entityType: "model", entityId: params.modelId });
+    const comments = items.map((c) => ({
+      id: c.id,
+      targetType: "model",
+      civitaiPostId: 0,
+      civitaiImageId: null,
+      localImageId: null,
+      civitaiUrl: `https://${params.domain}/models/${params.modelId}`,
+      authorUsername: c.authorUsername,
+      authorAvatarUrl: c.authorAvatarUrl,
+      content: c.content,
+      createdAt: c.createdAt,
+      reactionCount: c.reactionCount,
+      heartCount: c.heartCount,
+      parentCommentId: c.parentCommentId,
+      depth: c.depth,
+      isPinned: c.isPinned
+    }));
+    return { ok: true, comments };
+  } catch {
+    return { ok: false, comments: [] };
+  }
+}
+function enrichCommentsWithLocalImages(comments) {
+  if (!comments || comments.length === 0) return [];
+  const localIds = Array.from(
+    new Set(
+      comments.map((c) => c.localImageId).filter((id) => typeof id === "number" && Number.isInteger(id) && id > 0)
+    )
+  );
+  const infoById = /* @__PURE__ */ new Map();
+  if (localIds.length > 0) {
+    const placeholders = localIds.map(() => "?").join(",");
+    const rows = db.prepare(`SELECT id, filename FROM images WHERE id IN (${placeholders})`).all(...localIds);
+    for (const row of rows) {
+      infoById.set(Number(row.id), { filename: String(row.filename || "") });
+    }
+  }
+  return comments.map((c) => {
+    const localInfo = c.localImageId ? infoById.get(c.localImageId) : void 0;
+    return {
+      ...c,
+      localFilename: localInfo?.filename ?? c.localFilename ?? null,
+      localThumbnailUrl: c.localImageId && localInfo ? `/api/images/${c.localImageId}/thumbnail` : c.localThumbnailUrl ?? null
+    };
+  });
+}
+var init_civitaiCommentsService = __esm({
+  "src/server/services/civitai/civitaiCommentsService.ts"() {
+    init_db();
+    init_civitaiMcpClient();
+  }
+});
+
+// src/server/services/civitai/civitaiModelStatsHelper.ts
+function extractCivitaiCreatorUsername(modelObj, versionObj) {
+  const raw = modelObj?.creator?.username ?? versionObj?.model?.creator?.username ?? modelObj?.user?.username ?? null;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : null;
+}
+function extractCivitaiModelStats(modelObj, versionObj) {
+  const mStats = modelObj?.stats || {};
+  const vStats = versionObj?.stats || {};
+  const downloadCount = Math.max(0, Number(mStats.downloadCount ?? vStats.downloadCount ?? 0));
+  const thumbsUpCount = Math.max(0, Number(mStats.thumbsUpCount ?? vStats.thumbsUpCount ?? 0));
+  const thumbsDownCount = Math.max(0, Number(mStats.thumbsDownCount ?? vStats.thumbsDownCount ?? 0));
+  const commentCount = Math.max(0, Number(mStats.commentCount ?? 0));
+  const tippedAmountCount = Math.max(0, Number(mStats.tippedAmountCount ?? 0));
+  const totalVersionsCount = Array.isArray(modelObj?.modelVersions) ? modelObj.modelVersions.length : versionObj ? 1 : 0;
+  const matchedVersion = versionObj?.id ? {
+    versionId: String(versionObj.id),
+    versionName: String(versionObj.name || "Version"),
+    downloadCount: Math.max(0, Number(vStats.downloadCount || 0)),
+    thumbsUpCount: Math.max(0, Number(vStats.thumbsUpCount || 0)),
+    thumbsDownCount: Math.max(0, Number(vStats.thumbsDownCount || 0))
+  } : null;
+  return {
+    downloadCount,
+    thumbsUpCount,
+    thumbsDownCount,
+    commentCount,
+    tippedAmountCount,
+    totalVersionsCount,
+    matchedVersion
+  };
+}
+function parseCivitaiStatsJson(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      downloadCount: Math.max(0, Number(parsed.downloadCount || 0)),
+      thumbsUpCount: Math.max(0, Number(parsed.thumbsUpCount || 0)),
+      thumbsDownCount: Math.max(0, Number(parsed.thumbsDownCount || 0)),
+      commentCount: Math.max(0, Number(parsed.commentCount || 0)),
+      tippedAmountCount: Math.max(0, Number(parsed.tippedAmountCount || 0)),
+      totalVersionsCount: Math.max(0, Number(parsed.totalVersionsCount || 0)),
+      matchedVersion: parsed.matchedVersion ? {
+        versionId: String(parsed.matchedVersion.versionId || ""),
+        versionName: String(parsed.matchedVersion.versionName || "Version"),
+        downloadCount: Math.max(0, Number(parsed.matchedVersion.downloadCount || 0)),
+        thumbsUpCount: Math.max(0, Number(parsed.matchedVersion.thumbsUpCount || 0)),
+        thumbsDownCount: Math.max(0, Number(parsed.matchedVersion.thumbsDownCount || 0))
+      } : null
+    };
+  } catch {
+    return null;
+  }
+}
+function parseCivitaiCommentsJson(raw) {
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+function parseCivitaiLinkInput(rawInput) {
+  const trimmed = String(rawInput || "").trim();
+  if (!trimmed) {
+    return { modelId: null, versionId: null, domain: "civitai.com", isBareNumeric: false };
+  }
+  const bareMatch = trimmed.match(/^(?:v|ver|version|id|#)?\s*[:#-]?\s*(\d{3,12})$/i);
+  if (bareMatch) {
+    return {
+      modelId: null,
+      versionId: bareMatch[1],
+      domain: "civitai.com",
+      isBareNumeric: true
+    };
+  }
+  const normalizedUrl = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  const parsed = parseIdsFromCivitaiUrl(normalizedUrl);
+  return {
+    modelId: parsed.modelId,
+    versionId: parsed.versionId,
+    domain: parsed.domain || "civitai.com",
+    isBareNumeric: false
+  };
+}
+var init_civitaiModelStatsHelper = __esm({
+  "src/server/services/civitai/civitaiModelStatsHelper.ts"() {
+    init_civitaiUrlAndDomain();
+  }
+});
+
 // src/server/services/civitai/civitaiModelEnrichmentService.ts
 import fs7 from "fs";
 import path7 from "path";
@@ -3797,9 +4342,29 @@ async function cacheModelPreviewImages(cacheKey, sources) {
   }
   return stored;
 }
+function getCachedCivitaiAccountUsername() {
+  try {
+    const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'civitai_account_username'`).get();
+    return row?.value?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+function propagateModelLinkToCharacters(modelId, filename, triggerWord) {
+  const cleanTrigger = triggerWord?.trim() || "";
+  db.prepare(
+    `UPDATE character_loras
+     SET model_id = COALESCE(model_id, ?),
+         trigger_word = CASE
+           WHEN TRIM(COALESCE(trigger_word, '')) = '' AND ? != '' THEN ?
+           ELSE trigger_word
+         END
+     WHERE LOWER(lora_name) = LOWER(?)`
+  ).run(modelId, cleanTrigger, cleanTrigger, filename);
+}
 function applyCivitaiEnrichmentToModel(modelId, meta, cachedPreviews, extraMeta) {
   const existing = db.prepare(
-    `SELECT id, trigger_word, default_model_strength, civitai_id, civitai_version_id,
+    `SELECT id, filename, trigger_word, default_model_strength, civitai_id, civitai_version_id,
               civitai_url, base_model, recommended_weight, civitai_description, preview_images_json
        FROM models WHERE id = ?`
   ).get(modelId);
@@ -3820,35 +4385,61 @@ function applyCivitaiEnrichmentToModel(modelId, meta, cachedPreviews, extraMeta)
     filledDefaultStrength = true;
   }
   const nextPreviewsJson = cachedPreviews.length > 0 ? JSON.stringify(cachedPreviews) : existing.preview_images_json || "[]";
+  const statsJson = extraMeta?.stats ? JSON.stringify(extraMeta.stats) : null;
+  const overwrite = extraMeta?.overwriteCivitaiLink ? 1 : 0;
   db.prepare(
     `UPDATE models
-     SET civitai_id = COALESCE(?, civitai_id),
-         civitai_version_id = COALESCE(?, civitai_version_id),
-         civitai_url = COALESCE(?, civitai_url),
+     SET civitai_id = CASE WHEN ? = 1 AND ? IS NOT NULL THEN ? ELSE COALESCE(?, civitai_id) END,
+         civitai_version_id = CASE WHEN ? = 1 AND ? IS NOT NULL THEN ? ELSE COALESCE(?, civitai_version_id) END,
+         civitai_url = CASE WHEN ? = 1 AND ? IS NOT NULL THEN ? ELSE COALESCE(?, civitai_url) END,
          hf_repo_id = COALESCE(?, hf_repo_id),
          download_url = COALESCE(download_url, ?),
-         base_model = COALESCE(?, base_model),
+         base_model = CASE WHEN ? = 1 AND ? IS NOT NULL THEN ? ELSE COALESCE(?, base_model) END,
          recommended_weight = COALESCE(?, recommended_weight),
-         civitai_description = COALESCE(?, civitai_description),
+         civitai_description = CASE WHEN ? = 1 AND ? IS NOT NULL THEN ? ELSE COALESCE(?, civitai_description) END,
          preview_images_json = ?,
          trigger_word = ?,
          default_model_strength = ?,
+         civitai_creator_username = COALESCE(?, civitai_creator_username),
+         is_own_civitai_upload = CASE WHEN ? = 1 THEN 1 ELSE is_own_civitai_upload END,
+         civitai_stats_json = COALESCE(?, civitai_stats_json),
+         civitai_stats_synced_at = CASE WHEN ? IS NOT NULL THEN datetime('now') ELSE civitai_stats_synced_at END,
          civitai_fetched_at = datetime('now')
      WHERE id = ?`
   ).run(
+    overwrite,
     meta.civitaiId,
+    meta.civitaiId,
+    meta.civitaiId,
+    overwrite,
     meta.civitaiVersionId,
+    meta.civitaiVersionId,
+    meta.civitaiVersionId,
+    overwrite,
+    meta.civitaiUrl,
+    meta.civitaiUrl,
     meta.civitaiUrl,
     extraMeta?.hfRepoId || null,
     extraMeta?.downloadUrl || null,
+    overwrite,
+    meta.baseModel,
+    meta.baseModel,
     meta.baseModel,
     meta.recommendedWeight,
+    overwrite,
+    meta.civitaiDescription,
+    meta.civitaiDescription,
     meta.civitaiDescription,
     nextPreviewsJson,
     nextTriggerWord,
     nextModelStrength,
+    extraMeta?.creatorUsername || null,
+    extraMeta?.isOwnUpload ? 1 : 0,
+    statsJson,
+    statsJson,
     modelId
   );
+  propagateModelLinkToCharacters(modelId, existing.filename, nextTriggerWord);
   invalidateInstalledModelsCache();
   return { filledTriggerWord, filledDefaultStrength };
 }
@@ -3865,7 +4456,10 @@ function computeFileSha256Stream(filePath) {
   });
 }
 async function fetchAndEnrichModelFromCivitai(modelId, options) {
-  const allowHfFallback = options?.allowHuggingFaceFallback !== false;
+  const isExplicitLink = Boolean(
+    options?.explicitLinkInput?.trim() || options?.explicitVersionId?.trim() || options?.explicitModelId?.trim()
+  );
+  const allowHfFallback = !isExplicitLink && options?.allowHuggingFaceFallback !== false;
   const row = db.prepare("SELECT * FROM models WHERE id = ?").get(modelId);
   if (!row) {
     const err = new Error("Model not found");
@@ -3874,7 +4468,7 @@ async function fetchAndEnrichModelFromCivitai(modelId, options) {
   }
   let sha256 = row.sha256_hash || null;
   let autov2 = row.autov2_hash || null;
-  if (!sha256 && row.file_path && fs7.existsSync(row.file_path)) {
+  if (!isExplicitLink && !sha256 && row.file_path && fs7.existsSync(row.file_path)) {
     try {
       const computed = await computeFileSha256Stream(row.file_path);
       sha256 = computed.sha256;
@@ -3888,20 +4482,25 @@ async function fetchAndEnrichModelFromCivitai(modelId, options) {
     } catch {
     }
   }
+  const parsedExplicit = options?.explicitLinkInput ? parseCivitaiLinkInput(options.explicitLinkInput) : null;
   const parsedFromUrl = parseIdsFromCivitaiUrl(row.civitai_url || row.download_url);
-  const storedCivitaiId = row.civitai_id || parsedFromUrl.modelId;
-  const storedVersionId = row.civitai_version_id || parsedFromUrl.versionId;
-  let detectedDomain = parsedFromUrl.domain || "civitai.com";
+  const explicitVerId = options?.explicitVersionId?.trim() || parsedExplicit?.versionId || null;
+  const explicitModId = options?.explicitModelId?.trim() || parsedExplicit?.modelId || null;
+  const storedCivitaiId = explicitModId || row.civitai_id || parsedFromUrl.modelId;
+  const storedVersionId = explicitVerId || row.civitai_version_id || parsedFromUrl.versionId;
+  let detectedDomain = options?.explicitDomain || parsedExplicit?.domain || parsedFromUrl.domain || "civitai.com";
   const headers = getCivitaiHeaders();
+  const fetchOpts = options?.fetchFn ? { fetchFn: options.fetchFn, bypassCache: true } : void 0;
   let versionObj = null;
   let modelObj = null;
-  const hashesToTry = [sha256, autov2].filter((h) => Boolean(h && h.trim()));
+  const hashesToTry = isExplicitLink ? [] : [sha256, autov2].filter((h) => Boolean(h && h.trim()));
   for (const h of hashesToTry) {
     const found = await fetchCivitaiJsonWithFallback(
       `/api/v1/model-versions/by-hash/${encodeURIComponent(h.trim())}`,
       headers,
       detectedDomain,
-      9e3
+      9e3,
+      fetchOpts
     );
     if (found?.data) {
       versionObj = found.data;
@@ -3913,18 +4512,22 @@ async function fetchAndEnrichModelFromCivitai(modelId, options) {
     const foundVer = await fetchCivitaiJsonWithFallback(
       `/api/v1/model-versions/${encodeURIComponent(String(storedVersionId))}`,
       headers,
-      detectedDomain
+      detectedDomain,
+      8e3,
+      fetchOpts
     );
     if (foundVer?.data) {
       versionObj = foundVer.data;
       if (foundVer.domain === "civitai.red") detectedDomain = "civitai.red";
     }
   }
-  if (!versionObj && storedCivitaiId) {
+  const fallbackModelLookupId = storedCivitaiId || (parsedExplicit?.isBareNumeric ? parsedExplicit.versionId : null);
+  if (!versionObj && fallbackModelLookupId) {
     const parentRes = await fetchCivitaiParentModelWithDomain(
-      storedCivitaiId,
+      fallbackModelLookupId,
       headers,
-      detectedDomain
+      detectedDomain,
+      fetchOpts
     );
     modelObj = parentRes.model;
     if (parentRes.domain === "civitai.red") detectedDomain = "civitai.red";
@@ -3966,22 +4569,26 @@ async function fetchAndEnrichModelFromCivitai(modelId, options) {
           meta: normalizedHf,
           cachedPreviews: cachedPreviews2,
           filledTriggerWord: filledTriggerWord2,
-          filledDefaultStrength: filledDefaultStrength2
+          filledDefaultStrength: filledDefaultStrength2,
+          stats: null,
+          creatorUsername: null,
+          isOwnUpload: false
         };
       }
     }
     const err = new Error(
-      hashesToTry.length > 0 || allowHfFallback ? "No matching model found on Civitai or Hugging Face for this file." : "Cannot look up model on Civitai: no local file hash or Civitai ID available."
+      isExplicitLink ? "Could not find a Civitai model or version matching that URL / Version ID." : hashesToTry.length > 0 || allowHfFallback ? "No matching model found on Civitai or Hugging Face for this file." : "Cannot look up model on Civitai: no local file hash or Civitai ID available."
     );
     err.statusCode = 404;
     throw err;
   }
-  const resolvedParentId = versionObj.modelId || storedCivitaiId;
+  const resolvedParentId = versionObj.modelId || fallbackModelLookupId;
   if (!modelObj && resolvedParentId) {
     const parentRes = await fetchCivitaiParentModelWithDomain(
       resolvedParentId,
       headers,
-      detectedDomain
+      detectedDomain,
+      fetchOpts
     );
     modelObj = parentRes.model;
     if (parentRes.domain === "civitai.red") detectedDomain = "civitai.red";
@@ -3990,24 +4597,59 @@ async function fetchAndEnrichModelFromCivitai(modelId, options) {
     modelObj = { id: resolvedParentId, ...versionObj.model };
   }
   let finalDomain = resolveCivitaiDomain(modelObj, versionObj, detectedDomain);
-  if (finalDomain === "civitai.com" && resolvedParentId) {
+  if (finalDomain === "civitai.com" && resolvedParentId && !options?.fetchFn) {
     finalDomain = await probeCivitaiWebDomain(resolvedParentId, finalDomain);
   }
   const meta = normalizeCivitaiData(modelObj, versionObj, row.filename, finalDomain);
+  const stats = extractCivitaiModelStats(modelObj, versionObj);
+  const creatorUsername = extractCivitaiCreatorUsername(modelObj, versionObj);
+  const accountUser = options?.ownUsername ?? getCachedCivitaiAccountUsername();
+  const isOwnUpload = Boolean(
+    creatorUsername && accountUser && creatorUsername.toLowerCase() === accountUser.toLowerCase()
+  );
   const cacheKey = `m${row.id}_${meta.civitaiVersionId || row.autov2_hash || "v"}`;
-  const cachedPreviews = await cacheModelPreviewImages(cacheKey, meta.previewImages);
+  const cachedPreviews = options?.fetchFn ? [] : await cacheModelPreviewImages(cacheKey, meta.previewImages);
   const { filledTriggerWord, filledDefaultStrength } = applyCivitaiEnrichmentToModel(
     row.id,
     meta,
-    cachedPreviews
+    cachedPreviews,
+    {
+      creatorUsername,
+      isOwnUpload,
+      stats,
+      overwriteCivitaiLink: isExplicitLink
+    }
   );
+  const canQueryComments = Boolean(options?.listCommentsFn || appConfig.civitaiApiKey?.trim());
+  const shouldFetchComments = options?.syncComments !== false && canQueryComments && meta.civitaiId && (stats.commentCount > 0 || isExplicitLink);
+  if (shouldFetchComments && meta.civitaiId) {
+    const numericModelId = Number(meta.civitaiId);
+    if (Number.isInteger(numericModelId) && numericModelId > 0) {
+      const commentRes = await fetchModelCommentsViaMcp({
+        modelId: numericModelId,
+        domain: finalDomain,
+        apiKey: appConfig.civitaiApiKey,
+        fetchFn: options?.fetchFn,
+        listCommentsFn: options?.listCommentsFn
+      });
+      if (commentRes.ok) {
+        db.prepare(`UPDATE models SET civitai_comments_json = ? WHERE id = ?`).run(
+          JSON.stringify(commentRes.comments),
+          row.id
+        );
+      }
+    }
+  }
   return {
     provider: "civitai",
     hfRepoId: row.hf_repo_id || null,
     meta,
     cachedPreviews,
     filledTriggerWord,
-    filledDefaultStrength
+    filledDefaultStrength,
+    stats,
+    creatorUsername,
+    isOwnUpload
   };
 }
 async function healExistingCivitaiLinks() {
@@ -4340,6 +4982,8 @@ var init_civitaiModelEnrichmentService = __esm({
     init_config();
     init_huggingFaceMetadataService();
     init_civitaiHttpAndParse();
+    init_civitaiCommentsService();
+    init_civitaiModelStatsHelper();
     MAX_PREVIEW_IMAGES = 4;
     initialHealTriggered = false;
     cachedInstalledModelsIndex = null;
@@ -8541,386 +9185,472 @@ var init_visualTaggerService = __esm({
   }
 });
 
-// src/server/services/civitai/civitaiMcpClient.ts
-function isSizeLimitErrorMessage(status, message) {
-  if (status === 413) return true;
-  return /too large|payload.*large|size limit|exceeds.*(mb|mib|bytes|size)|max.*size|413/i.test(
-    message
-  );
+// src/server/services/civitai/civitaiCreatorModelsService.ts
+import crypto5 from "crypto";
+function hashApiKeyShort(apiKey) {
+  return crypto5.createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
 }
-function parseMcpResponseBody(rawText) {
-  const trimmed = rawText.trim();
-  if (!trimmed) {
-    throw new Error("Empty response from Civitai MCP server.");
-  }
-  if (trimmed.startsWith("{")) {
-    return JSON.parse(trimmed);
-  }
-  const dataLines = trimmed.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).filter(Boolean);
-  for (let i = dataLines.length - 1; i >= 0; i--) {
-    try {
-      return JSON.parse(dataLines[i]);
-    } catch {
-    }
-  }
-  throw new Error(`Unexpected Civitai MCP response format: ${trimmed.slice(0, 200)}`);
+function getAppSetting(key) {
+  const row = db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get(key);
+  return row?.value ?? null;
 }
-function extractToolResultPayload(toolResult) {
-  if (!toolResult || typeof toolResult !== "object") return toolResult;
-  if (toolResult.structuredContent && typeof toolResult.structuredContent === "object") {
-    return toolResult.structuredContent;
-  }
-  const firstText = Array.isArray(toolResult.content) ? toolResult.content.find((c) => c?.type === "text" && typeof c.text === "string")?.text : void 0;
-  if (typeof firstText === "string") {
-    const trimmed = firstText.trim();
-    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-      try {
-        return JSON.parse(trimmed);
-      } catch {
-        return { message: firstText };
-      }
-    }
-    return { message: firstText };
-  }
-  return toolResult;
+function setAppSetting(key, value) {
+  db.prepare(
+    `INSERT INTO app_settings (key, value, updated_at)
+     VALUES (?, ?, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+  ).run(key, value);
 }
-function stripCivitaiCommentHtml(raw) {
-  return String(raw || "").replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/\n{3,}/g, "\n\n").trim();
-}
-function sumCommentReactions(raw) {
-  if (!raw || typeof raw !== "object") return { reactionCount: 0, heartCount: 0 };
-  if (Array.isArray(raw.reactions)) {
-    let total = 0;
-    let hearts = 0;
-    for (const r of raw.reactions) {
-      const cnt = Math.max(0, Number(r?.count ?? r?.total ?? 1));
-      total += cnt;
-      if (String(r?.reaction || "").toLowerCase() === "heart") {
-        hearts += cnt;
-      }
-    }
-    return { reactionCount: total, heartCount: hearts };
+async function resolveAuthenticatedCivitaiUsername(options) {
+  const key = (options?.deps?.apiKey ?? appConfig.civitaiApiKey ?? "").trim();
+  if (!key && !options?.deps?.whoAmIFn) {
+    return null;
   }
-  const stats = raw.stats && typeof raw.stats === "object" ? raw.stats : raw;
-  const heartCount = Math.max(0, Number(stats.heartCount || 0));
-  const likeCount = Math.max(0, Number(stats.likeCount || 0));
-  const laughCount = Math.max(0, Number(stats.laughCount || 0));
-  const cryCount = Math.max(0, Number(stats.cryCount || 0));
-  const explicitTotal = Number(raw.reactionCount ?? stats.reactionCount ?? 0);
-  const sum = heartCount + likeCount + laughCount + cryCount;
-  return {
-    reactionCount: Math.max(sum, Number.isFinite(explicitTotal) ? explicitTotal : 0),
-    heartCount
-  };
-}
-function normalizeCivitaiMcpComments(payload) {
-  const candidates = Array.isArray(payload) ? payload : Array.isArray(payload?.comments) ? payload.comments : Array.isArray(payload?.items) ? payload.items : Array.isArray(payload?.threads) ? payload.threads : Array.isArray(payload?.results) ? payload.results : Array.isArray(payload?.data) ? payload.data : [];
-  const out = [];
-  const seenIds = /* @__PURE__ */ new Set();
-  const visit = (item, depth, parentId) => {
-    if (!item || typeof item !== "object") return;
-    const id = Number(item.id ?? item.commentId ?? 0);
-    const text = stripCivitaiCommentHtml(
-      item.content ?? item.body ?? item.text ?? item.message ?? ""
-    );
-    const authorUsername = String(
-      item.user?.username ?? item.author?.username ?? (typeof item.author === "string" ? item.author : "") ?? item.username ?? "Civitai User"
-    ).trim();
-    const authorAvatarUrl = typeof item.user?.image === "string" ? item.user.image : typeof item.author?.image === "string" ? item.author.image : null;
-    const createdAt = typeof item.createdAt === "string" ? item.createdAt : typeof item.created_at === "string" ? item.created_at : null;
-    const resolvedParent = item.parentId != null ? Number(item.parentId) : item.parentCommentId != null ? Number(item.parentCommentId) : parentId;
-    const { reactionCount, heartCount } = sumCommentReactions(item);
-    if (Number.isInteger(id) && id > 0 && text && !seenIds.has(id) && !item.hidden) {
-      seenIds.add(id);
-      out.push({
-        id,
-        authorUsername: authorUsername || "Civitai User",
-        authorAvatarUrl,
-        content: text,
-        createdAt,
-        reactionCount,
-        heartCount,
-        parentCommentId: resolvedParent && Number.isInteger(resolvedParent) ? resolvedParent : null,
-        depth,
-        isPinned: Boolean(item.pinned ?? item.isPinned)
-      });
-    }
-    const nested = Array.isArray(item.replies) ? item.replies : Array.isArray(item.children) ? item.children : Array.isArray(item.comments) ? item.comments : [];
-    for (const child of nested) {
-      visit(child, Math.min(depth + 1, 3), Number.isInteger(id) && id > 0 ? id : parentId);
-    }
-  };
-  for (const item of candidates) {
-    visit(item, 0, null);
-  }
-  return out;
-}
-var CIVITAI_MCP_URL, CivitaiPayloadTooLargeError, CivitaiMcpClient;
-var init_civitaiMcpClient = __esm({
-  "src/server/services/civitai/civitaiMcpClient.ts"() {
-    CIVITAI_MCP_URL = "https://mcp.civitai.com/mcp";
-    CivitaiPayloadTooLargeError = class extends Error {
-      constructor(message) {
-        super(message);
-        this.code = "PAYLOAD_TOO_LARGE";
-        this.name = "CivitaiPayloadTooLargeError";
-      }
-    };
-    CivitaiMcpClient = class {
-      constructor(apiKey, deps) {
-        this.sessionId = null;
-        this.nextId = 1;
-        this.apiKey = apiKey.trim();
-        this.endpointUrl = deps?.endpointUrl || CIVITAI_MCP_URL;
-        this.fetchFn = deps?.fetchFn || fetch;
-      }
-      async postJsonRpc(body) {
-        const headers = {
-          "Content-Type": "application/json",
-          Accept: "application/json, text/event-stream",
-          Authorization: `Bearer ${this.apiKey}`
-        };
-        if (this.sessionId) {
-          headers["mcp-session-id"] = this.sessionId;
-        }
-        const res = await this.fetchFn(this.endpointUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body)
-        });
-        const sid = res.headers.get("mcp-session-id");
-        if (sid) this.sessionId = sid;
-        const text = await res.text();
-        if (!res.ok) {
-          if (isSizeLimitErrorMessage(res.status, text)) {
-            throw new CivitaiPayloadTooLargeError(
-              `Civitai rejected image upload due to file size limits (HTTP ${res.status}).`
-            );
-          }
-          throw new Error(`Civitai MCP HTTP ${res.status}: ${text.slice(0, 300)}`);
-        }
-        if (!text.trim()) {
-          return { status: res.status, envelope: null };
-        }
-        const envelope = parseMcpResponseBody(text);
-        if (envelope.error) {
-          const msg = envelope.error.message || "Civitai MCP JSON-RPC error";
-          if (isSizeLimitErrorMessage(res.status, msg)) {
-            throw new CivitaiPayloadTooLargeError(msg);
-          }
-          throw new Error(msg);
-        }
-        return { status: res.status, envelope };
-      }
-      async initialize() {
-        await this.postJsonRpc({
-          jsonrpc: "2.0",
-          id: this.nextId++,
-          method: "initialize",
-          params: {
-            protocolVersion: "2025-03-26",
-            capabilities: {},
-            clientInfo: { name: "couchy", version: "0.1.0" }
-          }
-        });
-        await this.postJsonRpc({
-          jsonrpc: "2.0",
-          method: "notifications/initialized"
-        });
-      }
-      async callTool(name, args) {
-        const { envelope } = await this.postJsonRpc({
-          jsonrpc: "2.0",
-          id: this.nextId++,
-          method: "tools/call",
-          params: { name, arguments: args }
-        });
-        const result = envelope?.result;
-        const payload = extractToolResultPayload(result);
-        if (result?.isError) {
-          const errMsg = typeof payload?.message === "string" ? payload.message : typeof payload?.error === "string" ? payload.error : JSON.stringify(payload || "Civitai tool call failed");
-          if (isSizeLimitErrorMessage(400, errMsg)) {
-            throw new CivitaiPayloadTooLargeError(errMsg);
-          }
-          throw new Error(errMsg);
-        }
-        return payload;
-      }
-      async verifyAccountReady() {
-        const info = await this.callTool("whoami", {});
-        if (info?.muted === true || info?.isMuted === true) {
-          throw new Error("Your Civitai account is currently muted and cannot create posts.");
-        }
-        if (info?.isOnboarded === false) {
-          throw new Error(
-            "Your Civitai account has not completed onboarding. Sign in on civitai.com once to accept terms before creating drafts."
-          );
-        }
-      }
-      async uploadImage(params) {
-        const res = await this.callTool("upload_image", {
-          data: params.base64Data,
-          contentType: params.contentType
-        });
-        const uuid = res?.uuid || res?.id || res?.imageUuid;
-        if (!uuid || typeof uuid !== "string") {
-          throw new Error("Civitai upload_image did not return an image UUID.");
-        }
-        return {
-          uuid,
-          width: typeof res.width === "number" ? res.width : void 0,
-          height: typeof res.height === "number" ? res.height : void 0
-        };
-      }
-      async createDraftPost(params) {
-        const imageList = Array.isArray(params.images) && params.images.length > 0 ? params.images : params.image ? [params.image] : [];
-        if (imageList.length === 0 || imageList.length > 20) {
-          throw new Error(`Civitai create_post requires between 1 and 20 images (got ${imageList.length}).`);
-        }
-        const args = {
-          images: imageList.map((img) => ({
-            uuid: img.uuid,
-            width: img.width,
-            height: img.height,
-            type: "image"
-          })),
-          publish: false
-          // Always draft-only; never auto-publish
-        };
-        if (params.title && params.title.trim()) args.title = params.title.trim();
-        if (params.detail && params.detail.trim()) args.detail = params.detail.trim();
-        if (Array.isArray(params.tags) && params.tags.length > 0) args.tags = params.tags;
-        if (params.modelVersionId && Number(params.modelVersionId) > 0) {
-          args.modelVersionId = Number(params.modelVersionId);
-        }
-        const res = await this.callTool("create_post", args);
-        const rawPostId = res?.id ?? res?.postId ?? res?.post?.id;
-        const postId = Number(rawPostId);
-        if (!Number.isInteger(postId) || postId <= 0) {
-          throw new Error("Civitai create_post did not return a valid post ID.");
-        }
-        const processingImageIds = Array.isArray(res?.processingImageIds) ? res.processingImageIds.map(Number).filter(Number.isFinite) : [];
-        return { postId, processingImageIds };
-      }
-      /**
-       * Calls Civitai MCP `list_comments` for an image or post entity and normalizes the thread.
-       */
-      async listComments(params) {
-        const res = await this.callTool("list_comments", {
-          entityType: params.entityType,
-          entityId: params.entityId,
-          depth: params.depth ?? 2,
-          sort: params.sort ?? "Newest",
-          includeFull: params.includeFull ?? true
-        });
-        return normalizeCivitaiMcpComments(res);
-      }
-    };
-  }
-});
-
-// src/server/services/civitai/civitaiCommentsService.ts
-async function fetchPostCommentsViaMcp(params) {
-  let listFn = params.listCommentsFn;
-  if (!listFn) {
-    const key = params.apiKey?.trim();
-    if (!key) {
-      return { ok: false, comments: [] };
-    }
-    const client = new CivitaiMcpClient(key, { fetchFn: params.fetchFn });
-    await client.initialize();
-    listFn = ({ entityType, entityId }) => client.listComments({ entityType, entityId, depth: 2, sort: "Newest", includeFull: true });
-  }
-  const collected = [];
-  const seenKeys = /* @__PURE__ */ new Set();
-  let anySucceeded = false;
-  for (const img of params.postImages) {
-    if (img.commentCount <= 0) continue;
-    try {
-      const items = await listFn({ entityType: "image", entityId: img.civitaiImageId });
-      anySucceeded = true;
-      for (const c of items) {
-        const dedupeKey = `image:${c.id}`;
-        if (seenKeys.has(dedupeKey)) continue;
-        seenKeys.add(dedupeKey);
-        collected.push({
-          id: c.id,
-          targetType: "image",
-          civitaiPostId: params.postId,
-          civitaiImageId: img.civitaiImageId,
-          localImageId: img.localImageId ?? null,
-          civitaiUrl: `https://${params.domain}/images/${img.civitaiImageId}`,
-          authorUsername: c.authorUsername,
-          authorAvatarUrl: c.authorAvatarUrl,
-          content: c.content,
-          createdAt: c.createdAt,
-          reactionCount: c.reactionCount,
-          heartCount: c.heartCount,
-          parentCommentId: c.parentCommentId,
-          depth: c.depth,
-          isPinned: c.isPinned
-        });
-      }
-    } catch {
-    }
+  const keyTag = key ? hashApiKeyShort(key) : "stub";
+  const storedKeyTag = getAppSetting("civitai_account_key_tag");
+  const storedUser = getAppSetting("civitai_account_username")?.trim() || null;
+  const storedSyncedAt = Number(getAppSetting("civitai_account_username_ts") || 0);
+  if (!options?.forceRefresh && storedUser && storedKeyTag === keyTag && storedSyncedAt > 0 && Date.now() - storedSyncedAt < WHOAMI_CACHE_TTL_MS) {
+    return storedUser;
   }
   try {
-    const postComments = await listFn({ entityType: "post", entityId: params.postId });
-    anySucceeded = true;
-    for (const c of postComments) {
-      const dedupeKey = `post:${c.id}`;
-      if (seenKeys.has(dedupeKey)) continue;
-      seenKeys.add(dedupeKey);
-      collected.push({
-        id: c.id,
-        targetType: "post",
-        civitaiPostId: params.postId,
-        civitaiImageId: null,
-        localImageId: null,
-        civitaiUrl: `https://${params.domain}/posts/${params.postId}`,
-        authorUsername: c.authorUsername,
-        authorAvatarUrl: c.authorAvatarUrl,
-        content: c.content,
-        createdAt: c.createdAt,
-        reactionCount: c.reactionCount,
-        heartCount: c.heartCount,
-        parentCommentId: c.parentCommentId,
-        depth: c.depth,
-        isPinned: c.isPinned
-      });
+    let username = null;
+    if (options?.deps?.whoAmIFn) {
+      const res = await options.deps.whoAmIFn();
+      username = res?.username?.trim() || null;
+    } else {
+      const client = new CivitaiMcpClient(key, { fetchFn: options?.deps?.fetchFn });
+      await client.initialize();
+      const res = await client.getWhoAmI();
+      username = res.username;
     }
+    if (username) {
+      setAppSetting("civitai_account_username", username);
+      setAppSetting("civitai_account_key_tag", keyTag);
+      setAppSetting("civitai_account_username_ts", String(Date.now()));
+    }
+    return username;
   } catch {
+    return storedKeyTag === keyTag ? storedUser : null;
   }
-  return { ok: anySucceeded, comments: collected };
 }
-function enrichCommentsWithLocalImages(comments) {
-  if (!comments || comments.length === 0) return [];
-  const localIds = Array.from(
-    new Set(
-      comments.map((c) => c.localImageId).filter((id) => typeof id === "number" && Number.isInteger(id) && id > 0)
-    )
-  );
-  const infoById = /* @__PURE__ */ new Map();
-  if (localIds.length > 0) {
-    const placeholders = localIds.map(() => "?").join(",");
-    const rows = db.prepare(`SELECT id, filename FROM images WHERE id IN (${placeholders})`).all(...localIds);
-    for (const row of rows) {
-      infoById.set(Number(row.id), { filename: String(row.filename || "") });
+async function fetchRawCreatorModelsPage(domain, username, headers, fetchFn, cursor) {
+  const params = new URLSearchParams({
+    username,
+    limit: "100",
+    nsfw: "true"
+  });
+  if (cursor) params.set("cursor", cursor);
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const res = await fetchFn(`https://${domain}/api/v1/models?${params.toString()}`, {
+      headers,
+      signal: controller.signal
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return {
+      items: Array.isArray(data?.items) ? data.items : [],
+      nextCursor: typeof data?.metadata?.nextCursor === "string" && data.metadata.nextCursor.trim() ? data.metadata.nextCursor.trim() : null
+    };
+  } catch {
+    return null;
+  }
+}
+async function fetchAllRawCreatorModels(username, deps) {
+  const fetchFn = deps?.fetchFn || fetch;
+  const key = (deps?.apiKey ?? appConfig.civitaiApiKey ?? "").trim();
+  const headers = { "Content-Type": "application/json" };
+  if (key) headers.Authorization = `Bearer ${key}`;
+  const byModelId = /* @__PURE__ */ new Map();
+  for (const domain of ["civitai.com", "civitai.red"]) {
+    let cursor = null;
+    for (let page = 0; page < 4; page++) {
+      const pageRes = await fetchRawCreatorModelsPage(domain, username, headers, fetchFn, cursor);
+      if (!pageRes) break;
+      for (const item of pageRes.items) {
+        const idStr = item?.id ? String(item.id) : "";
+        if (!idStr) continue;
+        const resolvedDomain = resolveCivitaiDomain(item, null, domain);
+        const existing = byModelId.get(idStr);
+        if (!existing || resolvedDomain === "civitai.red") {
+          byModelId.set(idStr, { model: item, domain: resolvedDomain });
+        }
+      }
+      if (!pageRes.nextCursor || pageRes.items.length === 0) break;
+      cursor = pageRes.nextCursor;
     }
   }
-  return comments.map((c) => {
-    const localInfo = c.localImageId ? infoById.get(c.localImageId) : void 0;
+  return Array.from(byModelId.values());
+}
+function mapRawUploadsWithLocalLinks(rawEntries, fallbackUsername) {
+  const localModels = db.prepare(
+    `SELECT id, filename, civitai_version_id, sha256_hash, autov2_hash
+       FROM models`
+  ).all();
+  const byVersionId = /* @__PURE__ */ new Map();
+  const byHash = /* @__PURE__ */ new Map();
+  for (const m of localModels) {
+    if (m.civitai_version_id) {
+      byVersionId.set(String(m.civitai_version_id).trim(), { id: m.id, filename: m.filename });
+    }
+    if (m.sha256_hash) {
+      byHash.set(m.sha256_hash.trim().toUpperCase(), { id: m.id, filename: m.filename });
+    }
+    if (m.autov2_hash) {
+      byHash.set(m.autov2_hash.trim().toUpperCase(), { id: m.id, filename: m.filename });
+    }
+  }
+  return rawEntries.map(({ model, domain }) => {
+    const modelId = String(model.id);
+    const creatorUsername = extractCivitaiCreatorUsername(model) || fallbackUsername;
+    const rawVersions = Array.isArray(model.modelVersions) ? model.modelVersions : [];
+    const firstVer = rawVersions[0];
+    const previewUrl = firstVer?.images?.find((img) => img?.type !== "video" && img?.url)?.url || null;
+    const versions = rawVersions.map((ver) => {
+      const versionId = String(ver.id);
+      const verDomain = resolveCivitaiDomain(model, ver, domain);
+      const hashes = [];
+      for (const f of Array.isArray(ver.files) ? ver.files : []) {
+        if (f?.hashes?.SHA256) hashes.push(String(f.hashes.SHA256).trim().toUpperCase());
+        if (f?.hashes?.AutoV2) hashes.push(String(f.hashes.AutoV2).trim().toUpperCase());
+      }
+      let linked = byVersionId.get(versionId) || null;
+      if (!linked) {
+        for (const h of hashes) {
+          const hit = byHash.get(h);
+          if (hit) {
+            linked = hit;
+            break;
+          }
+        }
+      }
+      const vStats = ver?.stats || {};
+      return {
+        versionId,
+        versionName: String(ver.name || "Version"),
+        baseModel: typeof ver.baseModel === "string" ? ver.baseModel : null,
+        civitaiUrl: buildCivitaiUrl(modelId, versionId, verDomain),
+        downloadCount: Math.max(0, Number(vStats.downloadCount || 0)),
+        thumbsUpCount: Math.max(0, Number(vStats.thumbsUpCount || 0)),
+        thumbsDownCount: Math.max(0, Number(vStats.thumbsDownCount || 0)),
+        hashes,
+        alreadyLinkedModelId: linked?.id ?? null,
+        alreadyLinkedFilename: linked?.filename ?? null
+      };
+    });
+    const stats = extractCivitaiModelStats(model);
     return {
-      ...c,
-      localFilename: localInfo?.filename ?? c.localFilename ?? null,
-      localThumbnailUrl: c.localImageId && localInfo ? `/api/images/${c.localImageId}/thumbnail` : c.localThumbnailUrl ?? null
+      civitaiId: modelId,
+      name: String(model.name || `Model #${modelId}`),
+      type: String(model.type || "LORA"),
+      creatorUsername,
+      domain,
+      civitaiUrl: buildCivitaiUrl(modelId, null, domain) || `https://${domain}/models/${modelId}`,
+      previewUrl,
+      stats: {
+        downloadCount: stats.downloadCount,
+        thumbsUpCount: stats.thumbsUpCount,
+        thumbsDownCount: stats.thumbsDownCount,
+        commentCount: stats.commentCount,
+        tippedAmountCount: stats.tippedAmountCount
+      },
+      versions
     };
   });
 }
-var init_civitaiCommentsService = __esm({
-  "src/server/services/civitai/civitaiCommentsService.ts"() {
+async function listMyCivitaiUploads(options) {
+  const key = (options?.deps?.apiKey ?? appConfig.civitaiApiKey ?? "").trim();
+  const hasCivitaiKey = Boolean(key || options?.deps?.whoAmIFn);
+  const username = await resolveAuthenticatedCivitaiUsername({
+    forceRefresh: options?.forceRefresh,
+    deps: options?.deps
+  });
+  if (!username) {
+    return { username: null, hasCivitaiKey, items: [] };
+  }
+  if (!options?.forceRefresh && !options?.deps?.fetchFn && cachedUploadsMem && cachedUploadsMem.username.toLowerCase() === username.toLowerCase() && cachedUploadsMem.expiresAt > Date.now()) {
+    const rawCached = cachedUploadsMem.items;
+    const localRows = db.prepare(`SELECT id, filename, civitai_version_id, sha256_hash, autov2_hash FROM models`).all();
+    const byVer = /* @__PURE__ */ new Map();
+    const byHash = /* @__PURE__ */ new Map();
+    for (const m of localRows) {
+      if (m.civitai_version_id) byVer.set(String(m.civitai_version_id).trim(), m);
+      if (m.sha256_hash) byHash.set(m.sha256_hash.trim().toUpperCase(), m);
+      if (m.autov2_hash) byHash.set(m.autov2_hash.trim().toUpperCase(), m);
+    }
+    return {
+      username,
+      hasCivitaiKey,
+      items: rawCached.map((item) => ({
+        ...item,
+        versions: item.versions.map((v) => {
+          const hit = byVer.get(v.versionId) || v.hashes.map((h) => byHash.get(h)).find(Boolean) || null;
+          return {
+            ...v,
+            alreadyLinkedModelId: hit?.id ?? null,
+            alreadyLinkedFilename: hit?.filename ?? null
+          };
+        })
+      }))
+    };
+  }
+  const rawEntries = await fetchAllRawCreatorModels(username, options?.deps);
+  const mapped = mapRawUploadsWithLocalLinks(rawEntries, username);
+  if (!options?.deps?.fetchFn) {
+    cachedUploadsMem = {
+      username,
+      items: mapped,
+      expiresAt: Date.now() + MY_UPLOADS_MEMORY_TTL_MS
+    };
+  }
+  return { username, hasCivitaiKey, items: mapped };
+}
+async function autoMatchOwnCivitaiUploads(options) {
+  const username = await resolveAuthenticatedCivitaiUsername({ deps: options?.deps });
+  if (!username) {
+    return { username: null, checkedUploads: 0, newlyLinkedCount: 0, updatedOwnFlagsCount: 0 };
+  }
+  const rawEntries = await fetchAllRawCreatorModels(username, options?.deps);
+  if (rawEntries.length === 0) {
+    return { username, checkedUploads: 0, newlyLinkedCount: 0, updatedOwnFlagsCount: 0 };
+  }
+  const bySha256 = /* @__PURE__ */ new Map();
+  const byAutoV2 = /* @__PURE__ */ new Map();
+  const byVersionId = /* @__PURE__ */ new Map();
+  for (const { model, domain } of rawEntries) {
+    const modelId = String(model.id);
+    for (const ver of Array.isArray(model.modelVersions) ? model.modelVersions : []) {
+      const versionId = String(ver.id);
+      const verDomain = resolveCivitaiDomain(model, ver, domain);
+      const cand = {
+        modelObj: model,
+        versionObj: ver,
+        domain: verDomain,
+        versionId,
+        modelId
+      };
+      byVersionId.set(versionId, cand);
+      for (const f of Array.isArray(ver.files) ? ver.files : []) {
+        if (f?.hashes?.SHA256) {
+          bySha256.set(String(f.hashes.SHA256).trim().toUpperCase(), cand);
+        }
+        if (f?.hashes?.AutoV2) {
+          byAutoV2.set(String(f.hashes.AutoV2).trim().toUpperCase(), cand);
+        }
+      }
+    }
+  }
+  const localModels = db.prepare(
+    `SELECT id, filename, sha256_hash, autov2_hash, civitai_id, civitai_version_id,
+              civitai_url, civitai_creator_username, is_own_civitai_upload
+       FROM models`
+  ).all();
+  let newlyLinkedCount = 0;
+  let updatedOwnFlagsCount = 0;
+  for (const row of localModels) {
+    const existingVerId = row.civitai_version_id ? String(row.civitai_version_id).trim() : null;
+    const shaKey = row.sha256_hash ? String(row.sha256_hash).trim().toUpperCase() : null;
+    const v2Key = row.autov2_hash ? String(row.autov2_hash).trim().toUpperCase() : null;
+    const matched = (existingVerId ? byVersionId.get(existingVerId) : void 0) || (shaKey ? bySha256.get(shaKey) : void 0) || (v2Key ? byAutoV2.get(v2Key) : void 0);
+    if (!matched) {
+      if (row.civitai_creator_username && String(row.civitai_creator_username).toLowerCase() === username.toLowerCase() && !row.is_own_civitai_upload) {
+        db.prepare(`UPDATE models SET is_own_civitai_upload = 1 WHERE id = ?`).run(row.id);
+        updatedOwnFlagsCount++;
+      }
+      continue;
+    }
+    const wasUnlinked = !row.civitai_url && !row.civitai_id && !row.civitai_version_id;
+    const meta = normalizeCivitaiData(
+      matched.modelObj,
+      matched.versionObj,
+      row.filename,
+      matched.domain
+    );
+    const stats = extractCivitaiModelStats(matched.modelObj, matched.versionObj);
+    const creator = extractCivitaiCreatorUsername(matched.modelObj, matched.versionObj) || username;
+    const cacheKey = `m${row.id}_${meta.civitaiVersionId || row.autov2_hash || "v"}`;
+    const cachedPreviews = options?.deps?.fetchFn ? [] : await cacheModelPreviewImages(cacheKey, meta.previewImages);
+    applyCivitaiEnrichmentToModel(row.id, meta, cachedPreviews, {
+      creatorUsername: creator,
+      isOwnUpload: true,
+      stats,
+      overwriteCivitaiLink: wasUnlinked
+    });
+    if (wasUnlinked) {
+      newlyLinkedCount++;
+    } else if (!row.is_own_civitai_upload || !row.civitai_creator_username) {
+      updatedOwnFlagsCount++;
+    }
+  }
+  if (newlyLinkedCount > 0 || updatedOwnFlagsCount > 0) {
+    invalidateInstalledModelsCache();
+  }
+  return {
+    username,
+    checkedUploads: rawEntries.length,
+    newlyLinkedCount,
+    updatedOwnFlagsCount
+  };
+}
+function parseSqliteUtcMs(raw) {
+  if (!raw || !String(raw).trim()) return 0;
+  const s = String(raw).trim();
+  const normalized = s.includes("T") ? s.endsWith("Z") ? s : `${s}Z` : `${s.replace(" ", "T")}Z`;
+  const ms = Date.parse(normalized);
+  return Number.isFinite(ms) ? ms : 0;
+}
+async function syncLinkedModelsCivitaiStats(options) {
+  const minIntervalMs = options?.minIntervalMs ?? 10 * 60 * 1e3;
+  const rows = options?.onlyModelId ? db.prepare(`SELECT * FROM models WHERE id = ?`).all(options.onlyModelId) : db.prepare(
+    `SELECT * FROM models
+           WHERE civitai_id IS NOT NULL
+              OR civitai_version_id IS NOT NULL
+              OR civitai_url IS NOT NULL`
+  ).all();
+  const accountUsername = await resolveAuthenticatedCivitaiUsername({ deps: options?.deps });
+  const headers = getCivitaiHeaders();
+  const fetchOpts = {
+    fetchFn: options?.deps?.fetchFn,
+    bypassCache: true
+  };
+  let checkedModels = 0;
+  let changedModels = 0;
+  let latestStats = null;
+  let latestComments = [];
+  let latestCreator = null;
+  let latestIsOwn = false;
+  let latestSyncedAt = null;
+  const nowMs = Date.now();
+  for (const row of rows) {
+    const lastSyncMs = parseSqliteUtcMs(row.civitai_stats_synced_at);
+    if (minIntervalMs > 0 && lastSyncMs > 0 && nowMs - lastSyncMs < minIntervalMs) {
+      continue;
+    }
+    const parsedUrl = parseIdsFromCivitaiUrl(row.civitai_url || row.download_url);
+    const modelId = row.civitai_id || parsedUrl.modelId;
+    const versionId = row.civitai_version_id || parsedUrl.versionId;
+    const preferredDomain = parsedUrl.domain || "civitai.com";
+    if (!modelId && !versionId) continue;
+    let versionObj = null;
+    let modelObj = null;
+    let resolvedDomain = preferredDomain;
+    if (versionId) {
+      const vRes = await fetchCivitaiJsonWithFallback(
+        `/api/v1/model-versions/${encodeURIComponent(String(versionId))}`,
+        headers,
+        resolvedDomain,
+        8e3,
+        fetchOpts
+      );
+      if (vRes?.data) {
+        versionObj = vRes.data;
+        resolvedDomain = vRes.domain;
+      }
+    }
+    const effectiveModelId = versionObj?.modelId || modelId;
+    if (effectiveModelId) {
+      const mRes = await fetchCivitaiParentModelWithDomain(
+        effectiveModelId,
+        headers,
+        resolvedDomain,
+        fetchOpts
+      );
+      modelObj = mRes.model;
+      resolvedDomain = mRes.domain;
+    }
+    if (!modelObj && !versionObj) continue;
+    checkedModels++;
+    if (!versionObj && Array.isArray(modelObj?.modelVersions) && modelObj.modelVersions.length > 0) {
+      versionObj = modelObj.modelVersions[0];
+    }
+    const stats = extractCivitaiModelStats(modelObj, versionObj);
+    const creator = extractCivitaiCreatorUsername(modelObj, versionObj) || row.civitai_creator_username || null;
+    const isOwn = Boolean(
+      row.is_own_civitai_upload || creator && accountUsername && creator.toLowerCase() === accountUsername.toLowerCase()
+    );
+    const prevStats = parseCivitaiStatsJson(row.civitai_stats_json);
+    const prevComments = parseCivitaiCommentsJson(row.civitai_comments_json);
+    let nextComments = prevComments;
+    let commentsChanged = false;
+    const key = (options?.deps?.apiKey ?? appConfig.civitaiApiKey ?? "").trim();
+    const canQueryComments = Boolean(options?.deps?.listCommentsFn || key);
+    const numericModelId = Number(effectiveModelId || modelObj?.id || 0);
+    if (canQueryComments && Number.isInteger(numericModelId) && numericModelId > 0 && (stats.commentCount > 0 || !row.civitai_comments_json || stats.commentCount !== (prevStats?.commentCount ?? 0))) {
+      const commentRes = await fetchModelCommentsViaMcp({
+        modelId: numericModelId,
+        domain: resolvedDomain,
+        apiKey: key,
+        fetchFn: options?.deps?.fetchFn,
+        listCommentsFn: options?.deps?.listCommentsFn
+      });
+      if (commentRes.ok) {
+        nextComments = commentRes.comments;
+        commentsChanged = JSON.stringify(nextComments) !== (row.civitai_comments_json || null);
+      }
+    }
+    const nextStatsJson = JSON.stringify(stats);
+    const nextCommentsJson = JSON.stringify(nextComments);
+    const statsChanged = nextStatsJson !== (row.civitai_stats_json || null);
+    const creatorChanged = creator !== (row.civitai_creator_username || null) || (isOwn ? 1 : 0) !== Number(row.is_own_civitai_upload || 0);
+    db.prepare(
+      `UPDATE models
+       SET civitai_id = COALESCE(?, civitai_id),
+           civitai_version_id = COALESCE(?, civitai_version_id),
+           civitai_creator_username = COALESCE(?, civitai_creator_username),
+           is_own_civitai_upload = CASE WHEN ? = 1 THEN 1 ELSE is_own_civitai_upload END,
+           civitai_stats_json = ?,
+           civitai_comments_json = CASE WHEN ? = 1 THEN ? ELSE civitai_comments_json END,
+           civitai_stats_synced_at = datetime('now')
+       WHERE id = ?`
+    ).run(
+      effectiveModelId ? String(effectiveModelId) : null,
+      versionObj?.id ? String(versionObj.id) : null,
+      creator,
+      isOwn ? 1 : 0,
+      nextStatsJson,
+      commentsChanged ? 1 : 0,
+      nextCommentsJson,
+      row.id
+    );
+    if (statsChanged || commentsChanged || creatorChanged) {
+      changedModels++;
+    }
+    latestStats = stats;
+    latestComments = nextComments;
+    latestCreator = creator;
+    latestIsOwn = isOwn;
+    latestSyncedAt = (/* @__PURE__ */ new Date()).toISOString();
+    if (!options?.deps?.fetchFn && rows.length > 1) {
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+  return {
+    checkedModels,
+    changedModels,
+    latestStats,
+    latestComments,
+    creatorUsername: latestCreator,
+    isOwnUpload: latestIsOwn,
+    syncedAt: latestSyncedAt
+  };
+}
+var WHOAMI_CACHE_TTL_MS, MY_UPLOADS_MEMORY_TTL_MS, REQUEST_TIMEOUT_MS, cachedUploadsMem;
+var init_civitaiCreatorModelsService = __esm({
+  "src/server/services/civitai/civitaiCreatorModelsService.ts"() {
     init_db();
+    init_config();
     init_civitaiMcpClient();
+    init_civitaiCommentsService();
+    init_civitaiHttpAndParse();
+    init_civitaiModelEnrichmentService();
+    init_civitaiModelStatsHelper();
+    WHOAMI_CACHE_TTL_MS = 24 * 60 * 60 * 1e3;
+    MY_UPLOADS_MEMORY_TTL_MS = 2 * 60 * 1e3;
+    REQUEST_TIMEOUT_MS = 9e3;
+    cachedUploadsMem = null;
   }
 });
 
@@ -8937,7 +9667,7 @@ __export(civitaiActivitySyncService_exports, {
   syncAllCivitaiShareActivity: () => syncAllCivitaiShareActivity,
   syncCivitaiActivityForImage: () => syncCivitaiActivityForImage
 });
-function parseSqliteUtcMs(raw) {
+function parseSqliteUtcMs2(raw) {
   if (!raw || !String(raw).trim()) return 0;
   const s = String(raw).trim();
   const normalized = s.includes("T") ? s.endsWith("Z") ? s : `${s}Z` : `${s.replace(" ", "T")}Z`;
@@ -9100,7 +9830,7 @@ async function queryPostStatsAcrossDomains(postId, preferredDomain, fetchFn) {
   for (const domain of domains) {
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS2);
       const res = await fetchFn(
         `https://${domain}/api/v1/images?postId=${encodeURIComponent(String(postId))}&nsfw=X&limit=20`,
         { headers, signal: controller.signal }
@@ -9246,7 +9976,7 @@ async function syncCivitaiActivityForImage(imageId, options) {
     seenPosts.add(postId);
     const needsBreakdownBackfill = row.status === "published" && Number(row.reaction_count || 0) > 0 && Number(row.heart_count || 0) + Number(row.like_count || 0) + Number(row.laugh_count || 0) + Number(row.cry_count || 0) === 0;
     const needsCommentBackfill = syncComments && row.status === "published" && (!row.comments_synced_at || Number(row.comment_count || 0) > 0 && !row.comments_json);
-    const lastSyncMs = parseSqliteUtcMs(row.stats_synced_at);
+    const lastSyncMs = parseSqliteUtcMs2(row.stats_synced_at);
     if (!needsBreakdownBackfill && !needsCommentBackfill && minIntervalMs > 0 && lastSyncMs > 0 && nowMs - lastSyncMs < minIntervalMs) {
       continue;
     }
@@ -9285,6 +10015,14 @@ function markAllCivitaiActivitySeen() {
   }
   return info.changes;
 }
+function isCivitaiNotificationsEnabledInDb() {
+  try {
+    const row = db.prepare(`SELECT value FROM app_settings WHERE key = 'civitai_activity_notifications_enabled'`).get();
+    return row ? row.value !== "0" : true;
+  } catch {
+    return true;
+  }
+}
 async function syncAllCivitaiShareActivity(options) {
   if (isSyncRunning) return { checkedPosts: 0, changedPosts: 0 };
   if (!options?.deps?.fetchFn && !appConfig.civitaiApiKey?.trim()) {
@@ -9303,7 +10041,7 @@ async function syncAllCivitaiShareActivity(options) {
       if (!postId || seenPosts.has(postId)) continue;
       seenPosts.add(postId);
       const needsBreakdownBackfill = row.status === "published" && Number(row.reaction_count || 0) > 0 && Number(row.heart_count || 0) + Number(row.like_count || 0) + Number(row.laugh_count || 0) + Number(row.cry_count || 0) === 0;
-      const lastSyncMs = parseSqliteUtcMs(row.stats_synced_at);
+      const lastSyncMs = parseSqliteUtcMs2(row.stats_synced_at);
       if (!needsBreakdownBackfill && minIntervalMs > 0 && lastSyncMs > 0 && nowMs - lastSyncMs < minIntervalMs) {
         continue;
       }
@@ -9314,9 +10052,38 @@ async function syncAllCivitaiShareActivity(options) {
         await new Promise((r) => setTimeout(r, 150));
       }
     }
-    if (changedPosts > 0) {
+    let checkedModels = 0;
+    let changedModels = 0;
+    let newlyLinkedModels = 0;
+    const shouldSyncModels = (options?.includeModels ?? !options?.deps?.fetchFn) && isCivitaiNotificationsEnabledInDb();
+    if (shouldSyncModels) {
+      const matchRes = await autoMatchOwnCivitaiUploads({
+        deps: {
+          fetchFn: options?.deps?.fetchFn,
+          listCommentsFn: options?.deps?.listCommentsFn
+        }
+      });
+      newlyLinkedModels = matchRes.newlyLinkedCount;
+      const modelStatsRes = await syncLinkedModelsCivitaiStats({
+        minIntervalMs,
+        deps: {
+          fetchFn: options?.deps?.fetchFn,
+          listCommentsFn: options?.deps?.listCommentsFn
+        }
+      });
+      checkedModels = modelStatsRes.checkedModels;
+      changedModels = modelStatsRes.changedModels;
+    }
+    if (changedPosts > 0 || changedModels > 0 || newlyLinkedModels > 0) {
       notifyWorkspaceDataChanged();
     }
+    return {
+      checkedPosts,
+      changedPosts,
+      checkedModels,
+      changedModels,
+      newlyLinkedModels
+    };
   } catch (err) {
     logger.warn("CivitaiSync", "Background Civitai activity check failed", err);
   } finally {
@@ -9345,7 +10112,7 @@ function stopCivitaiActivityScheduler() {
     activitySyncTimer = null;
   }
 }
-var DEFAULT_BACKGROUND_INTERVAL_MS, DEFAULT_INSPECTOR_MIN_INTERVAL_MS, REQUEST_TIMEOUT_MS, activitySyncTimer, activityStartupTimer, isSyncRunning;
+var DEFAULT_BACKGROUND_INTERVAL_MS, DEFAULT_INSPECTOR_MIN_INTERVAL_MS, REQUEST_TIMEOUT_MS2, activitySyncTimer, activityStartupTimer, isSyncRunning;
 var init_civitaiActivitySyncService = __esm({
   "src/server/services/civitai/civitaiActivitySyncService.ts"() {
     init_db();
@@ -9354,9 +10121,10 @@ var init_civitaiActivitySyncService = __esm({
     init_comfyuiLiveMonitor();
     init_civitaiHttpAndParse();
     init_civitaiCommentsService();
+    init_civitaiCreatorModelsService();
     DEFAULT_BACKGROUND_INTERVAL_MS = 15 * 60 * 1e3;
     DEFAULT_INSPECTOR_MIN_INTERVAL_MS = 2 * 60 * 1e3;
-    REQUEST_TIMEOUT_MS = 8e3;
+    REQUEST_TIMEOUT_MS2 = 8e3;
     activitySyncTimer = null;
     activityStartupTimer = null;
     isSyncRunning = false;
@@ -9960,6 +10728,11 @@ function listLoraExplorerItems() {
         COALESCE(m.default_clip_strength, 1.0) AS defaultClipStrength,
         m.trigger_word AS triggerWord,
         m.llm_description AS llmDescription,
+        m.civitai_creator_username AS civitaiCreatorUsername,
+        COALESCE(m.is_own_civitai_upload, 0) AS isOwnCivitaiUpload,
+        m.civitai_stats_json AS civitaiStatsJson,
+        m.civitai_comments_json AS civitaiCommentsJson,
+        m.civitai_stats_synced_at AS civitaiStatsSyncedAt,
         COUNT(DISTINCT il.image_id) AS imageCount,
         COUNT(DISTINCT iw.workflow_id) AS workflowCount,
         AVG(CASE WHEN r.rating > 0 THEN r.rating ELSE NULL END) AS avgRating,
@@ -10025,6 +10798,11 @@ function listLoraExplorerItems() {
       defaultClipStrength: Number(r.defaultClipStrength ?? 1),
       triggerWord: r.triggerWord || null,
       llmDescription: r.llmDescription || null,
+      civitaiCreatorUsername: r.civitaiCreatorUsername || null,
+      isOwnCivitaiUpload: Boolean(r.isOwnCivitaiUpload),
+      civitaiStats: parseCivitaiStatsJson(r.civitaiStatsJson),
+      civitaiComments: parseCivitaiCommentsJson(r.civitaiCommentsJson),
+      civitaiStatsSyncedAt: r.civitaiStatsSyncedAt || null,
       imageCount: Number(r.imageCount || 0),
       workflowCount: Number(r.workflowCount || 0),
       averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
@@ -10043,6 +10821,7 @@ var init_galleryQueryService = __esm({
     init_visualTaggerService();
     init_seriesService();
     init_civitaiHttpAndParse();
+    init_civitaiModelStatsHelper();
     init_civitaiActivitySyncService();
     init_characterService();
   }
@@ -13376,14 +14155,14 @@ var init_llmPromptUtils = __esm({
 });
 
 // src/server/services/llm/llmImageAnalysisService.ts
-import crypto5 from "crypto";
+import crypto6 from "crypto";
 import fs19 from "fs";
 import path18 from "path";
 function archiveUploadedPromptImage1Mp(imageBuffer, mimeHeader) {
   if (!getBoolSetting("save_uploaded_prompt_images", false)) return null;
   try {
     fs19.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
-    const hashPrefix = crypto5.createHash("sha256").update(imageBuffer).digest("hex").slice(0, 10);
+    const hashPrefix = crypto6.createHash("sha256").update(imageBuffer).digest("hex").slice(0, 10);
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const mimeLower = mimeHeader.toLowerCase();
     const ext = mimeLower.includes("png") ? "png" : mimeLower.includes("webp") ? "webp" : "jpg";
@@ -14704,7 +15483,7 @@ __export(modelInventoryService_exports, {
 });
 import fs22 from "fs";
 import path20 from "path";
-import crypto6 from "crypto";
+import crypto7 from "crypto";
 function extractComfyObjectInfoChoices(objectInfo, nodeClass, inputField) {
   const nodeDef = objectInfo?.[nodeClass];
   const fieldDef = nodeDef?.input?.required?.[inputField] ?? nodeDef?.input?.optional?.[inputField];
@@ -14724,7 +15503,7 @@ async function computeModelHashesIfFeasible(filePath, size) {
   }
   try {
     const data = await fs22.promises.readFile(filePath);
-    const hex = crypto6.createHash("sha256").update(data).digest("hex");
+    const hex = crypto7.createHash("sha256").update(data).digest("hex");
     return { sha256: hex, autov2: hex.slice(0, 10) };
   } catch {
     return { sha256: null, autov2: null };
@@ -14949,7 +15728,12 @@ function listModelInventory() {
       averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
       lastSeenAt: r.last_seen_at,
       dependentImageCount: Number(r.dependentImageCount || 0),
-      dependentWorkflowCount: Number(r.dependentWorkflowCount || 0)
+      dependentWorkflowCount: Number(r.dependentWorkflowCount || 0),
+      civitaiCreatorUsername: r.civitai_creator_username || null,
+      isOwnCivitaiUpload: Boolean(r.is_own_civitai_upload),
+      civitaiStats: parseCivitaiStatsJson(r.civitai_stats_json),
+      civitaiComments: parseCivitaiCommentsJson(r.civitai_comments_json),
+      civitaiStatsSyncedAt: r.civitai_stats_synced_at || null
     };
   });
 }
@@ -15090,6 +15874,7 @@ var init_modelInventoryService = __esm({
     init_fsWalkService();
     init_scannerService();
     init_civitaiHttpAndParse();
+    init_civitaiModelStatsHelper();
     init_civitaiModelEnrichmentService();
     init_storageStatsService();
   }
@@ -15183,6 +15968,7 @@ var init_modelsRoutes = __esm({
     init_db();
     init_modelInventoryService();
     init_civitaiModelEnrichmentService();
+    init_civitaiCreatorModelsService();
     modelsRouter = Router4();
     modelsRouter.get("/models/inventory", (_req, res) => {
       try {
@@ -15229,6 +16015,75 @@ var init_modelsRoutes = __esm({
       } catch (err) {
         const status = typeof err?.statusCode === "number" ? err.statusCode : 500;
         res.status(status).json({ error: err?.message || "Failed to fetch model details" });
+      }
+    });
+    modelsRouter.get("/models/civitai-uploads", async (req, res) => {
+      try {
+        const forceRefresh = req.query.refresh === "1";
+        const result = await listMyCivitaiUploads({ forceRefresh });
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to load Civitai uploads" });
+      }
+    });
+    modelsRouter.post("/models/:id/civitai-link", async (req, res) => {
+      try {
+        const modelId = Number(req.params.id);
+        if (!Number.isFinite(modelId) || modelId <= 0) {
+          res.status(400).json({ error: "Valid numeric model ID is required" });
+          return;
+        }
+        const { input, versionId, modelId: civitaiModelId, domain } = req.body || {};
+        if (!String(input || "").trim() && !String(versionId || "").trim() && !String(civitaiModelId || "").trim()) {
+          res.status(400).json({ error: "Provide a Civitai URL or Model Version ID." });
+          return;
+        }
+        const result = await fetchAndEnrichModelFromCivitai(modelId, {
+          allowHuggingFaceFallback: false,
+          explicitLinkInput: typeof input === "string" ? input : void 0,
+          explicitVersionId: versionId ? String(versionId) : void 0,
+          explicitModelId: civitaiModelId ? String(civitaiModelId) : void 0,
+          explicitDomain: domain === "civitai.red" ? "civitai.red" : void 0
+        });
+        res.json({
+          ok: true,
+          civitaiUrl: result.meta.civitaiUrl,
+          civitaiId: result.meta.civitaiId,
+          civitaiVersionId: result.meta.civitaiVersionId,
+          baseModel: result.meta.baseModel,
+          creatorUsername: result.creatorUsername,
+          isOwnUpload: result.isOwnUpload,
+          stats: result.stats,
+          filledTriggerWord: result.filledTriggerWord,
+          filledDefaultStrength: result.filledDefaultStrength
+        });
+      } catch (err) {
+        const status = typeof err?.statusCode === "number" ? err.statusCode : 500;
+        res.status(status).json({ error: err?.message || "Failed to link Civitai model" });
+      }
+    });
+    modelsRouter.post("/models/:id/civitai-stats-refresh", async (req, res) => {
+      try {
+        const modelId = Number(req.params.id);
+        if (!Number.isFinite(modelId) || modelId <= 0) {
+          res.status(400).json({ error: "Valid numeric model ID is required" });
+          return;
+        }
+        const syncRes = await syncLinkedModelsCivitaiStats({
+          onlyModelId: modelId,
+          minIntervalMs: 0
+        });
+        res.json({
+          ok: true,
+          checkedModels: syncRes.checkedModels,
+          stats: syncRes.latestStats ?? null,
+          comments: syncRes.latestComments ?? [],
+          creatorUsername: syncRes.creatorUsername ?? null,
+          isOwnUpload: Boolean(syncRes.isOwnUpload),
+          syncedAt: syncRes.syncedAt ?? null
+        });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to refresh Civitai model stats" });
       }
     });
     modelsRouter.get("/models/:id/preview/:filename", (req, res) => {
@@ -15309,7 +16164,7 @@ var init_modelsRoutes = __esm({
 });
 
 // src/server/services/civitai/civitaiImageShareService.ts
-import crypto7 from "crypto";
+import crypto8 from "crypto";
 import fs24 from "fs";
 import path22 from "path";
 import sharp8 from "sharp";
@@ -15508,7 +16363,7 @@ async function fetchAndSaveCivitaiInspirationImage(imageUrl) {
     const { data: outBuf, info: outInfo } = await pipeline.jpeg({ quality: 88, mozjpeg: true }).toBuffer({ resolveWithObject: true });
     if (outBuf.length === 0) return null;
     fs24.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
-    const hashPrefix = crypto7.createHash("sha256").update(outBuf).digest("hex").slice(0, 10);
+    const hashPrefix = crypto8.createHash("sha256").update(outBuf).digest("hex").slice(0, 10);
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const filename = `civitai-1mp-${timestamp}-${hashPrefix}.jpg`;
     fs24.writeFileSync(path22.join(appConfig.uploadedImagesDir, filename), outBuf);
@@ -16789,7 +17644,7 @@ var init_modelDownloadPostProcess = __esm({
 // src/server/services/modelDownloadExecutor.ts
 import fs25 from "fs";
 import path25 from "path";
-import crypto8 from "crypto";
+import crypto9 from "crypto";
 import { Readable as Readable3 } from "stream";
 function markDownloadJobPending(jobId) {
   if (Number.isFinite(jobId) && jobId > 0) {
@@ -16899,7 +17754,7 @@ async function executeDownloadJob(jobId, params) {
     }
     const totalBytes = Number(res.headers.get("content-length") || 0);
     db.prepare("UPDATE download_jobs SET total_bytes = ? WHERE id = ?").run(totalBytes, jobId);
-    const hash = crypto8.createHash("sha256");
+    const hash = crypto9.createHash("sha256");
     fileStream = fs25.createWriteStream(partPath);
     let bytesDownloaded = 0;
     let lastUpdate = Date.now();
@@ -18105,7 +18960,7 @@ var init_modelDownloadsRoutes = __esm({
 });
 
 // src/server/services/workflowLibraryService.ts
-import crypto9 from "crypto";
+import crypto10 from "crypto";
 function listWorkflowLibraryItems() {
   const rows = db.prepare(
     `
@@ -18250,7 +19105,7 @@ function saveOrUpdateWorkflow(input) {
   if (!visualWorkflowJson && !apiWorkflowJson) {
     throw new WorkflowServiceError(400, "Provide visual or API workflow JSON");
   }
-  const wfHash = crypto9.createHash("sha256").update((visualWorkflowJson || "") + "||" + (apiWorkflowJson || "")).digest("hex");
+  const wfHash = crypto10.createHash("sha256").update((visualWorkflowJson || "") + "||" + (apiWorkflowJson || "")).digest("hex");
   const tx = db.transaction(() => {
     if (isDefault) {
       db.prepare("UPDATE workflows SET is_default = 0 WHERE is_default = 1").run();

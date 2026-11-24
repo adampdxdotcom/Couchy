@@ -1,7 +1,12 @@
 /**
  * Shared TypeScript contracts between Frontend and Backend.
  */
-import type { CivitaiShareFilterMode, CivitaiShareSummary } from './apiTypes.ts';
+import type {
+  CivitaiCommentRecord,
+  CivitaiModelStatsSummary,
+  CivitaiShareFilterMode,
+  CivitaiShareSummary,
+} from './apiTypes.ts';
 
 export type DependencyStatus = 'exact_match' | 'available' | 'incomplete' | 'unknown';
 
@@ -401,6 +406,11 @@ export interface LoraExplorerItem {
   defaultClipStrength?: number;
   triggerWord?: string | null;
   llmDescription?: string | null;
+  civitaiCreatorUsername?: string | null;
+  isOwnCivitaiUpload?: boolean;
+  civitaiStats?: CivitaiModelStatsSummary | null;
+  civitaiComments?: CivitaiCommentRecord[];
+  civitaiStatsSyncedAt?: string | null;
 }
 
 export interface ModelInventoryItem {
@@ -437,6 +447,11 @@ export interface ModelInventoryItem {
   lastSeenAt: string;
   dependentImageCount: number;
   dependentWorkflowCount: number;
+  civitaiCreatorUsername?: string | null;
+  isOwnCivitaiUpload?: boolean;
+  civitaiStats?: CivitaiModelStatsSummary | null;
+  civitaiComments?: CivitaiCommentRecord[];
+  civitaiStatsSyncedAt?: string | null;
 }
 
 export interface ModelCleanupCandidate {

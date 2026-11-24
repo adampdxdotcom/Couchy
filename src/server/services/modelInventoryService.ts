@@ -11,6 +11,10 @@ import {
 } from './fsWalkService.ts';
 import { recomputeImageDependencyStatus } from './scannerService.ts';
 import { parsePreviewImagesJson } from './civitai/civitaiHttpAndParse.ts';
+import {
+  parseCivitaiCommentsJson,
+  parseCivitaiStatsJson,
+} from './civitai/civitaiModelStatsHelper.ts';
 import { invalidateInstalledModelsCache } from './civitai/civitaiModelEnrichmentService.ts';
 import { invalidateStorageUsageStatsCache } from './storageStatsService.ts';
 import type { ModelInventoryItem, ModelType } from '../../shared/types.ts';
@@ -365,6 +369,11 @@ export function listModelInventory(): ModelInventoryItem[] {
       lastSeenAt: r.last_seen_at,
       dependentImageCount: Number(r.dependentImageCount || 0),
       dependentWorkflowCount: Number(r.dependentWorkflowCount || 0),
+      civitaiCreatorUsername: r.civitai_creator_username || null,
+      isOwnCivitaiUpload: Boolean(r.is_own_civitai_upload),
+      civitaiStats: parseCivitaiStatsJson(r.civitai_stats_json),
+      civitaiComments: parseCivitaiCommentsJson(r.civitai_comments_json),
+      civitaiStatsSyncedAt: r.civitai_stats_synced_at || null,
     };
   });
 }

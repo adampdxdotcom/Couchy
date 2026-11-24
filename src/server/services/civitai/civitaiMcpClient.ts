@@ -180,12 +180,31 @@ export class CivitaiMcpClient {
     return payload as T;
   }
 
-  async verifyAccountReady(): Promise<void> {
+  async getWhoAmI(): Promise<{
+    username: string | null;
+    muted?: boolean;
+    isOnboarded?: boolean;
+  }> {
     const info = await this.callTool<any>('whoami', {});
-    if (info?.muted === true || info?.isMuted === true) {
+    const username =
+      typeof info?.username === 'string' && info.username.trim()
+        ? info.username.trim()
+        : typeof info?.user?.username === 'string' && info.user.username.trim()
+        ? info.user.username.trim()
+        : null;
+    return {
+      username,
+      muted: Boolean(info?.muted ?? info?.isMuted),
+      isOnboarded: info?.isOnboarded !== false,
+    };
+  }
+
+  async verifyAccountReady(): Promise<void> {
+    const info = await this.getWhoAmI();
+    if (info.muted) {
       throw new Error('Your Civitai account is currently muted and cannot create posts.');
     }
-    if (info?.isOnboarded === false) {
+    if (info.isOnboarded === false) {
       throw new Error(
         'Your Civitai account has not completed onboarding. Sign in on civitai.com once to accept terms before creating drafts.'
       );
@@ -258,10 +277,10 @@ export class CivitaiMcpClient {
   }
 
   /**
-   * Calls Civitai MCP `list_comments` for an image or post entity and normalizes the thread.
+   * Calls Civitai MCP `list_comments` for an image, post, or model entity and normalizes the thread.
    */
   async listComments(params: {
-    entityType: 'image' | 'post';
+    entityType: 'image' | 'post' | 'model';
     entityId: number;
     depth?: number;
     sort?: 'Oldest' | 'Newest';

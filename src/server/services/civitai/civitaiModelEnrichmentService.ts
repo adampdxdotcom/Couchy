@@ -17,6 +17,13 @@ import {
   type CivitaiDomain,
   type CivitaiNormalizedMeta,
 } from './civitaiHttpAndParse.ts';
+import { fetchModelCommentsViaMcp, type ListCommentsFn } from './civitaiCommentsService.ts';
+import {
+  extractCivitaiCreatorUsername,
+  extractCivitaiModelStats,
+  parseCivitaiLinkInput,
+} from './civitaiModelStatsHelper.ts';
+import type { CivitaiModelStatsSummary } from '../../../shared/apiTypes.ts';
 import type {
   ExternalModelFileOption,
   ExternalModelInstalledInfo,
@@ -149,6 +156,38 @@ export async function cacheModelPreviewImages(
   return stored;
 }
 
+function getCachedCivitaiAccountUsername(): string | null {
+  try {
+    const row = db
+      .prepare(`SELECT value FROM app_settings WHERE key = 'civitai_account_username'`)
+      .get() as { value: string } | undefined;
+    return row?.value?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Propagates newly resolved model ID and trigger word onto linked `character_loras` rows without
+ * overwriting user-customized character trigger words.
+ */
+export function propagateModelLinkToCharacters(
+  modelId: number,
+  filename: string,
+  triggerWord: string | null
+): void {
+  const cleanTrigger = triggerWord?.trim() || '';
+  db.prepare(
+    `UPDATE character_loras
+     SET model_id = COALESCE(model_id, ?),
+         trigger_word = CASE
+           WHEN TRIM(COALESCE(trigger_word, '')) = '' AND ? != '' THEN ?
+           ELSE trigger_word
+         END
+     WHERE LOWER(lora_name) = LOWER(?)`
+  ).run(modelId, cleanTrigger, cleanTrigger, filename);
+}
+
 /**
  * Applies Civitai enrichment metadata onto an existing `models` row.
  * Follows the non-destructive conflict policy: only fills `trigger_word` when empty
@@ -158,11 +197,18 @@ export function applyCivitaiEnrichmentToModel(
   modelId: number,
   meta: CivitaiNormalizedMeta,
   cachedPreviews: StoredPreviewImageEntry[],
-  extraMeta?: { hfRepoId?: string | null; downloadUrl?: string | null }
+  extraMeta?: {
+    hfRepoId?: string | null;
+    downloadUrl?: string | null;
+    creatorUsername?: string | null;
+    isOwnUpload?: boolean;
+    stats?: CivitaiModelStatsSummary | null;
+    overwriteCivitaiLink?: boolean;
+  }
 ): { filledTriggerWord: boolean; filledDefaultStrength: boolean } {
   const existing = db
     .prepare(
-      `SELECT id, trigger_word, default_model_strength, civitai_id, civitai_version_id,
+      `SELECT id, filename, trigger_word, default_model_strength, civitai_id, civitai_version_id,
               civitai_url, base_model, recommended_weight, civitai_description, preview_images_json
        FROM models WHERE id = ?`
     )
@@ -199,36 +245,63 @@ export function applyCivitaiEnrichmentToModel(
       ? JSON.stringify(cachedPreviews)
       : existing.preview_images_json || '[]';
 
+  const statsJson = extraMeta?.stats ? JSON.stringify(extraMeta.stats) : null;
+  const overwrite = extraMeta?.overwriteCivitaiLink ? 1 : 0;
+
   db.prepare(
     `UPDATE models
-     SET civitai_id = COALESCE(?, civitai_id),
-         civitai_version_id = COALESCE(?, civitai_version_id),
-         civitai_url = COALESCE(?, civitai_url),
+     SET civitai_id = CASE WHEN ? = 1 AND ? IS NOT NULL THEN ? ELSE COALESCE(?, civitai_id) END,
+         civitai_version_id = CASE WHEN ? = 1 AND ? IS NOT NULL THEN ? ELSE COALESCE(?, civitai_version_id) END,
+         civitai_url = CASE WHEN ? = 1 AND ? IS NOT NULL THEN ? ELSE COALESCE(?, civitai_url) END,
          hf_repo_id = COALESCE(?, hf_repo_id),
          download_url = COALESCE(download_url, ?),
-         base_model = COALESCE(?, base_model),
+         base_model = CASE WHEN ? = 1 AND ? IS NOT NULL THEN ? ELSE COALESCE(?, base_model) END,
          recommended_weight = COALESCE(?, recommended_weight),
-         civitai_description = COALESCE(?, civitai_description),
+         civitai_description = CASE WHEN ? = 1 AND ? IS NOT NULL THEN ? ELSE COALESCE(?, civitai_description) END,
          preview_images_json = ?,
          trigger_word = ?,
          default_model_strength = ?,
+         civitai_creator_username = COALESCE(?, civitai_creator_username),
+         is_own_civitai_upload = CASE WHEN ? = 1 THEN 1 ELSE is_own_civitai_upload END,
+         civitai_stats_json = COALESCE(?, civitai_stats_json),
+         civitai_stats_synced_at = CASE WHEN ? IS NOT NULL THEN datetime('now') ELSE civitai_stats_synced_at END,
          civitai_fetched_at = datetime('now')
      WHERE id = ?`
   ).run(
+    overwrite,
     meta.civitaiId,
+    meta.civitaiId,
+    meta.civitaiId,
+    overwrite,
     meta.civitaiVersionId,
+    meta.civitaiVersionId,
+    meta.civitaiVersionId,
+    overwrite,
+    meta.civitaiUrl,
+    meta.civitaiUrl,
     meta.civitaiUrl,
     extraMeta?.hfRepoId || null,
     extraMeta?.downloadUrl || null,
+    overwrite,
+    meta.baseModel,
+    meta.baseModel,
     meta.baseModel,
     meta.recommendedWeight,
+    overwrite,
+    meta.civitaiDescription,
+    meta.civitaiDescription,
     meta.civitaiDescription,
     nextPreviewsJson,
     nextTriggerWord,
     nextModelStrength,
+    extraMeta?.creatorUsername || null,
+    extraMeta?.isOwnUpload ? 1 : 0,
+    statsJson,
+    statsJson,
     modelId
   );
 
+  propagateModelLinkToCharacters(modelId, existing.filename, nextTriggerWord);
   invalidateInstalledModelsCache();
   return { filledTriggerWord, filledDefaultStrength };
 }
@@ -256,7 +329,17 @@ export function computeFileSha256Stream(filePath: string): Promise<{ sha256: str
  */
 export async function fetchAndEnrichModelFromCivitai(
   modelId: number,
-  options?: { allowHuggingFaceFallback?: boolean }
+  options?: {
+    allowHuggingFaceFallback?: boolean;
+    explicitLinkInput?: string;
+    explicitVersionId?: string;
+    explicitModelId?: string;
+    explicitDomain?: CivitaiDomain;
+    ownUsername?: string | null;
+    syncComments?: boolean;
+    fetchFn?: typeof fetch;
+    listCommentsFn?: ListCommentsFn;
+  }
 ): Promise<{
   provider: 'civitai' | 'huggingface';
   hfRepoId: string | null;
@@ -264,8 +347,14 @@ export async function fetchAndEnrichModelFromCivitai(
   cachedPreviews: StoredPreviewImageEntry[];
   filledTriggerWord: boolean;
   filledDefaultStrength: boolean;
+  stats: CivitaiModelStatsSummary | null;
+  creatorUsername: string | null;
+  isOwnUpload: boolean;
 }> {
-  const allowHfFallback = options?.allowHuggingFaceFallback !== false;
+  const isExplicitLink = Boolean(
+    options?.explicitLinkInput?.trim() || options?.explicitVersionId?.trim() || options?.explicitModelId?.trim()
+  );
+  const allowHfFallback = !isExplicitLink && options?.allowHuggingFaceFallback !== false;
   const row = db.prepare('SELECT * FROM models WHERE id = ?').get(modelId) as any;
   if (!row) {
     const err: any = new Error('Model not found');
@@ -276,7 +365,7 @@ export async function fetchAndEnrichModelFromCivitai(
   let sha256: string | null = row.sha256_hash || null;
   let autov2: string | null = row.autov2_hash || null;
 
-  if (!sha256 && row.file_path && fs.existsSync(row.file_path)) {
+  if (!isExplicitLink && !sha256 && row.file_path && fs.existsSync(row.file_path)) {
     try {
       const computed = await computeFileSha256Stream(row.file_path);
       sha256 = computed.sha256;
@@ -292,23 +381,34 @@ export async function fetchAndEnrichModelFromCivitai(
     }
   }
 
+  const parsedExplicit = options?.explicitLinkInput
+    ? parseCivitaiLinkInput(options.explicitLinkInput)
+    : null;
   const parsedFromUrl = parseIdsFromCivitaiUrl(row.civitai_url || row.download_url);
-  const storedCivitaiId = row.civitai_id || parsedFromUrl.modelId;
-  const storedVersionId = row.civitai_version_id || parsedFromUrl.versionId;
-  let detectedDomain: CivitaiDomain = parsedFromUrl.domain || 'civitai.com';
+
+  const explicitVerId = options?.explicitVersionId?.trim() || parsedExplicit?.versionId || null;
+  const explicitModId = options?.explicitModelId?.trim() || parsedExplicit?.modelId || null;
+  const storedCivitaiId = explicitModId || row.civitai_id || parsedFromUrl.modelId;
+  const storedVersionId = explicitVerId || row.civitai_version_id || parsedFromUrl.versionId;
+  let detectedDomain: CivitaiDomain =
+    options?.explicitDomain || parsedExplicit?.domain || parsedFromUrl.domain || 'civitai.com';
 
   const headers = getCivitaiHeaders();
+  const fetchOpts = options?.fetchFn ? { fetchFn: options.fetchFn, bypassCache: true } : undefined;
   let versionObj: any = null;
   let modelObj: any = null;
 
-  // 1. Prefer exact hash lookup when SHA-256 or AutoV2 hash is known (tries .com then .red)
-  const hashesToTry = [sha256, autov2].filter((h): h is string => Boolean(h && h.trim()));
+  // 1. When NOT explicitly linking by URL/Version ID, prefer exact SHA-256 / AutoV2 hash lookup
+  const hashesToTry = isExplicitLink
+    ? []
+    : [sha256, autov2].filter((h): h is string => Boolean(h && h.trim()));
   for (const h of hashesToTry) {
     const found = await fetchCivitaiJsonWithFallback(
       `/api/v1/model-versions/by-hash/${encodeURIComponent(h.trim())}`,
       headers,
       detectedDomain,
-      9000
+      9000,
+      fetchOpts
     );
     if (found?.data) {
       versionObj = found.data;
@@ -317,12 +417,14 @@ export async function fetchAndEnrichModelFromCivitai(
     }
   }
 
-  // 2. Fallback to stored Civitai version or model IDs if hash lookup missed
+  // 2. Explicit or stored Civitai Version ID / Model ID lookup
   if (!versionObj && storedVersionId) {
     const foundVer = await fetchCivitaiJsonWithFallback(
       `/api/v1/model-versions/${encodeURIComponent(String(storedVersionId))}`,
       headers,
-      detectedDomain
+      detectedDomain,
+      8000,
+      fetchOpts
     );
     if (foundVer?.data) {
       versionObj = foundVer.data;
@@ -330,11 +432,15 @@ export async function fetchAndEnrichModelFromCivitai(
     }
   }
 
-  if (!versionObj && storedCivitaiId) {
+  // If user pasted a bare numeric Model ID instead of a Version ID, try resolving it as a Model ID
+  const fallbackModelLookupId =
+    storedCivitaiId || (parsedExplicit?.isBareNumeric ? parsedExplicit.versionId : null);
+  if (!versionObj && fallbackModelLookupId) {
     const parentRes = await fetchCivitaiParentModelWithDomain(
-      storedCivitaiId,
+      fallbackModelLookupId,
       headers,
-      detectedDomain
+      detectedDomain,
+      fetchOpts
     );
     modelObj = parentRes.model;
     if (parentRes.domain === 'civitai.red') detectedDomain = 'civitai.red';
@@ -378,12 +484,17 @@ export async function fetchAndEnrichModelFromCivitai(
           cachedPreviews,
           filledTriggerWord,
           filledDefaultStrength,
+          stats: null,
+          creatorUsername: null,
+          isOwnUpload: false,
         };
       }
     }
 
     const err: any = new Error(
-      hashesToTry.length > 0 || allowHfFallback
+      isExplicitLink
+        ? 'Could not find a Civitai model or version matching that URL / Version ID.'
+        : hashesToTry.length > 0 || allowHfFallback
         ? 'No matching model found on Civitai or Hugging Face for this file.'
         : 'Cannot look up model on Civitai: no local file hash or Civitai ID available.'
     );
@@ -391,12 +502,13 @@ export async function fetchAndEnrichModelFromCivitai(
     throw err;
   }
 
-  const resolvedParentId = versionObj.modelId || storedCivitaiId;
+  const resolvedParentId = versionObj.modelId || fallbackModelLookupId;
   if (!modelObj && resolvedParentId) {
     const parentRes = await fetchCivitaiParentModelWithDomain(
       resolvedParentId,
       headers,
-      detectedDomain
+      detectedDomain,
+      fetchOpts
     );
     modelObj = parentRes.model;
     if (parentRes.domain === 'civitai.red') detectedDomain = 'civitai.red';
@@ -406,18 +518,61 @@ export async function fetchAndEnrichModelFromCivitai(
   }
 
   let finalDomain = resolveCivitaiDomain(modelObj, versionObj, detectedDomain);
-  if (finalDomain === 'civitai.com' && resolvedParentId) {
+  if (finalDomain === 'civitai.com' && resolvedParentId && !options?.fetchFn) {
     finalDomain = await probeCivitaiWebDomain(resolvedParentId, finalDomain);
   }
 
   const meta = normalizeCivitaiData(modelObj, versionObj, row.filename, finalDomain);
+  const stats = extractCivitaiModelStats(modelObj, versionObj);
+  const creatorUsername = extractCivitaiCreatorUsername(modelObj, versionObj);
+  const accountUser = options?.ownUsername ?? getCachedCivitaiAccountUsername();
+  const isOwnUpload = Boolean(
+    creatorUsername &&
+      accountUser &&
+      creatorUsername.toLowerCase() === accountUser.toLowerCase()
+  );
+
   const cacheKey = `m${row.id}_${meta.civitaiVersionId || row.autov2_hash || 'v'}`;
-  const cachedPreviews = await cacheModelPreviewImages(cacheKey, meta.previewImages);
+  const cachedPreviews = options?.fetchFn
+    ? []
+    : await cacheModelPreviewImages(cacheKey, meta.previewImages);
   const { filledTriggerWord, filledDefaultStrength } = applyCivitaiEnrichmentToModel(
     row.id,
     meta,
-    cachedPreviews
+    cachedPreviews,
+    {
+      creatorUsername,
+      isOwnUpload,
+      stats,
+      overwriteCivitaiLink: isExplicitLink,
+    }
   );
+
+  // Fetch model comments via MCP if configured and either comments exist or user explicitly linked
+  const canQueryComments = Boolean(options?.listCommentsFn || appConfig.civitaiApiKey?.trim());
+  const shouldFetchComments =
+    options?.syncComments !== false &&
+    canQueryComments &&
+    meta.civitaiId &&
+    (stats.commentCount > 0 || isExplicitLink);
+  if (shouldFetchComments && meta.civitaiId) {
+    const numericModelId = Number(meta.civitaiId);
+    if (Number.isInteger(numericModelId) && numericModelId > 0) {
+      const commentRes = await fetchModelCommentsViaMcp({
+        modelId: numericModelId,
+        domain: finalDomain,
+        apiKey: appConfig.civitaiApiKey,
+        fetchFn: options?.fetchFn,
+        listCommentsFn: options?.listCommentsFn,
+      });
+      if (commentRes.ok) {
+        db.prepare(`UPDATE models SET civitai_comments_json = ? WHERE id = ?`).run(
+          JSON.stringify(commentRes.comments),
+          row.id
+        );
+      }
+    }
+  }
 
   return {
     provider: 'civitai',
@@ -426,6 +581,9 @@ export async function fetchAndEnrichModelFromCivitai(
     cachedPreviews,
     filledTriggerWord,
     filledDefaultStrength,
+    stats,
+    creatorUsername,
+    isOwnUpload,
   };
 }
 

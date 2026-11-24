@@ -36,6 +36,9 @@ import type {
   WorkflowLibraryItem,
 } from '../shared/types.ts';
 import type {
+  CivitaiCommentRecord,
+  CivitaiModelStatsSummary,
+  CivitaiMyUploadModelItem,
   CivitaiShareDraftRequest,
   CivitaiShareDraftResponse,
   CivitaiShareEligibilityResponse,
@@ -457,6 +460,49 @@ export const api = {
       healed: number;
       redCount: number;
     }>('/api/models/civitai-heal', { method: 'POST' }),
+
+  listMyCivitaiUploads: (refresh = false) =>
+    requestJson<{
+      username: string | null;
+      hasCivitaiKey: boolean;
+      items: CivitaiMyUploadModelItem[];
+    }>(`/api/models/civitai-uploads${refresh ? '?refresh=1' : ''}`),
+
+  linkModelToCivitai: (
+    modelId: number,
+    payload: {
+      input?: string;
+      versionId?: string;
+      modelId?: string;
+      domain?: 'civitai.com' | 'civitai.red';
+    }
+  ) =>
+    requestJson<{
+      ok: boolean;
+      civitaiUrl: string | null;
+      civitaiId: string | null;
+      civitaiVersionId: string | null;
+      baseModel: string | null;
+      creatorUsername: string | null;
+      isOwnUpload: boolean;
+      stats: CivitaiModelStatsSummary | null;
+      filledTriggerWord: boolean;
+      filledDefaultStrength: boolean;
+    }>(`/api/models/${modelId}/civitai-link`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  refreshModelCivitaiStats: (modelId: number) =>
+    requestJson<{
+      ok: boolean;
+      checkedModels: number;
+      stats: CivitaiModelStatsSummary | null;
+      comments: CivitaiCommentRecord[];
+      creatorUsername: string | null;
+      isOwnUpload: boolean;
+      syncedAt: string | null;
+    }>(`/api/models/${modelId}/civitai-stats-refresh`, { method: 'POST' }),
 
   getModelImpact: (name: string) =>
     requestJson<ModelImpactReport>(`/api/models/${encodeURIComponent(name)}/impact`),

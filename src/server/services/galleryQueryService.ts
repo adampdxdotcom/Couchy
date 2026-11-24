@@ -5,6 +5,10 @@ import {
   enrichSingleImageWithSeries,
 } from './seriesService.ts';
 import { parsePreviewImagesJson } from './civitai/civitaiHttpAndParse.ts';
+import {
+  parseCivitaiCommentsJson,
+  parseCivitaiStatsJson,
+} from './civitai/civitaiModelStatsHelper.ts';
 import { summarizeCivitaiDraftRows } from './civitai/civitaiActivitySyncService.ts';
 import { getCharacterPortraitMetadataMap } from './characterService.ts';
 import type {
@@ -781,6 +785,11 @@ export function listLoraExplorerItems(): LoraExplorerItem[] {
         COALESCE(m.default_clip_strength, 1.0) AS defaultClipStrength,
         m.trigger_word AS triggerWord,
         m.llm_description AS llmDescription,
+        m.civitai_creator_username AS civitaiCreatorUsername,
+        COALESCE(m.is_own_civitai_upload, 0) AS isOwnCivitaiUpload,
+        m.civitai_stats_json AS civitaiStatsJson,
+        m.civitai_comments_json AS civitaiCommentsJson,
+        m.civitai_stats_synced_at AS civitaiStatsSyncedAt,
         COUNT(DISTINCT il.image_id) AS imageCount,
         COUNT(DISTINCT iw.workflow_id) AS workflowCount,
         AVG(CASE WHEN r.rating > 0 THEN r.rating ELSE NULL END) AS avgRating,
@@ -856,6 +865,11 @@ export function listLoraExplorerItems(): LoraExplorerItem[] {
       defaultClipStrength: Number(r.defaultClipStrength ?? 1.0),
       triggerWord: r.triggerWord || null,
       llmDescription: r.llmDescription || null,
+      civitaiCreatorUsername: r.civitaiCreatorUsername || null,
+      isOwnCivitaiUpload: Boolean(r.isOwnCivitaiUpload),
+      civitaiStats: parseCivitaiStatsJson(r.civitaiStatsJson),
+      civitaiComments: parseCivitaiCommentsJson(r.civitaiCommentsJson),
+      civitaiStatsSyncedAt: r.civitaiStatsSyncedAt || null,
       imageCount: Number(r.imageCount || 0),
       workflowCount: Number(r.workflowCount || 0),
       averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),

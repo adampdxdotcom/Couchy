@@ -384,6 +384,9 @@ export default function App() {
             presets={workspace.presets}
             allImages={workspace.allImages}
             pillTypeSettings={workspace.pillTypeSettings}
+            civitaiActivityNotificationsEnabled={
+              workspace.healthData?.config?.civitaiActivityNotificationsEnabled !== false
+            }
             onRefresh={refreshAll}
             onOpenImage={(img) => setInspectedImageId(img.id)}
             onFilterGalleryByLora={(loraFilename) => {
