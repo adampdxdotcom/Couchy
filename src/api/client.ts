@@ -949,13 +949,13 @@ export const api = {
       body: JSON.stringify({ targetMegapixels }),
     }),
 
-  // Help & README Docs Assistant
+  // Help & User Manual Docs Assistant
   getHelpReadme: () => requestJson<HelpReadmePayload>('/api/help/readme'),
 
   askHelpAssistant: (messages: Array<{ role: 'user' | 'assistant'; content: string }>) =>
     requestJson<{
       reply: string;
-      matchedSections: Array<{ id: string; title: string }>;
+      matchedSections: Array<{ id: string; title: string; chapterTitle?: string }>;
       modelUsed: string;
     }>('/api/help/ask', {
       method: 'POST',

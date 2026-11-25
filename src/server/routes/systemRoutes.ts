@@ -590,19 +590,19 @@ systemRouter.post('/models/cleanup/run', async (req, res) => {
 
 /**
  * GET /api/help/readme
- * Returns live README.md markdown and parsed section outline.
+ * Returns live stitched User Manual markdown (from docs/*.md, falling back to README.md) and section outline.
  */
 systemRouter.get('/help/readme', (_req, res) => {
   try {
     res.json(getHelpDocsPayload());
   } catch (err: unknown) {
-    res.status(500).json({ error: getErrorMessage(err, 'Failed to load README.md') });
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to load Help documentation') });
   }
 });
 
 /**
  * POST /api/help/ask
- * Answers user questions grounded in retrieved README.md sections via the Local LLM.
+ * Answers user questions grounded in retrieved User Manual sections via the Local LLM.
  */
 systemRouter.post('/help/ask', async (req, res) => {
   try {

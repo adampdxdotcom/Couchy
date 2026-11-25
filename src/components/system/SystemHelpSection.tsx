@@ -3,7 +3,11 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { BookOpen, Check, Copy, Loader2, RefreshCw, Search } from 'lucide-react';
 import { api } from '../../api/client.ts';
-import type { HelpDocSectionSummary, LmStudioStatus } from '../../shared/types.ts';
+import type {
+  HelpDocChapterSummary,
+  HelpDocSectionSummary,
+  LmStudioStatus,
+} from '../../shared/types.ts';
 import { copyTextToClipboard } from '../../shared/utils.ts';
 import { HelpDocsChatPanel } from './HelpDocsChatPanel.tsx';
 
@@ -22,10 +26,41 @@ function extractNodeText(node: React.ReactNode): string {
 
 function slugifyHeading(raw: string): string {
   return raw
+    .replace(/&[a-z0-9#]+;/gi, ' ')
     .toLowerCase()
     .trim()
     .replace(/[^\w\s-]/g, '')
     .replace(/ /g, '-');
+}
+
+/** Resolves relative `.md` cross-chapter links to a stitched section or chapter anchor ID. */
+function resolveInternalDocHref(
+  href: string,
+  chapters: HelpDocChapterSummary[],
+  sections: HelpDocSectionSummary[]
+): string | null {
+  if (href.startsWith('#')) return href.slice(1);
+  if (/^(https?:|mailto:)/i.test(href)) return null;
+
+  const [rawPath, rawFragment] = href.split('#');
+  const filename = rawPath.replace(/^\.?\//, '').split('/').pop()?.toLowerCase();
+  if (!filename || !filename.endsWith('.md')) return null;
+
+  const matchedChapter = chapters.find((c) => c.filename.toLowerCase() === filename);
+  if (!matchedChapter) return null;
+
+  if (rawFragment) {
+    const targetSlug = slugifyHeading(decodeURIComponent(rawFragment));
+    const inChapter = sections.find(
+      (s) =>
+        s.chapterSlug === matchedChapter.slug &&
+        (s.id === targetSlug || slugifyHeading(s.title) === targetSlug)
+    );
+    if (inChapter) return inChapter.id;
+    return targetSlug;
+  }
+
+  return matchedChapter.anchorId;
 }
 
 const CodeBlockWithCopy: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
@@ -71,8 +106,10 @@ const CodeBlockWithCopy: React.FC<{ children?: React.ReactNode }> = ({ children 
 
 const ReadmeMarkdownArticle = React.memo<{
   markdown: string;
+  chapters: HelpDocChapterSummary[];
+  sections: HelpDocSectionSummary[];
   onJumpToSection: (sectionId: string) => void;
-}>(({ markdown, onJumpToSection }) => {
+}>(({ markdown, chapters, sections, onJumpToSection }) => {
   // Fresh per render so duplicate-heading suffixes stay 100% deterministic across re-renders
   const seenSlugs = new Map<string, number>();
   const nextHeadingId = (children: React.ReactNode) => {
@@ -141,13 +178,16 @@ const ReadmeMarkdownArticle = React.memo<{
         ),
         hr: () => <hr className="my-6 border-zinc-800" />,
         a: ({ href, children }) => {
-          if (href?.startsWith('#')) {
+          const internalTarget = href
+            ? resolveInternalDocHref(href, chapters, sections)
+            : null;
+          if (internalTarget) {
             return (
               <a
-                href={href}
+                href={`#${internalTarget}`}
                 onClick={(e) => {
                   e.preventDefault();
-                  onJumpToSection(href);
+                  onJumpToSection(internalTarget);
                 }}
                 className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 cursor-pointer"
               >
@@ -203,36 +243,40 @@ const ReadmeMarkdownArticle = React.memo<{
 });
 
 /**
- * Renders live README.md documentation with smooth anchor navigation and code copy buttons,
- * paired with a Local LLM Help Assistant panel whenever an LLM is connected.
+ * Renders the live stitched User Manual (from `docs/*.md`, with `README.md` fallback)
+ * with smooth anchor navigation and code copy buttons, paired with a Local LLM Help Assistant panel.
  */
 export const SystemHelpSection: React.FC<SystemHelpSectionProps> = ({ lmStatus }) => {
   const [markdown, setMarkdown] = useState<string>('');
   const [sections, setSections] = useState<HelpDocSectionSummary[]>([]);
+  const [chapters, setChapters] = useState<HelpDocChapterSummary[]>([]);
+  const [docSource, setDocSource] = useState<'docs' | 'readme'>('docs');
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [sectionFilter, setSectionFilter] = useState('');
   const articleRef = useRef<HTMLDivElement | null>(null);
 
-  const loadReadme = useCallback(async () => {
+  const loadManual = useCallback(async () => {
     setIsLoading(true);
     setErrorMsg(null);
     try {
       const payload = await api.getHelpReadme();
       setMarkdown(payload.markdown);
       setSections(payload.sections || []);
+      setChapters(payload.chapters || []);
+      setDocSource(payload.source || (payload.chapters?.length ? 'docs' : 'readme'));
       setUpdatedAt(payload.updatedAt || null);
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Failed to load README documentation.');
+      setErrorMsg(err?.message || 'Failed to load documentation.');
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void loadReadme();
-  }, [loadReadme]);
+    void loadManual();
+  }, [loadManual]);
 
   const jumpToSection = useCallback((sectionId: string) => {
     const cleanId = sectionId.replace(/^#/, '');
@@ -250,9 +294,37 @@ export const SystemHelpSection: React.FC<SystemHelpSectionProps> = ({ lmStatus }
     return sections.filter(
       (s) =>
         s.title.toLowerCase().includes(q) ||
-        (s.parentTitle || '').toLowerCase().includes(q)
+        (s.parentTitle || '').toLowerCase().includes(q) ||
+        (s.chapterTitle || '').toLowerCase().includes(q)
     );
   }, [sections, sectionFilter]);
+
+  const groupedSections = useMemo(() => {
+    if (chapters.length === 0) return null;
+    const groups: Array<{ chapterTitle: string; items: HelpDocSectionSummary[] }> = [];
+    const bySlug = new Map<string, HelpDocSectionSummary[]>();
+
+    for (const sec of filteredSections) {
+      const key = sec.chapterSlug || '__other';
+      const bucket = bySlug.get(key);
+      if (bucket) bucket.push(sec);
+      else bySlug.set(key, [sec]);
+    }
+
+    for (const ch of chapters) {
+      const items = bySlug.get(ch.slug);
+      if (items && items.length > 0) {
+        groups.push({ chapterTitle: ch.title, items });
+        bySlug.delete(ch.slug);
+      }
+    }
+    for (const items of bySlug.values()) {
+      if (items.length > 0) {
+        groups.push({ chapterTitle: items[0].chapterTitle || 'Manual', items });
+      }
+    }
+    return groups;
+  }, [chapters, filteredSections]);
 
   const showHelpChat = Boolean(lmStatus?.online);
 
@@ -264,10 +336,19 @@ export const SystemHelpSection: React.FC<SystemHelpSectionProps> = ({ lmStatus }
           <BookOpen className="w-4 h-4 text-indigo-400 shrink-0" />
           <div>
             <h2 className="text-sm font-display font-semibold text-zinc-100">
-              Couchy Documentation &amp; Quick Reference
+              Couchy User Manual &amp; Quick Reference
             </h2>
             <p className="text-[11px] text-zinc-400">
-              Rendered live from <code className="text-zinc-300">README.md</code>
+              {docSource === 'docs' && chapters.length > 0 ? (
+                <>
+                  Rendered live from <code className="text-zinc-300">docs/</code> · {chapters.length}{' '}
+                  chapters
+                </>
+              ) : (
+                <>
+                  Rendered live from <code className="text-zinc-300">README.md</code>
+                </>
+              )}
               {updatedAt ? ` · Updated ${new Date(updatedAt).toLocaleDateString()}` : ''}
             </p>
           </div>
@@ -290,23 +371,33 @@ export const SystemHelpSection: React.FC<SystemHelpSectionProps> = ({ lmStatus }
             onChange={(e) => {
               if (e.target.value) jumpToSection(e.target.value);
             }}
-            className="px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-300 max-w-[220px]"
+            className="px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-300 max-w-[240px]"
             aria-label="Jump to documentation section"
           >
             <option value="">Jump to section...</option>
-            {filteredSections.map((sec) => (
-              <option key={sec.id} value={sec.id}>
-                {sec.level === 3 ? `  ↳ ${sec.title}` : sec.title}
-              </option>
-            ))}
+            {groupedSections
+              ? groupedSections.map((group) => (
+                  <optgroup key={group.chapterTitle} label={group.chapterTitle}>
+                    {group.items.map((sec) => (
+                      <option key={sec.id} value={sec.id}>
+                        {sec.level === 3 ? `↳ ${sec.title}` : sec.title}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))
+              : filteredSections.map((sec) => (
+                  <option key={sec.id} value={sec.id}>
+                    {sec.level === 3 ? `  ↳ ${sec.title}` : sec.title}
+                  </option>
+                ))}
           </select>
 
           <button
             type="button"
-            onClick={() => void loadReadme()}
+            onClick={() => void loadManual()}
             disabled={isLoading}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-200 rounded-lg cursor-pointer"
-            title="Reload README.md from disk"
+            title="Reload documentation from disk"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
             <span>Reload</span>
@@ -325,14 +416,19 @@ export const SystemHelpSection: React.FC<SystemHelpSectionProps> = ({ lmStatus }
           {isLoading ? (
             <div className="py-16 flex items-center justify-center gap-2 text-zinc-400">
               <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
-              <span>Loading README.md...</span>
+              <span>Loading User Manual...</span>
             </div>
           ) : errorMsg ? (
             <div className="p-4 rounded-lg bg-rose-950/50 border border-rose-800/70 text-rose-200">
               {errorMsg}
             </div>
           ) : (
-            <ReadmeMarkdownArticle markdown={markdown} onJumpToSection={jumpToSection} />
+            <ReadmeMarkdownArticle
+              markdown={markdown}
+              chapters={chapters}
+              sections={sections}
+              onJumpToSection={jumpToSection}
+            />
           )}
         </div>
 

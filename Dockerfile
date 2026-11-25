@@ -56,13 +56,14 @@ RUN mkdir -p /data/output /data/models /data/thumbnails /data/uploaded \
     /app/data/backups /app/data/local_models /app/data/uploaded /downloads \
     && chown -R node:node /data /app /downloads
 
-# Copy only runtime dependencies, built SPA, bundled server, workflow JSONs, and README (for Help docs)
+# Copy only runtime dependencies, built SPA, bundled server, workflow JSONs, and docs/README (for Help manual)
 COPY --chown=node:node --from=builder /app/node_modules /app/node_modules
 COPY --chown=node:node --from=builder /app/dist /app/dist
 COPY --chown=node:node --from=builder /app/dist-server /app/dist-server
 COPY --chown=node:node --from=builder /app/src/server/workflows/*.json /app/dist-server/workflows/
 COPY --chown=node:node --from=builder /app/package.json /app/package.json
 COPY --chown=node:node --from=builder /app/README.md /app/README.md
+COPY --chown=node:node --from=builder /app/docs /app/docs
 
 USER node
 

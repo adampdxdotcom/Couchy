@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BookmarkPlus, Dices, ExternalLink, Heart, Keyboard, Loader2, MessageSquare, Play, RotateCcw, Share2, Star, Trash2, X } from 'lucide-react';
 import { api } from '../api/client.ts';
-import { renderDependencyLabel } from './GalleryGridView.tsx';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
 import { SeriesMiniGalleryModal } from './inspector/SeriesMiniGalleryModal.tsx';
 import { SplitCompareView } from './inspector/SplitCompareView.tsx';
@@ -709,10 +708,6 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                     <ExternalLink className="w-2.5 h-2.5 opacity-75" />
                   </a>
                 )}
-
-                <span className="hidden lg:inline-flex shrink-0">
-                  {renderDependencyLabel(activeImage.dependencyStatus)}
-                </span>
 
                 {activeImage.isRandomRoll && (
                   <span

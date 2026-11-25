@@ -751,16 +751,27 @@ export interface VisualTaggerStatus {
   lastError: string | null;
 }
 
+export interface HelpDocChapterSummary {
+  slug: string;
+  title: string;
+  filename: string;
+  anchorId: string;
+}
+
 export interface HelpDocSectionSummary {
   id: string;
   level: number;
   title: string;
   parentTitle: string | null;
+  chapterSlug?: string;
+  chapterTitle?: string;
 }
 
 export interface HelpReadmePayload {
   markdown: string;
   sections: HelpDocSectionSummary[];
+  chapters?: HelpDocChapterSummary[];
+  source?: 'docs' | 'readme';
   updatedAt: string;
 }
 
@@ -768,7 +779,7 @@ export interface HelpChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
-  matchedSections?: Array<{ id: string; title: string }>;
+  matchedSections?: Array<{ id: string; title: string; chapterTitle?: string }>;
   modelUsed?: string;
 }
 
