@@ -9,6 +9,10 @@ import {
   startFilesystemWatcher,
 } from '../services/scannerService.ts';
 import {
+  scheduleDebouncedModelSync,
+  startModelFilesystemWatcher,
+} from '../services/modelWatcherService.ts';
+import {
   configureScheduledBackups,
   createDatabaseBackup,
   exportUserAnnotationsJson,
@@ -237,6 +241,8 @@ systemRouter.patch('/config', (req, res) => {
     if (nextModelsDir) {
       fs.mkdirSync(nextModelsDir, { recursive: true });
       appConfig.comfyuiModelsDir = nextModelsDir;
+      startModelFilesystemWatcher();
+      scheduleDebouncedModelSync('config-updated', 250);
     }
     if (nextDownloadsDir) {
       fs.mkdirSync(nextDownloadsDir, { recursive: true });

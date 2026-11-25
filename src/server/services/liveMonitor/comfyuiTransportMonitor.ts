@@ -12,10 +12,41 @@ import {
   syncRunJobCounts,
 } from './liveMonitorState.ts';
 import { extractMetadataFromPromptGraph, extractPromptId } from './promptGraphUtils.ts';
+import { scheduleDebouncedModelSync } from '../modelWatcherService.ts';
 
 let wsInstance: WebSocket | null = null;
 let connectedWsUrl = '';
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let monitorStopped = false;
+
+/**
+ * Transitions ComfyUI status to online and triggers an automatic model inventory sync
+ * whenever ComfyUI recovers from an offline state (e.g., after a reboot or restart).
+ */
+function markComfyUiOnline(source: string): void {
+  const wasOffline = !liveMonitorState.online;
+  liveMonitorState.online = true;
+  if (wasOffline) {
+    scheduleDebouncedModelSync(`comfyui-online:${source}`, 1500);
+  }
+}
+
+export function stopComfyUiWsMonitor(): void {
+  monitorStopped = true;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (wsInstance) {
+    const active = wsInstance;
+    wsInstance = null;
+    try {
+      active.close();
+    } catch {
+      // ignore
+    }
+  }
+}
 
 function buildWsUrl(httpBaseUrl: string): string {
   const clean = httpBaseUrl.trim().replace(/\/+$/, '');
@@ -84,6 +115,7 @@ function collectQueuePromptIds(entries: any[], now: number): Set<string> {
  */
 export function ensureComfyUiWsMonitor(): void {
   if (typeof WebSocket === 'undefined') return;
+  monitorStopped = false;
 
   const targetWsUrl = buildWsUrl(appConfig.comfyuiUrl);
   if (wsInstance && connectedWsUrl === targetWsUrl && wsInstance.readyState <= 1) {
@@ -105,7 +137,8 @@ export function ensureComfyUiWsMonitor(): void {
     wsInstance = ws;
 
     ws.addEventListener('open', () => {
-      liveMonitorState.online = true;
+      if (wsInstance !== ws) return;
+      markComfyUiOnline('ws');
     });
 
     ws.addEventListener('message', (event) => {
@@ -170,7 +203,7 @@ export function ensureComfyUiWsMonitor(): void {
             liveMonitorState.currentNode = String(data.node);
           }
         } else if (type === 'execution_cached' || type === 'executed') {
-          liveMonitorState.online = true;
+          markComfyUiOnline('ws-event');
         } else if (type === 'execution_error' || type === 'execution_interrupted') {
           const pid =
             typeof data?.prompt_id === 'string'
@@ -212,12 +245,15 @@ export function ensureComfyUiWsMonitor(): void {
     });
 
     ws.addEventListener('close', () => {
+      if (wsInstance !== ws) return;
       wsInstance = null;
-      if (!reconnectTimer) {
+      liveMonitorState.online = false;
+      if (!monitorStopped && !reconnectTimer) {
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null;
           ensureComfyUiWsMonitor();
         }, 5000);
+        reconnectTimer.unref?.();
       }
     });
 
@@ -281,7 +317,7 @@ export async function getComfyUiLiveStatus(): Promise<ComfyUiLiveStatus> {
           liveMonitorState.progressPercent = null;
         }
 
-        liveMonitorState.online = true;
+        markComfyUiOnline('queue');
         liveMonitorState.runningCount = running;
         liveMonitorState.queuedCount = pending;
         syncRunJobCounts(running + pending);

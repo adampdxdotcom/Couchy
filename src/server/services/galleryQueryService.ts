@@ -30,11 +30,13 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
   // Build fast lookup for installed models by id and lowercase filename
   const modelRows = db
     .prepare(
-      'SELECT id, LOWER(filename) AS lowerFilename, lora_category, is_installed, download_file_path FROM models'
+      'SELECT id, LOWER(filename) AS lowerFilename, name, nickname, lora_category, is_installed, download_file_path FROM models'
     )
     .all() as {
     id: number;
     lowerFilename: string;
+    name: string | null;
+    nickname: string | null;
     lora_category: string;
     is_installed: number;
     download_file_path: string | null;
@@ -45,6 +47,19 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
     modelById.set(m.id, m);
     modelByLowerName.set(m.lowerFilename, m);
   }
+
+  const resolveModelForLora = (l: { modelId?: number | null; loraName?: string | null }) => {
+    if (l.modelId) {
+      const byId = modelById.get(l.modelId);
+      if (byId) return byId;
+    }
+    const normalized = String(l.loraName || '').replace(/\\/g, '/').toLowerCase();
+    if (!normalized) return undefined;
+    const exact = modelByLowerName.get(normalized);
+    if (exact) return exact;
+    const baseName = normalized.split('/').pop() || normalized;
+    return modelByLowerName.get(baseName);
+  };
 
   const lorasByImageId = new Map<number, any[]>();
   const modelsByImageId = new Map<number, any[]>();
@@ -76,13 +91,13 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
     lorasByImageId.set(
       single.id,
       rawLoras.map((l) => {
-        const m =
-          (l.modelId ? modelById.get(l.modelId) : undefined) ||
-          modelByLowerName.get(String(l.loraName || '').toLowerCase());
+        const m = resolveModelForLora(l);
         const isInstalled = Boolean(m?.is_installed);
         return {
           ...l,
           loraCategory: m?.lora_category || 'unclassified',
+          displayName: m?.name || null,
+          nickname: m?.nickname || null,
           isInstalled,
           isDownloadedPendingImport: Boolean(!isInstalled && m?.download_file_path),
         };
@@ -215,13 +230,13 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
       )
       .all() as any[];
     for (const l of allLoras) {
-      const m =
-        (l.modelId ? modelById.get(l.modelId) : undefined) ||
-        modelByLowerName.get(String(l.loraName || '').toLowerCase());
+      const m = resolveModelForLora(l);
       const isInstalled = Boolean(m?.is_installed);
       const enriched = {
         ...l,
         loraCategory: m?.lora_category || 'unclassified',
+        displayName: m?.name || null,
+        nickname: m?.nickname || null,
         isInstalled,
         isDownloadedPendingImport: Boolean(!isInstalled && m?.download_file_path),
       };
@@ -495,6 +510,34 @@ function testWordMatch(text: string, term: string): boolean {
   }
 }
 
+function matchesLoraTerm(
+  lora: ImageRecord['loras'][number],
+  needle: string,
+  isQuoted: boolean
+): boolean {
+  if (!needle) return false;
+  if (needle.startsWith('@')) {
+    const nickNeedle = needle.slice(1).trim();
+    if (!nickNeedle || !lora.nickname) return false;
+    return isQuoted
+      ? lora.nickname.toLowerCase().includes(nickNeedle.toLowerCase())
+      : testWordMatch(lora.nickname, nickNeedle);
+  }
+  if (isQuoted) {
+    const lower = needle.toLowerCase();
+    return (
+      lora.loraName.toLowerCase().includes(lower) ||
+      (lora.displayName || '').toLowerCase().includes(lower) ||
+      (lora.nickname || '').toLowerCase().includes(lower)
+    );
+  }
+  return (
+    testWordMatch(lora.loraName, needle) ||
+    testWordMatch(lora.displayName || '', needle) ||
+    testWordMatch(lora.nickname || '', needle)
+  );
+}
+
 function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
   // Numeric comparison e.g. rating >= 4, steps >= 20, cfg <= 8
   const numMatch = predicate.match(/^(rating|steps|cfg|filesize)\s*(>=|<=|>|<|=)\s*([\d.]+)$/i);
@@ -526,7 +569,17 @@ function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
       return img.characters.some((c) => c.characterName.toLowerCase().includes(val));
     }
     if (key === 'lora') {
-      return img.loras.some((l) => l.loraName.toLowerCase().includes(val));
+      const cleanNickVal = val.replace(/^@+/, '');
+      return img.loras.some((l) => {
+        if (val.startsWith('@')) {
+          return Boolean(cleanNickVal && (l.nickname || '').toLowerCase().includes(cleanNickVal));
+        }
+        return (
+          l.loraName.toLowerCase().includes(val) ||
+          (l.displayName || '').toLowerCase().includes(val) ||
+          (l.nickname || '').toLowerCase().includes(val)
+        );
+      });
     }
     if (key === 'checkpoint' || key === 'ckpt' || key === 'model') {
       return (img.checkpointName || '').toLowerCase().includes(val);
@@ -564,17 +617,27 @@ function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
     }
   }
 
-  // Universal search scoped strictly to: prompts, tags, loras, characters, and visual keywords.
+  // Universal search scoped strictly to: prompts, tags, loras (filename, Couchy name, @nickname), characters, and visual keywords.
   // Filenames, negative prompts, hashes, and notes are excluded from universal search.
   const isQuoted = predicate.startsWith('"') && predicate.endsWith('"') && predicate.length >= 2;
   const needle = isQuoted ? predicate.slice(1, -1).trim() : predicate.trim();
   if (!needle) return true;
 
+  // Leading @ targets LoRA @nicknames directly (plus literal @mentions in positive prompt)
+  if (needle.startsWith('@')) {
+    return (
+      img.loras.some((l) => matchesLoraTerm(l, needle, isQuoted)) ||
+      (isQuoted
+        ? (img.positivePrompt || '').toLowerCase().includes(needle.toLowerCase())
+        : testWordMatch(img.positivePrompt || '', needle))
+    );
+  }
+
   if (isQuoted) {
     const lower = needle.toLowerCase();
     return (
       (img.positivePrompt || '').toLowerCase().includes(lower) ||
-      img.loras.some((l) => l.loraName.toLowerCase().includes(lower)) ||
+      img.loras.some((l) => matchesLoraTerm(l, needle, true)) ||
       img.characters.some((c) => c.characterName.toLowerCase().includes(lower)) ||
       img.tags.some((t) => t.name.toLowerCase().includes(lower)) ||
       (img.visualTags || []).some(
@@ -588,7 +651,7 @@ function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
   // Unquoted: Match whole words across positivePrompt, loras, characters, tags, and visualTags
   return (
     testWordMatch(img.positivePrompt || '', needle) ||
-    img.loras.some((l) => testWordMatch(l.loraName, needle)) ||
+    img.loras.some((l) => matchesLoraTerm(l, needle, false)) ||
     img.characters.some((c) => testWordMatch(c.characterName, needle)) ||
     img.tags.some((t) => testWordMatch(t.name, needle)) ||
     (img.visualTags || []).some(

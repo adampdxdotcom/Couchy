@@ -138,7 +138,7 @@ export const GalleryFilterBar: React.FC<GalleryFilterBarProps> = ({
             type="text"
             value={filters.query}
             onChange={(e) => onChange({ ...filters, query: e.target.value })}
-            placeholder="Search prompts, tags, loras, characters..."
+            placeholder="Search prompts, tags, loras, @nicknames, characters..."
             className="w-full pl-10 pr-9 py-2 text-sm bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
           />
           {filters.query && (

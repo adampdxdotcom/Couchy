@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { db } from '../db.ts';
 import { appConfig } from '../config.ts';
+import { logger } from '../logger.ts';
 import {
   MODEL_DIR_TYPE_MAP,
   MODEL_EXTS,
@@ -17,6 +18,7 @@ import {
 } from './civitai/civitaiModelStatsHelper.ts';
 import { invalidateInstalledModelsCache } from './civitai/civitaiModelEnrichmentService.ts';
 import { invalidateStorageUsageStatsCache } from './storageStatsService.ts';
+import { notifyWorkspaceDataChanged } from './liveMonitor/liveMonitorState.ts';
 import type { ModelInventoryItem, ModelType } from '../../shared/types.ts';
 
 export interface LoraMentionConfigInput {
@@ -78,13 +80,40 @@ async function computeModelHashesIfFeasible(
   }
 }
 
+let inFlightModelSync: Promise<ModelInventoryItem[]> | null = null;
+let queuedModelSync = false;
+let hasCompletedInitialDependencySync = false;
+
 /**
  * Inventories models across COMFYUI_MODELS_DIR, ComfyUI /object_info, and DOWNLOADS_DIR.
- * Only models verified inside COMFYUI_MODELS_DIR (complete copy) or ComfyUI /object_info
- * are marked `is_installed = 1`. Files sitting only in DOWNLOADS_DIR remain `is_installed = 0`
- * with `download_file_path` populated so Couchy displays them as unavailable / pending import.
+ * Concurrent calls are coalesced so rapid watcher/reconnect triggers never overlap or drop
+ * a trailing change. Only models verified inside COMFYUI_MODELS_DIR (complete copy) or
+ * ComfyUI /object_info are marked `is_installed = 1`.
  */
-export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
+export function syncModelInventory(): Promise<ModelInventoryItem[]> {
+  if (inFlightModelSync) {
+    queuedModelSync = true;
+    return inFlightModelSync;
+  }
+
+  const run = (async () => {
+    try {
+      let result = await runSyncModelInventoryOnce();
+      while (queuedModelSync) {
+        queuedModelSync = false;
+        result = await runSyncModelInventoryOnce();
+      }
+      return result;
+    } finally {
+      inFlightModelSync = null;
+    }
+  })();
+
+  inFlightModelSync = run;
+  return run;
+}
+
+async function runSyncModelInventoryOnce(): Promise<ModelInventoryItem[]> {
   interface ScannedDiskFile {
     fullPath: string;
     filename: string;
@@ -195,11 +224,19 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
   const verifiedInstalledKeys = new Set<string>();
 
   const existingByFilename = new Map<string, any>();
+  let existingInstalledCount = 0;
   for (const row of db
-    .prepare('SELECT id, filename, file_size, sha256_hash, autov2_hash FROM models')
+    .prepare(
+      `SELECT id, filename, file_path, file_size, sha256_hash, autov2_hash,
+              is_installed, comfyui_path, download_file_path
+       FROM models`
+    )
     .all() as any[]) {
     existingByFilename.set(String(row.filename).toLowerCase(), row);
+    if (row.is_installed) existingInstalledCount += 1;
   }
+
+  let inventoryChanged = false;
 
   for (const key of allSeenKeys) {
     const comfyDisk = comfyDiskMap.get(key) || null;
@@ -243,6 +280,19 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
       verifiedInstalledKeys.add(key);
     }
 
+    const nextFilePath = resolvedPath ?? existing?.file_path ?? null;
+    const nextFileSize = resolvedSize ?? existing?.file_size ?? null;
+    if (
+      !existing ||
+      Boolean(existing.is_installed) !== Boolean(installedFlag) ||
+      (existing.comfyui_path || null) !== comfyuiPath ||
+      (existing.download_file_path || null) !== downloadFilePath ||
+      (existing.file_path || null) !== nextFilePath ||
+      (existing.file_size ?? null) !== nextFileSize
+    ) {
+      inventoryChanged = true;
+    }
+
     db.prepare(
       `INSERT INTO models
         (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, comfyui_path, download_file_path, last_seen_at)
@@ -273,39 +323,69 @@ export async function syncModelInventory(): Promise<ModelInventoryItem[]> {
     );
   }
 
-  // Clear stale installed flags whenever at least one authoritative ComfyUI source was reachable
-  if (comfyModelsDirExists || comfyApiOnline) {
-    for (const key of existingByFilename.keys()) {
+  // Safeguard: never wipe installed flags if ComfyUI is offline and COMFYUI_MODELS_DIR looks empty
+  // (e.g. host reboot where Docker booted before the models bind/network mount populated).
+  const hasAuthoritativeUninstallSource =
+    comfyApiOnline || (comfyModelsDirExists && comfyDiskMap.size > 0);
+
+  if (hasAuthoritativeUninstallSource) {
+    for (const [key, existing] of existingByFilename.entries()) {
       if (!verifiedInstalledKeys.has(key)) {
         const dlEntry = downloadsDiskMap.get(key) || null;
-        db.prepare(
-          `UPDATE models
-           SET is_installed = 0,
-               comfyui_path = NULL,
-               download_file_path = ?
-           WHERE LOWER(filename) = ?`
-        ).run(dlEntry?.fullPath || null, key);
+        const nextDlPath = dlEntry?.fullPath || null;
+        if (
+          Boolean(existing.is_installed) ||
+          existing.comfyui_path !== null ||
+          (existing.download_file_path || null) !== nextDlPath
+        ) {
+          inventoryChanged = true;
+          db.prepare(
+            `UPDATE models
+             SET is_installed = 0,
+                 comfyui_path = NULL,
+                 download_file_path = ?
+             WHERE LOWER(filename) = ?`
+          ).run(nextDlPath, key);
+        }
       }
     }
-  } else if (downloadsDirExists) {
-    // Still keep download_file_path accurate when ComfyUI folders are unreachable
-    for (const key of existingByFilename.keys()) {
-      const dlEntry = downloadsDiskMap.get(key) || null;
-      db.prepare(`UPDATE models SET download_file_path = ? WHERE LOWER(filename) = ?`).run(
-        dlEntry?.fullPath || null,
-        key
+  } else {
+    if (existingInstalledCount > 0 && comfyModelsDirExists && comfyDiskMap.size === 0) {
+      logger.warn(
+        'ModelSync',
+        `COMFYUI_MODELS_DIR (${appConfig.comfyuiModelsDir}) returned 0 files while ComfyUI is offline; preserving ${existingInstalledCount} existing installed model(s)`
       );
+    }
+    if (downloadsDirExists) {
+      // Keep download_file_path accurate while preserving installed flags until mount/ComfyUI recovers
+      for (const [key, existing] of existingByFilename.entries()) {
+        const dlEntry = downloadsDiskMap.get(key) || null;
+        const nextDlPath = dlEntry?.fullPath || null;
+        if ((existing.download_file_path || null) !== nextDlPath) {
+          inventoryChanged = true;
+          db.prepare(`UPDATE models SET download_file_path = ? WHERE LOWER(filename) = ?`).run(
+            nextDlPath,
+            key
+          );
+        }
+      }
     }
   }
 
-  // Recompute dependency statuses across all indexed images
-  const allImgIds = db.prepare('SELECT id FROM images WHERE is_missing = 0').all() as { id: number }[];
-  for (const row of allImgIds) {
-    recomputeImageDependencyStatus(row.id);
+  // Only recompute image dependencies and notify clients when inventory actually changed (or on first boot sync)
+  if (inventoryChanged || !hasCompletedInitialDependencySync) {
+    hasCompletedInitialDependencySync = true;
+    const allImgIds = db.prepare('SELECT id FROM images WHERE is_missing = 0').all() as { id: number }[];
+    for (const row of allImgIds) {
+      recomputeImageDependencyStatus(row.id);
+    }
+    invalidateInstalledModelsCache();
+    invalidateStorageUsageStatsCache();
+    if (inventoryChanged) {
+      notifyWorkspaceDataChanged();
+    }
   }
 
-  invalidateInstalledModelsCache();
-  invalidateStorageUsageStatsCache();
   return listModelInventory();
 }
 

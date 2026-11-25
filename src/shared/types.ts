@@ -60,6 +60,8 @@ export interface ImageLoraRecord {
   nodeType: string | null;
   provenance: ProvenanceSource;
   loraCategory?: LoraCategory;
+  displayName?: string | null;
+  nickname?: string | null;
   isInstalled?: boolean;
   isDownloadedPendingImport?: boolean;
 }

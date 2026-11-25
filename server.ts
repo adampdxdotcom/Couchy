@@ -127,17 +127,20 @@ async function startServer() {
               startFilesystemWatcher,
             },
             { syncModelInventory },
+            { startModelFilesystemWatcher },
+            { ensureComfyUiWsMonitor },
             { getTaggerSettings, isTaggerModelDownloaded, startVisualTaggerQueue },
             { startDownloadScheduler },
             { scanAndCleanCopiedDownloads, startModelCleanupScheduler },
             { startLoraHeadshotWatcher },
             {
               startCivitaiActivityScheduler,
-              stopCivitaiActivityScheduler,
             },
           ] = await Promise.all([
             import('./src/server/services/scannerService.ts'),
             import('./src/server/services/modelInventoryService.ts'),
+            import('./src/server/services/modelWatcherService.ts'),
+            import('./src/server/services/comfyuiLiveMonitor.ts'),
             import('./src/server/services/visualTaggerService.ts'),
             import('./src/server/services/downloadSchedulerService.ts'),
             import('./src/server/services/modelCleanupService.ts'),
@@ -147,6 +150,8 @@ async function startServer() {
 
           backfillMissingImagePrompts(false);
           startFilesystemWatcher();
+          startModelFilesystemWatcher();
+          ensureComfyUiWsMonitor();
           startDownloadScheduler();
           startLoraHeadshotWatcher();
           startModelCleanupScheduler();
@@ -162,6 +167,7 @@ async function startServer() {
 
           reconcileTimer = setInterval(() => {
             runDirectoryScan('reconcile').catch(() => {});
+            syncModelInventory().catch(() => {});
           }, 5 * 60 * 1000);
         } catch (err) {
           logger.error('Server', 'Background startup scan error', err);
@@ -184,9 +190,17 @@ async function startServer() {
 
   const shutdown = async () => {
     if (reconcileTimer) clearInterval(reconcileTimer);
-    await import('./src/server/services/civitai/civitaiActivitySyncService.ts')
-      .then((m) => m.stopCivitaiActivityScheduler())
-      .catch(() => {});
+    await Promise.all([
+      import('./src/server/services/civitai/civitaiActivitySyncService.ts')
+        .then((m) => m.stopCivitaiActivityScheduler())
+        .catch(() => {}),
+      import('./src/server/services/modelWatcherService.ts')
+        .then((m) => m.stopModelFilesystemWatcher())
+        .catch(() => {}),
+      import('./src/server/services/liveMonitor/comfyuiTransportMonitor.ts')
+        .then((m) => m.stopComfyUiWsMonitor())
+        .catch(() => {}),
+    ]);
     httpServer.close();
     if (viteServer) {
       await viteServer.close().catch(() => {});

@@ -5,7 +5,7 @@
 - **Views & Live Progress**: Switch between **Grid**, **Masonry**, and **Compact** views with **`SM` / `MD` / `LG`** scaling, page navigation or **Infinite Scroll**, and inline **Pending Ghost Cards** showing live generation progress until finished PNGs arrive.
 - **Card Footer & Quick Actions**: Shows **Character Name** (click to filter), **LoRA Pills**, and **Image Details** (`width×height · aspect ratio · Base Model`), plus quick buttons to **Select**, **Rate (`1–5★`)**, **Favorite / Poster**, **Reuse Prompt**, open **Agent**, or **Reject** (with an **Undo** toast).
 - **Search, Filters & Presets**:
-  - Full-text search across prompts, filenames, Base Models, LoRAs, and visual tags.
+  - Full-text search across prompts, tags, characters, visual tags, and LoRAs—including raw filenames, custom Couchy LoRA display names, and `@nicknames` (e.g. `@noir` or `lora:"Warm Film"`).
   - Multi-facet filters for **Characters** (`Match ALL` / `Match ANY` + *Include suggestions*), **LoRAs** (`Match ALL` / `Match ANY` + **Min / Max Strength**), **Favorites Only**, **Min Rating**, **Checkpoint** *(the Gallery label for a Krea 2 Base Model)*, **Collection**, **Tags**, **Date Range**, **Dependency Status** (`Exact Match`, `Available`, `Incomplete`, `Unknown`), **Civitai Share Status** (`Shared on Civitai`, `Draft Only`, `Published`, `Has Likes/Comments`, `New Activity` — propagated across collapsed **Series Stacks**), and **Rejected / Archived** modes.
   - **9 Sort Orders**, named **Saved Search Presets**, and **`ZIP (N)`** filtered export.
 - **Bulk Toolbar**: Select cards or **`Shift + Click`** ranges to batch-apply **Ratings**, **Favorite**, **Archive**, **Reject**, **Tag**, **Character**, **Collection**, or **Selected ZIP** export.

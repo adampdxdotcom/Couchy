@@ -10,6 +10,7 @@ Open **LoRAs & Models** for four integrated tabs:
 ## Base Models Explorer
 
 - Indexes both your ComfyUI models folder and downloads folder, switching between **Base Models (Krea 2)** *(default)* and **Support Models (CLIP / VAE / Upscalers / Other)** with Grid/List views, Hide/Unhide, `@Mention` toggles, and **Base Model Detail View**.
+- **Automatic Live Sync & Reboot Resilience**: Couchy live-monitors `COMFYUI_MODELS_DIR` for newly added or removed weights, automatically re-syncs whenever ComfyUI comes back online, runs a quiet 5-minute fallback reconciliation, and preserves existing installed flags if the models mount is temporarily empty while ComfyUI is offline.
 
 ## Presets (`LoRA Presets`)
 

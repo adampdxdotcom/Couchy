@@ -7440,7 +7440,596 @@ var init_ghostCardAggregator = __esm({
   }
 });
 
+// src/server/services/modelInventoryService.ts
+var modelInventoryService_exports = {};
+__export(modelInventoryService_exports, {
+  extractComfyObjectInfoChoices: () => extractComfyObjectInfoChoices,
+  listModelInventory: () => listModelInventory,
+  syncModelInventory: () => syncModelInventory,
+  updateLoraMentionConfig: () => updateLoraMentionConfig,
+  updateLoraVisibility: () => updateLoraVisibility,
+  updateModelConfig: () => updateModelConfig,
+  updateModelVisibility: () => updateModelVisibility
+});
+import fs10 from "fs";
+import path10 from "path";
+import crypto3 from "crypto";
+function extractComfyObjectInfoChoices(objectInfo, nodeClass, inputField) {
+  const nodeDef = objectInfo?.[nodeClass];
+  const fieldDef = nodeDef?.input?.required?.[inputField] ?? nodeDef?.input?.optional?.[inputField];
+  if (!Array.isArray(fieldDef)) return [];
+  let rawOptions = null;
+  if (Array.isArray(fieldDef[0])) {
+    rawOptions = fieldDef[0];
+  } else if (fieldDef[0] === "COMBO" && Array.isArray(fieldDef[1]?.options)) {
+    rawOptions = fieldDef[1].options;
+  }
+  if (!rawOptions) return [];
+  return rawOptions.map((v) => String(v ?? "").trim()).filter((v) => Boolean(v) && v !== "None");
+}
+async function computeModelHashesIfFeasible(filePath, size) {
+  if (size > 350 * 1024 * 1024) {
+    return { sha256: null, autov2: null };
+  }
+  try {
+    const data = await fs10.promises.readFile(filePath);
+    const hex = crypto3.createHash("sha256").update(data).digest("hex");
+    return { sha256: hex, autov2: hex.slice(0, 10) };
+  } catch {
+    return { sha256: null, autov2: null };
+  }
+}
+function syncModelInventory() {
+  if (inFlightModelSync) {
+    queuedModelSync = true;
+    return inFlightModelSync;
+  }
+  const run = (async () => {
+    try {
+      let result = await runSyncModelInventoryOnce();
+      while (queuedModelSync) {
+        queuedModelSync = false;
+        result = await runSyncModelInventoryOnce();
+      }
+      return result;
+    } finally {
+      inFlightModelSync = null;
+    }
+  })();
+  inFlightModelSync = run;
+  return run;
+}
+async function runSyncModelInventoryOnce() {
+  const walkModelRoot = async (rootDir, defaultType, includeSubfolderRelPath) => {
+    const found = /* @__PURE__ */ new Map();
+    if (!rootDir) return found;
+    const entries = await walkDirectoryFilesAsync(rootDir, {
+      extensions: MODEL_EXTS,
+      includeStat: true,
+      minSizeBytes: 1,
+      initialModelType: defaultType,
+      modelTypeByDirName: MODEL_DIR_TYPE_MAP
+    });
+    for (const entry of entries) {
+      const key = entry.filename.toLowerCase();
+      if (!found.has(key)) {
+        found.set(key, {
+          fullPath: entry.fullPath,
+          filename: entry.filename,
+          relativeToCategory: includeSubfolderRelPath ? entry.relativeToCategory || entry.filename : entry.filename,
+          modelType: entry.modelType,
+          size: entry.size
+        });
+      }
+    }
+    return found;
+  };
+  const downloadsDirResolved = path10.resolve(appConfig.downloadsDir || "");
+  const comfyDirResolved = path10.resolve(appConfig.comfyuiModelsDir || "");
+  const dirsOverlap = Boolean(downloadsDirResolved && comfyDirResolved) && (downloadsDirResolved === comfyDirResolved || downloadsDirResolved.startsWith(comfyDirResolved + path10.sep));
+  const [comfyModelsDirExists, downloadsDirExists, comfyDiskMap, downloadsDiskMap] = await Promise.all([
+    pathExistsAsync(appConfig.comfyuiModelsDir),
+    pathExistsAsync(appConfig.downloadsDir),
+    walkModelRoot(appConfig.comfyuiModelsDir, "other", true),
+    dirsOverlap ? Promise.resolve(/* @__PURE__ */ new Map()) : walkModelRoot(appConfig.downloadsDir, "lora", false)
+  ]);
+  let comfyApiOnline = false;
+  const comfyApiMap = /* @__PURE__ */ new Map();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3e3);
+    const res = await fetch(`${appConfig.comfyuiUrl}/object_info`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (res.ok) {
+      comfyApiOnline = true;
+      const objInfo = await res.json();
+      const extractList = (nodeName, inputKey, mType) => {
+        const list = extractComfyObjectInfoChoices(objInfo, nodeName, inputKey);
+        for (const rawEntry of list) {
+          const normalizedRaw = rawEntry.replace(/\\/g, "/").trim();
+          const filename = normalizedRaw.split("/").pop() || normalizedRaw;
+          const key = filename.toLowerCase();
+          if (!comfyApiMap.has(key)) {
+            comfyApiMap.set(key, { filename, rawName: normalizedRaw, modelType: mType });
+          }
+        }
+      };
+      extractList("CheckpointLoaderSimple", "ckpt_name", "checkpoint");
+      extractList("LoraLoader", "lora_name", "lora");
+      extractList("VAELoader", "vae_name", "vae");
+      extractList("ControlNetLoader", "control_net_name", "controlnet");
+      extractList("UpscaleModelLoader", "model_name", "upscaler");
+      extractList("CLIPLoader", "clip_name", "clip");
+      extractList("DualCLIPLoader", "clip_name1", "clip");
+      extractList("DualCLIPLoader", "clip_name2", "clip");
+      extractList("CLIPLoaderGGUF", "clip_name", "clip");
+      extractList("UNETLoader", "unet_name", "diffusion");
+      extractList("UnetLoaderGGUF", "unet_name", "diffusion");
+    }
+  } catch {
+  }
+  const allSeenKeys = /* @__PURE__ */ new Set([
+    ...comfyDiskMap.keys(),
+    ...downloadsDiskMap.keys(),
+    ...comfyApiMap.keys()
+  ]);
+  const verifiedInstalledKeys = /* @__PURE__ */ new Set();
+  const existingByFilename = /* @__PURE__ */ new Map();
+  let existingInstalledCount = 0;
+  for (const row of db.prepare(
+    `SELECT id, filename, file_path, file_size, sha256_hash, autov2_hash,
+              is_installed, comfyui_path, download_file_path
+       FROM models`
+  ).all()) {
+    existingByFilename.set(String(row.filename).toLowerCase(), row);
+    if (row.is_installed) existingInstalledCount += 1;
+  }
+  let inventoryChanged = false;
+  for (const key of allSeenKeys) {
+    const comfyDisk = comfyDiskMap.get(key) || null;
+    const dlDisk = downloadsDiskMap.get(key) || null;
+    const apiEntry = comfyApiMap.get(key) || null;
+    const hasCompleteComfyDiskCopy = Boolean(
+      comfyDisk && (!dlDisk || comfyDisk.size === dlDisk.size)
+    );
+    const isComfyAvailable = Boolean(apiEntry || hasCompleteComfyDiskCopy);
+    const primaryDisk = comfyDisk || dlDisk;
+    const canonicalFilename = apiEntry?.filename || primaryDisk?.filename || key;
+    const resolvedType = apiEntry?.modelType || (comfyDisk && comfyDisk.modelType !== "other" ? comfyDisk.modelType : null) || dlDisk?.modelType || "other";
+    const resolvedPath = comfyDisk?.fullPath || dlDisk?.fullPath || null;
+    const resolvedSize = comfyDisk?.size ?? dlDisk?.size ?? null;
+    const comfyuiPath = isComfyAvailable ? apiEntry?.rawName || comfyDisk?.relativeToCategory || canonicalFilename : null;
+    const downloadFilePath = dlDisk?.fullPath || null;
+    const existing = existingByFilename.get(key);
+    let sha256 = existing?.sha256_hash || null;
+    let autov2 = existing?.autov2_hash || null;
+    if (primaryDisk && (!sha256 || existing?.file_size !== primaryDisk.size)) {
+      const computed = await computeModelHashesIfFeasible(primaryDisk.fullPath, primaryDisk.size);
+      sha256 = computed.sha256;
+      autov2 = computed.autov2;
+    }
+    const sourceType = apiEntry && !comfyDisk && !dlDisk ? "comfyui_api" : "filesystem";
+    const installedFlag = isComfyAvailable ? 1 : 0;
+    if (isComfyAvailable) {
+      verifiedInstalledKeys.add(key);
+    }
+    const nextFilePath = resolvedPath ?? existing?.file_path ?? null;
+    const nextFileSize = resolvedSize ?? existing?.file_size ?? null;
+    if (!existing || Boolean(existing.is_installed) !== Boolean(installedFlag) || (existing.comfyui_path || null) !== comfyuiPath || (existing.download_file_path || null) !== downloadFilePath || (existing.file_path || null) !== nextFilePath || (existing.file_size ?? null) !== nextFileSize) {
+      inventoryChanged = true;
+    }
+    db.prepare(
+      `INSERT INTO models
+        (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, comfyui_path, download_file_path, last_seen_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(filename) DO UPDATE SET
+         model_type = CASE WHEN excluded.model_type != 'other' THEN excluded.model_type ELSE models.model_type END,
+         file_path = COALESCE(excluded.file_path, models.file_path),
+         file_size = COALESCE(excluded.file_size, models.file_size),
+         sha256_hash = COALESCE(excluded.sha256_hash, models.sha256_hash),
+         autov2_hash = COALESCE(excluded.autov2_hash, models.autov2_hash),
+         is_installed = excluded.is_installed,
+         source_type = CASE WHEN excluded.source_type = 'filesystem' THEN 'filesystem' ELSE models.source_type END,
+         comfyui_path = excluded.comfyui_path,
+         download_file_path = excluded.download_file_path,
+         last_seen_at = datetime('now')`
+    ).run(
+      canonicalFilename.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, ""),
+      canonicalFilename,
+      resolvedType,
+      resolvedPath,
+      resolvedSize,
+      sha256,
+      autov2,
+      installedFlag,
+      sourceType,
+      comfyuiPath,
+      downloadFilePath
+    );
+  }
+  const hasAuthoritativeUninstallSource = comfyApiOnline || comfyModelsDirExists && comfyDiskMap.size > 0;
+  if (hasAuthoritativeUninstallSource) {
+    for (const [key, existing] of existingByFilename.entries()) {
+      if (!verifiedInstalledKeys.has(key)) {
+        const dlEntry = downloadsDiskMap.get(key) || null;
+        const nextDlPath = dlEntry?.fullPath || null;
+        if (Boolean(existing.is_installed) || existing.comfyui_path !== null || (existing.download_file_path || null) !== nextDlPath) {
+          inventoryChanged = true;
+          db.prepare(
+            `UPDATE models
+             SET is_installed = 0,
+                 comfyui_path = NULL,
+                 download_file_path = ?
+             WHERE LOWER(filename) = ?`
+          ).run(nextDlPath, key);
+        }
+      }
+    }
+  } else {
+    if (existingInstalledCount > 0 && comfyModelsDirExists && comfyDiskMap.size === 0) {
+      logger.warn(
+        "ModelSync",
+        `COMFYUI_MODELS_DIR (${appConfig.comfyuiModelsDir}) returned 0 files while ComfyUI is offline; preserving ${existingInstalledCount} existing installed model(s)`
+      );
+    }
+    if (downloadsDirExists) {
+      for (const [key, existing] of existingByFilename.entries()) {
+        const dlEntry = downloadsDiskMap.get(key) || null;
+        const nextDlPath = dlEntry?.fullPath || null;
+        if ((existing.download_file_path || null) !== nextDlPath) {
+          inventoryChanged = true;
+          db.prepare(`UPDATE models SET download_file_path = ? WHERE LOWER(filename) = ?`).run(
+            nextDlPath,
+            key
+          );
+        }
+      }
+    }
+  }
+  if (inventoryChanged || !hasCompletedInitialDependencySync) {
+    hasCompletedInitialDependencySync = true;
+    const allImgIds = db.prepare("SELECT id FROM images WHERE is_missing = 0").all();
+    for (const row of allImgIds) {
+      recomputeImageDependencyStatus(row.id);
+    }
+    invalidateInstalledModelsCache();
+    invalidateStorageUsageStatsCache();
+    if (inventoryChanged) {
+      notifyWorkspaceDataChanged();
+    }
+  }
+  return listModelInventory();
+}
+function listModelInventory() {
+  const rows = db.prepare(
+    `
+      SELECT
+        m.*,
+        COUNT(DISTINCT i.id) AS dependentImageCount,
+        COUNT(DISTINCT iw.workflow_id) AS dependentWorkflowCount,
+        AVG(CASE WHEN rt.rating > 0 THEN rt.rating ELSE NULL END) AS avgRating
+      FROM models m
+      LEFT JOIN image_models im ON LOWER(im.model_name) = LOWER(m.filename)
+      LEFT JOIN images i ON i.id = im.image_id AND i.is_missing = 0
+      LEFT JOIN ratings rt ON rt.content_hash = i.content_hash
+      LEFT JOIN image_workflows iw ON iw.image_id = i.id
+      GROUP BY m.id
+      ORDER BY m.is_installed DESC, dependentImageCount DESC, m.filename COLLATE NOCASE ASC
+    `
+  ).all();
+  return rows.map((r) => {
+    const isInstalled = Boolean(r.is_installed);
+    const downloadFilePath = r.download_file_path || null;
+    return {
+      id: r.id,
+      name: r.name,
+      filename: r.filename,
+      modelType: r.model_type,
+      loraCategory: r.lora_category || "unclassified",
+      filePath: r.file_path || null,
+      fileSize: r.file_size ?? null,
+      sha256Hash: r.sha256_hash || null,
+      autov2Hash: r.autov2_hash || null,
+      isInstalled,
+      isDownloadedPendingImport: Boolean(!isInstalled && downloadFilePath),
+      comfyuiPath: r.comfyui_path || null,
+      downloadFilePath,
+      isHidden: Boolean(r.is_hidden),
+      sourceType: r.source_type,
+      downloadUrl: r.download_url || null,
+      civitaiId: r.civitai_id || null,
+      civitaiVersionId: r.civitai_version_id || null,
+      civitaiUrl: r.civitai_url || null,
+      baseModel: r.base_model || null,
+      recommendedWeight: r.recommended_weight !== null && r.recommended_weight !== void 0 ? Number(r.recommended_weight) : null,
+      civitaiDescription: r.civitai_description || null,
+      previewImages: parsePreviewImagesJson(r.preview_images_json, r.id),
+      civitaiFetchedAt: r.civitai_fetched_at || null,
+      hfRepoId: r.hf_repo_id || null,
+      userNotes: r.user_notes || null,
+      nickname: r.nickname || null,
+      mentionEnabled: Boolean(r.mention_enabled),
+      llmDescription: r.llm_description || null,
+      averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
+      lastSeenAt: r.last_seen_at,
+      dependentImageCount: Number(r.dependentImageCount || 0),
+      dependentWorkflowCount: Number(r.dependentWorkflowCount || 0),
+      civitaiCreatorUsername: r.civitai_creator_username || null,
+      isOwnCivitaiUpload: Boolean(r.is_own_civitai_upload),
+      civitaiStats: parseCivitaiStatsJson(r.civitai_stats_json),
+      civitaiComments: parseCivitaiCommentsJson(r.civitai_comments_json),
+      civitaiStatsSyncedAt: r.civitai_stats_synced_at || null
+    };
+  });
+}
+function updateLoraVisibility(loraName, isHidden) {
+  const cleanName = loraName.trim();
+  const hiddenFlag = isHidden ? 1 : 0;
+  db.prepare(
+    `INSERT INTO models (name, filename, model_type, lora_category, is_hidden)
+     VALUES (?, ?, 'lora', 'unclassified', ?)
+     ON CONFLICT(filename) DO UPDATE SET
+       is_hidden = excluded.is_hidden`
+  ).run(cleanName.replace(/\.(safetensors|pt|ckpt)$/i, ""), cleanName, hiddenFlag);
+  invalidateInstalledModelsCache();
+}
+function updateLoraMentionConfig(input) {
+  const {
+    loraName,
+    name,
+    mentionEnabled,
+    nickname,
+    defaultModelStrength,
+    defaultClipStrength,
+    triggerWord,
+    llmDescription
+  } = input;
+  const existingRow = db.prepare(
+    `SELECT id, name, filename, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description
+       FROM models WHERE LOWER(filename) = LOWER(?)`
+  ).get(loraName);
+  let nextName = existingRow?.name ?? loraName.replace(/\.(safetensors|pt|ckpt)$/i, "");
+  if (name !== void 0) {
+    const cleanName = typeof name === "string" ? name.trim() : "";
+    if (!cleanName) {
+      throw new Error("Model name cannot be empty");
+    }
+    nextName = cleanName;
+  }
+  const cleanNick = nickname !== void 0 ? typeof nickname === "string" ? nickname.trim().replace(/^@+/, "").toLowerCase() || null : null : existingRow?.nickname ?? null;
+  if (cleanNick) {
+    const existing = db.prepare(
+      `SELECT filename FROM models WHERE LOWER(nickname) = ? AND LOWER(filename) != LOWER(?)`
+    ).get(cleanNick, loraName);
+    if (existing) {
+      throw new Error(`Nickname "@${cleanNick}" is already assigned to ${existing.filename}`);
+    }
+  }
+  const cleanTriggerWord = triggerWord !== void 0 ? typeof triggerWord === "string" ? triggerWord.trim() || null : null : existingRow?.trigger_word ?? null;
+  const cleanLlmDescription = llmDescription !== void 0 ? typeof llmDescription === "string" ? llmDescription.trim() || null : null : existingRow?.llm_description ?? null;
+  const cleanModelStr = defaultModelStrength !== void 0 && !Number.isNaN(Number(defaultModelStrength)) ? Math.max(-10, Math.min(10, Number(defaultModelStrength))) : existingRow?.default_model_strength ?? 1;
+  const cleanClipStr = defaultClipStrength !== void 0 && !Number.isNaN(Number(defaultClipStrength)) ? Math.max(-10, Math.min(10, Number(defaultClipStrength))) : existingRow?.default_clip_strength ?? 1;
+  const isMention = mentionEnabled !== void 0 ? mentionEnabled ? 1 : 0 : existingRow?.mention_enabled ?? 0;
+  if (existingRow) {
+    db.prepare(
+      `UPDATE models
+       SET name = ?,
+           nickname = ?,
+           mention_enabled = ?,
+           default_model_strength = ?,
+           default_clip_strength = ?,
+           trigger_word = ?,
+           llm_description = ?
+       WHERE id = ?`
+    ).run(
+      nextName,
+      cleanNick,
+      isMention,
+      cleanModelStr,
+      cleanClipStr,
+      cleanTriggerWord,
+      cleanLlmDescription,
+      existingRow.id
+    );
+  } else {
+    db.prepare(
+      `INSERT INTO models (name, filename, model_type, lora_category, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description)
+       VALUES (?, ?, 'lora', 'unclassified', ?, ?, ?, ?, ?, ?)`
+    ).run(
+      nextName,
+      loraName,
+      cleanNick,
+      isMention,
+      cleanModelStr,
+      cleanClipStr,
+      cleanTriggerWord,
+      cleanLlmDescription
+    );
+  }
+  invalidateInstalledModelsCache();
+}
+function updateModelVisibility(modelId, isHidden) {
+  const result = db.prepare(`UPDATE models SET is_hidden = ? WHERE id = ?`).run(isHidden ? 1 : 0, modelId);
+  if (result.changes === 0) {
+    throw new Error(`Model #${modelId} not found`);
+  }
+  invalidateInstalledModelsCache();
+}
+function updateModelConfig(modelId, input) {
+  const existingRow = db.prepare(
+    `SELECT id, name, filename, nickname, mention_enabled, llm_description, user_notes
+       FROM models WHERE id = ?`
+  ).get(modelId);
+  if (!existingRow) {
+    throw new Error(`Model #${modelId} not found`);
+  }
+  let nextName = existingRow.name;
+  if (input.name !== void 0) {
+    const cleanName = typeof input.name === "string" ? input.name.trim() : "";
+    if (!cleanName) {
+      throw new Error("Model name cannot be empty");
+    }
+    nextName = cleanName;
+  }
+  const cleanNick = input.nickname !== void 0 ? typeof input.nickname === "string" ? input.nickname.trim().replace(/^@+/, "").toLowerCase() || null : null : existingRow.nickname ?? null;
+  if (cleanNick) {
+    const conflict = db.prepare(`SELECT filename FROM models WHERE LOWER(nickname) = ? AND id != ?`).get(cleanNick, modelId);
+    if (conflict) {
+      throw new Error(`Nickname "@${cleanNick}" is already assigned to ${conflict.filename}`);
+    }
+  }
+  const isMention = input.mentionEnabled !== void 0 ? input.mentionEnabled ? 1 : 0 : existingRow.mention_enabled ?? 0;
+  const cleanDetails = input.llmDescription !== void 0 ? typeof input.llmDescription === "string" ? input.llmDescription.trim() || null : null : existingRow.llm_description ?? null;
+  const cleanUserNotes = input.userNotes !== void 0 ? typeof input.userNotes === "string" ? input.userNotes.trim() || null : null : existingRow.user_notes ?? null;
+  db.prepare(
+    `UPDATE models
+     SET name = ?,
+         nickname = ?,
+         mention_enabled = ?,
+         llm_description = ?,
+         user_notes = ?
+     WHERE id = ?`
+  ).run(nextName, cleanNick, isMention, cleanDetails, cleanUserNotes, modelId);
+  invalidateInstalledModelsCache();
+}
+var inFlightModelSync, queuedModelSync, hasCompletedInitialDependencySync;
+var init_modelInventoryService = __esm({
+  "src/server/services/modelInventoryService.ts"() {
+    init_db();
+    init_config();
+    init_logger();
+    init_fsWalkService();
+    init_scannerService();
+    init_civitaiHttpAndParse();
+    init_civitaiModelStatsHelper();
+    init_civitaiModelEnrichmentService();
+    init_storageStatsService();
+    init_liveMonitorState();
+    inFlightModelSync = null;
+    queuedModelSync = false;
+    hasCompletedInitialDependencySync = false;
+  }
+});
+
+// src/server/services/modelWatcherService.ts
+var modelWatcherService_exports = {};
+__export(modelWatcherService_exports, {
+  cancelPendingModelSync: () => cancelPendingModelSync,
+  scheduleDebouncedModelSync: () => scheduleDebouncedModelSync,
+  startModelFilesystemWatcher: () => startModelFilesystemWatcher,
+  stopModelFilesystemWatcher: () => stopModelFilesystemWatcher
+});
+import fs11 from "fs";
+import path11 from "path";
+import chokidar from "chokidar";
+function cancelPendingModelSync() {
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
+  }
+  pendingReason = null;
+}
+function scheduleDebouncedModelSync(reason, delayMs = 2500, syncRunner = syncModelInventory) {
+  pendingReason = reason;
+  if (debounceTimer) {
+    clearTimeout(debounceTimer);
+  }
+  debounceTimer = setTimeout(() => {
+    const activeReason = pendingReason || reason;
+    debounceTimer = null;
+    pendingReason = null;
+    logger.info("ModelWatcher", `Running automatic model inventory sync (${activeReason})`);
+    syncRunner().catch((err) => {
+      logger.error("ModelWatcher", `Automatic model sync failed (${activeReason})`, err);
+    });
+  }, Math.max(0, delayMs));
+  debounceTimer.unref?.();
+}
+async function stopModelFilesystemWatcher() {
+  cancelPendingModelSync();
+  if (!modelWatcher) return;
+  const watcher = modelWatcher;
+  modelWatcher = null;
+  await watcher.close().catch(() => {
+  });
+}
+function startModelFilesystemWatcher() {
+  if (modelWatcher) {
+    const prev = modelWatcher;
+    modelWatcher = null;
+    prev.close().catch(() => {
+    });
+  }
+  const watchDir = appConfig.comfyuiModelsDir;
+  if (!watchDir) return;
+  if (!fs11.existsSync(watchDir)) {
+    logger.warn(
+      "ModelWatcher",
+      `COMFYUI_MODELS_DIR does not exist yet (${watchDir}); waiting for reconnect or periodic reconcile`
+    );
+    return;
+  }
+  const isModelFile = (filePath) => MODEL_EXTS.has(path11.extname(filePath).toLowerCase());
+  modelWatcher = chokidar.watch(watchDir, {
+    ignoreInitial: true,
+    persistent: true,
+    ignorePermissionErrors: true,
+    awaitWriteFinish: {
+      stabilityThreshold: 2e3,
+      pollInterval: 300
+    }
+  });
+  const handleModelEvent = (eventName, filePath) => {
+    if (!isModelFile(filePath)) return;
+    scheduleDebouncedModelSync(`fs:${eventName}`, 2500);
+  };
+  modelWatcher.on("add", (filePath) => handleModelEvent("add", filePath)).on("change", (filePath) => handleModelEvent("change", filePath)).on("unlink", (filePath) => handleModelEvent("unlink", filePath)).on("error", (err) => {
+    logger.warn("ModelWatcher", `Filesystem watcher error on ${watchDir}`, err);
+  });
+  logger.info("ModelWatcher", `Live-monitoring ComfyUI Models Directory: ${watchDir}`);
+}
+var modelWatcher, debounceTimer, pendingReason;
+var init_modelWatcherService = __esm({
+  "src/server/services/modelWatcherService.ts"() {
+    init_config();
+    init_logger();
+    init_fsWalkService();
+    init_modelInventoryService();
+    modelWatcher = null;
+    debounceTimer = null;
+    pendingReason = null;
+  }
+});
+
 // src/server/services/liveMonitor/comfyuiTransportMonitor.ts
+var comfyuiTransportMonitor_exports = {};
+__export(comfyuiTransportMonitor_exports, {
+  ensureComfyUiWsMonitor: () => ensureComfyUiWsMonitor,
+  getComfyUiLiveStatus: () => getComfyUiLiveStatus,
+  stopComfyUiWsMonitor: () => stopComfyUiWsMonitor
+});
+function markComfyUiOnline(source) {
+  const wasOffline = !liveMonitorState.online;
+  liveMonitorState.online = true;
+  if (wasOffline) {
+    scheduleDebouncedModelSync(`comfyui-online:${source}`, 1500);
+  }
+}
+function stopComfyUiWsMonitor() {
+  monitorStopped = true;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (wsInstance) {
+    const active = wsInstance;
+    wsInstance = null;
+    try {
+      active.close();
+    } catch {
+    }
+  }
+}
 function buildWsUrl(httpBaseUrl) {
   const clean = httpBaseUrl.trim().replace(/\/+$/, "");
   const wsBase = clean.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:");
@@ -7489,6 +8078,7 @@ function collectQueuePromptIds(entries, now) {
 }
 function ensureComfyUiWsMonitor() {
   if (typeof WebSocket === "undefined") return;
+  monitorStopped = false;
   const targetWsUrl = buildWsUrl(appConfig.comfyuiUrl);
   if (wsInstance && connectedWsUrl === targetWsUrl && wsInstance.readyState <= 1) {
     return;
@@ -7505,7 +8095,8 @@ function ensureComfyUiWsMonitor() {
     const ws = new WebSocket(targetWsUrl);
     wsInstance = ws;
     ws.addEventListener("open", () => {
-      liveMonitorState.online = true;
+      if (wsInstance !== ws) return;
+      markComfyUiOnline("ws");
     });
     ws.addEventListener("message", (event) => {
       if (typeof event.data !== "string") return;
@@ -7562,7 +8153,7 @@ function ensureComfyUiWsMonitor() {
             liveMonitorState.currentNode = String(data.node);
           }
         } else if (type === "execution_cached" || type === "executed") {
-          liveMonitorState.online = true;
+          markComfyUiOnline("ws-event");
         } else if (type === "execution_error" || type === "execution_interrupted") {
           const pid = typeof data?.prompt_id === "string" ? data.prompt_id : liveMonitorState.activePromptId;
           if (pid) {
@@ -7598,12 +8189,15 @@ function ensureComfyUiWsMonitor() {
       }
     });
     ws.addEventListener("close", () => {
+      if (wsInstance !== ws) return;
       wsInstance = null;
-      if (!reconnectTimer) {
+      liveMonitorState.online = false;
+      if (!monitorStopped && !reconnectTimer) {
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null;
           ensureComfyUiWsMonitor();
         }, 5e3);
+        reconnectTimer.unref?.();
       }
     });
     ws.addEventListener("error", () => {
@@ -7649,7 +8243,7 @@ async function getComfyUiLiveStatus() {
           liveMonitorState.activePromptId = null;
           liveMonitorState.progressPercent = null;
         }
-        liveMonitorState.online = true;
+        markComfyUiOnline("queue");
         liveMonitorState.runningCount = running;
         liveMonitorState.queuedCount = pending;
         syncRunJobCounts(running + pending);
@@ -7697,7 +8291,7 @@ async function getComfyUiLiveStatus() {
     lastError: liveMonitorState.lastError && now - liveMonitorState.lastError.timestamp < 3e4 ? liveMonitorState.lastError : null
   };
 }
-var wsInstance, connectedWsUrl, reconnectTimer;
+var wsInstance, connectedWsUrl, reconnectTimer, monitorStopped;
 var init_comfyuiTransportMonitor = __esm({
   "src/server/services/liveMonitor/comfyuiTransportMonitor.ts"() {
     init_config();
@@ -7706,9 +8300,11 @@ var init_comfyuiTransportMonitor = __esm({
     init_ghostCardAggregator();
     init_liveMonitorState();
     init_promptGraphUtils();
+    init_modelWatcherService();
     wsInstance = null;
     connectedWsUrl = "";
     reconnectTimer = null;
+    monitorStopped = false;
   }
 });
 
@@ -7792,19 +8388,19 @@ var init_corruptRecordCleanup = __esm({
 });
 
 // src/server/services/scanner/scannerMediaUtils.ts
-import fs10 from "fs";
-import path10 from "path";
-import crypto3 from "crypto";
+import fs12 from "fs";
+import path12 from "path";
+import crypto4 from "crypto";
 import sharp2 from "sharp";
 function computeFileSha256(filePath) {
-  const hash = crypto3.createHash("sha256");
-  const data = fs10.readFileSync(filePath);
+  const hash = crypto4.createHash("sha256");
+  const data = fs12.readFileSync(filePath);
   hash.update(data);
   return hash.digest("hex");
 }
 async function ensureWebpThumbnail(sourceFile, contentHash, forceOverwrite = false) {
-  fs10.mkdirSync(appConfig.thumbnailPath, { recursive: true });
-  const thumbFile = path10.join(appConfig.thumbnailPath, `${contentHash}.webp`);
+  fs12.mkdirSync(appConfig.thumbnailPath, { recursive: true });
+  const thumbFile = path12.join(appConfig.thumbnailPath, `${contentHash}.webp`);
   try {
     const metadata = await sharp2(sourceFile).metadata();
     const width = metadata.width || 0;
@@ -7812,7 +8408,7 @@ async function ensureWebpThumbnail(sourceFile, contentHash, forceOverwrite = fal
     if (width <= 0 || height <= 0) {
       return { thumbPath: null, width: 0, height: 0, format: "PNG" };
     }
-    const format = (metadata.format || path10.extname(sourceFile).slice(1)).toUpperCase();
+    const format = (metadata.format || path12.extname(sourceFile).slice(1)).toUpperCase();
     const thumbExisted = await pathExistsAsync(thumbFile);
     if (forceOverwrite || !thumbExisted) {
       await sharp2(sourceFile).resize({ width: 384, height: 384, fit: "inside", withoutEnlargement: true }).webp({ quality: 80 }).toFile(thumbFile);
@@ -7826,19 +8422,19 @@ async function ensureWebpThumbnail(sourceFile, contentHash, forceOverwrite = fal
 function resolveImageDiskPath(row) {
   const rel = String(row.relative_path || "");
   if (row.is_uploaded_reference || rel.startsWith("__uploaded__/")) {
-    return path10.resolve(appConfig.uploadedImagesDir, path10.basename(rel));
+    return path12.resolve(appConfig.uploadedImagesDir, path12.basename(rel));
   }
-  return path10.resolve(appConfig.comfyuiOutputDir, rel);
+  return path12.resolve(appConfig.comfyuiOutputDir, rel);
 }
 async function indexUploadedInspirationImage(filename, positivePrompt) {
-  const safeName = path10.basename(String(filename || "").trim());
+  const safeName = path12.basename(String(filename || "").trim());
   if (!safeName) return null;
-  const fullPath = path10.resolve(appConfig.uploadedImagesDir, safeName);
-  const uploadedRoot = path10.resolve(appConfig.uploadedImagesDir);
-  if (!fullPath.startsWith(uploadedRoot + path10.sep)) {
+  const fullPath = path12.resolve(appConfig.uploadedImagesDir, safeName);
+  const uploadedRoot = path12.resolve(appConfig.uploadedImagesDir);
+  if (!fullPath.startsWith(uploadedRoot + path12.sep)) {
     return null;
   }
-  const stat = await fs10.promises.stat(fullPath).catch(() => null);
+  const stat = await fs12.promises.stat(fullPath).catch(() => null);
   if (!stat || !stat.isFile() || stat.size <= 0) return null;
   const relativePath = `__uploaded__/${safeName}`;
   const existing = db.prepare("SELECT id FROM images WHERE relative_path = ? LIMIT 1").get(relativePath);
@@ -7897,11 +8493,11 @@ async function runBackgroundThumbnailMigration() {
     const updateStmt = db.prepare("UPDATE images SET thumbnail_path = ? WHERE id = ?");
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const expectedThumb = path10.join(appConfig.thumbnailPath, `${row.content_hash}.webp`);
-      const thumbExists = fs10.existsSync(expectedThumb);
+      const expectedThumb = path12.join(appConfig.thumbnailPath, `${row.content_hash}.webp`);
+      const thumbExists = fs12.existsSync(expectedThumb);
       if (forceRebuildAll || !thumbExists || row.thumbnail_path !== expectedThumb) {
         const origPath = resolveImageDiskPath(row);
-        if (fs10.existsSync(origPath)) {
+        if (fs12.existsSync(origPath)) {
           const { thumbPath } = await ensureWebpThumbnail(origPath, row.content_hash, forceRebuildAll);
           if (thumbPath && row.thumbnail_path !== thumbPath) {
             updateStmt.run(thumbPath, row.id);
@@ -8096,17 +8692,17 @@ var init_scannerPersistenceHelpers = __esm({
 });
 
 // src/server/services/scanner/imageIndexer.ts
-import fs11 from "fs";
-import path11 from "path";
-import crypto4 from "crypto";
+import fs13 from "fs";
+import path13 from "path";
+import crypto5 from "crypto";
 async function indexSingleImageFile(fullPath, rootDir, forceMetadataRebuild = false, characterId) {
   try {
-    const stat = await fs11.promises.stat(fullPath);
+    const stat = await fs13.promises.stat(fullPath);
     if (!stat.isFile()) return { outcome: "unchanged", imageId: null, contentHash: null };
-    const ext = path11.extname(fullPath).toLowerCase();
+    const ext = path13.extname(fullPath).toLowerCase();
     if (!SUPPORTED_EXTENSIONS.has(ext)) return { outcome: "unchanged", imageId: null, contentHash: null };
-    const relativePath = path11.relative(rootDir, fullPath).replace(/\\/g, "/");
-    const filename = path11.basename(fullPath);
+    const relativePath = path13.relative(rootDir, fullPath).replace(/\\/g, "/");
+    const filename = path13.basename(fullPath);
     const mtimeIso = stat.mtime.toISOString();
     const existingByPath = db.prepare(
       "SELECT id, content_hash, file_size, width, height, file_mtime, is_missing, thumbnail_path FROM images WHERE relative_path = ?"
@@ -8119,7 +8715,7 @@ async function indexSingleImageFile(fullPath, rootDir, forceMetadataRebuild = fa
       return { outcome: "error", imageId: null, contentHash: null };
     }
     if (existingByPath && !forceMetadataRebuild && existingByPath.file_size === stat.size && existingByPath.width > 0 && existingByPath.height > 0 && existingByPath.file_mtime === mtimeIso && existingByPath.is_missing === 0) {
-      const expectedThumb = path11.join(appConfig.thumbnailPath, `${existingByPath.content_hash}.webp`);
+      const expectedThumb = path13.join(appConfig.thumbnailPath, `${existingByPath.content_hash}.webp`);
       if (!await pathExistsAsync(expectedThumb) || existingByPath.thumbnail_path !== expectedThumb) {
         const { thumbPath: thumbPath2 } = await ensureWebpThumbnail(fullPath, existingByPath.content_hash);
         if (thumbPath2) {
@@ -8220,7 +8816,7 @@ async function indexSingleImageFile(fullPath, rootDir, forceMetadataRebuild = fa
         rawMetadataJson: JSON.stringify(parsed.rawChunks)
       });
       if (parsed.visualWorkflowJson || parsed.apiWorkflowJson) {
-        const wfDigest = crypto4.createHash("sha256").update((parsed.visualWorkflowJson || "") + "||" + (parsed.apiWorkflowJson || "")).digest("hex");
+        const wfDigest = crypto5.createHash("sha256").update((parsed.visualWorkflowJson || "") + "||" + (parsed.apiWorkflowJson || "")).digest("hex");
         db.prepare(
           `INSERT INTO workflows (name, visual_workflow_json, api_workflow_json, workflow_hash)
            VALUES (?, ?, ?, ?)
@@ -8536,9 +9132,9 @@ var init_derivedMetadataService = __esm({
 });
 
 // src/server/services/scanner/directoryScanService.ts
-import fs12 from "fs";
-import path12 from "path";
-import chokidar from "chokidar";
+import fs14 from "fs";
+import path14 from "path";
+import chokidar2 from "chokidar";
 function getActiveScanStatus() {
   if (activeScanJobId) {
     return db.prepare("SELECT * FROM scan_jobs WHERE id = ?").get(activeScanJobId);
@@ -8574,7 +9170,7 @@ async function runDirectoryScan(scanType = "incremental") {
     try {
       for (let i = 0; i < files.length; i++) {
         const filePath = files[i];
-        const rel = path12.relative(rootDir, filePath).replace(/\\/g, "/");
+        const rel = path14.relative(rootDir, filePath).replace(/\\/g, "/");
         seenRelativePaths.add(rel);
         const res = await indexSingleImageFile(
           filePath,
@@ -8601,7 +9197,7 @@ async function runDirectoryScan(scanType = "incremental") {
       for (const row of existingRows) {
         if (row.is_uploaded_reference) {
           const uploadedPath = resolveImageDiskPath(row);
-          if (!fs12.existsSync(uploadedPath)) {
+          if (!fs14.existsSync(uploadedPath)) {
             db.prepare("UPDATE images SET is_missing = 1 WHERE id = ?").run(row.id);
             deleted++;
           }
@@ -8646,8 +9242,8 @@ function startFilesystemWatcher() {
     fsWatcher.close();
   }
   const watchDir = appConfig.comfyuiOutputDir;
-  fs12.mkdirSync(watchDir, { recursive: true });
-  fsWatcher = chokidar.watch(watchDir, {
+  fs14.mkdirSync(watchDir, { recursive: true });
+  fsWatcher = chokidar2.watch(watchDir, {
     ignoreInitial: true,
     persistent: true,
     awaitWriteFinish: {
@@ -8668,7 +9264,7 @@ function startFilesystemWatcher() {
     }
   });
   fsWatcher.on("unlink", (filePath) => {
-    const rel = path12.relative(watchDir, filePath).replace(/\\/g, "/");
+    const rel = path14.relative(watchDir, filePath).replace(/\\/g, "/");
     db.prepare("UPDATE images SET is_missing = 1 WHERE relative_path = ?").run(rel);
     invalidateStorageUsageStatsCache();
   });
@@ -8736,26 +9332,26 @@ __export(visualTaggerService_exports, {
   tagSingleImageById: () => tagSingleImageById,
   updateVisualTaggerConfig: () => updateVisualTaggerConfig
 });
-import fs13 from "fs";
-import path13 from "path";
+import fs15 from "fs";
+import path15 from "path";
 import { Readable } from "stream";
 import sharp3 from "sharp";
 import * as ort from "onnxruntime-node";
 function getTaggerModelDir() {
-  const dir = path13.join(appConfig.localModelsDir, "wd-vit-tagger-v3");
-  fs13.mkdirSync(dir, { recursive: true });
+  const dir = path15.join(appConfig.localModelsDir, "wd-vit-tagger-v3");
+  fs15.mkdirSync(dir, { recursive: true });
   return dir;
 }
 function getModelOnnxPath() {
-  return path13.join(getTaggerModelDir(), "model.onnx");
+  return path15.join(getTaggerModelDir(), "model.onnx");
 }
 function getTagsCsvPath() {
-  return path13.join(getTaggerModelDir(), "selected_tags.csv");
+  return path15.join(getTaggerModelDir(), "selected_tags.csv");
 }
 function isTaggerModelDownloaded() {
   try {
-    const onnxStat = fs13.statSync(getModelOnnxPath());
-    const csvStat = fs13.statSync(getTagsCsvPath());
+    const onnxStat = fs15.statSync(getModelOnnxPath());
+    const csvStat = fs15.statSync(getTagsCsvPath());
     return onnxStat.size > 1e7 && csvStat.size > 1e4;
   } catch {
     return false;
@@ -8781,10 +9377,10 @@ async function downloadFileWithProgress(url, destPath, onBytes) {
   }
   const res = await fetch(url, { headers, redirect: "follow" });
   if (!res.ok || !res.body) {
-    throw new Error(`Failed to download ${path13.basename(destPath)} (HTTP ${res.status})`);
+    throw new Error(`Failed to download ${path15.basename(destPath)} (HTTP ${res.status})`);
   }
   const contentLength = Number(res.headers.get("content-length") || 0);
-  const fileStream = fs13.createWriteStream(partPath);
+  const fileStream = fs15.createWriteStream(partPath);
   const nodeStream = Readable.fromWeb(res.body);
   await new Promise((resolve, reject) => {
     nodeStream.on("data", (chunk) => {
@@ -8798,7 +9394,7 @@ async function downloadFileWithProgress(url, destPath, onBytes) {
     fileStream.on("finish", resolve);
     nodeStream.pipe(fileStream);
   });
-  fs13.renameSync(partPath, destPath);
+  fs15.renameSync(partPath, destPath);
 }
 async function ensureTaggerModelDownloaded() {
   if (isTaggerModelDownloaded()) return true;
@@ -8810,12 +9406,12 @@ async function ensureTaggerModelDownloaded() {
   try {
     const csvPath = getTagsCsvPath();
     const onnxPath = getModelOnnxPath();
-    if (!fs13.existsSync(csvPath) || fs13.statSync(csvPath).size < 1e4) {
+    if (!fs15.existsSync(csvPath) || fs15.statSync(csvPath).size < 1e4) {
       await downloadFileWithProgress(HF_TAGS_URL, csvPath, (chunk) => {
         downloadedBytes += chunk;
       });
     }
-    if (!fs13.existsSync(onnxPath) || fs13.statSync(onnxPath).size < 1e7) {
+    if (!fs15.existsSync(onnxPath) || fs15.statSync(onnxPath).size < 1e7) {
       let onnxExpectedSet = false;
       await downloadFileWithProgress(HF_MODEL_URL, onnxPath, (chunk, total) => {
         if (!onnxExpectedSet && total > 0) {
@@ -8837,7 +9433,7 @@ async function ensureTaggerModelDownloaded() {
 }
 function loadTagDefinitions() {
   if (tagDefinitions) return tagDefinitions;
-  const raw = fs13.readFileSync(getTagsCsvPath(), "utf-8");
+  const raw = fs15.readFileSync(getTagsCsvPath(), "utf-8");
   const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
   const parsed = [];
   for (let i = 1; i < lines.length; i++) {
@@ -8972,11 +9568,11 @@ async function interrogateImageBufferWithWd14(imageBuffer, customThreshold) {
 }
 function resolveReadableImagePath(imgRow) {
   if (imgRow.thumbnail_path) {
-    const thumbAbs = path13.isAbsolute(imgRow.thumbnail_path) ? imgRow.thumbnail_path : path13.join(appConfig.thumbnailPath, path13.basename(imgRow.thumbnail_path));
-    if (fs13.existsSync(thumbAbs)) return thumbAbs;
+    const thumbAbs = path15.isAbsolute(imgRow.thumbnail_path) ? imgRow.thumbnail_path : path15.join(appConfig.thumbnailPath, path15.basename(imgRow.thumbnail_path));
+    if (fs15.existsSync(thumbAbs)) return thumbAbs;
   }
   const origAbs = resolveImageDiskPath(imgRow);
-  if (fs13.existsSync(origAbs)) return origAbs;
+  if (fs15.existsSync(origAbs)) return origAbs;
   return null;
 }
 async function tagSingleImageById(imageId, forceEvenIfDisabled = false) {
@@ -9192,9 +9788,9 @@ var init_visualTaggerService = __esm({
 });
 
 // src/server/services/civitai/civitaiCreatorModelsService.ts
-import crypto5 from "crypto";
+import crypto6 from "crypto";
 function hashApiKeyShort(apiKey) {
-  return crypto5.createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
+  return crypto6.createHash("sha256").update(apiKey).digest("hex").slice(0, 12);
 }
 function getAppSetting(key) {
   const row = db.prepare(`SELECT value FROM app_settings WHERE key = ?`).get(key);
@@ -10142,7 +10738,7 @@ function hydrateImageRecords(rows) {
   if (rows.length === 0) return [];
   const visualTaggerEnabled = getTaggerSettings().enabled;
   const modelRows = db.prepare(
-    "SELECT id, LOWER(filename) AS lowerFilename, lora_category, is_installed, download_file_path FROM models"
+    "SELECT id, LOWER(filename) AS lowerFilename, name, nickname, lora_category, is_installed, download_file_path FROM models"
   ).all();
   const modelById = /* @__PURE__ */ new Map();
   const modelByLowerName = /* @__PURE__ */ new Map();
@@ -10150,6 +10746,18 @@ function hydrateImageRecords(rows) {
     modelById.set(m.id, m);
     modelByLowerName.set(m.lowerFilename, m);
   }
+  const resolveModelForLora = (l) => {
+    if (l.modelId) {
+      const byId = modelById.get(l.modelId);
+      if (byId) return byId;
+    }
+    const normalized = String(l.loraName || "").replace(/\\/g, "/").toLowerCase();
+    if (!normalized) return void 0;
+    const exact = modelByLowerName.get(normalized);
+    if (exact) return exact;
+    const baseName = normalized.split("/").pop() || normalized;
+    return modelByLowerName.get(baseName);
+  };
   const lorasByImageId = /* @__PURE__ */ new Map();
   const modelsByImageId = /* @__PURE__ */ new Map();
   const charsByHash = /* @__PURE__ */ new Map();
@@ -10174,11 +10782,13 @@ function hydrateImageRecords(rows) {
     lorasByImageId.set(
       single.id,
       rawLoras.map((l) => {
-        const m = (l.modelId ? modelById.get(l.modelId) : void 0) || modelByLowerName.get(String(l.loraName || "").toLowerCase());
+        const m = resolveModelForLora(l);
         const isInstalled = Boolean(m?.is_installed);
         return {
           ...l,
           loraCategory: m?.lora_category || "unclassified",
+          displayName: m?.name || null,
+          nickname: m?.nickname || null,
           isInstalled,
           isDownloadedPendingImport: Boolean(!isInstalled && m?.download_file_path)
         };
@@ -10284,11 +10894,13 @@ function hydrateImageRecords(rows) {
          FROM image_loras`
     ).all();
     for (const l of allLoras) {
-      const m = (l.modelId ? modelById.get(l.modelId) : void 0) || modelByLowerName.get(String(l.loraName || "").toLowerCase());
+      const m = resolveModelForLora(l);
       const isInstalled = Boolean(m?.is_installed);
       const enriched = {
         ...l,
         loraCategory: m?.lora_category || "unclassified",
+        displayName: m?.name || null,
+        nickname: m?.nickname || null,
         isInstalled,
         isDownloadedPendingImport: Boolean(!isInstalled && m?.download_file_path)
       };
@@ -10516,6 +11128,19 @@ function testWordMatch(text, term) {
     return text.toLowerCase().includes(term.toLowerCase());
   }
 }
+function matchesLoraTerm(lora, needle, isQuoted) {
+  if (!needle) return false;
+  if (needle.startsWith("@")) {
+    const nickNeedle = needle.slice(1).trim();
+    if (!nickNeedle || !lora.nickname) return false;
+    return isQuoted ? lora.nickname.toLowerCase().includes(nickNeedle.toLowerCase()) : testWordMatch(lora.nickname, nickNeedle);
+  }
+  if (isQuoted) {
+    const lower = needle.toLowerCase();
+    return lora.loraName.toLowerCase().includes(lower) || (lora.displayName || "").toLowerCase().includes(lower) || (lora.nickname || "").toLowerCase().includes(lower);
+  }
+  return testWordMatch(lora.loraName, needle) || testWordMatch(lora.displayName || "", needle) || testWordMatch(lora.nickname || "", needle);
+}
 function evaluateSinglePredicate(img, predicate) {
   const numMatch = predicate.match(/^(rating|steps|cfg|filesize)\s*(>=|<=|>|<|=)\s*([\d.]+)$/i);
   if (numMatch) {
@@ -10537,7 +11162,13 @@ function evaluateSinglePredicate(img, predicate) {
       return img.characters.some((c) => c.characterName.toLowerCase().includes(val));
     }
     if (key === "lora") {
-      return img.loras.some((l) => l.loraName.toLowerCase().includes(val));
+      const cleanNickVal = val.replace(/^@+/, "");
+      return img.loras.some((l) => {
+        if (val.startsWith("@")) {
+          return Boolean(cleanNickVal && (l.nickname || "").toLowerCase().includes(cleanNickVal));
+        }
+        return l.loraName.toLowerCase().includes(val) || (l.displayName || "").toLowerCase().includes(val) || (l.nickname || "").toLowerCase().includes(val);
+      });
     }
     if (key === "checkpoint" || key === "ckpt" || key === "model") {
       return (img.checkpointName || "").toLowerCase().includes(val);
@@ -10570,13 +11201,16 @@ function evaluateSinglePredicate(img, predicate) {
   const isQuoted = predicate.startsWith('"') && predicate.endsWith('"') && predicate.length >= 2;
   const needle = isQuoted ? predicate.slice(1, -1).trim() : predicate.trim();
   if (!needle) return true;
+  if (needle.startsWith("@")) {
+    return img.loras.some((l) => matchesLoraTerm(l, needle, isQuoted)) || (isQuoted ? (img.positivePrompt || "").toLowerCase().includes(needle.toLowerCase()) : testWordMatch(img.positivePrompt || "", needle));
+  }
   if (isQuoted) {
     const lower = needle.toLowerCase();
-    return (img.positivePrompt || "").toLowerCase().includes(lower) || img.loras.some((l) => l.loraName.toLowerCase().includes(lower)) || img.characters.some((c) => c.characterName.toLowerCase().includes(lower)) || img.tags.some((t) => t.name.toLowerCase().includes(lower)) || (img.visualTags || []).some(
+    return (img.positivePrompt || "").toLowerCase().includes(lower) || img.loras.some((l) => matchesLoraTerm(l, needle, true)) || img.characters.some((c) => c.characterName.toLowerCase().includes(lower)) || img.tags.some((t) => t.name.toLowerCase().includes(lower)) || (img.visualTags || []).some(
       (vt) => vt.tag.toLowerCase().includes(lower) || vt.tag.toLowerCase().replace(/_/g, " ").includes(lower)
     );
   }
-  return testWordMatch(img.positivePrompt || "", needle) || img.loras.some((l) => testWordMatch(l.loraName, needle)) || img.characters.some((c) => testWordMatch(c.characterName, needle)) || img.tags.some((t) => testWordMatch(t.name, needle)) || (img.visualTags || []).some(
+  return testWordMatch(img.positivePrompt || "", needle) || img.loras.some((l) => matchesLoraTerm(l, needle, false)) || img.characters.some((c) => testWordMatch(c.characterName, needle)) || img.tags.some((t) => testWordMatch(t.name, needle)) || (img.visualTags || []).some(
     (vt) => testWordMatch(vt.tag, needle) || testWordMatch(vt.tag.replace(/_/g, " "), needle)
   );
 }
@@ -10841,7 +11475,7 @@ var init_types = __esm({
 });
 
 // src/server/services/workflowCompilerService.ts
-import fs14 from "fs";
+import fs16 from "fs";
 function computeDimensionsFromMegapixels(aspectRatio, megapixels) {
   const mp = Math.max(0.1, Math.min(10, Number(megapixels) || 1));
   const totalPixels = mp * 1e6;
@@ -10878,9 +11512,9 @@ function getExecutableApiGraph(workflowRow) {
     } catch {
     }
   }
-  if (workflowRow.workflow_hash === "default-krea2-turbo-workflow" && fs14.existsSync(PRIMARY_WORKFLOW_PATH2)) {
+  if (workflowRow.workflow_hash === "default-krea2-turbo-workflow" && fs16.existsSync(PRIMARY_WORKFLOW_PATH2)) {
     try {
-      const parsed = JSON.parse(fs14.readFileSync(PRIMARY_WORKFLOW_PATH2, "utf-8"));
+      const parsed = JSON.parse(fs16.readFileSync(PRIMARY_WORKFLOW_PATH2, "utf-8"));
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed.nodes)) {
         return parsed;
       }
@@ -11277,7 +11911,7 @@ function compileWorkflowForGeneration(params) {
   return graph;
 }
 function compileUpscaleWorkflow(params) {
-  const rawJson = fs14.readFileSync(UPSCALE_WORKFLOW_PATH, "utf-8");
+  const rawJson = fs16.readFileSync(UPSCALE_WORKFLOW_PATH, "utf-8");
   const graph = JSON.parse(rawJson);
   const cleanSubfolder = (params.subfolder || "").trim().replace(/^\/+|\/+$/g, "");
   const sourceSuffix = params.sourceType === "input" ? "[input]" : "[output]";
@@ -11328,8 +11962,8 @@ var init_workflowCompilerService = __esm({
 });
 
 // src/server/services/comfyuiService.ts
-import fs15 from "fs";
-import path14 from "path";
+import fs17 from "fs";
+import path16 from "path";
 function formatComfyHistoryError(messages) {
   if (Array.isArray(messages)) {
     for (const msg of messages) {
@@ -11402,8 +12036,8 @@ function pollComfyPromptCompletion(options) {
                 if (!firstOutputSpec) {
                   firstOutputSpec = { filename, subfolder };
                 }
-                const fullPath = path14.join(appConfig.comfyuiOutputDir, subfolder, filename);
-                if (fs15.existsSync(fullPath)) {
+                const fullPath = path16.join(appConfig.comfyuiOutputDir, subfolder, filename);
+                if (fs17.existsSync(fullPath)) {
                   const resIndex = await indexSingleImageFile(
                     fullPath,
                     appConfig.comfyuiOutputDir,
@@ -11807,7 +12441,7 @@ async function submitImageUpscale(params) {
     throw new Error("Image not found.");
   }
   const origPath = resolveImageDiskPath(imgRow);
-  if (imgRow.is_missing || !fs15.existsSync(origPath)) {
+  if (imgRow.is_missing || !fs17.existsSync(origPath)) {
     throw new Error("Original image file is missing on disk.");
   }
   const conn = await testComfyUiConnection();
@@ -11816,12 +12450,12 @@ async function submitImageUpscale(params) {
   }
   const targetMp = Math.max(0.5, Math.min(10, Number(params.targetMegapixels) || 6));
   let loadFilename = imgRow.filename;
-  let loadSubfolder = path14.dirname(imgRow.relative_path) === "." ? "" : path14.dirname(imgRow.relative_path);
+  let loadSubfolder = path16.dirname(imgRow.relative_path) === "." ? "" : path16.dirname(imgRow.relative_path);
   let loadSourceType = "output";
   try {
-    const fileBuf = fs15.readFileSync(origPath);
+    const fileBuf = fs17.readFileSync(origPath);
     const form = new FormData();
-    form.append("image", new Blob([fileBuf]), path14.basename(origPath));
+    form.append("image", new Blob([fileBuf]), path16.basename(origPath));
     form.append("overwrite", "true");
     form.append("type", "input");
     const uploadRes = await fetch(`${appConfig.comfyuiUrl}/upload/image`, {
@@ -11838,7 +12472,7 @@ async function submitImageUpscale(params) {
     }
   } catch {
   }
-  const baseStem = path14.basename(imgRow.filename, path14.extname(imgRow.filename));
+  const baseStem = path16.basename(imgRow.filename, path16.extname(imgRow.filename));
   const upscalePayload = compileUpscaleWorkflow({
     imageFilename: loadFilename,
     subfolder: loadSubfolder,
@@ -11908,8 +12542,8 @@ var init_comfyuiService = __esm({
 });
 
 // src/server/services/civitai/civitaiShareCore.ts
-import fs16 from "fs";
-import path15 from "path";
+import fs18 from "fs";
+import path17 from "path";
 import sharp4 from "sharp";
 function classifyPromptGraphMetadata(promptChunk, workflowChunk) {
   const classTypes = [];
@@ -11950,7 +12584,7 @@ function classifyPromptGraphMetadata(promptChunk, workflowChunk) {
   return { hasNativeMetadata: false, isStandaloneUpscale: hasUpscaleNode };
 }
 async function inspectDiskImageNativeMetadata(diskPath) {
-  if (!diskPath || !fs16.existsSync(diskPath)) {
+  if (!diskPath || !fs18.existsSync(diskPath)) {
     return {
       fileExists: false,
       fileSizeBytes: 0,
@@ -11958,8 +12592,8 @@ async function inspectDiskImageNativeMetadata(diskPath) {
       isStandaloneUpscale: false
     };
   }
-  const stat = fs16.statSync(diskPath);
-  const ext = path15.extname(diskPath).toLowerCase();
+  const stat = fs18.statSync(diskPath);
+  const ext = path17.extname(diskPath).toLowerCase();
   if (ext === ".png") {
     const chunks = readPngTextChunks(diskPath);
     if (chunks.parameters && chunks.parameters.trim().length > 0) {
@@ -12161,7 +12795,7 @@ async function inspectCoreImageShare(imageRow, hasCivitaiKey, allowUncharacteriz
        WHERE it.image_content_hash = ?
        ORDER BY t.name ASC`
   ).all(imageRow.content_hash);
-  const stem = path15.parse(imageRow.filename).name;
+  const stem = path17.parse(imageRow.filename).name;
   const defaultTitle = linkedCharacters.length > 0 ? `${linkedCharacters.map((c) => c.name).join(" & ")} \u2014 ${stem}` : stem;
   return {
     eligibleForContent: exclusionCode === null,
@@ -12174,7 +12808,7 @@ async function inspectCoreImageShare(imageRow, hasCivitaiKey, allowUncharacteriz
     fileSizeBytes,
     width: Number(imageRow.width || 0),
     height: Number(imageRow.height || 0),
-    format: String(imageRow.format || path15.extname(imageRow.filename).replace(/^\./, "")),
+    format: String(imageRow.format || path17.extname(imageRow.filename).replace(/^\./, "")),
     linkedCharacters,
     prefilledTitle: defaultTitle,
     prefilledDescription: metaRow?.positive_prompt ? String(metaRow.positive_prompt).trim() : "",
@@ -12450,8 +13084,8 @@ var init_civitaiShareEligibility = __esm({
 });
 
 // src/server/services/civitai/civitaiImagePayload.ts
-import fs17 from "fs";
-import path16 from "path";
+import fs19 from "fs";
+import path18 from "path";
 import sharp5 from "sharp";
 function crc32(buf) {
   let c = 4294967295;
@@ -12562,7 +13196,7 @@ function buildA1111ParameterText(imageId, width, height) {
   const primaryCkpt = checkpoints[0];
   const ckptName = meta?.checkpoint_name || primaryCkpt?.model_name;
   if (ckptName) {
-    settings.push(`Model: ${quoteInfotextValue(path16.parse(String(ckptName)).name)}`);
+    settings.push(`Model: ${quoteInfotextValue(path18.parse(String(ckptName)).name)}`);
   }
   const ckptHash = primaryCkpt?.autov2_hash || (meta?.checkpoint_hash || primaryCkpt?.model_hash || primaryCkpt?.sha256_hash || "").slice(0, 10);
   if (ckptHash) {
@@ -12590,7 +13224,7 @@ function buildA1111ParameterText(imageId, width, height) {
   for (const l of loras) {
     if (seenRowIds.has(l.row_id)) continue;
     seenRowIds.add(l.row_id);
-    const shortName = path16.parse(l.lora_name).name;
+    const shortName = path18.parse(l.lora_name).name;
     const hash = l.autov2_hash || (l.lora_hash || l.sha256_hash || "").slice(0, 10);
     if (hash) {
       loraHashEntries.push(`${shortName}: ${hash}`);
@@ -12620,8 +13254,8 @@ function buildA1111ParameterText(imageId, width, height) {
 async function prepareCivitaiImagePayload(imageId, diskPath, width, height, uploadMode) {
   const paramText = buildA1111ParameterText(imageId, width, height);
   if (uploadMode === "original_png") {
-    const rawBuffer = fs17.readFileSync(diskPath);
-    const ext = path16.extname(diskPath).toLowerCase();
+    const rawBuffer = fs19.readFileSync(diskPath);
+    const ext = path18.extname(diskPath).toLowerCase();
     const contentType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".webp" ? "image/webp" : "image/png";
     const uploadBuffer = contentType === "image/png" && paramText.trim() ? upsertPngTextChunk(rawBuffer, "parameters", paramText) : rawBuffer;
     return {
@@ -12973,8 +13607,8 @@ __export(imagesRoutes_exports, {
   imagesRouter: () => imagesRouter
 });
 import { Router } from "express";
-import fs18 from "fs";
-import path17 from "path";
+import fs20 from "fs";
+import path19 from "path";
 import * as archiverPkg from "archiver";
 var createZipArchive, imagesRouter;
 var init_imagesRoutes = __esm({
@@ -13060,24 +13694,24 @@ var init_imagesRoutes = __esm({
         res.status(404).end();
         return;
       }
-      const expectedThumbPath = path17.join(appConfig.thumbnailPath, `${row.content_hash}.webp`);
-      if (fs18.existsSync(expectedThumbPath)) {
+      const expectedThumbPath = path19.join(appConfig.thumbnailPath, `${row.content_hash}.webp`);
+      if (fs20.existsSync(expectedThumbPath)) {
         if (row.thumbnail_path !== expectedThumbPath) {
           db.prepare("UPDATE images SET thumbnail_path = ? WHERE id = ?").run(expectedThumbPath, row.id);
         }
         res.setHeader("Content-Type", "image/webp");
         res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-        res.sendFile(path17.resolve(expectedThumbPath));
+        res.sendFile(path19.resolve(expectedThumbPath));
         return;
       }
       const origPath = resolveImageDiskPath(row);
-      if (fs18.existsSync(origPath)) {
+      if (fs20.existsSync(origPath)) {
         const { thumbPath } = await ensureWebpThumbnail(origPath, row.content_hash);
-        if (thumbPath && fs18.existsSync(thumbPath)) {
+        if (thumbPath && fs20.existsSync(thumbPath)) {
           db.prepare("UPDATE images SET thumbnail_path = ? WHERE id = ?").run(thumbPath, row.id);
           res.setHeader("Content-Type", "image/webp");
           res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-          res.sendFile(path17.resolve(thumbPath));
+          res.sendFile(path19.resolve(thumbPath));
           return;
         }
         res.sendFile(origPath);
@@ -13095,7 +13729,7 @@ var init_imagesRoutes = __esm({
         return;
       }
       const origPath = resolveImageDiskPath(row);
-      if (!fs18.existsSync(origPath)) {
+      if (!fs20.existsSync(origPath)) {
         res.status(404).json({ error: "Original file missing on disk" });
         return;
       }
@@ -13271,7 +13905,7 @@ var init_imagesRoutes = __esm({
           ).get(id);
           if (!row) continue;
           const absPath = resolveImageDiskPath(row);
-          if (!fs18.existsSync(absPath)) continue;
+          if (!fs20.existsSync(absPath)) continue;
           let entryName = row.filename;
           if (usedNames.has(entryName)) {
             entryName = `${id}_${row.filename}`;
@@ -14161,19 +14795,19 @@ var init_llmPromptUtils = __esm({
 });
 
 // src/server/services/llm/llmImageAnalysisService.ts
-import crypto6 from "crypto";
-import fs19 from "fs";
-import path18 from "path";
+import crypto7 from "crypto";
+import fs21 from "fs";
+import path20 from "path";
 function archiveUploadedPromptImage1Mp(imageBuffer, mimeHeader) {
   if (!getBoolSetting("save_uploaded_prompt_images", false)) return null;
   try {
-    fs19.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
-    const hashPrefix = crypto6.createHash("sha256").update(imageBuffer).digest("hex").slice(0, 10);
+    fs21.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
+    const hashPrefix = crypto7.createHash("sha256").update(imageBuffer).digest("hex").slice(0, 10);
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const mimeLower = mimeHeader.toLowerCase();
     const ext = mimeLower.includes("png") ? "png" : mimeLower.includes("webp") ? "webp" : "jpg";
     const generatedName = `prompt-1mp-${timestamp}-${hashPrefix}.${ext}`;
-    fs19.writeFileSync(path18.join(appConfig.uploadedImagesDir, generatedName), imageBuffer);
+    fs21.writeFileSync(path20.join(appConfig.uploadedImagesDir, generatedName), imageBuffer);
     invalidateStorageUsageStatsCache();
     return generatedName;
   } catch (err) {
@@ -14577,26 +15211,26 @@ var init_faceAlignmentUtils = __esm({
 });
 
 // src/server/services/faceRecognitionService.ts
-import fs20 from "fs";
-import path19 from "path";
+import fs22 from "fs";
+import path21 from "path";
 import { Readable as Readable2 } from "stream";
 import sharp6 from "sharp";
 import * as ort2 from "onnxruntime-node";
 function getFaceModelDir() {
-  const dir = path19.join(appConfig.localModelsDir, "insightface-buffalo-l");
-  fs20.mkdirSync(dir, { recursive: true });
+  const dir = path21.join(appConfig.localModelsDir, "insightface-buffalo-l");
+  fs22.mkdirSync(dir, { recursive: true });
   return dir;
 }
 function getDetModelPath() {
-  return path19.join(getFaceModelDir(), "det_10g.onnx");
+  return path21.join(getFaceModelDir(), "det_10g.onnx");
 }
 function getRecModelPath() {
-  return path19.join(getFaceModelDir(), "w600k_r50.onnx");
+  return path21.join(getFaceModelDir(), "w600k_r50.onnx");
 }
 function areFaceModelsDownloaded() {
   try {
-    const detStat = fs20.statSync(getDetModelPath());
-    const recStat = fs20.statSync(getRecModelPath());
+    const detStat = fs22.statSync(getDetModelPath());
+    const recStat = fs22.statSync(getRecModelPath());
     return detStat.size > 5e6 && recStat.size > 5e7;
   } catch {
     return false;
@@ -14613,9 +15247,9 @@ async function downloadFileAtomic(urls, destPath) {
       }
       const res = await fetch(url, { headers, redirect: "follow" });
       if (!res.ok || !res.body) {
-        throw new Error(`HTTP ${res.status} downloading ${path19.basename(destPath)}`);
+        throw new Error(`HTTP ${res.status} downloading ${path21.basename(destPath)}`);
       }
-      const fileStream = fs20.createWriteStream(partPath);
+      const fileStream = fs22.createWriteStream(partPath);
       const nodeStream = Readable2.fromWeb(res.body);
       await new Promise((resolve, reject) => {
         nodeStream.on("error", (err) => {
@@ -14626,27 +15260,27 @@ async function downloadFileAtomic(urls, destPath) {
         fileStream.on("finish", resolve);
         nodeStream.pipe(fileStream);
       });
-      fs20.renameSync(partPath, destPath);
+      fs22.renameSync(partPath, destPath);
       return;
     } catch (err) {
       lastErr = err;
       try {
-        if (fs20.existsSync(partPath)) fs20.unlinkSync(partPath);
+        if (fs22.existsSync(partPath)) fs22.unlinkSync(partPath);
       } catch {
       }
     }
   }
-  throw lastErr instanceof Error ? lastErr : new Error(`Failed to download ${path19.basename(destPath)}`);
+  throw lastErr instanceof Error ? lastErr : new Error(`Failed to download ${path21.basename(destPath)}`);
 }
 async function ensureFaceModelsReady() {
   if (areFaceModelsDownloaded() && detSession && recSession) return;
   if (ensureModelsPromise) return ensureModelsPromise;
   ensureModelsPromise = (async () => {
     try {
-      if (!fs20.existsSync(getDetModelPath()) || fs20.statSync(getDetModelPath()).size < 5e6) {
+      if (!fs22.existsSync(getDetModelPath()) || fs22.statSync(getDetModelPath()).size < 5e6) {
         await downloadFileAtomic(MODEL_DOWNLOAD_MIRRORS["det_10g.onnx"], getDetModelPath());
       }
-      if (!fs20.existsSync(getRecModelPath()) || fs20.statSync(getRecModelPath()).size < 5e7) {
+      if (!fs22.existsSync(getRecModelPath()) || fs22.statSync(getRecModelPath()).size < 5e7) {
         await downloadFileAtomic(MODEL_DOWNLOAD_MIRRORS["w600k_r50.onnx"], getRecModelPath());
       }
       if (!detSession) {
@@ -14853,7 +15487,7 @@ async function syncCharacterFaceEmbeddings() {
         relative_path: src.relativePath,
         is_uploaded_reference: src.isUploadedRef
       });
-      if (!fs20.existsSync(diskPath)) continue;
+      if (!fs22.existsSync(diskPath)) continue;
       try {
         const faces = await extractFaceEmbeddings(diskPath, src.sourceKind === "portrait" ? 2 : 3);
         if (faces.length === 0) continue;
@@ -15000,7 +15634,7 @@ __export(charactersRoutes_exports, {
   charactersRouter: () => charactersRouter
 });
 import { Router as Router2 } from "express";
-import fs21 from "fs";
+import fs23 from "fs";
 import sharp7 from "sharp";
 var charactersRouter, updateCharacterHandler;
 var init_charactersRoutes = __esm({
@@ -15225,7 +15859,7 @@ var init_charactersRoutes = __esm({
           return;
         }
         const origPath = resolveImageDiskPath(imgRow);
-        if (!fs21.existsSync(origPath)) {
+        if (!fs23.existsSync(origPath)) {
           res.status(404).json({ error: "Portrait image file is missing on disk." });
           return;
         }
@@ -15476,416 +16110,6 @@ var init_charactersRoutes = __esm({
   }
 });
 
-// src/server/services/modelInventoryService.ts
-var modelInventoryService_exports = {};
-__export(modelInventoryService_exports, {
-  extractComfyObjectInfoChoices: () => extractComfyObjectInfoChoices,
-  listModelInventory: () => listModelInventory,
-  syncModelInventory: () => syncModelInventory,
-  updateLoraMentionConfig: () => updateLoraMentionConfig,
-  updateLoraVisibility: () => updateLoraVisibility,
-  updateModelConfig: () => updateModelConfig,
-  updateModelVisibility: () => updateModelVisibility
-});
-import fs22 from "fs";
-import path20 from "path";
-import crypto7 from "crypto";
-function extractComfyObjectInfoChoices(objectInfo, nodeClass, inputField) {
-  const nodeDef = objectInfo?.[nodeClass];
-  const fieldDef = nodeDef?.input?.required?.[inputField] ?? nodeDef?.input?.optional?.[inputField];
-  if (!Array.isArray(fieldDef)) return [];
-  let rawOptions = null;
-  if (Array.isArray(fieldDef[0])) {
-    rawOptions = fieldDef[0];
-  } else if (fieldDef[0] === "COMBO" && Array.isArray(fieldDef[1]?.options)) {
-    rawOptions = fieldDef[1].options;
-  }
-  if (!rawOptions) return [];
-  return rawOptions.map((v) => String(v ?? "").trim()).filter((v) => Boolean(v) && v !== "None");
-}
-async function computeModelHashesIfFeasible(filePath, size) {
-  if (size > 350 * 1024 * 1024) {
-    return { sha256: null, autov2: null };
-  }
-  try {
-    const data = await fs22.promises.readFile(filePath);
-    const hex = crypto7.createHash("sha256").update(data).digest("hex");
-    return { sha256: hex, autov2: hex.slice(0, 10) };
-  } catch {
-    return { sha256: null, autov2: null };
-  }
-}
-async function syncModelInventory() {
-  const walkModelRoot = async (rootDir, defaultType, includeSubfolderRelPath) => {
-    const found = /* @__PURE__ */ new Map();
-    if (!rootDir) return found;
-    const entries = await walkDirectoryFilesAsync(rootDir, {
-      extensions: MODEL_EXTS,
-      includeStat: true,
-      minSizeBytes: 1,
-      initialModelType: defaultType,
-      modelTypeByDirName: MODEL_DIR_TYPE_MAP
-    });
-    for (const entry of entries) {
-      const key = entry.filename.toLowerCase();
-      if (!found.has(key)) {
-        found.set(key, {
-          fullPath: entry.fullPath,
-          filename: entry.filename,
-          relativeToCategory: includeSubfolderRelPath ? entry.relativeToCategory || entry.filename : entry.filename,
-          modelType: entry.modelType,
-          size: entry.size
-        });
-      }
-    }
-    return found;
-  };
-  const downloadsDirResolved = path20.resolve(appConfig.downloadsDir || "");
-  const comfyDirResolved = path20.resolve(appConfig.comfyuiModelsDir || "");
-  const dirsOverlap = Boolean(downloadsDirResolved && comfyDirResolved) && (downloadsDirResolved === comfyDirResolved || downloadsDirResolved.startsWith(comfyDirResolved + path20.sep));
-  const [comfyModelsDirExists, downloadsDirExists, comfyDiskMap, downloadsDiskMap] = await Promise.all([
-    pathExistsAsync(appConfig.comfyuiModelsDir),
-    pathExistsAsync(appConfig.downloadsDir),
-    walkModelRoot(appConfig.comfyuiModelsDir, "other", true),
-    dirsOverlap ? Promise.resolve(/* @__PURE__ */ new Map()) : walkModelRoot(appConfig.downloadsDir, "lora", false)
-  ]);
-  let comfyApiOnline = false;
-  const comfyApiMap = /* @__PURE__ */ new Map();
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3e3);
-    const res = await fetch(`${appConfig.comfyuiUrl}/object_info`, { signal: controller.signal });
-    clearTimeout(timer);
-    if (res.ok) {
-      comfyApiOnline = true;
-      const objInfo = await res.json();
-      const extractList = (nodeName, inputKey, mType) => {
-        const list = extractComfyObjectInfoChoices(objInfo, nodeName, inputKey);
-        for (const rawEntry of list) {
-          const normalizedRaw = rawEntry.replace(/\\/g, "/").trim();
-          const filename = normalizedRaw.split("/").pop() || normalizedRaw;
-          const key = filename.toLowerCase();
-          if (!comfyApiMap.has(key)) {
-            comfyApiMap.set(key, { filename, rawName: normalizedRaw, modelType: mType });
-          }
-        }
-      };
-      extractList("CheckpointLoaderSimple", "ckpt_name", "checkpoint");
-      extractList("LoraLoader", "lora_name", "lora");
-      extractList("VAELoader", "vae_name", "vae");
-      extractList("ControlNetLoader", "control_net_name", "controlnet");
-      extractList("UpscaleModelLoader", "model_name", "upscaler");
-      extractList("CLIPLoader", "clip_name", "clip");
-      extractList("DualCLIPLoader", "clip_name1", "clip");
-      extractList("DualCLIPLoader", "clip_name2", "clip");
-      extractList("CLIPLoaderGGUF", "clip_name", "clip");
-      extractList("UNETLoader", "unet_name", "diffusion");
-      extractList("UnetLoaderGGUF", "unet_name", "diffusion");
-    }
-  } catch {
-  }
-  const allSeenKeys = /* @__PURE__ */ new Set([
-    ...comfyDiskMap.keys(),
-    ...downloadsDiskMap.keys(),
-    ...comfyApiMap.keys()
-  ]);
-  const verifiedInstalledKeys = /* @__PURE__ */ new Set();
-  const existingByFilename = /* @__PURE__ */ new Map();
-  for (const row of db.prepare("SELECT id, filename, file_size, sha256_hash, autov2_hash FROM models").all()) {
-    existingByFilename.set(String(row.filename).toLowerCase(), row);
-  }
-  for (const key of allSeenKeys) {
-    const comfyDisk = comfyDiskMap.get(key) || null;
-    const dlDisk = downloadsDiskMap.get(key) || null;
-    const apiEntry = comfyApiMap.get(key) || null;
-    const hasCompleteComfyDiskCopy = Boolean(
-      comfyDisk && (!dlDisk || comfyDisk.size === dlDisk.size)
-    );
-    const isComfyAvailable = Boolean(apiEntry || hasCompleteComfyDiskCopy);
-    const primaryDisk = comfyDisk || dlDisk;
-    const canonicalFilename = apiEntry?.filename || primaryDisk?.filename || key;
-    const resolvedType = apiEntry?.modelType || (comfyDisk && comfyDisk.modelType !== "other" ? comfyDisk.modelType : null) || dlDisk?.modelType || "other";
-    const resolvedPath = comfyDisk?.fullPath || dlDisk?.fullPath || null;
-    const resolvedSize = comfyDisk?.size ?? dlDisk?.size ?? null;
-    const comfyuiPath = isComfyAvailable ? apiEntry?.rawName || comfyDisk?.relativeToCategory || canonicalFilename : null;
-    const downloadFilePath = dlDisk?.fullPath || null;
-    const existing = existingByFilename.get(key);
-    let sha256 = existing?.sha256_hash || null;
-    let autov2 = existing?.autov2_hash || null;
-    if (primaryDisk && (!sha256 || existing?.file_size !== primaryDisk.size)) {
-      const computed = await computeModelHashesIfFeasible(primaryDisk.fullPath, primaryDisk.size);
-      sha256 = computed.sha256;
-      autov2 = computed.autov2;
-    }
-    const sourceType = apiEntry && !comfyDisk && !dlDisk ? "comfyui_api" : "filesystem";
-    const installedFlag = isComfyAvailable ? 1 : 0;
-    if (isComfyAvailable) {
-      verifiedInstalledKeys.add(key);
-    }
-    db.prepare(
-      `INSERT INTO models
-        (name, filename, model_type, file_path, file_size, sha256_hash, autov2_hash, is_installed, source_type, comfyui_path, download_file_path, last_seen_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(filename) DO UPDATE SET
-         model_type = CASE WHEN excluded.model_type != 'other' THEN excluded.model_type ELSE models.model_type END,
-         file_path = COALESCE(excluded.file_path, models.file_path),
-         file_size = COALESCE(excluded.file_size, models.file_size),
-         sha256_hash = COALESCE(excluded.sha256_hash, models.sha256_hash),
-         autov2_hash = COALESCE(excluded.autov2_hash, models.autov2_hash),
-         is_installed = excluded.is_installed,
-         source_type = CASE WHEN excluded.source_type = 'filesystem' THEN 'filesystem' ELSE models.source_type END,
-         comfyui_path = excluded.comfyui_path,
-         download_file_path = excluded.download_file_path,
-         last_seen_at = datetime('now')`
-    ).run(
-      canonicalFilename.replace(/\.(safetensors|ckpt|pt|pth|bin|gguf|sft)$/i, ""),
-      canonicalFilename,
-      resolvedType,
-      resolvedPath,
-      resolvedSize,
-      sha256,
-      autov2,
-      installedFlag,
-      sourceType,
-      comfyuiPath,
-      downloadFilePath
-    );
-  }
-  if (comfyModelsDirExists || comfyApiOnline) {
-    for (const key of existingByFilename.keys()) {
-      if (!verifiedInstalledKeys.has(key)) {
-        const dlEntry = downloadsDiskMap.get(key) || null;
-        db.prepare(
-          `UPDATE models
-           SET is_installed = 0,
-               comfyui_path = NULL,
-               download_file_path = ?
-           WHERE LOWER(filename) = ?`
-        ).run(dlEntry?.fullPath || null, key);
-      }
-    }
-  } else if (downloadsDirExists) {
-    for (const key of existingByFilename.keys()) {
-      const dlEntry = downloadsDiskMap.get(key) || null;
-      db.prepare(`UPDATE models SET download_file_path = ? WHERE LOWER(filename) = ?`).run(
-        dlEntry?.fullPath || null,
-        key
-      );
-    }
-  }
-  const allImgIds = db.prepare("SELECT id FROM images WHERE is_missing = 0").all();
-  for (const row of allImgIds) {
-    recomputeImageDependencyStatus(row.id);
-  }
-  invalidateInstalledModelsCache();
-  invalidateStorageUsageStatsCache();
-  return listModelInventory();
-}
-function listModelInventory() {
-  const rows = db.prepare(
-    `
-      SELECT
-        m.*,
-        COUNT(DISTINCT i.id) AS dependentImageCount,
-        COUNT(DISTINCT iw.workflow_id) AS dependentWorkflowCount,
-        AVG(CASE WHEN rt.rating > 0 THEN rt.rating ELSE NULL END) AS avgRating
-      FROM models m
-      LEFT JOIN image_models im ON LOWER(im.model_name) = LOWER(m.filename)
-      LEFT JOIN images i ON i.id = im.image_id AND i.is_missing = 0
-      LEFT JOIN ratings rt ON rt.content_hash = i.content_hash
-      LEFT JOIN image_workflows iw ON iw.image_id = i.id
-      GROUP BY m.id
-      ORDER BY m.is_installed DESC, dependentImageCount DESC, m.filename COLLATE NOCASE ASC
-    `
-  ).all();
-  return rows.map((r) => {
-    const isInstalled = Boolean(r.is_installed);
-    const downloadFilePath = r.download_file_path || null;
-    return {
-      id: r.id,
-      name: r.name,
-      filename: r.filename,
-      modelType: r.model_type,
-      loraCategory: r.lora_category || "unclassified",
-      filePath: r.file_path || null,
-      fileSize: r.file_size ?? null,
-      sha256Hash: r.sha256_hash || null,
-      autov2Hash: r.autov2_hash || null,
-      isInstalled,
-      isDownloadedPendingImport: Boolean(!isInstalled && downloadFilePath),
-      comfyuiPath: r.comfyui_path || null,
-      downloadFilePath,
-      isHidden: Boolean(r.is_hidden),
-      sourceType: r.source_type,
-      downloadUrl: r.download_url || null,
-      civitaiId: r.civitai_id || null,
-      civitaiVersionId: r.civitai_version_id || null,
-      civitaiUrl: r.civitai_url || null,
-      baseModel: r.base_model || null,
-      recommendedWeight: r.recommended_weight !== null && r.recommended_weight !== void 0 ? Number(r.recommended_weight) : null,
-      civitaiDescription: r.civitai_description || null,
-      previewImages: parsePreviewImagesJson(r.preview_images_json, r.id),
-      civitaiFetchedAt: r.civitai_fetched_at || null,
-      hfRepoId: r.hf_repo_id || null,
-      userNotes: r.user_notes || null,
-      nickname: r.nickname || null,
-      mentionEnabled: Boolean(r.mention_enabled),
-      llmDescription: r.llm_description || null,
-      averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
-      lastSeenAt: r.last_seen_at,
-      dependentImageCount: Number(r.dependentImageCount || 0),
-      dependentWorkflowCount: Number(r.dependentWorkflowCount || 0),
-      civitaiCreatorUsername: r.civitai_creator_username || null,
-      isOwnCivitaiUpload: Boolean(r.is_own_civitai_upload),
-      civitaiStats: parseCivitaiStatsJson(r.civitai_stats_json),
-      civitaiComments: parseCivitaiCommentsJson(r.civitai_comments_json),
-      civitaiStatsSyncedAt: r.civitai_stats_synced_at || null
-    };
-  });
-}
-function updateLoraVisibility(loraName, isHidden) {
-  const cleanName = loraName.trim();
-  const hiddenFlag = isHidden ? 1 : 0;
-  db.prepare(
-    `INSERT INTO models (name, filename, model_type, lora_category, is_hidden)
-     VALUES (?, ?, 'lora', 'unclassified', ?)
-     ON CONFLICT(filename) DO UPDATE SET
-       is_hidden = excluded.is_hidden`
-  ).run(cleanName.replace(/\.(safetensors|pt|ckpt)$/i, ""), cleanName, hiddenFlag);
-  invalidateInstalledModelsCache();
-}
-function updateLoraMentionConfig(input) {
-  const {
-    loraName,
-    name,
-    mentionEnabled,
-    nickname,
-    defaultModelStrength,
-    defaultClipStrength,
-    triggerWord,
-    llmDescription
-  } = input;
-  const existingRow = db.prepare(
-    `SELECT id, name, filename, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description
-       FROM models WHERE LOWER(filename) = LOWER(?)`
-  ).get(loraName);
-  let nextName = existingRow?.name ?? loraName.replace(/\.(safetensors|pt|ckpt)$/i, "");
-  if (name !== void 0) {
-    const cleanName = typeof name === "string" ? name.trim() : "";
-    if (!cleanName) {
-      throw new Error("Model name cannot be empty");
-    }
-    nextName = cleanName;
-  }
-  const cleanNick = nickname !== void 0 ? typeof nickname === "string" ? nickname.trim().replace(/^@+/, "").toLowerCase() || null : null : existingRow?.nickname ?? null;
-  if (cleanNick) {
-    const existing = db.prepare(
-      `SELECT filename FROM models WHERE LOWER(nickname) = ? AND LOWER(filename) != LOWER(?)`
-    ).get(cleanNick, loraName);
-    if (existing) {
-      throw new Error(`Nickname "@${cleanNick}" is already assigned to ${existing.filename}`);
-    }
-  }
-  const cleanTriggerWord = triggerWord !== void 0 ? typeof triggerWord === "string" ? triggerWord.trim() || null : null : existingRow?.trigger_word ?? null;
-  const cleanLlmDescription = llmDescription !== void 0 ? typeof llmDescription === "string" ? llmDescription.trim() || null : null : existingRow?.llm_description ?? null;
-  const cleanModelStr = defaultModelStrength !== void 0 && !Number.isNaN(Number(defaultModelStrength)) ? Math.max(-10, Math.min(10, Number(defaultModelStrength))) : existingRow?.default_model_strength ?? 1;
-  const cleanClipStr = defaultClipStrength !== void 0 && !Number.isNaN(Number(defaultClipStrength)) ? Math.max(-10, Math.min(10, Number(defaultClipStrength))) : existingRow?.default_clip_strength ?? 1;
-  const isMention = mentionEnabled !== void 0 ? mentionEnabled ? 1 : 0 : existingRow?.mention_enabled ?? 0;
-  if (existingRow) {
-    db.prepare(
-      `UPDATE models
-       SET name = ?,
-           nickname = ?,
-           mention_enabled = ?,
-           default_model_strength = ?,
-           default_clip_strength = ?,
-           trigger_word = ?,
-           llm_description = ?
-       WHERE id = ?`
-    ).run(
-      nextName,
-      cleanNick,
-      isMention,
-      cleanModelStr,
-      cleanClipStr,
-      cleanTriggerWord,
-      cleanLlmDescription,
-      existingRow.id
-    );
-  } else {
-    db.prepare(
-      `INSERT INTO models (name, filename, model_type, lora_category, nickname, mention_enabled, default_model_strength, default_clip_strength, trigger_word, llm_description)
-       VALUES (?, ?, 'lora', 'unclassified', ?, ?, ?, ?, ?, ?)`
-    ).run(
-      nextName,
-      loraName,
-      cleanNick,
-      isMention,
-      cleanModelStr,
-      cleanClipStr,
-      cleanTriggerWord,
-      cleanLlmDescription
-    );
-  }
-  invalidateInstalledModelsCache();
-}
-function updateModelVisibility(modelId, isHidden) {
-  const result = db.prepare(`UPDATE models SET is_hidden = ? WHERE id = ?`).run(isHidden ? 1 : 0, modelId);
-  if (result.changes === 0) {
-    throw new Error(`Model #${modelId} not found`);
-  }
-  invalidateInstalledModelsCache();
-}
-function updateModelConfig(modelId, input) {
-  const existingRow = db.prepare(
-    `SELECT id, name, filename, nickname, mention_enabled, llm_description, user_notes
-       FROM models WHERE id = ?`
-  ).get(modelId);
-  if (!existingRow) {
-    throw new Error(`Model #${modelId} not found`);
-  }
-  let nextName = existingRow.name;
-  if (input.name !== void 0) {
-    const cleanName = typeof input.name === "string" ? input.name.trim() : "";
-    if (!cleanName) {
-      throw new Error("Model name cannot be empty");
-    }
-    nextName = cleanName;
-  }
-  const cleanNick = input.nickname !== void 0 ? typeof input.nickname === "string" ? input.nickname.trim().replace(/^@+/, "").toLowerCase() || null : null : existingRow.nickname ?? null;
-  if (cleanNick) {
-    const conflict = db.prepare(`SELECT filename FROM models WHERE LOWER(nickname) = ? AND id != ?`).get(cleanNick, modelId);
-    if (conflict) {
-      throw new Error(`Nickname "@${cleanNick}" is already assigned to ${conflict.filename}`);
-    }
-  }
-  const isMention = input.mentionEnabled !== void 0 ? input.mentionEnabled ? 1 : 0 : existingRow.mention_enabled ?? 0;
-  const cleanDetails = input.llmDescription !== void 0 ? typeof input.llmDescription === "string" ? input.llmDescription.trim() || null : null : existingRow.llm_description ?? null;
-  const cleanUserNotes = input.userNotes !== void 0 ? typeof input.userNotes === "string" ? input.userNotes.trim() || null : null : existingRow.user_notes ?? null;
-  db.prepare(
-    `UPDATE models
-     SET name = ?,
-         nickname = ?,
-         mention_enabled = ?,
-         llm_description = ?,
-         user_notes = ?
-     WHERE id = ?`
-  ).run(nextName, cleanNick, isMention, cleanDetails, cleanUserNotes, modelId);
-  invalidateInstalledModelsCache();
-}
-var init_modelInventoryService = __esm({
-  "src/server/services/modelInventoryService.ts"() {
-    init_db();
-    init_config();
-    init_fsWalkService();
-    init_scannerService();
-    init_civitaiHttpAndParse();
-    init_civitaiModelStatsHelper();
-    init_civitaiModelEnrichmentService();
-    init_storageStatsService();
-  }
-});
-
 // src/server/routes/lorasRoutes.ts
 import { Router as Router3 } from "express";
 var lorasRouter;
@@ -15966,8 +16190,8 @@ var init_lorasRoutes = __esm({
 
 // src/server/routes/modelsRoutes.ts
 import { Router as Router4 } from "express";
-import fs23 from "fs";
-import path21 from "path";
+import fs24 from "fs";
+import path22 from "path";
 var modelsRouter;
 var init_modelsRoutes = __esm({
   "src/server/routes/modelsRoutes.ts"() {
@@ -16094,13 +16318,13 @@ var init_modelsRoutes = __esm({
     });
     modelsRouter.get("/models/:id/preview/:filename", (req, res) => {
       const targetPath = resolveSafeModelPreviewPath(req.params.filename);
-      if (!targetPath || !fs23.existsSync(targetPath)) {
+      if (!targetPath || !fs24.existsSync(targetPath)) {
         res.status(404).end();
         return;
       }
       res.setHeader("Content-Type", "image/webp");
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      res.sendFile(path21.resolve(targetPath));
+      res.sendFile(path22.resolve(targetPath));
     });
     modelsRouter.get("/models/:name/impact", (req, res) => {
       try {
@@ -16171,8 +16395,8 @@ var init_modelsRoutes = __esm({
 
 // src/server/services/civitai/civitaiImageShareService.ts
 import crypto8 from "crypto";
-import fs24 from "fs";
-import path22 from "path";
+import fs25 from "fs";
+import path23 from "path";
 import sharp8 from "sharp";
 function clampWeight(val, fallback = 1) {
   const n = Number(val);
@@ -16368,11 +16592,11 @@ async function fetchAndSaveCivitaiInspirationImage(imageUrl) {
     }
     const { data: outBuf, info: outInfo } = await pipeline.jpeg({ quality: 88, mozjpeg: true }).toBuffer({ resolveWithObject: true });
     if (outBuf.length === 0) return null;
-    fs24.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
+    fs25.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
     const hashPrefix = crypto8.createHash("sha256").update(outBuf).digest("hex").slice(0, 10);
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const filename = `civitai-1mp-${timestamp}-${hashPrefix}.jpg`;
-    fs24.writeFileSync(path22.join(appConfig.uploadedImagesDir, filename), outBuf);
+    fs25.writeFileSync(path23.join(appConfig.uploadedImagesDir, filename), outBuf);
     invalidateStorageUsageStatsCache();
     return {
       filename,
@@ -16646,7 +16870,7 @@ var init_civitaiImageShareService = __esm({
 });
 
 // src/server/services/modelSearchService.ts
-import path23 from "path";
+import path24 from "path";
 async function searchCivitaiModels(query, typeFilter) {
   const trimmed = query.trim();
   if (/^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(trimmed)) {
@@ -16839,13 +17063,13 @@ async function searchHuggingFaceModels(query, typeFilter) {
     const availableFiles = [];
     for (const s of siblings) {
       const rfilename = String(s.rfilename || "");
-      const ext = path23.extname(rfilename).toLowerCase();
+      const ext = path24.extname(rfilename).toLowerCase();
       if (!DOWNLOAD_WEIGHT_EXTS.has(ext)) continue;
       const inferred = inferSubfolderAndTypeFromPath(rfilename, tags);
       const encodedPath = rfilename.split("/").map((seg) => encodeURIComponent(seg)).join("/");
       availableFiles.push({
         rfilename,
-        filename: path23.basename(rfilename),
+        filename: path24.basename(rfilename),
         fileSize: typeof s.size === "number" ? s.size : s.lfs?.size ?? null,
         sha256Hash: s.lfs?.oid ? String(s.lfs.oid).toUpperCase() : null,
         downloadUrl: `https://huggingface.co/${repoId}/resolve/main/${encodedPath}`,
@@ -16899,7 +17123,7 @@ async function resolveDirectModelUrl(rawInput) {
       throw new Error(`No supported model weight files found in Hugging Face repo ${hfParsed.repoId}.`);
     }
     const matchedFile = (hfParsed.filePath ? repoData.files.find(
-      (f) => f.rfilename.toLowerCase() === hfParsed.filePath.toLowerCase() || f.filename.toLowerCase() === path23.basename(hfParsed.filePath).toLowerCase()
+      (f) => f.rfilename.toLowerCase() === hfParsed.filePath.toLowerCase() || f.filename.toLowerCase() === path24.basename(hfParsed.filePath).toLowerCase()
     ) : null) || repoData.files[0];
     const suggestedLoraCategory = matchedFile.modelType === "lora" ? classifyLoraFromMetadata({
       name: repoData.repoId,
@@ -16933,8 +17157,8 @@ async function resolveDirectModelUrl(rawInput) {
   }
   if (/^https?:\/\//i.test(input)) {
     const parsedUrl = new URL(input);
-    const rawBasename = decodeURIComponent(path23.basename(parsedUrl.pathname)) || "downloaded_model.safetensors";
-    const cleanFilename = DOWNLOAD_WEIGHT_EXTS.has(path23.extname(rawBasename).toLowerCase()) ? rawBasename : `${rawBasename}.safetensors`;
+    const rawBasename = decodeURIComponent(path24.basename(parsedUrl.pathname)) || "downloaded_model.safetensors";
+    const cleanFilename = DOWNLOAD_WEIGHT_EXTS.has(path24.extname(rawBasename).toLowerCase()) ? rawBasename : `${rawBasename}.safetensors`;
     const inferred = inferSubfolderAndTypeFromPath(parsedUrl.pathname);
     const suggestedLoraCategory = inferred.modelType === "lora" ? classifyLoraFromMetadata({
       name: cleanFilename,
@@ -17526,7 +17750,7 @@ var init_pillSettings = __esm({
 });
 
 // src/server/services/modelDownloadPostProcess.ts
-import path24 from "path";
+import path25 from "path";
 async function finalizeCompletedModelDownload(jobId, params, bytesDownloaded, actualHash, hashVerified) {
   db.prepare(
     `UPDATE download_jobs
@@ -17534,10 +17758,10 @@ async function finalizeCompletedModelDownload(jobId, params, bytesDownloaded, ac
          hash_verified = ?, error_message = NULL, completed_at = datetime('now')
      WHERE id = ?`
   ).run(bytesDownloaded, actualHash, hashVerified ? 1 : 0, jobId);
-  const resolvedDest = path24.resolve(params.destinationPath);
-  const resolvedComfyModels = path24.resolve(appConfig.comfyuiModelsDir || "");
+  const resolvedDest = path25.resolve(params.destinationPath);
+  const resolvedComfyModels = path25.resolve(appConfig.comfyuiModelsDir || "");
   const downloadedDirectlyIntoComfy = Boolean(
-    resolvedComfyModels && (resolvedDest === resolvedComfyModels || resolvedDest.startsWith(resolvedComfyModels + path24.sep))
+    resolvedComfyModels && (resolvedDest === resolvedComfyModels || resolvedDest.startsWith(resolvedComfyModels + path25.sep))
   );
   let resolvedLoraCategory = "unclassified";
   if (params.effectiveModelType === "lora") {
@@ -17648,8 +17872,8 @@ var init_modelDownloadPostProcess = __esm({
 });
 
 // src/server/services/modelDownloadExecutor.ts
-import fs25 from "fs";
-import path25 from "path";
+import fs26 from "fs";
+import path26 from "path";
 import crypto9 from "crypto";
 import { Readable as Readable3 } from "stream";
 function markDownloadJobPending(jobId) {
@@ -17732,7 +17956,7 @@ async function executeDownloadJob(jobId, params) {
   activeDownloadControllers.set(jobId, abortController);
   let fileStream = null;
   try {
-    fs25.mkdirSync(path25.dirname(params.destinationPath), { recursive: true });
+    fs26.mkdirSync(path26.dirname(params.destinationPath), { recursive: true });
     const headers = {};
     if (params.provider === "civitai" && appConfig.civitaiApiKey) {
       headers.Authorization = `Bearer ${appConfig.civitaiApiKey}`;
@@ -17761,7 +17985,7 @@ async function executeDownloadJob(jobId, params) {
     const totalBytes = Number(res.headers.get("content-length") || 0);
     db.prepare("UPDATE download_jobs SET total_bytes = ? WHERE id = ?").run(totalBytes, jobId);
     const hash = crypto9.createHash("sha256");
-    fileStream = fs25.createWriteStream(partPath);
+    fileStream = fs26.createWriteStream(partPath);
     let bytesDownloaded = 0;
     let lastUpdate = Date.now();
     const nodeReadable = Readable3.fromWeb(res.body);
@@ -17793,10 +18017,10 @@ async function executeDownloadJob(jobId, params) {
     const expected = params.expectedHash ? params.expectedHash.trim().toUpperCase() : null;
     const hashVerified = expected ? actualHash === expected || actualHash.startsWith(expected) : true;
     if (expected && !hashVerified) {
-      fs25.unlinkSync(partPath);
+      fs26.unlinkSync(partPath);
       throw new Error(`Hash mismatch: expected ${expected}, got ${actualHash}`);
     }
-    fs25.renameSync(partPath, params.destinationPath);
+    fs26.renameSync(partPath, params.destinationPath);
     await finalizeCompletedModelDownload(jobId, params, bytesDownloaded, actualHash, hashVerified);
   } catch (err) {
     if (fileStream) {
@@ -17805,9 +18029,9 @@ async function executeDownloadJob(jobId, params) {
       } catch {
       }
     }
-    if (fs25.existsSync(partPath)) {
+    if (fs26.existsSync(partPath)) {
       try {
-        fs25.unlinkSync(partPath);
+        fs26.unlinkSync(partPath);
       } catch {
       }
     }
@@ -17846,25 +18070,25 @@ var init_modelDownloadExecutor = __esm({
 });
 
 // src/server/services/modelDownloadConfirmationService.ts
-import fs26 from "fs";
-import path26 from "path";
+import fs27 from "fs";
+import path27 from "path";
 async function startConfirmedModelDownload(params) {
-  const safeFilename = path26.basename(params.filename.trim());
+  const safeFilename = path27.basename(params.filename.trim());
   if (!safeFilename || safeFilename.startsWith(".")) {
     throw new Error("Invalid destination filename.");
   }
   const defaultFolder = MODEL_TYPE_TO_DEFAULT_SUBFOLDER[params.modelType] || "checkpoints";
   const safeSubfolder = (params.subfolder || defaultFolder).replace(/[^a-zA-Z0-9_-]/g, "").toLowerCase();
   const effectiveModelType = SUBFOLDER_TO_MODEL_TYPE[safeSubfolder] || params.modelType;
-  const targetDir = path26.join(appConfig.downloadsDir, safeSubfolder);
-  const resolvedRoot = path26.resolve(appConfig.downloadsDir);
-  const resolvedTargetDir = path26.resolve(targetDir);
+  const targetDir = path27.join(appConfig.downloadsDir, safeSubfolder);
+  const resolvedRoot = path27.resolve(appConfig.downloadsDir);
+  const resolvedTargetDir = path27.resolve(targetDir);
   if (!resolvedTargetDir.startsWith(resolvedRoot)) {
     throw new Error("Destination directory validation failed.");
   }
-  fs26.mkdirSync(resolvedTargetDir, { recursive: true });
-  const destinationPath = path26.join(resolvedTargetDir, safeFilename);
-  if (fs26.existsSync(destinationPath) && !params.allowOverwrite) {
+  fs27.mkdirSync(resolvedTargetDir, { recursive: true });
+  const destinationPath = path27.join(resolvedTargetDir, safeFilename);
+  if (fs27.existsSync(destinationPath) && !params.allowOverwrite) {
     throw new Error(
       `File "${safeFilename}" already exists in ${resolvedTargetDir}. Confirm overwrite explicitly to replace it.`
     );
@@ -17980,8 +18204,8 @@ __export(downloadSchedulerService_exports, {
   runScheduledDownloadNow: () => runScheduledDownloadNow,
   startDownloadScheduler: () => startDownloadScheduler
 });
-import fs27 from "fs";
-import path27 from "path";
+import fs28 from "fs";
+import path28 from "path";
 function parseJobPayload(raw) {
   if (!raw) {
     return { subfolder: "checkpoints", allowOverwrite: false, retryCount: 0 };
@@ -18038,7 +18262,7 @@ async function refreshCivitaiScheduledMetadata(job, payload) {
       freshVer.baseModel,
       domain
     );
-    const targetBasename = path27.basename(String(job.destination_path || "")).toLowerCase();
+    const targetBasename = path28.basename(String(job.destination_path || "")).toLowerCase();
     const matched = files.find((f) => f.filename.toLowerCase() === targetBasename) || files[0];
     if (matched) {
       sourceUrl = matched.downloadUrl;
@@ -18051,8 +18275,8 @@ async function refreshCivitaiScheduledMetadata(job, payload) {
 async function runClaimedScheduledJob(job, skipEarlyAccessRefresh = false) {
   const payload = parseJobPayload(job.payload_json);
   const destinationPath = String(job.destination_path || "");
-  const safeFilename = path27.basename(destinationPath);
-  if (fs27.existsSync(destinationPath) && !payload.allowOverwrite) {
+  const safeFilename = path28.basename(destinationPath);
+  if (fs28.existsSync(destinationPath) && !payload.allowOverwrite) {
     db.prepare(
       `UPDATE download_jobs
        SET status = 'failed', error_message = ?, completed_at = datetime('now')
@@ -18278,8 +18502,8 @@ var init_downloadSchedulerService = __esm({
 });
 
 // src/server/services/modelRedownloadService.ts
-import fs28 from "fs";
-import path28 from "path";
+import fs29 from "fs";
+import path29 from "path";
 async function drainRedownloadQueue() {
   if (isProcessingRedownloadQueue) return;
   isProcessingRedownloadQueue = true;
@@ -18314,7 +18538,7 @@ async function drainRedownloadQueue() {
 function fileExistsWithSize(filePath) {
   if (!filePath || typeof filePath !== "string") return false;
   try {
-    const st = fs28.statSync(filePath);
+    const st = fs29.statSync(filePath);
     return st.isFile() && st.size > 0;
   } catch {
     return false;
@@ -18356,7 +18580,7 @@ function listMissingRedownloadCandidates() {
     `SELECT destination_path FROM download_jobs WHERE status IN ('downloading', 'queued')`
   ).all();
   const activeFilenames = new Set(
-    activeDownloadingJobs.map((j) => path28.basename(String(j.destination_path || "")).toLowerCase()).filter(Boolean)
+    activeDownloadingJobs.map((j) => path29.basename(String(j.destination_path || "")).toLowerCase()).filter(Boolean)
   );
   const allJobs = db.prepare(
     `SELECT * FROM download_jobs
@@ -18366,7 +18590,7 @@ function listMissingRedownloadCandidates() {
   const latestJobByFilename = /* @__PURE__ */ new Map();
   for (const job of allJobs) {
     const dest = String(job.destination_path || "");
-    const fname = path28.basename(dest).toLowerCase();
+    const fname = path29.basename(dest).toLowerCase();
     if (fname && !latestJobByFilename.has(fname)) {
       latestJobByFilename.set(fname, job);
     }
@@ -18380,14 +18604,14 @@ function listMissingRedownloadCandidates() {
   const candidates = /* @__PURE__ */ new Map();
   for (const m of modelsRows) {
     if (m.is_hidden) continue;
-    const safeFilename = path28.basename(String(m.filename || "").trim());
+    const safeFilename = path29.basename(String(m.filename || "").trim());
     if (!safeFilename) continue;
     const key = safeFilename.toLowerCase();
     if (activeFilenames.has(key)) continue;
     const matchingJob = latestJobByFilename.get(key) || null;
     const modelType = m.model_type || "lora";
     const defaultSubfolder = MODEL_TYPE_TO_DEFAULT_SUBFOLDER[modelType] || "loras";
-    const expectedDownloadPath = path28.join(appConfig.downloadsDir, defaultSubfolder, safeFilename);
+    const expectedDownloadPath = path29.join(appConfig.downloadsDir, defaultSubfolder, safeFilename);
     const existsOnDisk = fileExistsWithSize(m.file_path) || fileExistsWithSize(m.download_file_path) || fileExistsWithSize(matchingJob?.destination_path) || fileExistsWithSize(expectedDownloadPath);
     if (existsOnDisk) continue;
     let jobPayload = null;
@@ -18439,7 +18663,7 @@ function listMissingRedownloadCandidates() {
       continue;
     }
     const destPath = String(job.destination_path || "");
-    const safeFilename = path28.basename(destPath);
+    const safeFilename = path29.basename(destPath);
     if (!safeFilename) continue;
     if (fileExistsWithSize(destPath)) continue;
     const existingModel = modelsRows.find((m) => m.filename.toLowerCase() === key);
@@ -18496,9 +18720,9 @@ function listMissingRedownloadCandidates() {
 function createQueuedRedownloadTask(candidate) {
   const safeSubfolder = candidate.subfolder || MODEL_TYPE_TO_DEFAULT_SUBFOLDER[candidate.modelType] || "loras";
   const effectiveModelType = SUBFOLDER_TO_MODEL_TYPE[safeSubfolder] || candidate.modelType;
-  const targetDir = path28.resolve(path28.join(appConfig.downloadsDir, safeSubfolder));
-  fs28.mkdirSync(targetDir, { recursive: true });
-  const destinationPath = path28.join(targetDir, candidate.filename);
+  const targetDir = path29.resolve(path29.join(appConfig.downloadsDir, safeSubfolder));
+  fs29.mkdirSync(targetDir, { recursive: true });
+  const destinationPath = path29.join(targetDir, candidate.filename);
   const payloadJson = JSON.stringify({
     subfolder: safeSubfolder,
     allowOverwrite: true,
@@ -18567,7 +18791,7 @@ function adoptStuckOrOrphanedJobs() {
       continue;
     }
     const destPath = String(row.destination_path || "");
-    const safeFilename = path28.basename(destPath);
+    const safeFilename = path29.basename(destPath);
     if (!safeFilename) continue;
     if (fileExistsWithSize(destPath)) {
       db.prepare(
@@ -18611,12 +18835,12 @@ function startRedownloadMissingModels(options) {
   let candidates = listMissingRedownloadCandidates();
   if (options?.onlyJobId) {
     const targetJob = db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(options.onlyJobId);
-    const targetFname = targetJob ? path28.basename(String(targetJob.destination_path || "")).toLowerCase() : "";
+    const targetFname = targetJob ? path29.basename(String(targetJob.destination_path || "")).toLowerCase() : "";
     candidates = candidates.filter(
       (c) => c.lastJobId === options.onlyJobId || targetFname && c.key === targetFname
     );
   } else if (options?.onlyFilename) {
-    const targetKey = path28.basename(options.onlyFilename.trim()).toLowerCase();
+    const targetKey = path29.basename(options.onlyFilename.trim()).toLowerCase();
     candidates = candidates.filter((c) => c.key === targetKey);
   }
   const createdJobs = [];
@@ -18650,9 +18874,9 @@ function ensureRedownloadQueueRunning() {
 function cleanupPartFilesForJob(destinationPath, jobId) {
   if (!destinationPath) return;
   for (const candidate of [`${destinationPath}.part.${jobId}`, `${destinationPath}.part`]) {
-    if (fs28.existsSync(candidate)) {
+    if (fs29.existsSync(candidate)) {
       try {
-        fs28.unlinkSync(candidate);
+        fs29.unlinkSync(candidate);
       } catch {
       }
     }
@@ -18705,7 +18929,7 @@ var init_modelRedownloadService = __esm({
 
 // src/server/routes/modelDownloadsRoutes.ts
 import { Router as Router5 } from "express";
-import path29 from "path";
+import path30 from "path";
 var modelDownloadsRouter;
 var init_modelDownloadsRoutes = __esm({
   "src/server/routes/modelDownloadsRoutes.ts"() {
@@ -18921,7 +19145,7 @@ var init_modelDownloadsRoutes = __esm({
       const missingByKey = new Set(missingCandidates.map((c) => c.key));
       const enriched = jobs.map((job) => {
         const destPath = typeof job.destination_path === "string" ? job.destination_path : "";
-        const baseName = destPath ? path29.basename(destPath).toLowerCase() : "";
+        const baseName = destPath ? path30.basename(destPath).toLowerCase() : "";
         const matched = (destPath ? byFilePath.get(destPath.toLowerCase()) : void 0) || (baseName ? byFilename.get(baseName) : void 0);
         let firstPreviewUrl = null;
         if (job.provider === "civitai" && matched?.preview_images_json) {
@@ -19295,16 +19519,16 @@ var init_modelsAndWorkflowsRoutes = __esm({
 });
 
 // src/server/services/backupService.ts
-import fs29 from "fs";
-import path30 from "path";
+import fs30 from "fs";
+import path31 from "path";
 async function createDatabaseBackup(label = "manual") {
-  fs29.mkdirSync(appConfig.backupPath, { recursive: true });
+  fs30.mkdirSync(appConfig.backupPath, { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
   const safeLabel = label.replace(/[^a-zA-Z0-9_-]/g, "");
   const filename = `gallery-backup-${safeLabel}-${timestamp}.db`;
-  const destPath = path30.join(appConfig.backupPath, filename);
+  const destPath = path31.join(appConfig.backupPath, filename);
   await db.backup(destPath);
-  const stat = fs29.statSync(destPath);
+  const stat = fs30.statSync(destPath);
   const integrityRow = db.pragma("integrity_check", { simple: true });
   return {
     filename,
@@ -19315,10 +19539,10 @@ async function createDatabaseBackup(label = "manual") {
   };
 }
 function listDatabaseBackups() {
-  if (!fs29.existsSync(appConfig.backupPath)) return [];
-  return fs29.readdirSync(appConfig.backupPath).filter((f) => f.endsWith(".db") || f.endsWith(".json")).map((f) => {
-    const full = path30.join(appConfig.backupPath, f);
-    const stat = fs29.statSync(full);
+  if (!fs30.existsSync(appConfig.backupPath)) return [];
+  return fs30.readdirSync(appConfig.backupPath).filter((f) => f.endsWith(".db") || f.endsWith(".json")).map((f) => {
+    const full = path31.join(appConfig.backupPath, f);
+    const stat = fs30.statSync(full);
     return {
       filename: f,
       sizeBytes: stat.size,
@@ -19506,8 +19730,8 @@ var init_backupService = __esm({
 });
 
 // src/server/services/helpDocsService.ts
-import fs30 from "fs";
-import path31 from "path";
+import fs31 from "fs";
+import path32 from "path";
 function slugifyHeading(raw) {
   return raw.replace(/`([^`]*)`/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/&[a-z0-9#]+;/gi, " ").toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/ /g, "-");
 }
@@ -19529,8 +19753,8 @@ function shiftChapterHeadings(markdown) {
   }).join("\n").trim();
 }
 function listManualChapterFiles(docsDir) {
-  if (!fs30.existsSync(docsDir)) return [];
-  const entries = fs30.readdirSync(docsDir, { withFileTypes: true }).filter((d) => d.isFile() && d.name.toLowerCase().endsWith(".md")).map((d) => d.name);
+  if (!fs31.existsSync(docsDir)) return [];
+  const entries = fs31.readdirSync(docsDir, { withFileTypes: true }).filter((d) => d.isFile() && d.name.toLowerCase().endsWith(".md")).map((d) => d.name);
   if (entries.length === 0) return [];
   const available = new Set(entries);
   const ordered = [];
@@ -19606,9 +19830,9 @@ function loadStitchedManualFromDocs(docsDir) {
   const slugCounts = /* @__PURE__ */ new Map([["couchy-user-manual", 1]]);
   let latestMtimeMs = 0;
   for (const filename of chapterFiles) {
-    const fullPath = path31.join(docsDir, filename);
-    const raw = fs30.readFileSync(fullPath, "utf-8").trim();
-    const stat = fs30.statSync(fullPath);
+    const fullPath = path32.join(docsDir, filename);
+    const raw = fs31.readFileSync(fullPath, "utf-8").trim();
+    const stat = fs31.statSync(fullPath);
     if (stat.mtimeMs > latestMtimeMs) latestMtimeMs = stat.mtimeMs;
     const shifted = shiftChapterHeadings(raw);
     const slug = filename.replace(/\.md$/i, "");
@@ -19642,7 +19866,7 @@ function loadStitchedManualFromDocs(docsDir) {
   };
 }
 function getHelpDocsPayload(rootDir = process.cwd()) {
-  const docsDir = path31.join(rootDir, "docs");
+  const docsDir = path32.join(rootDir, "docs");
   const stitched = loadStitchedManualFromDocs(docsDir);
   if (stitched) {
     const parsed2 = parseReadmeSections(stitched.markdown, stitched.chapterByAnchor);
@@ -19661,12 +19885,12 @@ function getHelpDocsPayload(rootDir = process.cwd()) {
       updatedAt: stitched.updatedAt
     };
   }
-  const readmePath = path31.join(rootDir, "README.md");
-  if (!fs30.existsSync(readmePath)) {
+  const readmePath = path32.join(rootDir, "README.md");
+  if (!fs31.existsSync(readmePath)) {
     throw new Error("Help documentation was not found in docs/ or README.md.");
   }
-  const markdown = fs30.readFileSync(readmePath, "utf-8");
-  const stat = fs30.statSync(readmePath);
+  const markdown = fs31.readFileSync(readmePath, "utf-8");
+  const stat = fs31.statSync(readmePath);
   const parsed = parseReadmeSections(markdown);
   return {
     markdown,
@@ -21756,7 +21980,7 @@ var init_libraryUsageStatsService = __esm({
 });
 
 // src/server/services/readinessService.ts
-import fs31 from "fs";
+import fs32 from "fs";
 function matchesFilename(installedList, target) {
   const cleanTarget = target.trim().replace(/\\/g, "/").toLowerCase();
   if (!cleanTarget) return false;
@@ -21889,7 +22113,7 @@ async function getGenerationReadiness() {
   const imageCount = db.prepare(
     "SELECT COUNT(*) AS c FROM images WHERE is_missing = 0 AND COALESCE(is_uploaded_reference, 0) = 0"
   ).get().c;
-  const outputReadable = fs31.existsSync(appConfig.comfyuiOutputDir);
+  const outputReadable = fs32.existsSync(appConfig.comfyuiOutputDir);
   const scanCheck = {
     id: "library_scan",
     label: "Gallery Output Folder",
@@ -21980,8 +22204,8 @@ __export(systemRoutes_exports, {
   systemRouter: () => systemRouter
 });
 import { Router as Router9 } from "express";
-import fs32 from "fs";
-import path32 from "path";
+import fs33 from "fs";
+import path33 from "path";
 function buildSafeConfigSnapshot() {
   const settingsMap = getSettingsMap([
     "quick_gen_box_enabled",
@@ -22047,10 +22271,10 @@ function validateAbsoluteDirectoryPath(rawPath, fieldName) {
   if (!trimmed || trimmed.includes("\0")) {
     throw new Error(`${fieldName} is invalid.`);
   }
-  if (!path32.isAbsolute(trimmed)) {
+  if (!path33.isAbsolute(trimmed)) {
     throw new Error(`${fieldName} must be an absolute path.`);
   }
-  return path32.resolve(trimmed);
+  return path33.resolve(trimmed);
 }
 var systemRouter;
 var init_systemRoutes = __esm({
@@ -22058,6 +22282,7 @@ var init_systemRoutes = __esm({
     init_db();
     init_config();
     init_scannerService();
+    init_modelWatcherService();
     init_backupService();
     init_visualTaggerService();
     init_modelCleanupService();
@@ -22128,16 +22353,18 @@ var init_systemRoutes = __esm({
           );
         }
         if (nextOutputDir) {
-          fs32.mkdirSync(nextOutputDir, { recursive: true });
+          fs33.mkdirSync(nextOutputDir, { recursive: true });
           appConfig.comfyuiOutputDir = nextOutputDir;
           startFilesystemWatcher();
         }
         if (nextModelsDir) {
-          fs32.mkdirSync(nextModelsDir, { recursive: true });
+          fs33.mkdirSync(nextModelsDir, { recursive: true });
           appConfig.comfyuiModelsDir = nextModelsDir;
+          startModelFilesystemWatcher();
+          scheduleDebouncedModelSync("config-updated", 250);
         }
         if (nextDownloadsDir) {
-          fs32.mkdirSync(nextDownloadsDir, { recursive: true });
+          fs33.mkdirSync(nextDownloadsDir, { recursive: true });
           appConfig.downloadsDir = nextDownloadsDir;
         }
         if (nextBackupHours !== null) {
@@ -24232,7 +24459,7 @@ var init_presetsRoutes = __esm({
 init_config();
 init_logger();
 import express from "express";
-import path33 from "path";
+import path34 from "path";
 async function startServer() {
   const outerApp = express();
   const innerApp = express();
@@ -24304,10 +24531,10 @@ async function startServer() {
       viteServer = viteInstance;
       innerApp.use(viteInstance.middlewares);
     } else {
-      const distPath = path33.join(process.cwd(), "dist");
+      const distPath = path34.join(process.cwd(), "dist");
       innerApp.use(express.static(distPath));
       innerApp.get("*", (_req, res) => {
-        res.sendFile(path33.join(distPath, "index.html"));
+        res.sendFile(path34.join(distPath, "index.html"));
       });
     }
   })();
@@ -24335,17 +24562,20 @@ async function startServer() {
             startFilesystemWatcher: startFilesystemWatcher2
           },
           { syncModelInventory: syncModelInventory2 },
+          { startModelFilesystemWatcher: startModelFilesystemWatcher2 },
+          { ensureComfyUiWsMonitor: ensureComfyUiWsMonitor2 },
           { getTaggerSettings: getTaggerSettings2, isTaggerModelDownloaded: isTaggerModelDownloaded2, startVisualTaggerQueue: startVisualTaggerQueue2 },
           { startDownloadScheduler: startDownloadScheduler2 },
           { scanAndCleanCopiedDownloads: scanAndCleanCopiedDownloads2, startModelCleanupScheduler: startModelCleanupScheduler2 },
           { startLoraHeadshotWatcher: startLoraHeadshotWatcher2 },
           {
-            startCivitaiActivityScheduler: startCivitaiActivityScheduler2,
-            stopCivitaiActivityScheduler: stopCivitaiActivityScheduler2
+            startCivitaiActivityScheduler: startCivitaiActivityScheduler2
           }
         ] = await Promise.all([
           Promise.resolve().then(() => (init_scannerService(), scannerService_exports)),
           Promise.resolve().then(() => (init_modelInventoryService(), modelInventoryService_exports)),
+          Promise.resolve().then(() => (init_modelWatcherService(), modelWatcherService_exports)),
+          Promise.resolve().then(() => (init_comfyuiLiveMonitor(), comfyuiLiveMonitor_exports)),
           Promise.resolve().then(() => (init_visualTaggerService(), visualTaggerService_exports)),
           Promise.resolve().then(() => (init_downloadSchedulerService(), downloadSchedulerService_exports)),
           Promise.resolve().then(() => (init_modelCleanupService(), modelCleanupService_exports)),
@@ -24354,6 +24584,8 @@ async function startServer() {
         ]);
         backfillMissingImagePrompts2(false);
         startFilesystemWatcher2();
+        startModelFilesystemWatcher2();
+        ensureComfyUiWsMonitor2();
         startDownloadScheduler2();
         startLoraHeadshotWatcher2();
         startModelCleanupScheduler2();
@@ -24369,6 +24601,8 @@ async function startServer() {
         }
         reconcileTimer = setInterval(() => {
           runDirectoryScan2("reconcile").catch(() => {
+          });
+          syncModelInventory2().catch(() => {
           });
         }, 5 * 60 * 1e3);
       } catch (err) {
@@ -24387,8 +24621,14 @@ async function startServer() {
   });
   const shutdown = async () => {
     if (reconcileTimer) clearInterval(reconcileTimer);
-    await Promise.resolve().then(() => (init_civitaiActivitySyncService(), civitaiActivitySyncService_exports)).then((m) => m.stopCivitaiActivityScheduler()).catch(() => {
-    });
+    await Promise.all([
+      Promise.resolve().then(() => (init_civitaiActivitySyncService(), civitaiActivitySyncService_exports)).then((m) => m.stopCivitaiActivityScheduler()).catch(() => {
+      }),
+      Promise.resolve().then(() => (init_modelWatcherService(), modelWatcherService_exports)).then((m) => m.stopModelFilesystemWatcher()).catch(() => {
+      }),
+      Promise.resolve().then(() => (init_comfyuiTransportMonitor(), comfyuiTransportMonitor_exports)).then((m) => m.stopComfyUiWsMonitor()).catch(() => {
+      })
+    ]);
     httpServer.close();
     if (viteServer) {
       await viteServer.close().catch(() => {
