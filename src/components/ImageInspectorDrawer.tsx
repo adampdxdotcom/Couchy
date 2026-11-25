@@ -33,8 +33,13 @@ import type {
   QueuedGhostCardItem,
 } from '../shared/types.ts';
 
+import type { InspectorVisibilityFilter } from './inspector/inspectorNavigation.ts';
+
 interface ImageInspectorDrawerProps {
   image: ImageRecord;
+  initialIterationId?: number | null;
+  galleryCards?: ImageRecord[];
+  galleryFilter?: InspectorVisibilityFilter;
   allImages?: ImageRecord[];
   loras?: LoraExplorerItem[];
   models?: ModelInventoryItem[];
@@ -44,6 +49,7 @@ interface ImageInspectorDrawerProps {
   onClose: () => void;
   onPrev?: () => void;
   onNext?: () => void;
+  onSelectGalleryCard?: (cardId: number, iterationId?: number | null) => void;
   onUpdated: () => void | Promise<void>;
   onPushToast?: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
   onRateImage?: (imageId: number, rating: number) => Promise<void> | void;
@@ -86,6 +92,9 @@ function resolveNextUserPresetName(existingPresets: LoraPreset[]): string {
  */
 export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   image,
+  initialIterationId = null,
+  galleryCards = [],
+  galleryFilter,
   allImages = [],
   loras = [],
   models = [],
@@ -95,6 +104,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   onClose,
   onPrev,
   onNext,
+  onSelectGalleryCard,
   onUpdated,
   onPushToast,
   onRateImage,
@@ -164,13 +174,19 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     handleEnterSplitMode,
     handleSwapSplitSlots,
     handleSplitAnnotationRefresh,
+    handlePrevPhoto,
+    handleNextPhoto,
   } = useInspectorState({
     image,
+    initialIterationId,
+    galleryCards,
+    galleryFilter,
     allImages,
     ghostItems,
     onClose,
     onPrev,
     onNext,
+    onSelectGalleryCard,
     onUpdated,
     onRateImage,
     onToggleFavoriteImage,
@@ -497,8 +513,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
             loupeEnabled={loupeEnabled}
             onSetLoupeEnabled={setLoupeEnabled}
             onClose={onClose}
-            onPrev={onPrev}
-            onNext={onNext}
+            onPrev={handlePrevPhoto}
+            onNext={handleNextPhoto}
             onEnterSplitMode={handleEnterSplitMode}
           />
 
@@ -747,8 +763,8 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                     <div className="flex justify-between"><span>Toggle Loupe</span><span className="font-mono text-zinc-400">L</span></div>
                     <div className="flex justify-between"><span>Stack Mini Gallery</span><span className="font-mono text-zinc-400">S</span></div>
                     <div className="flex justify-between"><span>Fullscreen</span><span className="font-mono text-zinc-400">Space</span></div>
-                    <div className="flex justify-between"><span>Next / Prev Card</span><span className="font-mono text-zinc-400">← / →</span></div>
-                    <div className="flex justify-between"><span>Next / Prev Stack Step</span><span className="font-mono text-zinc-400">[ / ]</span></div>
+                    <div className="flex justify-between"><span>Prev / Next Photo</span><span className="font-mono text-zinc-400">← / →</span></div>
+                    <div className="flex justify-between"><span>Prev / Next Stack</span><span className="font-mono text-zinc-400">[ / ]</span></div>
                     <div className="flex justify-between"><span>Close / Exit</span><span className="font-mono text-zinc-400">Esc</span></div>
                   </div>
                 )}

@@ -1,7 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../api/client.ts';
 import { findAttachedGhostsForImage } from '../../shared/utils.ts';
 import { pickDefaultCompareImageId } from './splitCompareUtils.ts';
+import {
+  DEFAULT_INSPECTOR_VISIBILITY_FILTER,
+  getOrderedVisibleSeriesItems,
+  resolveInspectorNavigationTargets,
+  type InspectorPhotoNavTarget,
+  type InspectorVisibilityFilter,
+} from './inspectorNavigation.ts';
 import type { ImageLoraRecord, ImageRecord, QueuedGhostCardItem } from '../../shared/types.ts';
 
 export interface InspectorDetailData {
@@ -39,11 +46,15 @@ export function buildEditableGenParamsFromImage(img: ImageRecord): InspectorEdit
 
 interface UseInspectorStateParams {
   image: ImageRecord;
+  initialIterationId?: number | null;
+  galleryCards?: ImageRecord[];
+  galleryFilter?: InspectorVisibilityFilter;
   allImages: ImageRecord[];
   ghostItems: QueuedGhostCardItem[];
   onClose: () => void;
   onPrev?: () => void;
   onNext?: () => void;
+  onSelectGalleryCard?: (cardId: number, iterationId?: number | null) => void;
   onUpdated: () => void | Promise<void>;
   onRateImage?: (imageId: number, rating: number) => Promise<void> | void;
   onToggleFavoriteImage?: (imageId: number, nextFavorite: boolean) => Promise<void> | void;
@@ -70,11 +81,15 @@ const getSuggestedUpscaleMp = (mp: number): number => {
  */
 export function useInspectorState({
   image,
+  initialIterationId = null,
+  galleryCards = [],
+  galleryFilter,
   allImages,
   ghostItems,
   onClose,
   onPrev,
   onNext,
+  onSelectGalleryCard,
   onUpdated,
   onRateImage,
   onToggleFavoriteImage,
@@ -82,13 +97,25 @@ export function useInspectorState({
   onAdvanceAfterReject,
   onNavigateToImage,
 }: UseInspectorStateParams) {
+  const sortBy = galleryFilter?.sortBy ?? DEFAULT_INSPECTOR_VISIBILITY_FILTER.sortBy;
+  const rejectedMode =
+    galleryFilter?.rejectedMode ?? DEFAULT_INSPECTOR_VISIBILITY_FILTER.rejectedMode;
+  const archivedMode =
+    galleryFilter?.archivedMode ?? DEFAULT_INSPECTOR_VISIBILITY_FILTER.archivedMode;
+  const effectiveGalleryFilter = useMemo<InspectorVisibilityFilter>(
+    () => ({ sortBy, rejectedMode, archivedMode }),
+    [sortBy, rejectedMode, archivedMode]
+  );
   const [isFullScreen, setIsFullScreen] = useState(false);
   const [loupeEnabled, setLoupeEnabled] = useState(false);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [curationFeedback, setCurationFeedback] = useState<InspectorCurationFeedback | null>(null);
   const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [selectedIterationId, setSelectedIterationId] = useState<number>(image.id);
+  const [selectedIterationId, setSelectedIterationId] = useState<number>(
+    initialIterationId ?? image.id
+  );
+  const prevOuterImageIdRef = useRef<number>(image.id);
   const [slotASeriesContextId, setSlotASeriesContextId] = useState<number | null>(
     image.seriesId ?? null
   );
@@ -143,6 +170,8 @@ export function useInspectorState({
               height: matchingSeriesStep.height || image.height,
               isFavorite: matchingSeriesStep.isFavorite,
               rating: matchingSeriesStep.rating,
+              isRejected: Boolean(matchingSeriesStep.isRejected),
+              isArchived: Boolean(matchingSeriesStep.isArchived),
               createdAt: matchingSeriesStep.createdAt || image.createdAt,
               chatSnapshot: matchingSeriesStep.chatSnapshot || [],
               isUploadedReference: Boolean(matchingSeriesStep.isUploadedReference),
@@ -169,6 +198,8 @@ export function useInspectorState({
               height: matchingCompareStep.height || image.height,
               isFavorite: matchingCompareStep.isFavorite,
               rating: matchingCompareStep.rating,
+              isRejected: Boolean(matchingCompareStep.isRejected),
+              isArchived: Boolean(matchingCompareStep.isArchived),
               createdAt: matchingCompareStep.createdAt || image.createdAt,
               chatSnapshot: matchingCompareStep.chatSnapshot || [],
               isUploadedReference: Boolean(matchingCompareStep.isUploadedReference),
@@ -205,32 +236,91 @@ export function useInspectorState({
     };
   }, []);
 
-  // Sync selectedIterationId and reset per-image mode state when outer image prop changes
+  // Sync selectedIterationId and reset per-card mode state when outer card or initial step changes
   useEffect(() => {
-    detailCacheRef.current.clear();
-    setDetailData(null);
-    setSelectedIterationId(image.id);
-    setSlotASeriesContextId(image.seriesId ?? null);
-    setEditablePositivePrompt(image.positivePrompt || '');
-    setEditableLoras(image.loras || []);
-    setEditableGenParams(buildEditableGenParamsFromImage(image));
-    setShowSeriesMiniGallery(false);
-    setIsSplitMode(false);
-    setCompareSelection(null);
-    setCompareDetailImage(null);
-    setShowComparePicker(false);
-  }, [image.id]);
+    const outerChanged = prevOuterImageIdRef.current !== image.id;
+    prevOuterImageIdRef.current = image.id;
+    const targetId = initialIterationId ?? image.id;
 
-  // Background-prefetch adjacent series steps' full-resolution originals for snappy navigation
+    if (outerChanged) {
+      detailCacheRef.current.clear();
+      setDetailData(null);
+      setSlotASeriesContextId(image.seriesId ?? null);
+      setEditablePositivePrompt(image.positivePrompt || '');
+      setEditableLoras(image.loras || []);
+      setEditableGenParams(buildEditableGenParamsFromImage(image));
+      setShowSeriesMiniGallery(false);
+      setIsSplitMode(false);
+      setCompareSelection(null);
+      setCompareDetailImage(null);
+      setShowComparePicker(false);
+    }
+    setSelectedIterationId(targetId);
+  }, [image.id, initialIterationId]);
+
+  const navTargets = useMemo(
+    () =>
+      resolveInspectorNavigationTargets({
+        activeImageId: activeImage.id,
+        activeSeriesItems: knownSeriesItems,
+        cardImageId: image.id,
+        galleryCards,
+        filter: effectiveGalleryFilter,
+      }),
+    [activeImage.id, effectiveGalleryFilter, galleryCards, image.id, knownSeriesItems]
+  );
+
+  const applyPhotoNavTarget = useCallback(
+    (target: InspectorPhotoNavTarget) => {
+      if (target.type === 'step') {
+        setSelectedIterationId(target.imageId);
+      } else if (onSelectGalleryCard) {
+        onSelectGalleryCard(target.cardId, target.iterationId);
+      }
+    },
+    [onSelectGalleryCard]
+  );
+
+  const handlePrevPhoto = useMemo(() => {
+    if (navTargets.prevPhoto) {
+      const target = navTargets.prevPhoto;
+      return () => applyPhotoNavTarget(target);
+    }
+    return onSelectGalleryCard ? undefined : onPrev;
+  }, [applyPhotoNavTarget, navTargets.prevPhoto, onPrev, onSelectGalleryCard]);
+
+  const handleNextPhoto = useMemo(() => {
+    if (navTargets.nextPhoto) {
+      const target = navTargets.nextPhoto;
+      return () => applyPhotoNavTarget(target);
+    }
+    return onSelectGalleryCard ? undefined : onNext;
+  }, [applyPhotoNavTarget, navTargets.nextPhoto, onNext, onSelectGalleryCard]);
+
+  const handlePrevStack = useMemo(() => {
+    if (navTargets.prevStackCardId !== null && onSelectGalleryCard) {
+      const cardId = navTargets.prevStackCardId;
+      return () => onSelectGalleryCard(cardId, null);
+    }
+    return onSelectGalleryCard ? undefined : onPrev;
+  }, [navTargets.prevStackCardId, onPrev, onSelectGalleryCard]);
+
+  const handleNextStack = useMemo(() => {
+    if (navTargets.nextStackCardId !== null && onSelectGalleryCard) {
+      const cardId = navTargets.nextStackCardId;
+      return () => onSelectGalleryCard(cardId, null);
+    }
+    return onSelectGalleryCard ? undefined : onNext;
+  }, [navTargets.nextStackCardId, onNext, onSelectGalleryCard]);
+
+  // Background-prefetch adjacent chronological photos (in-stack or cross-stack) for snappy navigation
   useEffect(() => {
-    const items = activeImage.seriesItems || [];
-    if (items.length <= 1) return;
-    const idx = items.findIndex((it) => it.imageId === activeImage.id);
-    if (idx < 0) return;
+    const neighborUrls = [
+      navTargets.prevPhoto?.originalUrl,
+      navTargets.nextPhoto?.originalUrl,
+    ].filter((url): url is string => Boolean(url));
+    if (neighborUrls.length === 0) return;
 
-    const neighborUrls = [items[idx - 1]?.originalUrl, items[idx + 1]?.originalUrl].filter(
-      (url): url is string => Boolean(url)
-    );
     const preloaders = neighborUrls.map((url) => {
       const preloadImg = new Image();
       preloadImg.referrerPolicy = 'no-referrer';
@@ -242,7 +332,7 @@ export function useInspectorState({
         preloadImg.src = '';
       });
     };
-  }, [activeImage.id, activeImage.seriesItems]);
+  }, [navTargets.prevPhoto?.originalUrl, navTargets.nextPhoto?.originalUrl]);
 
   const refreshActiveDetail = useCallback(
     (
@@ -398,7 +488,18 @@ export function useInspectorState({
 
       if (!nextRejected) {
         setDetailData((prev) =>
-          prev?.image ? { ...prev, image: { ...prev.image, isRejected: false } } : prev
+          prev?.image
+            ? {
+                ...prev,
+                image: {
+                  ...prev.image,
+                  isRejected: false,
+                  seriesItems: prev.image.seriesItems?.map((si) =>
+                    si.imageId === targetId ? { ...si, isRejected: false } : si
+                  ),
+                },
+              }
+            : prev
         );
         showCurationFeedback({ text: 'Restored from Rejected', tone: 'success' });
         if (onRejectImage) {
@@ -411,15 +512,30 @@ export function useInspectorState({
       }
 
       const seriesItems = activeImage.seriesItems || [];
-      const currentStepIdx = seriesItems.findIndex((it) => it.imageId === targetId);
-      const remainingSteps = seriesItems.filter((it) => it.imageId !== targetId);
+      const orderedVisible = getOrderedVisibleSeriesItems(seriesItems, effectiveGalleryFilter);
+      const visibleIdx = orderedVisible.findIndex((it) => it.imageId === targetId);
+      const remainingVisible = orderedVisible.filter((it) => it.imageId !== targetId);
 
-      // If rejecting an individual step within a multi-item stack, move to an adjacent step in the stack
-      if (autoAdvance && remainingSteps.length > 0 && currentStepIdx >= 0) {
+      // If rejecting an individual step within a multi-item stack, move to the next visible chronological step
+      if (autoAdvance && remainingVisible.length > 0 && visibleIdx >= 0) {
         const nextStep =
-          seriesItems[currentStepIdx + 1] || seriesItems[currentStepIdx - 1] || remainingSteps[0];
+          orderedVisible[visibleIdx + 1] || orderedVisible[visibleIdx - 1] || remainingVisible[0];
+        const rawStepIdx = seriesItems.findIndex((it) => it.imageId === targetId);
+        setDetailData((prev) =>
+          prev?.image
+            ? {
+                ...prev,
+                image: {
+                  ...prev.image,
+                  seriesItems: prev.image.seriesItems?.map((si) =>
+                    si.imageId === targetId ? { ...si, isRejected: true } : si
+                  ),
+                },
+              }
+            : prev
+        );
         showCurationFeedback({
-          text: `Rejected Step #${currentStepIdx + 1}`,
+          text: `Rejected Step #${rawStepIdx >= 0 ? rawStepIdx + 1 : visibleIdx + 1}`,
           tone: 'warning',
           undoImageId: targetId,
           undoWasStackStep: true,
@@ -430,7 +546,7 @@ export function useInspectorState({
         return;
       }
 
-      // Rejecting a standalone image (or final step of a stack): auto-advance to next/prev gallery item
+      // Rejecting a standalone image (or final visible step of a stack): auto-advance to next/prev gallery card
       if (autoAdvance && onAdvanceAfterReject) {
         showCurationFeedback({
           text: 'Image rejected',
@@ -449,7 +565,18 @@ export function useInspectorState({
       }
 
       setDetailData((prev) =>
-        prev?.image ? { ...prev, image: { ...prev.image, isRejected: true } } : prev
+        prev?.image
+          ? {
+              ...prev,
+              image: {
+                ...prev.image,
+                isRejected: true,
+                seriesItems: prev.image.seriesItems?.map((si) =>
+                  si.imageId === targetId ? { ...si, isRejected: true } : si
+                ),
+              },
+            }
+          : prev
       );
       showCurationFeedback({
         text: 'Image rejected',
@@ -468,6 +595,7 @@ export function useInspectorState({
       activeImage.id,
       activeImage.isRejected,
       activeImage.seriesItems,
+      effectiveGalleryFilter,
       image.id,
       onAdvanceAfterReject,
       onRejectImage,
@@ -547,29 +675,25 @@ export function useInspectorState({
         return;
       }
 
-      if (e.key === 'ArrowLeft' && onPrev) {
+      if (e.key === 'ArrowLeft' && handlePrevPhoto) {
         e.preventDefault();
-        onPrev();
+        handlePrevPhoto();
         return;
       }
-      if (e.key === 'ArrowRight' && onNext) {
+      if (e.key === 'ArrowRight' && handleNextPhoto) {
         e.preventDefault();
-        onNext();
+        handleNextPhoto();
         return;
       }
 
-      if (e.key === '[' || e.key === ']') {
-        const items = activeImage.seriesItems || [];
-        if (items.length > 1) {
-          const idx = items.findIndex((it) => it.imageId === activeImage.id);
-          if (idx >= 0) {
-            const nextIdx = e.key === '[' ? idx - 1 : idx + 1;
-            if (nextIdx >= 0 && nextIdx < items.length) {
-              e.preventDefault();
-              setSelectedIterationId(items[nextIdx].imageId);
-            }
-          }
-        }
+      if (e.key === '[' && handlePrevStack) {
+        e.preventDefault();
+        handlePrevStack();
+        return;
+      }
+      if (e.key === ']' && handleNextStack) {
+        e.preventDefault();
+        handleNextStack();
         return;
       }
 
@@ -605,8 +729,11 @@ export function useInspectorState({
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [
-    activeImage.id,
     activeImage.seriesItems,
+    handleNextPhoto,
+    handleNextStack,
+    handlePrevPhoto,
+    handlePrevStack,
     handleRateActiveImage,
     handleRejectActiveImage,
     handleToggleFavoriteActiveImage,
@@ -614,8 +741,6 @@ export function useInspectorState({
     isSplitMode,
     matchingPendingGhosts.length,
     onClose,
-    onNext,
-    onPrev,
     showComparePicker,
     showSeriesMiniGallery,
     showShortcutsHelp,
@@ -807,5 +932,9 @@ export function useInspectorState({
     handleEnterSplitMode,
     handleSwapSplitSlots,
     handleSplitAnnotationRefresh,
+    handlePrevPhoto,
+    handleNextPhoto,
+    handlePrevStack,
+    handleNextStack,
   };
 }

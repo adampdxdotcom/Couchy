@@ -30,6 +30,7 @@ export default function App() {
   const [layout, setLayout] = useState<GalleryViewLayout>('standard');
   const [thumbScale, setThumbScale] = useState<'sm' | 'md' | 'lg'>('md');
   const [inspectedImageId, setInspectedImageId] = useState<number | null>(null);
+  const [inspectedIterationId, setInspectedIterationId] = useState<number | null>(null);
   const [selectedCharacterId, setSelectedCharacterId] = useState<number | null>(null);
   const [quickGenPrefill, setQuickGenPrefill] = useState<QuickGenPrefill | null>(null);
   const [readiness, setReadiness] = useState<GenerationReadinessResponse | null>(null);
@@ -60,6 +61,14 @@ export default function App() {
     setQuickGenPrefill(null);
   }, []);
 
+  const openInspectedImage = useCallback(
+    (cardId: number | null, iterationId: number | null = null) => {
+      setInspectedImageId(cardId);
+      setInspectedIterationId(cardId === null ? null : iterationId);
+    },
+    []
+  );
+
   const toasts = useAppToasts();
   const workspace = useWorkspaceData();
 
@@ -83,7 +92,16 @@ export default function App() {
     notificationsEnabled: workspace.healthData?.config?.civitaiActivityNotificationsEnabled !== false,
     pushToast: toasts.pushToast,
     onRefreshAll: refreshAll,
-    onOpenImage: (imageId) => setInspectedImageId(imageId),
+    onOpenImage: (imageId) => {
+      const parentCard = workspace.images.find(
+        (c) => c.id === imageId || c.seriesItems?.some((si) => si.imageId === imageId)
+      );
+      if (parentCard) {
+        openInspectedImage(parentCard.id, parentCard.id === imageId ? null : imageId);
+      } else {
+        openInspectedImage(imageId, null);
+      }
+    },
     onFilterGalleryUnseen: () => {
       workspace.setGalleryPage(1);
       workspace.setFilters({
@@ -264,7 +282,7 @@ export default function App() {
               imageActions.setSelectedIds(new Set(workspace.images.map((i) => i.id)))
             }
             onClearSelection={imageActions.handleClearSelection}
-            onOpenInspector={(img) => setInspectedImageId(img.id)}
+            onOpenInspector={(img) => openInspectedImage(img.id)}
             onOpenCharacterGallery={(charId) => {
               setSelectedCharacterId(charId);
               setActiveTab('characters');
@@ -319,7 +337,7 @@ export default function App() {
             selectedCharacterId={selectedCharacterId}
             onSelectCharacterId={setSelectedCharacterId}
             onRefresh={refreshAll}
-            onOpenImage={(img) => setInspectedImageId(img.id)}
+            onOpenImage={(img) => openInspectedImage(img.id)}
             onFilterGalleryByCharacter={(charId, addonFilter) => {
               workspace.setGalleryPage(1);
               workspace.setFilters({
@@ -369,7 +387,7 @@ export default function App() {
             checkpoints={workspace.checkpoints}
             allImages={workspace.allImages}
             onRefreshAll={refreshAll}
-            onOpenImage={(img) => setInspectedImageId(img.id)}
+            onOpenImage={(img) => openInspectedImage(img.id)}
             onOpenSystemSettings={() => {
               setSystemSubTab('lm_studio');
               setActiveTab('system');
@@ -388,7 +406,7 @@ export default function App() {
               workspace.healthData?.config?.civitaiActivityNotificationsEnabled !== false
             }
             onRefresh={refreshAll}
-            onOpenImage={(img) => setInspectedImageId(img.id)}
+            onOpenImage={(img) => openInspectedImage(img.id)}
             onFilterGalleryByLora={(loraFilename) => {
               workspace.setFilters({ ...INITIAL_FILTERS, loras: [loraFilename] });
               setActiveTab('gallery');
@@ -409,7 +427,7 @@ export default function App() {
             loras={workspace.visibleLoras}
             checkpoints={workspace.checkpoints}
             onRefresh={refreshAll}
-            onOpenImage={(img) => setInspectedImageId(img.id)}
+            onOpenImage={(img) => openInspectedImage(img.id)}
             onPushToast={toasts.pushToast}
           />
         )}
@@ -428,6 +446,13 @@ export default function App() {
       {inspectedImage && (
         <ImageInspectorDrawer
           image={inspectedImage}
+          initialIterationId={inspectedIterationId}
+          galleryCards={workspace.images}
+          galleryFilter={{
+            sortBy: workspace.filters.sortBy,
+            rejectedMode: workspace.filters.rejectedMode,
+            archivedMode: workspace.filters.archivedMode,
+          }}
           allImages={workspace.allImages}
           loras={workspace.visibleLoras}
           models={workspace.models}
@@ -435,15 +460,16 @@ export default function App() {
           pillTypeSettings={workspace.pillTypeSettings}
           ghostItems={livePolling.activeGhostItems}
           onCancelGhost={livePolling.cancelGhostJob}
-          onClose={() => setInspectedImageId(null)}
+          onClose={() => openInspectedImage(null)}
+          onSelectGalleryCard={(cardId, iterationId) => openInspectedImage(cardId, iterationId ?? null)}
           onPrev={
             inspectedIdx > 0
-              ? () => setInspectedImageId(workspace.images[inspectedIdx - 1].id)
+              ? () => openInspectedImage(workspace.images[inspectedIdx - 1].id)
               : undefined
           }
           onNext={
             inspectedIdx >= 0 && inspectedIdx < workspace.images.length - 1
-              ? () => setInspectedImageId(workspace.images[inspectedIdx + 1].id)
+              ? () => openInspectedImage(workspace.images[inspectedIdx + 1].id)
               : undefined
           }
           onUpdated={refreshAll}
@@ -451,8 +477,20 @@ export default function App() {
           onRateImage={imageActions.handleQuickRate}
           onToggleFavoriteImage={imageActions.handleQuickFavorite}
           onRejectImage={imageActions.handleQuickReject}
-          onAdvanceAfterReject={imageActions.handleAdvanceAfterReject}
-          onNavigateToImage={(targetId) => setInspectedImageId(targetId)}
+          onAdvanceAfterReject={(rejectedCardId) => {
+            setInspectedIterationId(null);
+            imageActions.handleAdvanceAfterReject(rejectedCardId);
+          }}
+          onNavigateToImage={(targetId) => {
+            const parentCard = workspace.images.find(
+              (c) => c.id === targetId || c.seriesItems?.some((si) => si.imageId === targetId)
+            );
+            if (parentCard) {
+              openInspectedImage(parentCard.id, parentCard.id === targetId ? null : targetId);
+            } else {
+              openInspectedImage(targetId, null);
+            }
+          }}
           onOpenConversation={imageActions.handleOpenConversationForImage}
           onReusePrompt={(img) => imageActions.handleReusePrompt(img, { stackFromSource: true })}
           characters={workspace.characters}

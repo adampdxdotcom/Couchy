@@ -569,6 +569,8 @@ interface RawSeriesMemberRow {
   is_uploaded_reference: number;
   is_favorite: number;
   rating: number;
+  is_rejected: number;
+  is_archived: number;
 }
 
 function normalizeSeriesKind(raw: string | null | undefined): ImageSeriesKind {
@@ -591,6 +593,8 @@ function buildSeriesItemRecord(r: RawSeriesMemberRow): ImageSeriesItem {
     createdAt: r.item_created_at,
     chatSnapshot: parseChatSnapshot(r.chat_snapshot_json),
     isUploadedReference: Boolean(r.is_uploaded_reference),
+    isRejected: Boolean(r.is_rejected),
+    isArchived: Boolean(r.is_archived),
   };
 }
 
@@ -642,7 +646,9 @@ export function enrichSingleImageWithSeries(
          i.filename, i.content_hash, i.width, i.height, i.is_missing,
          COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference,
          COALESCE(r.is_favorite, 0) AS is_favorite,
-         COALESCE(r.rating, 0) AS rating
+         COALESCE(r.rating, 0) AS rating,
+         COALESCE(r.is_rejected, 0) AS is_rejected,
+         COALESCE(r.is_archived, 0) AS is_archived
        FROM image_series_items isi
        JOIN image_series s ON s.id = isi.series_id
        JOIN images i ON i.id = isi.image_id
@@ -682,7 +688,9 @@ export function collapseSeriesInGalleryPool(pool: ImageRecord[]): ImageRecord[] 
          i.filename, i.content_hash, i.width, i.height, i.is_missing,
          COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference,
          COALESCE(r.is_favorite, 0) AS is_favorite,
-         COALESCE(r.rating, 0) AS rating
+         COALESCE(r.rating, 0) AS rating,
+         COALESCE(r.is_rejected, 0) AS is_rejected,
+         COALESCE(r.is_archived, 0) AS is_archived
        FROM image_series_items isi
        JOIN image_series s ON s.id = isi.series_id
        JOIN images i ON i.id = isi.image_id

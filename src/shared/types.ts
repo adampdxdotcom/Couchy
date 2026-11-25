@@ -120,6 +120,8 @@ export interface ImageSeriesItem {
   createdAt: string;
   chatSnapshot: QuickGenChatMessage[];
   isUploadedReference?: boolean;
+  isRejected?: boolean;
+  isArchived?: boolean;
 }
 
 export interface ImageRecord {
