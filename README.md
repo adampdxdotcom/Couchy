@@ -1,3 +1,7 @@
+<p>
+  <img src="./public/android-chrome-512x512-light.png" alt="Couchy" width="128" />
+</p>
+
 # Couchy
 
 A local-first, self-hosted AI image gallery, character organization system, and prompt orchestration studio. Couchy connects directly to your [ComfyUI](https://github.com/comfyanonymous/ComfyUI) instance and an optional OpenAI-compatible Local LLM to generate, organize, tag, and explore images with full metadata provenance.
