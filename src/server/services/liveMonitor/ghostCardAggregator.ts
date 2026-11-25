@@ -2,38 +2,43 @@ import { db } from '../../db.ts';
 import type { QueuedGhostCardItem } from '../../../shared/types.ts';
 import {
   isBatchCancelled,
+  isPromptActiveOrFinishedInComfy,
+  isPromptRecentlySubmitted,
   liveMonitorState,
   resolvePromptProgressState,
 } from './liveMonitorState.ts';
 import { parseLoraNamesJson, toIsoUtc } from './promptGraphUtils.ts';
 import { resolveSeriesTargetForJob } from './seriesTargetResolver.ts';
 
-function isPromptKnownInComfy(pid: string | null): boolean {
-  return Boolean(
-    pid &&
-      (liveMonitorState.runningPromptIds.has(pid) ||
-        liveMonitorState.pendingPromptIds.has(pid) ||
-        liveMonitorState.finishedPromptIds.has(pid))
-  );
-}
-
 /**
- * Skips uncompleted DB jobs that have been idle > 45s while ComfyUI reports an empty queue.
+ * Checks whether an uncompleted DB row is orphaned/stale per prompt ID so an unrelated
+ * running ComfyUI job never resurrects old unfinished rows as fake 'Pending' ghosts.
  */
 function isStaleOrphanedGhostRow(
   status: string,
   hasOutput: boolean,
   pid: string | null,
-  ageSeconds: number
+  ageSeconds: number,
+  hasActiveSiblingInBatch = false
 ): boolean {
-  return (
-    status !== 'completed' &&
-    !hasOutput &&
-    !isPromptKnownInComfy(pid) &&
-    ageSeconds > 45 &&
-    liveMonitorState.runningCount === 0 &&
-    liveMonitorState.queuedCount === 0
-  );
+  if (status === 'completed' || hasOutput) return false;
+  if (isPromptActiveOrFinishedInComfy(pid) || isPromptRecentlySubmitted(pid)) return false;
+
+  // Submitted job with a prompt_id: once we have a live /queue snapshot from ComfyUI,
+  // any prompt_id absent from running/pending/finished past the 20s submit grace window
+  // is gone from ComfyUI even if another unrelated job is currently running.
+  if (pid) {
+    if (liveMonitorState.online && liveMonitorState.lastQueueFetchMs > 0 && ageSeconds > 20) {
+      return true;
+    }
+    return ageSeconds > 45 && liveMonitorState.runningCount === 0 && liveMonitorState.queuedCount === 0;
+  }
+
+  // Unsubmitted pending slot (e.g. progressive multi-shot LLM batch): keep while a sibling in the
+  // same batch is actively tracked in ComfyUI, otherwise expire if stuck or idle.
+  if (hasActiveSiblingInBatch) return false;
+  if (ageSeconds > 180) return true;
+  return ageSeconds > 45 && liveMonitorState.runningCount === 0 && liveMonitorState.queuedCount === 0;
 }
 
 /**
@@ -91,15 +96,34 @@ function collectGenerationBatchGhosts(seenPromptIds: Set<string>): QueuedGhostCa
         )[0].item_id
       : null;
 
-  const validRowsByBatch = new Map<number, any[]>();
+  // Identify batches that have at least one live prompt in ComfyUI so progressive pending siblings stay visible
+  const activeComfyBatchIds = new Set<number>();
   for (const r of rows) {
     const pid: string | null = r.comfyui_prompt_id || null;
-    if (isStaleOrphanedGhostRow(r.status, Boolean(r.output_image_id), pid, Number(r.age_seconds ?? 0))) {
+    if (isPromptActiveOrFinishedInComfy(pid) || isPromptRecentlySubmitted(pid)) {
+      activeComfyBatchIds.add(Number(r.batch_id));
+    }
+  }
+
+  const validRowsByBatch = new Map<number, any[]>();
+  for (const r of rows) {
+    const bid = Number(r.batch_id);
+    if (isBatchCancelled(bid)) continue;
+
+    const pid: string | null = r.comfyui_prompt_id || null;
+    if (
+      isStaleOrphanedGhostRow(
+        r.status,
+        Boolean(r.output_image_id),
+        pid,
+        Number(r.age_seconds ?? 0),
+        activeComfyBatchIds.has(bid)
+      )
+    ) {
       continue;
     }
     if (pid) seenPromptIds.add(pid);
 
-    const bid = Number(r.batch_id);
     const list = validRowsByBatch.get(bid);
     if (list) list.push(r);
     else validRowsByBatch.set(bid, [r]);
@@ -269,10 +293,6 @@ function collectReproductionJobGhosts(
   for (const rj of reproRows) {
     const pid: string | null = rj.comfyui_prompt_id || null;
     if (pid && seenPromptIds.has(pid)) continue;
-    if (isStaleOrphanedGhostRow(rj.status, false, pid, Number(rj.age_seconds ?? 0))) {
-      continue;
-    }
-    if (pid) seenPromptIds.add(pid);
 
     let outputImageId: number | null = null;
     try {
@@ -283,6 +303,13 @@ function collectReproductionJobGhosts(
     } catch {
       outputImageId = null;
     }
+
+    if (
+      isStaleOrphanedGhostRow(rj.status, Boolean(outputImageId), pid, Number(rj.age_seconds ?? 0))
+    ) {
+      continue;
+    }
+    if (pid) seenPromptIds.add(pid);
 
     const queueMeta = pid ? liveMonitorState.queuePromptMetaMap.get(pid) : undefined;
     const { cardState, progressPercent } = resolvePromptProgressState(

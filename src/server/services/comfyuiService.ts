@@ -10,11 +10,14 @@ import {
 } from './scannerService.ts';
 import {
   COUCHY_COMFY_CLIENT_ID,
-  invalidateComfyQueueCache,
+  isPromptActiveOrFinishedInComfy,
   isPromptCancelled,
+  isPromptRecentlySubmitted,
+  markPromptSubmitted,
   notifyImageIndexed,
   registerQueuedPromptSeriesTarget,
 } from './comfyuiLiveMonitor.ts';
+import { liveMonitorState } from './liveMonitor/liveMonitorState.ts';
 import {
   compileUpscaleWorkflow,
   injectGenerationParamsIntoGraph,
@@ -76,6 +79,8 @@ export function pollComfyPromptCompletion(options: PollComfyPromptOptions): void
     onError,
     onTimeout,
   } = options;
+
+  let consecutiveMissingFromQueue = 0;
 
   const tick = (attempt: number) => {
     if (isPromptCancelled(promptId)) {
@@ -161,6 +166,27 @@ export function pollComfyPromptCompletion(options: PollComfyPromptOptions): void
               runDirectoryScan('incremental');
             }
             return;
+          }
+
+          // If ComfyUI has a fresh /queue snapshot (<15s old) and this prompt is absent from both
+          // /history and /queue for 4 consecutive checks (~10s), it was cleared/dropped externally.
+          const hasFreshQueueSnapshot =
+            liveMonitorState.online &&
+            liveMonitorState.lastQueueFetchMs > 0 &&
+            Date.now() - liveMonitorState.lastQueueFetchMs < 15_000;
+          if (
+            attempt >= 10 &&
+            hasFreshQueueSnapshot &&
+            !isPromptRecentlySubmitted(promptId) &&
+            !isPromptActiveOrFinishedInComfy(promptId)
+          ) {
+            consecutiveMissingFromQueue += 1;
+            if (consecutiveMissingFromQueue >= 4) {
+              await onTimeout?.();
+              return;
+            }
+          } else {
+            consecutiveMissingFromQueue = 0;
           }
         }
         tick(attempt + 1);
@@ -573,7 +599,7 @@ export async function submitWorkflowReproduction(params: {
        WHERE id = ?`
     ).run(promptId, jobId);
 
-    invalidateComfyQueueCache();
+    markPromptSubmitted(promptId);
 
     // Lookup confirmed character on source image if present
     let sourceCharacterId: number | null = null;
@@ -608,7 +634,7 @@ export async function submitWorkflowReproduction(params: {
     pollComfyPromptCompletion({
       promptId,
       characterId: sourceCharacterId,
-      maxAttempts: 90,
+      maxAttempts: 480,
       onSuccess: ({ outputImageIds }) => {
         if (params.imageId) {
           for (const derivedId of outputImageIds) {
@@ -632,6 +658,15 @@ export async function submitWorkflowReproduction(params: {
            SET status = 'failed', execution_error = ?, completed_at = datetime('now')
            WHERE id = ?`
         ).run(errMsg, jobId);
+      },
+      onTimeout: () => {
+        db.prepare(
+          `UPDATE reproduction_jobs
+           SET status = 'failed',
+               execution_error = 'Job left ComfyUI queue or timed out before completing',
+               completed_at = datetime('now')
+           WHERE id = ? AND status IN ('queued', 'running')`
+        ).run(jobId);
       },
     });
 
@@ -756,7 +791,7 @@ export async function submitImageUpscale(params: {
     isUpscale: true,
   });
 
-  invalidateComfyQueueCache();
+  markPromptSubmitted(promptId);
   pollComfyPromptCompletion({
     promptId,
     characterId: sourceCharacterId,

@@ -6700,6 +6700,22 @@ function registerQueuedPromptSeriesTarget(promptId, meta) {
 function invalidateComfyQueueCache() {
   liveMonitorState.lastQueueFetchMs = 0;
 }
+function markPromptSubmitted(promptId) {
+  const pid = (promptId || "").trim();
+  if (!pid) return;
+  liveMonitorState.recentlySubmittedPromptIds.set(pid, Date.now());
+  invalidateComfyQueueCache();
+}
+function isPromptRecentlySubmitted(promptId, now = Date.now()) {
+  if (!promptId) return false;
+  const submittedAt = liveMonitorState.recentlySubmittedPromptIds.get(promptId);
+  return submittedAt !== void 0 && now - submittedAt <= RECENT_SUBMIT_GRACE_MS;
+}
+function isPromptActiveOrFinishedInComfy(promptId) {
+  return Boolean(
+    promptId && (liveMonitorState.runningPromptIds.has(promptId) || liveMonitorState.pendingPromptIds.has(promptId) || liveMonitorState.finishedPromptIds.has(promptId))
+  );
+}
 function markPromptsCancelled(promptIds, batchId) {
   const now = Date.now();
   if (typeof batchId === "number" && batchId > 0) {
@@ -6715,6 +6731,7 @@ function markPromptsCancelled(promptIds, batchId) {
     liveMonitorState.finishedPromptIds.delete(pid);
     liveMonitorState.queuePromptMetaMap.delete(pid);
     liveMonitorState.queuePromptSeriesMap.delete(pid);
+    liveMonitorState.recentlySubmittedPromptIds.delete(pid);
     if (liveMonitorState.activePromptId === pid) {
       liveMonitorState.activePromptId = null;
       liveMonitorState.progressPercent = null;
@@ -6788,8 +6805,13 @@ function pruneStaleMonitorEntries(now) {
       liveMonitorState.cancelledBatchIds.delete(bid);
     }
   }
+  for (const [pid, ts] of liveMonitorState.recentlySubmittedPromptIds.entries()) {
+    if (now - ts > RECENT_SUBMIT_GRACE_MS) {
+      liveMonitorState.recentlySubmittedPromptIds.delete(pid);
+    }
+  }
 }
-var COUCHY_COMFY_CLIENT_ID, liveMonitorState;
+var COUCHY_COMFY_CLIENT_ID, liveMonitorState, RECENT_SUBMIT_GRACE_MS;
 var init_liveMonitorState = __esm({
   "src/server/services/liveMonitor/liveMonitorState.ts"() {
     init_logger();
@@ -6816,8 +6838,10 @@ var init_liveMonitorState = __esm({
       workspaceVersion: Date.now(),
       lastError: null,
       cancelledPromptIds: /* @__PURE__ */ new Map(),
-      cancelledBatchIds: /* @__PURE__ */ new Map()
+      cancelledBatchIds: /* @__PURE__ */ new Map(),
+      recentlySubmittedPromptIds: /* @__PURE__ */ new Map()
     };
+    RECENT_SUBMIT_GRACE_MS = 25e3;
   }
 });
 
@@ -7112,13 +7136,18 @@ var init_seriesTargetResolver = __esm({
 });
 
 // src/server/services/liveMonitor/ghostCardAggregator.ts
-function isPromptKnownInComfy(pid) {
-  return Boolean(
-    pid && (liveMonitorState.runningPromptIds.has(pid) || liveMonitorState.pendingPromptIds.has(pid) || liveMonitorState.finishedPromptIds.has(pid))
-  );
-}
-function isStaleOrphanedGhostRow(status, hasOutput, pid, ageSeconds) {
-  return status !== "completed" && !hasOutput && !isPromptKnownInComfy(pid) && ageSeconds > 45 && liveMonitorState.runningCount === 0 && liveMonitorState.queuedCount === 0;
+function isStaleOrphanedGhostRow(status, hasOutput, pid, ageSeconds, hasActiveSiblingInBatch = false) {
+  if (status === "completed" || hasOutput) return false;
+  if (isPromptActiveOrFinishedInComfy(pid) || isPromptRecentlySubmitted(pid)) return false;
+  if (pid) {
+    if (liveMonitorState.online && liveMonitorState.lastQueueFetchMs > 0 && ageSeconds > 20) {
+      return true;
+    }
+    return ageSeconds > 45 && liveMonitorState.runningCount === 0 && liveMonitorState.queuedCount === 0;
+  }
+  if (hasActiveSiblingInBatch) return false;
+  if (ageSeconds > 180) return true;
+  return ageSeconds > 45 && liveMonitorState.runningCount === 0 && liveMonitorState.queuedCount === 0;
 }
 function collectGenerationBatchGhosts(seenPromptIds) {
   const rows = db.prepare(
@@ -7165,14 +7194,28 @@ function collectGenerationBatchGhosts(seenPromptIds) {
   const oldestSubmittedItemId = submittedRows.length > 0 ? [...submittedRows].sort(
     (a, b) => a.batch_id !== b.batch_id ? a.batch_id - b.batch_id : a.item_index - b.item_index
   )[0].item_id : null;
-  const validRowsByBatch = /* @__PURE__ */ new Map();
+  const activeComfyBatchIds = /* @__PURE__ */ new Set();
   for (const r of rows) {
     const pid = r.comfyui_prompt_id || null;
-    if (isStaleOrphanedGhostRow(r.status, Boolean(r.output_image_id), pid, Number(r.age_seconds ?? 0))) {
+    if (isPromptActiveOrFinishedInComfy(pid) || isPromptRecentlySubmitted(pid)) {
+      activeComfyBatchIds.add(Number(r.batch_id));
+    }
+  }
+  const validRowsByBatch = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const bid = Number(r.batch_id);
+    if (isBatchCancelled(bid)) continue;
+    const pid = r.comfyui_prompt_id || null;
+    if (isStaleOrphanedGhostRow(
+      r.status,
+      Boolean(r.output_image_id),
+      pid,
+      Number(r.age_seconds ?? 0),
+      activeComfyBatchIds.has(bid)
+    )) {
       continue;
     }
     if (pid) seenPromptIds.add(pid);
-    const bid = Number(r.batch_id);
     const list = validRowsByBatch.get(bid);
     if (list) list.push(r);
     else validRowsByBatch.set(bid, [r]);
@@ -7313,10 +7356,6 @@ function collectReproductionJobGhosts(seenPromptIds, existingCount) {
   for (const rj of reproRows) {
     const pid = rj.comfyui_prompt_id || null;
     if (pid && seenPromptIds.has(pid)) continue;
-    if (isStaleOrphanedGhostRow(rj.status, false, pid, Number(rj.age_seconds ?? 0))) {
-      continue;
-    }
-    if (pid) seenPromptIds.add(pid);
     let outputImageId = null;
     try {
       const parsedIds = JSON.parse(rj.output_image_ids_json || "[]");
@@ -7326,6 +7365,10 @@ function collectReproductionJobGhosts(seenPromptIds, existingCount) {
     } catch {
       outputImageId = null;
     }
+    if (isStaleOrphanedGhostRow(rj.status, Boolean(outputImageId), pid, Number(rj.age_seconds ?? 0))) {
+      continue;
+    }
+    if (pid) seenPromptIds.add(pid);
     const queueMeta = pid ? liveMonitorState.queuePromptMetaMap.get(pid) : void 0;
     const { cardState, progressPercent } = resolvePromptProgressState(
       pid,
@@ -8319,7 +8362,10 @@ __export(comfyuiLiveMonitor_exports, {
   getComfyUiLiveStatus: () => getComfyUiLiveStatus,
   invalidateComfyQueueCache: () => invalidateComfyQueueCache,
   isBatchCancelled: () => isBatchCancelled,
+  isPromptActiveOrFinishedInComfy: () => isPromptActiveOrFinishedInComfy,
   isPromptCancelled: () => isPromptCancelled,
+  isPromptRecentlySubmitted: () => isPromptRecentlySubmitted,
+  markPromptSubmitted: () => markPromptSubmitted,
   markPromptsCancelled: () => markPromptsCancelled,
   notifyImageIndexed: () => notifyImageIndexed,
   notifyWorkspaceDataChanged: () => notifyWorkspaceDataChanged,
@@ -11991,6 +12037,7 @@ function pollComfyPromptCompletion(options) {
     onError,
     onTimeout
   } = options;
+  let consecutiveMissingFromQueue = 0;
   const tick = (attempt) => {
     if (isPromptCancelled(promptId)) {
       return;
@@ -12067,6 +12114,16 @@ function pollComfyPromptCompletion(options) {
               runDirectoryScan("incremental");
             }
             return;
+          }
+          const hasFreshQueueSnapshot = liveMonitorState.online && liveMonitorState.lastQueueFetchMs > 0 && Date.now() - liveMonitorState.lastQueueFetchMs < 15e3;
+          if (attempt >= 10 && hasFreshQueueSnapshot && !isPromptRecentlySubmitted(promptId) && !isPromptActiveOrFinishedInComfy(promptId)) {
+            consecutiveMissingFromQueue += 1;
+            if (consecutiveMissingFromQueue >= 4) {
+              await onTimeout?.();
+              return;
+            }
+          } else {
+            consecutiveMissingFromQueue = 0;
           }
         }
         tick(attempt + 1);
@@ -12372,7 +12429,7 @@ async function submitWorkflowReproduction(params) {
        SET comfyui_prompt_id = ?, status = 'running'
        WHERE id = ?`
     ).run(promptId, jobId);
-    invalidateComfyQueueCache();
+    markPromptSubmitted(promptId);
     let sourceCharacterId = null;
     let sourceCharacterName = null;
     if (params.imageId) {
@@ -12397,7 +12454,7 @@ async function submitWorkflowReproduction(params) {
     pollComfyPromptCompletion({
       promptId,
       characterId: sourceCharacterId,
-      maxAttempts: 90,
+      maxAttempts: 480,
       onSuccess: ({ outputImageIds }) => {
         if (params.imageId) {
           for (const derivedId of outputImageIds) {
@@ -12421,6 +12478,15 @@ async function submitWorkflowReproduction(params) {
            SET status = 'failed', execution_error = ?, completed_at = datetime('now')
            WHERE id = ?`
         ).run(errMsg, jobId);
+      },
+      onTimeout: () => {
+        db.prepare(
+          `UPDATE reproduction_jobs
+           SET status = 'failed',
+               execution_error = 'Job left ComfyUI queue or timed out before completing',
+               completed_at = datetime('now')
+           WHERE id = ? AND status IN ('queued', 'running')`
+        ).run(jobId);
       }
     });
     return db.prepare("SELECT * FROM reproduction_jobs WHERE id = ?").get(jobId);
@@ -12508,7 +12574,7 @@ async function submitImageUpscale(params) {
     prompt: `Upscale ${imgRow.filename} to ${targetMp.toFixed(1)} MP`,
     isUpscale: true
   });
-  invalidateComfyQueueCache();
+  markPromptSubmitted(promptId);
   pollComfyPromptCompletion({
     promptId,
     characterId: sourceCharacterId,
@@ -12536,6 +12602,7 @@ var init_comfyuiService = __esm({
     init_config();
     init_scannerService();
     init_comfyuiLiveMonitor();
+    init_liveMonitorState();
     init_workflowCompilerService();
     init_seriesService();
   }
@@ -20567,7 +20634,7 @@ function trackGenerationItem(itemId, promptId, characterId, fallbackUpscaleMp, b
                  SET comfyui_prompt_id = ?, output_image_id = COALESCE(?, output_image_id)
                  WHERE id = ?`
               ).run(upData.prompt_id, firstImageId, itemId);
-              invalidateComfyQueueCache();
+              markPromptSubmitted(upData.prompt_id);
               trackGenerationItem(itemId, upData.prompt_id, characterId, void 0, firstImageId);
               return;
             }
@@ -20614,6 +20681,15 @@ function trackGenerationItem(itemId, promptId, characterId, fallbackUpscaleMp, b
         recovery
       });
       notifyImageIndexed();
+    },
+    onTimeout: () => {
+      db.prepare(
+        `UPDATE generation_items
+         SET status = 'failed',
+             error_message = 'Job left ComfyUI queue or timed out before completing',
+             completed_at = datetime('now')
+         WHERE id = ? AND status IN ('pending', 'submitted')`
+      ).run(itemId);
     }
   });
 }
@@ -20689,6 +20765,7 @@ async function submitItemToComfyUi(params) {
        SET comfyui_prompt_id = ?, status = 'submitted'
        WHERE id = ?`
     ).run(promptId, itemId);
+    markPromptSubmitted(promptId);
     trackGenerationItem(
       itemId,
       promptId,

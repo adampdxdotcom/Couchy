@@ -39,6 +39,7 @@ export interface LiveMonitorState {
   lastError: ComfyUiExecutionErrorNotice | null;
   cancelledPromptIds: Map<string, number>;
   cancelledBatchIds: Map<number, number>;
+  recentlySubmittedPromptIds: Map<string, number>;
 }
 
 export const liveMonitorState: LiveMonitorState = {
@@ -64,6 +65,7 @@ export const liveMonitorState: LiveMonitorState = {
   lastError: null,
   cancelledPromptIds: new Map<string, number>(),
   cancelledBatchIds: new Map<number, number>(),
+  recentlySubmittedPromptIds: new Map<string, number>(),
 };
 
 /**
@@ -131,6 +133,37 @@ export function invalidateComfyQueueCache(): void {
   liveMonitorState.lastQueueFetchMs = 0;
 }
 
+const RECENT_SUBMIT_GRACE_MS = 25_000;
+
+/**
+ * Records a freshly submitted ComfyUI prompt_id so ghost-card staleness checks give
+ * ComfyUI's /queue a brief grace window (including for Pass-2 upscales on older DB rows).
+ */
+export function markPromptSubmitted(promptId: string | null | undefined): void {
+  const pid = (promptId || '').trim();
+  if (!pid) return;
+  liveMonitorState.recentlySubmittedPromptIds.set(pid, Date.now());
+  invalidateComfyQueueCache();
+}
+
+export function isPromptRecentlySubmitted(
+  promptId: string | null | undefined,
+  now = Date.now()
+): boolean {
+  if (!promptId) return false;
+  const submittedAt = liveMonitorState.recentlySubmittedPromptIds.get(promptId);
+  return submittedAt !== undefined && now - submittedAt <= RECENT_SUBMIT_GRACE_MS;
+}
+
+export function isPromptActiveOrFinishedInComfy(promptId: string | null | undefined): boolean {
+  return Boolean(
+    promptId &&
+      (liveMonitorState.runningPromptIds.has(promptId) ||
+        liveMonitorState.pendingPromptIds.has(promptId) ||
+        liveMonitorState.finishedPromptIds.has(promptId))
+  );
+}
+
 /**
  * Marks prompts (and an optional batch ID) as explicitly cancelled by the user so
  * pollers stop quietly and ComfyUI interrupt events do not trigger error toasts.
@@ -150,6 +183,7 @@ export function markPromptsCancelled(promptIds: string[], batchId?: number | nul
     liveMonitorState.finishedPromptIds.delete(pid);
     liveMonitorState.queuePromptMetaMap.delete(pid);
     liveMonitorState.queuePromptSeriesMap.delete(pid);
+    liveMonitorState.recentlySubmittedPromptIds.delete(pid);
     if (liveMonitorState.activePromptId === pid) {
       liveMonitorState.activePromptId = null;
       liveMonitorState.progressPercent = null;
@@ -263,6 +297,11 @@ export function pruneStaleMonitorEntries(now: number): void {
   for (const [bid, ts] of liveMonitorState.cancelledBatchIds.entries()) {
     if (now - ts > 5 * 60_000) {
       liveMonitorState.cancelledBatchIds.delete(bid);
+    }
+  }
+  for (const [pid, ts] of liveMonitorState.recentlySubmittedPromptIds.entries()) {
+    if (now - ts > RECENT_SUBMIT_GRACE_MS) {
+      liveMonitorState.recentlySubmittedPromptIds.delete(pid);
     }
   }
 }

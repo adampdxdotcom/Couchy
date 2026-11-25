@@ -6,6 +6,7 @@ import {
   invalidateComfyQueueCache,
   isBatchCancelled,
   markPromptsCancelled,
+  markPromptSubmitted,
   notifyImageIndexed,
   recordComfyExecutionError,
 } from './comfyuiLiveMonitor.ts';
@@ -163,7 +164,7 @@ function trackGenerationItem(
                  SET comfyui_prompt_id = ?, output_image_id = COALESCE(?, output_image_id)
                  WHERE id = ?`
               ).run(upData.prompt_id, firstImageId, itemId);
-              invalidateComfyQueueCache();
+              markPromptSubmitted(upData.prompt_id);
               trackGenerationItem(itemId, upData.prompt_id, characterId, undefined, firstImageId);
               return;
             }
@@ -213,6 +214,15 @@ function trackGenerationItem(
         recovery,
       });
       notifyImageIndexed();
+    },
+    onTimeout: () => {
+      db.prepare(
+        `UPDATE generation_items
+         SET status = 'failed',
+             error_message = 'Job left ComfyUI queue or timed out before completing',
+             completed_at = datetime('now')
+         WHERE id = ? AND status IN ('pending', 'submitted')`
+      ).run(itemId);
     },
   });
 }
@@ -311,6 +321,7 @@ async function submitItemToComfyUi(params: {
        SET comfyui_prompt_id = ?, status = 'submitted'
        WHERE id = ?`
     ).run(promptId, itemId);
+    markPromptSubmitted(promptId);
 
     trackGenerationItem(
       itemId,
