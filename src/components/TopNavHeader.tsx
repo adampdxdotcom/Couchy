@@ -207,9 +207,15 @@ export const TopNavHeader: React.FC<TopNavHeaderProps> = ({
             onSelectTab('gallery');
             setMobileMenuOpenState(false);
           }}
-          className="text-lg font-display font-bold tracking-tight text-zinc-100 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded cursor-pointer py-1"
+          className="inline-flex items-center gap-2 text-lg font-display font-bold tracking-tight text-zinc-100 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded cursor-pointer py-1"
         >
-          Couchy
+          <img
+            src="/android-chrome-192x192-dark.png"
+            alt=""
+            aria-hidden="true"
+            className="w-6 h-6 rounded-md object-contain shrink-0"
+          />
+          <span>Couchy</span>
         </button>
       </div>
 
