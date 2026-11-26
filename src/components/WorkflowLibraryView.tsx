@@ -36,9 +36,11 @@ import {
   type PowerLoraEntry,
 } from './workflows/PowerLoraLoaderEditor.tsx';
 
+import { useScopedGalleryImages } from '../hooks/useScopedGalleryImages.ts';
+
 interface WorkflowLibraryViewProps {
   workflows: WorkflowLibraryItem[];
-  allImages: ImageRecord[];
+  refreshVersion?: number;
   models: ModelInventoryItem[];
   loras: LoraExplorerItem[];
   checkpoints: string[];
@@ -52,7 +54,7 @@ interface WorkflowLibraryViewProps {
  */
 export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
   workflows,
-  allImages,
+  refreshVersion = 0,
   models,
   loras,
   checkpoints,
@@ -62,6 +64,24 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
 }) => {
   const [selectedWfId, setSelectedWfId] = useState<number | null>(null);
   const [selectedWfDetail, setSelectedWfDetail] = useState<any>(null);
+
+  const associatedWorkflowFilter = useMemo(
+    () =>
+      selectedWfDetail?.id
+        ? {
+            workflowId: Number(selectedWfDetail.id),
+            rejectedMode: 'include' as const,
+            archivedMode: 'include' as const,
+            sortBy: 'newest' as const,
+            limit: 6,
+          }
+        : null,
+    [selectedWfDetail?.id]
+  );
+  const { items: associatedWorkflowImages } = useScopedGalleryImages(
+    associatedWorkflowFilter,
+    refreshVersion
+  );
 
   // Editor mode: structured graphical settings vs raw JSON
   const [editorMode, setEditorMode] = useState<'structured' | 'json'>('structured');
@@ -543,10 +563,7 @@ export const WorkflowLibraryView: React.FC<WorkflowLibraryViewProps> = ({
                   Associated Images Using This Workflow
                 </span>
                 <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
-                  {allImages
-                    .filter((i) => i.workflowId === selectedWfDetail.id)
-                    .slice(0, 6)
-                    .map((img) => (
+                  {associatedWorkflowImages.map((img) => (
                       <div
                         key={img.id}
                         onClick={() => onOpenImage(img)}

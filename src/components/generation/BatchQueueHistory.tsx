@@ -1,12 +1,11 @@
 import React from 'react';
 import { Layers, RefreshCw } from 'lucide-react';
-import type { GenerationBatchRecord, ImageRecord } from '../../shared/types.ts';
+import type { GenerationBatchRecord } from '../../shared/types.ts';
 
 export interface BatchQueueHistoryProps {
   batches: GenerationBatchRecord[];
-  allImages: ImageRecord[];
   onRefreshBatches: () => void;
-  onOpenImage: (img: ImageRecord) => void;
+  onOpenImageId: (imageId: number) => void;
 }
 
 /**
@@ -15,9 +14,8 @@ export interface BatchQueueHistoryProps {
  */
 export const BatchQueueHistory: React.FC<BatchQueueHistoryProps> = ({
   batches,
-  allImages,
   onRefreshBatches,
-  onOpenImage,
+  onOpenImageId,
 }) => {
   return (
     <section className="p-5 bg-zinc-900/60 border border-zinc-800/90 rounded-xl space-y-4">
@@ -94,12 +92,7 @@ export const BatchQueueHistory: React.FC<BatchQueueHistoryProps> = ({
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  {batch.items.map((item) => {
-                    const linkedImage = item.outputImageId
-                      ? allImages.find((img) => img.id === item.outputImageId)
-                      : null;
-
-                    return (
+                  {batch.items.map((item) => (
                       <div
                         key={item.id}
                         className="p-2.5 bg-zinc-900/60 border border-zinc-800/90 rounded-lg flex gap-3 items-start"
@@ -108,7 +101,7 @@ export const BatchQueueHistory: React.FC<BatchQueueHistoryProps> = ({
                           <button
                             type="button"
                             onClick={() => {
-                              if (linkedImage) onOpenImage(linkedImage);
+                              if (item.outputImageId) onOpenImageId(item.outputImageId);
                             }}
                             className="w-16 h-16 rounded overflow-hidden bg-zinc-950 border border-zinc-800 shrink-0 cursor-pointer"
                           >
@@ -159,8 +152,7 @@ export const BatchQueueHistory: React.FC<BatchQueueHistoryProps> = ({
                           )}
                         </div>
                       </div>
-                    );
-                  })}
+                  ))}
                 </div>
               </div>
             );

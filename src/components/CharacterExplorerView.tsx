@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client.ts';
+import { useScopedGalleryImages } from '../hooks/useScopedGalleryImages.ts';
 import type {
   CharacterProfile,
   ImageRecord,
@@ -21,7 +22,7 @@ import { MergeCharactersModal } from './character/MergeCharactersModal.tsx';
 
 interface CharacterExplorerViewProps {
   characters: CharacterProfile[];
-  allImages: ImageRecord[];
+  refreshVersion?: number;
   ghostItems?: QueuedGhostCardItem[];
   loras: LoraExplorerItem[];
   models?: ModelInventoryItem[];
@@ -51,7 +52,7 @@ interface CharacterExplorerViewProps {
  */
 export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   characters,
-  allImages,
+  refreshVersion = 0,
   ghostItems = [],
   loras,
   models = [],
@@ -78,22 +79,41 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
     setInternalCharId(nextId);
     onSelectCharacterId?.(nextId);
   };
-  const [optimisticPortraitId, setOptimisticPortraitId] = useState<number | null>(null);
+  const [optimisticPortrait, setOptimisticPortrait] = useState<{
+    id: number;
+    thumbnailUrl: string;
+  } | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showMergeModal, setShowMergeModal] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [selectedSuggestedIds, setSelectedSuggestedIds] = useState<Set<number>>(new Set());
 
   useEffect(() => {
-    setOptimisticPortraitId(null);
+    setOptimisticPortrait(null);
     setSelectedSuggestedIds(new Set());
   }, [selectedCharId]);
 
   useEffect(() => {
-    setOptimisticPortraitId(null);
+    setOptimisticPortrait(null);
   }, [characters]);
 
   const selectedCharacter = characters.find((c) => c.id === selectedCharId) || null;
+
+  // Fetch only this character's non-rejected confirmed & suggested images on demand
+  const scopedFilter = useMemo(
+    () =>
+      selectedCharacter
+        ? {
+            characterIds: [selectedCharacter.id],
+            includeSuggestedCharacters: true,
+            rejectedMode: 'exclude' as const,
+            archivedMode: 'include' as const,
+            sortBy: 'newest' as const,
+          }
+        : null,
+    [selectedCharacter?.id]
+  );
+  const { items: characterImages } = useScopedGalleryImages(scopedFilter, refreshVersion);
 
   const handleCreateCharacter = async (data: {
     name: string;
@@ -138,7 +158,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
 
   const handleSetPortrait = async (img: ImageRecord) => {
     if (!selectedCharacter) return;
-    setOptimisticPortraitId(img.id);
+    setOptimisticPortrait({ id: img.id, thumbnailUrl: img.thumbnailUrl });
     try {
       await api.updateCharacter(selectedCharacter.id, {
         portraitImageId: img.id,
@@ -151,7 +171,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
       setTimeout(() => setStatusMessage(null), 3000);
     } catch (err: any) {
       console.error('Failed to set character portrait:', err);
-      setOptimisticPortraitId(null);
+      setOptimisticPortrait(null);
       setStatusMessage('Failed to set character portrait.');
       if (onPushToast) {
         onPushToast('Failed to set character portrait', 'error');
@@ -162,14 +182,14 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
 
   // Detailed Character Profile Page
   if (selectedCharacter) {
-    const confirmedImages = allImages.filter(
+    const confirmedImages = characterImages.filter(
       (img) =>
         !img.isRejected &&
         img.characters.some(
           (c) => c.characterId === selectedCharacter.id && c.status === 'confirmed'
         )
     );
-    const suggestedImages = allImages.filter(
+    const suggestedImages = characterImages.filter(
       (img) =>
         !img.isRejected &&
         img.characters.some(
@@ -185,13 +205,11 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
     const usesFiveStarOnly = fiveStarImages.length > 0;
     const targetHighestRatedPool = usesFiveStarOnly ? fiveStarImages : fourStarOrHigher;
 
-    const activePortraitId = optimisticPortraitId ?? selectedCharacter.portraitImageId;
+    const activePortraitId = optimisticPortrait?.id ?? selectedCharacter.portraitImageId;
     const isOptimisticSwitch =
-      optimisticPortraitId !== null && optimisticPortraitId !== selectedCharacter.portraitImageId;
+      optimisticPortrait !== null && optimisticPortrait.id !== selectedCharacter.portraitImageId;
     const currentPortraitThumb =
-      (optimisticPortraitId
-        ? allImages.find((i) => i.id === optimisticPortraitId)?.thumbnailUrl
-        : null) || selectedCharacter.portraitThumbnailUrl;
+      optimisticPortrait?.thumbnailUrl || selectedCharacter.portraitThumbnailUrl;
     const currentPortraitCrop = isOptimisticSwitch
       ? null
       : selectedCharacter.portraitCrop ?? null;

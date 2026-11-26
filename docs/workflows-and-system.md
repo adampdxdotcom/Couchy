@@ -10,7 +10,7 @@
 
 ## System Administration & In-App Help
 
-The **System** workspace includes the top **Save Uploaded Prompt Images (1MP)**, **Save Civitai Import Images (1MP)** (controlling **Quick Gen Box** `Inspo` Step 1 archiving), **Share 0-Character Images (Civitai)** *(**Off** by default)*, **Civitai Activity Notifications** *(**On** by default)*, **Insert Couchy Metadata on Export** *(**Off** by default; embeds standard XMP photo metadata + `couchy` JSON on single downloads and ZIP exports)*, and **Insert Civitai Metadata on Export** *(**Off** by default; embeds Civitai/A1111 `parameters` with resource IDs and LoRA hashes on single downloads and ZIP exports)* toggles, alongside 8 tabs:
+The **System** workspace includes six top workspace preference switches—**Save Uploaded Prompt Images (1MP)**, **Save Civitai Import Images (1MP)** (controlling **Quick Gen Box** `Inspo` Step 1 archiving), **Share 0-Character Images (Civitai)** *(**Off** by default)*, **Civitai Activity Notifications** *(**On** by default)*, **Insert Couchy Metadata on Export** *(**Off** by default)*, and **Insert Civitai Metadata on Export** *(**Off** by default)*—alongside 8 tabs:
 
 1. **Search**: Enable/disable local visual keyword tagging, switch **CPU vs. NVIDIA GPU**, adjust confidence threshold, and **Pause / Resume**, **Scan Unindexed**, or **Rescan All**.
 2. **Quick Gen & Pills**: Toggle the **Quick Gen Box**, **Gallery Pill Colors**, and per-type `@mention` insertion rules (Characters, Base Models, LoRAs).
@@ -20,3 +20,13 @@ The **System** workspace includes the top **Save Uploaded Prompt Images (1MP)**,
 6. **Database**: Create integrity-verified SQLite backups and export/import portable JSON annotation backups.
 7. **Metadata**: Run **Incremental Scan** or **Rebuild Machine Metadata** (re-parses embedded PNG metadata while preserving all user annotations) and review **Scan History**.
 8. **Help**: Live searchable User Manual stitched from `docs/*.md` with chapter-grouped section jumps, reload, code-block copy buttons, and a conditional **Ask the Docs** sidebar when the Local LLM is online.
+
+## Export Metadata Switches (Downloads & ZIP)
+
+Both export switches in the **System** top bar default to **Off**. When both are **Off**, single-image downloads and **`ZIP`** exports stream the original file from disk byte-for-byte with only its existing ComfyUI metadata. When either switch is **On**, Couchy injects metadata **in-memory** on download/ZIP export (typically ~1–3 KB added) without modifying your read-only source files on disk—using lossless chunk insertion on PNGs (no pixel re-encoding, preserving original ComfyUI `prompt`/`workflow` chunks) and XMP/EXIF merging on JPEG/WebP files:
+
+- **Insert Couchy Metadata on Export** *(**Off** by default)*:
+  - Embeds a standard Adobe **XMP** packet (`XML:com.adobe.xmp` on PNG; XMP + EXIF `Software`/`ImageDescription` on JPEG/WebP) recognized by Apple Photos, Adobe Lightroom, Immich, and macOS/Windows file browsers—containing star **Rating** (`1–5`), **Favorite** label, **CreateDate**, **Description** (user notes + positive prompt), and deduplicated **Keywords** (confirmed characters, custom tags, collections, and LoRA display names).
+  - On PNGs, also embeds a compact structured **`couchy`** JSON text chunk (`version: 1`) capturing rating, favorite flag, notes, confirmed characters, tags, collections, Base Model, LoRA names/nicknames/strengths, and published Civitai URL (if shared).
+- **Insert Civitai Metadata on Export** *(**Off** by default)*:
+  - Embeds a Civitai/A1111-compatible **`parameters`** block (PNG `parameters` text chunk; EXIF `UserComment` on JPEG/WebP) containing positive/negative prompts, sampler/scheduler/steps/CFG/seed/size, **`Civitai resources`** (Base Model and LoRA version IDs with strengths), **`Hashes`**, and **`Lora hashes`** so manually uploaded exports auto-link every model and LoRA on Civitai.

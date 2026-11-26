@@ -9,7 +9,12 @@ const createZipArchive = ((archiverPkg as any).default || archiverPkg) as (
   options?: archiverPkg.ArchiverOptions
 ) => archiverPkg.Archiver;
 import { appConfig } from '../config.ts';
-import { hydrateImageRecords, queryGalleryImages } from '../services/galleryQueryService.ts';
+import {
+  hydrateImageRecords,
+  queryGalleryImages,
+  queryGalleryImagesPage,
+  type GalleryQueryPageParams,
+} from '../services/galleryQueryService.ts';
 import {
   getExportMetadataSettings,
   prepareExportImageBuffer,
@@ -22,6 +27,7 @@ import { ensureCharacterPortraitIfUnset } from '../services/characterService.ts'
 import { ensureWebpThumbnail, resolveImageDiskPath } from '../services/scannerService.ts';
 import { submitImageUpscale } from '../services/comfyuiService.ts';
 import {
+  listUnseenCivitaiActivity,
   markAllCivitaiActivitySeen,
   markCivitaiActivitySeenForImage,
   syncCivitaiActivityForImage,
@@ -39,15 +45,28 @@ export const imagesRouter = Router();
 
 /**
  * POST /api/images/query
- * Returns filtered, sorted ImageRecords.
+ * Returns filtered, sorted, and optionally server-paginated ImageRecords.
  */
 imagesRouter.post('/query', (req, res) => {
   try {
-    const filters = (req.body || {}) as Partial<GalleryFilterState>;
-    const items = queryGalleryImages(filters);
-    res.json({ items, total: items.length });
+    const filters = (req.body || {}) as GalleryQueryPageParams;
+    const result = queryGalleryImagesPage(filters);
+    res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to query images' });
+  }
+});
+
+/**
+ * GET /api/images/civitai-share/unseen
+ * Returns compact unseen Civitai activity entries for the top notification alert.
+ */
+imagesRouter.get('/civitai-share/unseen', (_req, res) => {
+  try {
+    const items = listUnseenCivitaiActivity();
+    res.json({ items });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to load unseen Civitai activity' });
   }
 });
 

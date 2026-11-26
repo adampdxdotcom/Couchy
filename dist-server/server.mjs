@@ -5015,10 +5015,47 @@ var init_civitaiModelEnrichmentService = __esm({
   }
 });
 
+// src/server/services/stampedCatalogCache.ts
+function getDbChangeStamp() {
+  const tcRow = db.prepare("SELECT total_changes() AS tc").get();
+  const dvRow = db.prepare("PRAGMA data_version").get();
+  return `${Number(tcRow?.tc ?? 0)}:${Number(dvRow?.data_version ?? 0)}`;
+}
+function getOrBuildStampedCatalog(cacheKey, builder) {
+  const stamp = getDbChangeStamp();
+  const existing = catalogCache.get(cacheKey);
+  if (existing && existing.stamp === stamp) {
+    return existing.value;
+  }
+  for (const [key, entry] of catalogCache.entries()) {
+    if (entry.stamp !== stamp) {
+      catalogCache.delete(key);
+    }
+  }
+  if (catalogCache.size >= MAX_CATALOG_ENTRIES) {
+    const oldestKey = catalogCache.keys().next().value;
+    if (oldestKey !== void 0) {
+      catalogCache.delete(oldestKey);
+    }
+  }
+  const value = builder();
+  catalogCache.set(cacheKey, { stamp, value });
+  return value;
+}
+var MAX_CATALOG_ENTRIES, catalogCache;
+var init_stampedCatalogCache = __esm({
+  "src/server/services/stampedCatalogCache.ts"() {
+    init_db();
+    MAX_CATALOG_ENTRIES = 16;
+    catalogCache = /* @__PURE__ */ new Map();
+  }
+});
+
 // src/server/services/characterService.ts
 function listCharacterProfiles() {
-  const rows = db.prepare(
-    `
+  return getOrBuildStampedCatalog("characters:list", () => {
+    const rows = db.prepare(
+      `
       SELECT
         c.*,
         img.id AS resolved_portrait_id
@@ -5027,18 +5064,18 @@ function listCharacterProfiles() {
         OR (c.portrait_image_id IS NOT NULL AND img.id = c.portrait_image_id)
       ORDER BY c.name COLLATE NOCASE ASC
     `
-  ).all();
-  if (rows.length === 0) return [];
-  const aliasesByChar = /* @__PURE__ */ new Map();
-  for (const a of db.prepare("SELECT character_id AS characterId, id, alias FROM character_aliases ORDER BY alias ASC").all()) {
-    const arr = aliasesByChar.get(a.characterId);
-    const item = { id: a.id, alias: a.alias };
-    if (arr) arr.push(item);
-    else aliasesByChar.set(a.characterId, [item]);
-  }
-  const lorasByChar = /* @__PURE__ */ new Map();
-  for (const l of db.prepare(
-    `
+    ).all();
+    if (rows.length === 0) return [];
+    const aliasesByChar = /* @__PURE__ */ new Map();
+    for (const a of db.prepare("SELECT character_id AS characterId, id, alias FROM character_aliases ORDER BY alias ASC").all()) {
+      const arr = aliasesByChar.get(a.characterId);
+      const item = { id: a.id, alias: a.alias };
+      if (arr) arr.push(item);
+      else aliasesByChar.set(a.characterId, [item]);
+    }
+    const lorasByChar = /* @__PURE__ */ new Map();
+    for (const l of db.prepare(
+      `
       SELECT
         cl.character_id AS characterId,
         cl.id,
@@ -5056,21 +5093,21 @@ function listCharacterProfiles() {
       GROUP BY cl.id
       ORDER BY cl.lora_name ASC
     `
-  ).all()) {
-    const { characterId, ...rest } = l;
-    const isInstalled = Boolean(rest.isInstalled);
-    const enriched = {
-      ...rest,
-      isInstalled,
-      isDownloadedPendingImport: Boolean(!isInstalled && rest.downloadFilePath)
-    };
-    const arr = lorasByChar.get(characterId);
-    if (arr) arr.push(enriched);
-    else lorasByChar.set(characterId, [enriched]);
-  }
-  const workflowsByChar = /* @__PURE__ */ new Map();
-  for (const wf of db.prepare(
-    `
+    ).all()) {
+      const { characterId, ...rest } = l;
+      const isInstalled = Boolean(rest.isInstalled);
+      const enriched = {
+        ...rest,
+        isInstalled,
+        isDownloadedPendingImport: Boolean(!isInstalled && rest.downloadFilePath)
+      };
+      const arr = lorasByChar.get(characterId);
+      if (arr) arr.push(enriched);
+      else lorasByChar.set(characterId, [enriched]);
+    }
+    const workflowsByChar = /* @__PURE__ */ new Map();
+    for (const wf of db.prepare(
+      `
       SELECT
         cw.character_id AS characterId,
         cw.workflow_id AS workflowId,
@@ -5079,41 +5116,41 @@ function listCharacterProfiles() {
       FROM character_workflows cw
       JOIN workflows w ON w.id = cw.workflow_id
     `
-  ).all()) {
-    const { characterId, ...rest } = wf;
-    const arr = workflowsByChar.get(characterId);
-    if (arr) arr.push(rest);
-    else workflowsByChar.set(characterId, [rest]);
-  }
-  const tagsByChar = /* @__PURE__ */ new Map();
-  for (const t of db.prepare(
-    `
+    ).all()) {
+      const { characterId, ...rest } = wf;
+      const arr = workflowsByChar.get(characterId);
+      if (arr) arr.push(rest);
+      else workflowsByChar.set(characterId, [rest]);
+    }
+    const tagsByChar = /* @__PURE__ */ new Map();
+    for (const t of db.prepare(
+      `
       SELECT ct.character_id AS characterId, t.id, t.name, t.color
       FROM character_tags ct
       JOIN tags t ON t.id = ct.tag_id
     `
-  ).all()) {
-    const { characterId, ...rest } = t;
-    const arr = tagsByChar.get(characterId);
-    if (arr) arr.push(rest);
-    else tagsByChar.set(characterId, [rest]);
-  }
-  const colsByChar = /* @__PURE__ */ new Map();
-  for (const col of db.prepare(
-    `
+    ).all()) {
+      const { characterId, ...rest } = t;
+      const arr = tagsByChar.get(characterId);
+      if (arr) arr.push(rest);
+      else tagsByChar.set(characterId, [rest]);
+    }
+    const colsByChar = /* @__PURE__ */ new Map();
+    for (const col of db.prepare(
+      `
       SELECT cc.character_id AS characterId, col.id, col.name
       FROM character_collections cc
       JOIN collections col ON col.id = cc.collection_id
     `
-  ).all()) {
-    const { characterId, ...rest } = col;
-    const arr = colsByChar.get(characterId);
-    if (arr) arr.push(rest);
-    else colsByChar.set(characterId, [rest]);
-  }
-  const statsByChar = /* @__PURE__ */ new Map();
-  for (const st of db.prepare(
-    `
+    ).all()) {
+      const { characterId, ...rest } = col;
+      const arr = colsByChar.get(characterId);
+      if (arr) arr.push(rest);
+      else colsByChar.set(characterId, [rest]);
+    }
+    const statsByChar = /* @__PURE__ */ new Map();
+    for (const st of db.prepare(
+      `
       SELECT
         ic.character_id AS characterId,
         SUM(CASE WHEN ic.status = 'confirmed' THEN 1 ELSE 0 END) AS confirmedCount,
@@ -5126,36 +5163,77 @@ function listCharacterProfiles() {
       LEFT JOIN ratings r ON r.content_hash = ic.image_content_hash
       GROUP BY ic.character_id
     `
-  ).all()) {
-    statsByChar.set(st.characterId, st);
-  }
-  return rows.map((row) => {
-    const stats = statsByChar.get(row.id);
-    const portraitId = resolveCharacterPortraitId(row);
-    return {
-      id: row.id,
-      name: row.name,
-      description: row.description || "",
-      physicalDescription: row.physical_description || "",
-      notes: row.notes || "",
-      portraitImageId: portraitId,
-      portraitContentHash: row.portrait_content_hash || null,
-      portraitThumbnailUrl: portraitId ? `/api/images/${portraitId}/thumbnail` : null,
-      portraitCrop: normalizePortraitCrop(row.portrait_crop_json),
-      allowCivitaiShare: Boolean(row.allow_civitai_share),
-      aliases: aliasesByChar.get(row.id) || [],
-      loras: lorasByChar.get(row.id) || [],
-      workflows: workflowsByChar.get(row.id) || [],
-      tags: tagsByChar.get(row.id) || [],
-      collections: colsByChar.get(row.id) || [],
-      confirmedImageCount: Number(stats?.confirmedCount || 0),
-      suggestedImageCount: Number(stats?.suggestedCount || 0),
-      averageRating: Number(stats?.avgRating ? Number(stats.avgRating).toFixed(2) : 0),
-      firstGenerationDate: stats?.firstGen || null,
-      latestGenerationDate: stats?.latestGen || null,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at
-    };
+    ).all()) {
+      statsByChar.set(st.characterId, st);
+    }
+    const samplesByChar = /* @__PURE__ */ new Map();
+    for (const s of db.prepare(
+      `
+      WITH ranked AS (
+        SELECT
+          ic.character_id AS characterId,
+          i.id,
+          i.filename,
+          i.content_hash AS contentHash,
+          m.positive_prompt AS positivePrompt,
+          ROW_NUMBER() OVER (
+            PARTITION BY ic.character_id
+            ORDER BY i.file_mtime DESC, i.id DESC
+          ) AS rn
+        FROM image_characters ic
+        JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+        LEFT JOIN ratings r ON r.content_hash = i.content_hash
+        LEFT JOIN image_metadata m ON m.image_id = i.id
+        WHERE ic.status = 'confirmed'
+          AND COALESCE(i.is_uploaded_reference, 0) = 0
+          AND COALESCE(r.is_rejected, 0) = 0
+      )
+      SELECT characterId, id, filename, contentHash, positivePrompt
+      FROM ranked
+      WHERE rn <= 4
+      ORDER BY characterId ASC, rn ASC
+    `
+    ).all()) {
+      const hashParam = s.contentHash ? `?h=${String(s.contentHash).slice(0, 12)}` : "";
+      const entry = {
+        id: Number(s.id),
+        filename: s.filename,
+        thumbnailUrl: `/api/images/${s.id}/thumbnail${hashParam}`,
+        positivePrompt: s.positivePrompt ?? null
+      };
+      const arr = samplesByChar.get(s.characterId);
+      if (arr) arr.push(entry);
+      else samplesByChar.set(s.characterId, [entry]);
+    }
+    return rows.map((row) => {
+      const stats = statsByChar.get(row.id);
+      const portraitId = resolveCharacterPortraitId(row);
+      return {
+        id: row.id,
+        name: row.name,
+        description: row.description || "",
+        physicalDescription: row.physical_description || "",
+        notes: row.notes || "",
+        portraitImageId: portraitId,
+        portraitContentHash: row.portrait_content_hash || null,
+        portraitThumbnailUrl: portraitId ? `/api/images/${portraitId}/thumbnail` : null,
+        portraitCrop: normalizePortraitCrop(row.portrait_crop_json),
+        allowCivitaiShare: Boolean(row.allow_civitai_share),
+        aliases: aliasesByChar.get(row.id) || [],
+        loras: lorasByChar.get(row.id) || [],
+        workflows: workflowsByChar.get(row.id) || [],
+        tags: tagsByChar.get(row.id) || [],
+        collections: colsByChar.get(row.id) || [],
+        confirmedImageCount: Number(stats?.confirmedCount || 0),
+        suggestedImageCount: Number(stats?.suggestedCount || 0),
+        averageRating: Number(stats?.avgRating ? Number(stats.avgRating).toFixed(2) : 0),
+        firstGenerationDate: stats?.firstGen || null,
+        latestGenerationDate: stats?.latestGen || null,
+        recentSamples: samplesByChar.get(row.id) || [],
+        createdAt: row.created_at,
+        updatedAt: row.updated_at
+      };
+    });
   });
 }
 function getCharacterProfileById(characterId) {
@@ -5310,6 +5388,30 @@ function buildCharacterProfile(row) {
     `
   ).get(row.id);
   const portraitId = resolveCharacterPortraitId(row);
+  const recentSamples = db.prepare(
+    `
+        SELECT
+          i.id,
+          i.filename,
+          i.content_hash AS contentHash,
+          m.positive_prompt AS positivePrompt
+        FROM image_characters ic
+        JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+        LEFT JOIN ratings r ON r.content_hash = i.content_hash
+        LEFT JOIN image_metadata m ON m.image_id = i.id
+        WHERE ic.character_id = ?
+          AND ic.status = 'confirmed'
+          AND COALESCE(i.is_uploaded_reference, 0) = 0
+          AND COALESCE(r.is_rejected, 0) = 0
+        ORDER BY i.file_mtime DESC, i.id DESC
+        LIMIT 4
+      `
+  ).all(row.id).map((s) => ({
+    id: Number(s.id),
+    filename: s.filename,
+    thumbnailUrl: `/api/images/${s.id}/thumbnail${s.contentHash ? `?h=${String(s.contentHash).slice(0, 12)}` : ""}`,
+    positivePrompt: s.positivePrompt ?? null
+  }));
   return {
     id: row.id,
     name: row.name,
@@ -5338,6 +5440,7 @@ function buildCharacterProfile(row) {
     averageRating: Number(stats?.avgRating ? Number(stats.avgRating).toFixed(2) : 0),
     firstGenerationDate: stats?.firstGen || null,
     latestGenerationDate: stats?.latestGen || null,
+    recentSamples,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -5706,6 +5809,7 @@ var init_characterService = __esm({
     init_db();
     init_utils();
     init_civitaiModelEnrichmentService();
+    init_stampedCatalogCache();
   }
 });
 
@@ -7905,66 +8009,129 @@ async function runSyncModelInventoryOnce() {
   }
   return listModelInventory();
 }
-function listModelInventory() {
-  const rows = db.prepare(
-    `
-      SELECT
-        m.*,
-        COUNT(DISTINCT i.id) AS dependentImageCount,
-        COUNT(DISTINCT iw.workflow_id) AS dependentWorkflowCount,
-        AVG(CASE WHEN rt.rating > 0 THEN rt.rating ELSE NULL END) AS avgRating
-      FROM models m
-      LEFT JOIN image_models im ON LOWER(im.model_name) = LOWER(m.filename)
-      LEFT JOIN images i ON i.id = im.image_id AND i.is_missing = 0
-      LEFT JOIN ratings rt ON rt.content_hash = i.content_hash
-      LEFT JOIN image_workflows iw ON iw.image_id = i.id
-      GROUP BY m.id
-      ORDER BY m.is_installed DESC, dependentImageCount DESC, m.filename COLLATE NOCASE ASC
-    `
-  ).all();
-  return rows.map((r) => {
-    const isInstalled = Boolean(r.is_installed);
-    const downloadFilePath = r.download_file_path || null;
-    return {
-      id: r.id,
-      name: r.name,
-      filename: r.filename,
-      modelType: r.model_type,
-      loraCategory: r.lora_category || "unclassified",
-      filePath: r.file_path || null,
-      fileSize: r.file_size ?? null,
-      sha256Hash: r.sha256_hash || null,
-      autov2Hash: r.autov2_hash || null,
-      isInstalled,
-      isDownloadedPendingImport: Boolean(!isInstalled && downloadFilePath),
-      comfyuiPath: r.comfyui_path || null,
-      downloadFilePath,
-      isHidden: Boolean(r.is_hidden),
-      sourceType: r.source_type,
-      downloadUrl: r.download_url || null,
-      civitaiId: r.civitai_id || null,
-      civitaiVersionId: r.civitai_version_id || null,
-      civitaiUrl: r.civitai_url || null,
-      baseModel: r.base_model || null,
-      recommendedWeight: r.recommended_weight !== null && r.recommended_weight !== void 0 ? Number(r.recommended_weight) : null,
-      civitaiDescription: r.civitai_description || null,
-      previewImages: parsePreviewImagesJson(r.preview_images_json, r.id),
-      civitaiFetchedAt: r.civitai_fetched_at || null,
-      hfRepoId: r.hf_repo_id || null,
-      userNotes: r.user_notes || null,
-      nickname: r.nickname || null,
-      mentionEnabled: Boolean(r.mention_enabled),
-      llmDescription: r.llm_description || null,
-      averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
-      lastSeenAt: r.last_seen_at,
-      dependentImageCount: Number(r.dependentImageCount || 0),
-      dependentWorkflowCount: Number(r.dependentWorkflowCount || 0),
-      civitaiCreatorUsername: r.civitai_creator_username || null,
-      isOwnCivitaiUpload: Boolean(r.is_own_civitai_upload),
-      civitaiStats: parseCivitaiStatsJson(r.civitai_stats_json),
-      civitaiComments: parseCivitaiCommentsJson(r.civitai_comments_json),
-      civitaiStatsSyncedAt: r.civitai_stats_synced_at || null
-    };
+function listModelInventory(options) {
+  const compact = Boolean(options?.compact);
+  return getOrBuildStampedCatalog(compact ? "models:compact" : "models:full", () => {
+    if (compact) {
+      const rows2 = db.prepare(
+        `
+          SELECT
+            id, name, filename, model_type, lora_category, file_path, file_size,
+            sha256_hash, autov2_hash, is_installed, comfyui_path, download_file_path,
+            is_hidden, source_type, download_url, civitai_id, civitai_version_id,
+            civitai_url, base_model, recommended_weight, preview_images_json,
+            civitai_fetched_at, hf_repo_id, user_notes, nickname, mention_enabled,
+            llm_description, last_seen_at, civitai_creator_username,
+            is_own_civitai_upload, civitai_stats_synced_at
+          FROM models
+          ORDER BY is_installed DESC, filename COLLATE NOCASE ASC
+        `
+      ).all();
+      return rows2.map((r) => {
+        const isInstalled = Boolean(r.is_installed);
+        const downloadFilePath = r.download_file_path || null;
+        return {
+          id: r.id,
+          name: r.name,
+          filename: r.filename,
+          modelType: r.model_type,
+          loraCategory: r.lora_category || "unclassified",
+          filePath: r.file_path || null,
+          fileSize: r.file_size ?? null,
+          sha256Hash: r.sha256_hash || null,
+          autov2Hash: r.autov2_hash || null,
+          isInstalled,
+          isDownloadedPendingImport: Boolean(!isInstalled && downloadFilePath),
+          comfyuiPath: r.comfyui_path || null,
+          downloadFilePath,
+          isHidden: Boolean(r.is_hidden),
+          sourceType: r.source_type,
+          downloadUrl: r.download_url || null,
+          civitaiId: r.civitai_id || null,
+          civitaiVersionId: r.civitai_version_id || null,
+          civitaiUrl: r.civitai_url || null,
+          baseModel: r.base_model || null,
+          recommendedWeight: r.recommended_weight !== null && r.recommended_weight !== void 0 ? Number(r.recommended_weight) : null,
+          civitaiDescription: null,
+          previewImages: parsePreviewImagesJson(r.preview_images_json, r.id).slice(0, 1),
+          civitaiFetchedAt: r.civitai_fetched_at || null,
+          hfRepoId: r.hf_repo_id || null,
+          userNotes: r.user_notes || null,
+          nickname: r.nickname || null,
+          mentionEnabled: Boolean(r.mention_enabled),
+          llmDescription: r.llm_description || null,
+          averageRating: 0,
+          lastSeenAt: r.last_seen_at,
+          dependentImageCount: 0,
+          dependentWorkflowCount: 0,
+          civitaiCreatorUsername: r.civitai_creator_username || null,
+          isOwnCivitaiUpload: Boolean(r.is_own_civitai_upload),
+          civitaiStats: null,
+          civitaiComments: [],
+          civitaiStatsSyncedAt: r.civitai_stats_synced_at || null
+        };
+      });
+    }
+    const rows = db.prepare(
+      `
+        SELECT
+          m.*,
+          COUNT(DISTINCT i.id) AS dependentImageCount,
+          COUNT(DISTINCT iw.workflow_id) AS dependentWorkflowCount,
+          AVG(CASE WHEN rt.rating > 0 THEN rt.rating ELSE NULL END) AS avgRating
+        FROM models m
+        LEFT JOIN image_models im ON LOWER(im.model_name) = LOWER(m.filename)
+        LEFT JOIN images i ON i.id = im.image_id AND i.is_missing = 0
+        LEFT JOIN ratings rt ON rt.content_hash = i.content_hash
+        LEFT JOIN image_workflows iw ON iw.image_id = i.id
+        GROUP BY m.id
+        ORDER BY m.is_installed DESC, dependentImageCount DESC, m.filename COLLATE NOCASE ASC
+      `
+    ).all();
+    return rows.map((r) => {
+      const isInstalled = Boolean(r.is_installed);
+      const downloadFilePath = r.download_file_path || null;
+      return {
+        id: r.id,
+        name: r.name,
+        filename: r.filename,
+        modelType: r.model_type,
+        loraCategory: r.lora_category || "unclassified",
+        filePath: r.file_path || null,
+        fileSize: r.file_size ?? null,
+        sha256Hash: r.sha256_hash || null,
+        autov2Hash: r.autov2_hash || null,
+        isInstalled,
+        isDownloadedPendingImport: Boolean(!isInstalled && downloadFilePath),
+        comfyuiPath: r.comfyui_path || null,
+        downloadFilePath,
+        isHidden: Boolean(r.is_hidden),
+        sourceType: r.source_type,
+        downloadUrl: r.download_url || null,
+        civitaiId: r.civitai_id || null,
+        civitaiVersionId: r.civitai_version_id || null,
+        civitaiUrl: r.civitai_url || null,
+        baseModel: r.base_model || null,
+        recommendedWeight: r.recommended_weight !== null && r.recommended_weight !== void 0 ? Number(r.recommended_weight) : null,
+        civitaiDescription: r.civitai_description || null,
+        previewImages: parsePreviewImagesJson(r.preview_images_json, r.id),
+        civitaiFetchedAt: r.civitai_fetched_at || null,
+        hfRepoId: r.hf_repo_id || null,
+        userNotes: r.user_notes || null,
+        nickname: r.nickname || null,
+        mentionEnabled: Boolean(r.mention_enabled),
+        llmDescription: r.llm_description || null,
+        averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
+        lastSeenAt: r.last_seen_at,
+        dependentImageCount: Number(r.dependentImageCount || 0),
+        dependentWorkflowCount: Number(r.dependentWorkflowCount || 0),
+        civitaiCreatorUsername: r.civitai_creator_username || null,
+        isOwnCivitaiUpload: Boolean(r.is_own_civitai_upload),
+        civitaiStats: parseCivitaiStatsJson(r.civitai_stats_json),
+        civitaiComments: parseCivitaiCommentsJson(r.civitai_comments_json),
+        civitaiStatsSyncedAt: r.civitai_stats_synced_at || null
+      };
+    });
   });
 }
 function updateLoraVisibility(loraName, isHidden) {
@@ -8110,6 +8277,7 @@ var init_modelInventoryService = __esm({
     init_civitaiModelEnrichmentService();
     init_storageStatsService();
     init_liveMonitorState();
+    init_stampedCatalogCache();
     inFlightModelSync = null;
     queuedModelSync = false;
     hasCompletedInitialDependencySync = false;
@@ -10468,6 +10636,7 @@ var init_civitaiCreatorModelsService = __esm({
 var civitaiActivitySyncService_exports = {};
 __export(civitaiActivitySyncService_exports, {
   extractCivitaiPostStats: () => extractCivitaiPostStats,
+  listUnseenCivitaiActivity: () => listUnseenCivitaiActivity,
   mapDraftRowToRecord: () => mapDraftRowToRecord,
   markAllCivitaiActivitySeen: () => markAllCivitaiActivitySeen,
   markCivitaiActivitySeenForImage: () => markCivitaiActivitySeenForImage,
@@ -10581,6 +10750,50 @@ function summarizeCivitaiDraftRows(rows) {
     hasUnseenActivity,
     primaryUrl
   };
+}
+function listUnseenCivitaiActivity() {
+  const rows = db.prepare(
+    `
+      SELECT
+        i.id AS resolved_image_id,
+        d.*
+      FROM image_civitai_drafts d
+      JOIN images i
+        ON (d.image_id = i.id OR (d.image_content_hash != '' AND d.image_content_hash = i.content_hash))
+      LEFT JOIN ratings r ON r.content_hash = i.content_hash
+      WHERE i.is_missing = 0
+        AND COALESCE(i.is_uploaded_reference, 0) = 0
+        AND COALESCE(r.is_rejected, 0) = 0
+        AND COALESCE(r.is_archived, 0) = 0
+        AND d.status = 'published'
+        AND (
+          COALESCE(d.reaction_count, 0) > COALESCE(d.seen_reaction_count, 0)
+          OR COALESCE(d.comment_count, 0) > COALESCE(d.seen_comment_count, 0)
+        )
+      ORDER BY d.id DESC
+    `
+  ).all();
+  if (rows.length === 0) return [];
+  const rowsByImageId = /* @__PURE__ */ new Map();
+  for (const row of rows) {
+    const imgId = Number(row.resolved_image_id);
+    const list = rowsByImageId.get(imgId);
+    if (list) list.push(row);
+    else rowsByImageId.set(imgId, [row]);
+  }
+  const out = [];
+  for (const [imageId, imgRows] of rowsByImageId.entries()) {
+    const summary = summarizeCivitaiDraftRows(imgRows);
+    if (summary && summary.hasUnseenActivity) {
+      out.push({
+        imageId,
+        reactionCount: summary.reactionCount,
+        commentCount: summary.commentCount,
+        hasUnseenActivity: true
+      });
+    }
+  }
+  return out;
 }
 function extractCivitaiPostStats(items, domain, postId) {
   const sortedItems = [...items].sort((a, b) => {
@@ -10938,6 +11151,55 @@ var init_civitaiActivitySyncService = __esm({
     activitySyncTimer = null;
     activityStartupTimer = null;
     isSyncRunning = false;
+  }
+});
+
+// src/server/services/galleryPoolCache.ts
+function getOrBuildHydratedGalleryPool(includeVisualTags, builder) {
+  const stamp = getGalleryDbChangeStamp();
+  const existing = includeVisualTags ? hydratedWithVisualCache : hydratedNoVisualCache;
+  if (existing && existing.stamp === stamp) {
+    return existing.items;
+  }
+  const items = builder();
+  const entry = { stamp, items };
+  if (includeVisualTags) {
+    hydratedWithVisualCache = entry;
+  } else {
+    hydratedNoVisualCache = entry;
+  }
+  return items;
+}
+function getOrBuildCollapsedGalleryPool(cacheKey, builder) {
+  const stamp = getGalleryDbChangeStamp();
+  const existing = collapsedPoolCache.get(cacheKey);
+  if (existing && existing.stamp === stamp) {
+    return existing.items;
+  }
+  for (const [k, v] of collapsedPoolCache.entries()) {
+    if (v.stamp !== stamp) {
+      collapsedPoolCache.delete(k);
+    }
+  }
+  if (collapsedPoolCache.size >= MAX_COLLAPSED_ENTRIES) {
+    const oldestKey = collapsedPoolCache.keys().next().value;
+    if (oldestKey !== void 0) {
+      collapsedPoolCache.delete(oldestKey);
+    }
+  }
+  const items = builder();
+  collapsedPoolCache.set(cacheKey, { stamp, items });
+  return items;
+}
+var getGalleryDbChangeStamp, MAX_COLLAPSED_ENTRIES, hydratedNoVisualCache, hydratedWithVisualCache, collapsedPoolCache;
+var init_galleryPoolCache = __esm({
+  "src/server/services/galleryPoolCache.ts"() {
+    init_stampedCatalogCache();
+    getGalleryDbChangeStamp = getDbChangeStamp;
+    MAX_COLLAPSED_ENTRIES = 6;
+    hydratedNoVisualCache = null;
+    hydratedWithVisualCache = null;
+    collapsedPoolCache = /* @__PURE__ */ new Map();
   }
 });
 
@@ -11423,8 +11685,8 @@ function evaluateSinglePredicate(img, predicate) {
     (vt) => testWordMatch(vt.tag, needle) || testWordMatch(vt.tag.replace(/_/g, " "), needle)
   );
 }
-function queryGalleryImages(filters) {
-  const rows = db.prepare(
+function loadRawActiveGalleryRows() {
+  return db.prepare(
     `
       SELECT
         i.*,
@@ -11439,15 +11701,25 @@ function queryGalleryImages(filters) {
         AND COALESCE(i.is_uploaded_reference, 0) = 0
     `
   ).all();
+}
+function queryGalleryImagesPage(filters) {
   const hasTextSearch = Boolean(filters.query && filters.query.trim());
-  let items = hydrateImageRecords(rows, { includeVisualTags: hasTextSearch });
   const rejectedMode = filters.rejectedMode || "exclude";
-  if (rejectedMode === "exclude") items = items.filter((i) => !i.isRejected);
-  else if (rejectedMode === "only") items = items.filter((i) => i.isRejected);
   const archivedMode = filters.archivedMode || "exclude";
-  if (archivedMode === "exclude") items = items.filter((i) => !i.isArchived);
-  else if (archivedMode === "only") items = items.filter((i) => i.isArchived);
-  items = collapseSeriesInGalleryPool(items);
+  const collapsedKey = `${rejectedMode}|${archivedMode}|${hasTextSearch ? "vt1" : "vt0"}`;
+  const baseCollapsedPool = getOrBuildCollapsedGalleryPool(collapsedKey, () => {
+    const hydratedPool = getOrBuildHydratedGalleryPool(
+      hasTextSearch,
+      () => hydrateImageRecords(loadRawActiveGalleryRows(), { includeVisualTags: hasTextSearch })
+    );
+    let filtered = hydratedPool;
+    if (rejectedMode === "exclude") filtered = filtered.filter((i) => !i.isRejected);
+    else if (rejectedMode === "only") filtered = filtered.filter((i) => i.isRejected);
+    if (archivedMode === "exclude") filtered = filtered.filter((i) => !i.isArchived);
+    else if (archivedMode === "only") filtered = filtered.filter((i) => i.isArchived);
+    return collapseSeriesInGalleryPool(filtered);
+  });
+  let items = baseCollapsedPool.slice();
   if (filters.favoritesOnly) {
     items = items.filter((i) => i.isFavorite);
   }
@@ -11457,6 +11729,24 @@ function queryGalleryImages(filters) {
   if (filters.checkpoint) {
     const ck = filters.checkpoint.toLowerCase();
     items = items.filter((i) => (i.checkpointName || "").toLowerCase() === ck);
+  }
+  if (filters.modelName && filters.modelName.trim()) {
+    const normalizeModelKey2 = (raw) => raw.trim().replace(/\\/g, "/").split("/").pop().replace(/\.(safetensors|ckpt|pt|pth|bin|gguf)$/i, "").toLowerCase();
+    const targetKey = normalizeModelKey2(filters.modelName);
+    const matchedModelImageIds = /* @__PURE__ */ new Set();
+    const modelRows = db.prepare("SELECT image_id AS imageId, model_name AS modelName FROM image_models").all();
+    for (const mr of modelRows) {
+      if (mr.modelName && normalizeModelKey2(mr.modelName) === targetKey) {
+        matchedModelImageIds.add(Number(mr.imageId));
+      }
+    }
+    items = items.filter(
+      (i) => matchedModelImageIds.has(i.id) || i.checkpointName && normalizeModelKey2(i.checkpointName) === targetKey || i.models.some((m) => normalizeModelKey2(m.modelName) === targetKey)
+    );
+  }
+  if (filters.workflowId !== void 0 && filters.workflowId !== null) {
+    const wfId = Number(filters.workflowId);
+    items = items.filter((i) => i.workflowId === wfId);
   }
   if (filters.dependencyStatus) {
     items = items.filter((i) => i.dependencyStatus === filters.dependencyStatus);
@@ -11543,137 +11833,262 @@ function queryGalleryImages(filters) {
         return b.fileMtime.localeCompare(a.fileMtime);
     }
   });
-  for (const item of items) {
-    if (item.visualTags && item.visualTags.length > 0) {
-      item.visualTags = [];
-    }
+  const total = items.length;
+  const hasPagination = typeof filters.page === "number" && Number.isFinite(filters.page) && filters.page >= 1;
+  let page = 1;
+  let pageSize = total;
+  let totalPages = 1;
+  if (hasPagination) {
+    const requestedPageSize = typeof filters.pageSize === "number" && Number.isFinite(filters.pageSize) ? Math.min(500, Math.max(1, Math.floor(filters.pageSize))) : 48;
+    pageSize = requestedPageSize;
+    totalPages = Math.max(1, Math.ceil(total / pageSize));
+    page = Math.min(Math.max(1, Math.floor(filters.page)), totalPages);
+    const startIdx = (page - 1) * pageSize;
+    items = items.slice(startIdx, startIdx + pageSize);
+  } else if (typeof filters.limit === "number" && filters.limit > 0 && items.length > filters.limit) {
+    items = items.slice(0, Math.floor(filters.limit));
+    pageSize = items.length;
   }
-  return items;
+  const sanitized = hasTextSearch ? items.map(
+    (item) => item.visualTags && item.visualTags.length > 0 ? { ...item, visualTags: [] } : item
+  ) : items;
+  return {
+    items: sanitized,
+    total,
+    page,
+    pageSize,
+    totalPages
+  };
 }
-function listLoraExplorerItems() {
-  const rows = db.prepare(
-    `
-      SELECT
-        COALESCE(m.filename, il.lora_name) AS filename,
-        COALESCE(m.name, REPLACE(il.lora_name, '.safetensors', '')) AS name,
-        m.id AS modelId,
-        m.file_path AS filePath,
-        m.file_size AS fileSize,
-        m.sha256_hash AS sha256Hash,
-        m.autov2_hash AS autov2Hash,
-        COALESCE(m.lora_category, 'unclassified') AS loraCategory,
-        COALESCE(m.is_installed, 0) AS isInstalled,
-        m.comfyui_path AS comfyuiPath,
-        m.download_file_path AS downloadFilePath,
-        COALESCE(m.is_hidden, 0) AS isHidden,
-        m.download_url AS downloadUrl,
-        m.civitai_id AS civitaiId,
-        m.civitai_version_id AS civitaiVersionId,
-        m.civitai_url AS civitaiUrl,
-        m.base_model AS baseModel,
-        m.recommended_weight AS recommendedWeight,
-        m.civitai_description AS civitaiDescription,
-        m.preview_images_json AS previewImagesJson,
-        m.civitai_fetched_at AS civitaiFetchedAt,
-        m.hf_repo_id AS hfRepoId,
-        m.user_notes AS userNotes,
-        m.nickname AS nickname,
-        COALESCE(m.mention_enabled, 0) AS mentionEnabled,
-        COALESCE(m.default_model_strength, 1.0) AS defaultModelStrength,
-        COALESCE(m.default_clip_strength, 1.0) AS defaultClipStrength,
-        m.trigger_word AS triggerWord,
-        m.llm_description AS llmDescription,
-        m.civitai_creator_username AS civitaiCreatorUsername,
-        COALESCE(m.is_own_civitai_upload, 0) AS isOwnCivitaiUpload,
-        m.civitai_stats_json AS civitaiStatsJson,
-        m.civitai_comments_json AS civitaiCommentsJson,
-        m.civitai_stats_synced_at AS civitaiStatsSyncedAt,
-        COUNT(DISTINCT il.image_id) AS imageCount,
-        COUNT(DISTINCT iw.workflow_id) AS workflowCount,
-        AVG(CASE WHEN r.rating > 0 THEN r.rating ELSE NULL END) AS avgRating,
-        MIN(il.model_strength) AS minModelStrength,
-        MAX(il.model_strength) AS maxModelStrength,
-        AVG(il.model_strength) AS avgModelStrength,
-        MIN(il.clip_strength) AS minClipStrength,
-        MAX(il.clip_strength) AS maxClipStrength
-      FROM models m
-      LEFT JOIN image_loras il ON LOWER(il.lora_name) = LOWER(m.filename)
-      LEFT JOIN images i ON i.id = il.image_id AND i.is_missing = 0
-      LEFT JOIN ratings r ON r.content_hash = i.content_hash
-      LEFT JOIN image_workflows iw ON iw.image_id = i.id
-      WHERE m.model_type = 'lora'
-      GROUP BY LOWER(m.filename)
-      ORDER BY imageCount DESC, m.filename COLLATE NOCASE ASC
-    `
-  ).all();
-  const portraitMap = getCharacterPortraitMetadataMap();
-  const allLinkedCharRows = db.prepare(
-    `SELECT LOWER(cl.lora_name) AS lowerLoraName, c.id, c.name, cl.appearance_label AS appearanceLabel
-       FROM character_loras cl
-       JOIN characters c ON c.id = cl.character_id`
-  ).all();
-  const charsByLowerLora = /* @__PURE__ */ new Map();
-  for (const c of allLinkedCharRows) {
-    const portraitInfo = portraitMap.get(c.id);
-    const entry = {
-      id: c.id,
-      name: c.name,
-      appearanceLabel: c.appearanceLabel,
-      portraitThumbnailUrl: portraitInfo?.url ?? null,
-      portraitCrop: portraitInfo?.crop ?? null
-    };
-    const arr = charsByLowerLora.get(c.lowerLoraName);
-    if (arr) arr.push(entry);
-    else charsByLowerLora.set(c.lowerLoraName, [entry]);
-  }
-  return rows.map((r) => {
-    const linkedChars = charsByLowerLora.get(String(r.filename || "").toLowerCase()) || [];
-    return {
-      name: r.name,
-      modelId: r.modelId ?? null,
-      filename: r.filename,
-      filePath: r.filePath ?? null,
-      fileSize: r.fileSize ?? null,
-      sha256Hash: r.sha256Hash ?? null,
-      autov2Hash: r.autov2Hash ?? null,
-      loraCategory: r.loraCategory || "unclassified",
-      isInstalled: Boolean(r.isInstalled),
-      isDownloadedPendingImport: Boolean(!r.isInstalled && r.downloadFilePath),
-      comfyuiPath: r.comfyuiPath ?? null,
-      downloadFilePath: r.downloadFilePath ?? null,
-      isHidden: Boolean(r.isHidden),
-      downloadUrl: r.downloadUrl ?? null,
-      civitaiId: r.civitaiId ?? null,
-      civitaiVersionId: r.civitaiVersionId ?? null,
-      civitaiUrl: r.civitaiUrl ?? null,
-      baseModel: r.baseModel ?? null,
-      recommendedWeight: r.recommendedWeight !== null && r.recommendedWeight !== void 0 ? Number(r.recommendedWeight) : null,
-      civitaiDescription: r.civitaiDescription ?? null,
-      previewImages: parsePreviewImagesJson(r.previewImagesJson, r.modelId),
-      civitaiFetchedAt: r.civitaiFetchedAt ?? null,
-      hfRepoId: r.hfRepoId ?? null,
-      userNotes: r.userNotes ?? null,
-      nickname: r.nickname || null,
-      mentionEnabled: Boolean(r.mentionEnabled),
-      defaultModelStrength: Number(r.defaultModelStrength ?? 1),
-      defaultClipStrength: Number(r.defaultClipStrength ?? 1),
-      triggerWord: r.triggerWord || null,
-      llmDescription: r.llmDescription || null,
-      civitaiCreatorUsername: r.civitaiCreatorUsername || null,
-      isOwnCivitaiUpload: Boolean(r.isOwnCivitaiUpload),
-      civitaiStats: parseCivitaiStatsJson(r.civitaiStatsJson),
-      civitaiComments: parseCivitaiCommentsJson(r.civitaiCommentsJson),
-      civitaiStatsSyncedAt: r.civitaiStatsSyncedAt || null,
-      imageCount: Number(r.imageCount || 0),
-      workflowCount: Number(r.workflowCount || 0),
-      averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
-      minModelStrength: r.minModelStrength !== null ? Number(Number(r.minModelStrength).toFixed(2)) : null,
-      maxModelStrength: r.maxModelStrength !== null ? Number(Number(r.maxModelStrength).toFixed(2)) : null,
-      avgModelStrength: r.avgModelStrength !== null ? Number(Number(r.avgModelStrength).toFixed(2)) : null,
-      minClipStrength: r.minClipStrength !== null ? Number(Number(r.minClipStrength).toFixed(2)) : null,
-      maxClipStrength: r.maxClipStrength !== null ? Number(Number(r.maxClipStrength).toFixed(2)) : null,
-      characters: linkedChars
-    };
+function queryGalleryImages(filters) {
+  return queryGalleryImagesPage(filters).items;
+}
+function listLoraExplorerItems(options) {
+  const compact = Boolean(options?.compact);
+  return getOrBuildStampedCatalog(compact ? "loras:compact" : "loras:full", () => {
+    if (compact) {
+      const countRows = db.prepare(
+        `SELECT LOWER(il.lora_name) AS lowerName, COUNT(DISTINCT il.image_id) AS imageCount
+           FROM image_loras il
+           JOIN images i ON i.id = il.image_id AND i.is_missing = 0
+           GROUP BY LOWER(il.lora_name)`
+      ).all();
+      const countByLower = /* @__PURE__ */ new Map();
+      for (const c of countRows) {
+        countByLower.set(c.lowerName, Number(c.imageCount || 0));
+      }
+      const compactRows = db.prepare(
+        `SELECT
+             m.id AS modelId,
+             m.filename,
+             COALESCE(m.name, REPLACE(m.filename, '.safetensors', '')) AS name,
+             m.file_path AS filePath,
+             m.file_size AS fileSize,
+             m.sha256_hash AS sha256Hash,
+             m.autov2_hash AS autov2Hash,
+             COALESCE(m.lora_category, 'unclassified') AS loraCategory,
+             COALESCE(m.is_installed, 0) AS isInstalled,
+             m.comfyui_path AS comfyuiPath,
+             m.download_file_path AS downloadFilePath,
+             COALESCE(m.is_hidden, 0) AS isHidden,
+             m.download_url AS downloadUrl,
+             m.civitai_id AS civitaiId,
+             m.civitai_version_id AS civitaiVersionId,
+             m.civitai_url AS civitaiUrl,
+             m.base_model AS baseModel,
+             m.recommended_weight AS recommendedWeight,
+             m.civitai_fetched_at AS civitaiFetchedAt,
+             m.hf_repo_id AS hfRepoId,
+             m.user_notes AS userNotes,
+             m.nickname AS nickname,
+             COALESCE(m.mention_enabled, 0) AS mentionEnabled,
+             COALESCE(m.default_model_strength, 1.0) AS defaultModelStrength,
+             COALESCE(m.default_clip_strength, 1.0) AS defaultClipStrength,
+             m.trigger_word AS triggerWord,
+             m.llm_description AS llmDescription,
+             m.civitai_creator_username AS civitaiCreatorUsername,
+             COALESCE(m.is_own_civitai_upload, 0) AS isOwnCivitaiUpload,
+             m.civitai_stats_synced_at AS civitaiStatsSyncedAt
+           FROM models m
+           WHERE m.model_type = 'lora'
+           GROUP BY LOWER(m.filename)`
+      ).all();
+      return compactRows.map((r) => {
+        const lower = String(r.filename || "").toLowerCase();
+        return {
+          name: r.name,
+          modelId: r.modelId ?? null,
+          filename: r.filename,
+          filePath: r.filePath ?? null,
+          fileSize: r.fileSize ?? null,
+          sha256Hash: r.sha256Hash ?? null,
+          autov2Hash: r.autov2Hash ?? null,
+          loraCategory: r.loraCategory || "unclassified",
+          isInstalled: Boolean(r.isInstalled),
+          isDownloadedPendingImport: Boolean(!r.isInstalled && r.downloadFilePath),
+          comfyuiPath: r.comfyuiPath ?? null,
+          downloadFilePath: r.downloadFilePath ?? null,
+          isHidden: Boolean(r.isHidden),
+          downloadUrl: r.downloadUrl ?? null,
+          civitaiId: r.civitaiId ?? null,
+          civitaiVersionId: r.civitaiVersionId ?? null,
+          civitaiUrl: r.civitaiUrl ?? null,
+          baseModel: r.baseModel ?? null,
+          recommendedWeight: r.recommendedWeight !== null && r.recommendedWeight !== void 0 ? Number(r.recommendedWeight) : null,
+          civitaiDescription: null,
+          previewImages: [],
+          civitaiFetchedAt: r.civitaiFetchedAt ?? null,
+          hfRepoId: r.hfRepoId ?? null,
+          userNotes: r.userNotes ?? null,
+          nickname: r.nickname || null,
+          mentionEnabled: Boolean(r.mentionEnabled),
+          defaultModelStrength: Number(r.defaultModelStrength ?? 1),
+          defaultClipStrength: Number(r.defaultClipStrength ?? 1),
+          triggerWord: r.triggerWord || null,
+          llmDescription: r.llmDescription || null,
+          civitaiCreatorUsername: r.civitaiCreatorUsername || null,
+          isOwnCivitaiUpload: Boolean(r.isOwnCivitaiUpload),
+          civitaiStats: null,
+          civitaiComments: [],
+          civitaiStatsSyncedAt: r.civitaiStatsSyncedAt || null,
+          imageCount: countByLower.get(lower) ?? 0,
+          workflowCount: 0,
+          averageRating: 0,
+          minModelStrength: null,
+          maxModelStrength: null,
+          avgModelStrength: null,
+          minClipStrength: null,
+          maxClipStrength: null,
+          characters: []
+        };
+      }).sort(
+        (a, b) => b.imageCount - a.imageCount || a.filename.localeCompare(b.filename, void 0, { sensitivity: "base" })
+      );
+    }
+    const rows = db.prepare(
+      `
+        SELECT
+          COALESCE(m.filename, il.lora_name) AS filename,
+          COALESCE(m.name, REPLACE(il.lora_name, '.safetensors', '')) AS name,
+          m.id AS modelId,
+          m.file_path AS filePath,
+          m.file_size AS fileSize,
+          m.sha256_hash AS sha256Hash,
+          m.autov2_hash AS autov2Hash,
+          COALESCE(m.lora_category, 'unclassified') AS loraCategory,
+          COALESCE(m.is_installed, 0) AS isInstalled,
+          m.comfyui_path AS comfyuiPath,
+          m.download_file_path AS downloadFilePath,
+          COALESCE(m.is_hidden, 0) AS isHidden,
+          m.download_url AS downloadUrl,
+          m.civitai_id AS civitaiId,
+          m.civitai_version_id AS civitaiVersionId,
+          m.civitai_url AS civitaiUrl,
+          m.base_model AS baseModel,
+          m.recommended_weight AS recommendedWeight,
+          m.civitai_description AS civitaiDescription,
+          m.preview_images_json AS previewImagesJson,
+          m.civitai_fetched_at AS civitaiFetchedAt,
+          m.hf_repo_id AS hfRepoId,
+          m.user_notes AS userNotes,
+          m.nickname AS nickname,
+          COALESCE(m.mention_enabled, 0) AS mentionEnabled,
+          COALESCE(m.default_model_strength, 1.0) AS defaultModelStrength,
+          COALESCE(m.default_clip_strength, 1.0) AS defaultClipStrength,
+          m.trigger_word AS triggerWord,
+          m.llm_description AS llmDescription,
+          m.civitai_creator_username AS civitaiCreatorUsername,
+          COALESCE(m.is_own_civitai_upload, 0) AS isOwnCivitaiUpload,
+          m.civitai_stats_json AS civitaiStatsJson,
+          m.civitai_comments_json AS civitaiCommentsJson,
+          m.civitai_stats_synced_at AS civitaiStatsSyncedAt,
+          COUNT(DISTINCT il.image_id) AS imageCount,
+          COUNT(DISTINCT iw.workflow_id) AS workflowCount,
+          AVG(CASE WHEN r.rating > 0 THEN r.rating ELSE NULL END) AS avgRating,
+          MIN(il.model_strength) AS minModelStrength,
+          MAX(il.model_strength) AS maxModelStrength,
+          AVG(il.model_strength) AS avgModelStrength,
+          MIN(il.clip_strength) AS minClipStrength,
+          MAX(il.clip_strength) AS maxClipStrength
+        FROM models m
+        LEFT JOIN image_loras il ON LOWER(il.lora_name) = LOWER(m.filename)
+        LEFT JOIN images i ON i.id = il.image_id AND i.is_missing = 0
+        LEFT JOIN ratings r ON r.content_hash = i.content_hash
+        LEFT JOIN image_workflows iw ON iw.image_id = i.id
+        WHERE m.model_type = 'lora'
+        GROUP BY LOWER(m.filename)
+        ORDER BY imageCount DESC, m.filename COLLATE NOCASE ASC
+      `
+    ).all();
+    const portraitMap = getCharacterPortraitMetadataMap();
+    const allLinkedCharRows = db.prepare(
+      `SELECT LOWER(cl.lora_name) AS lowerLoraName, c.id, c.name, cl.appearance_label AS appearanceLabel
+         FROM character_loras cl
+         JOIN characters c ON c.id = cl.character_id`
+    ).all();
+    const charsByLowerLora = /* @__PURE__ */ new Map();
+    for (const c of allLinkedCharRows) {
+      const portraitInfo = portraitMap.get(c.id);
+      const entry = {
+        id: c.id,
+        name: c.name,
+        appearanceLabel: c.appearanceLabel,
+        portraitThumbnailUrl: portraitInfo?.url ?? null,
+        portraitCrop: portraitInfo?.crop ?? null
+      };
+      const arr = charsByLowerLora.get(c.lowerLoraName);
+      if (arr) arr.push(entry);
+      else charsByLowerLora.set(c.lowerLoraName, [entry]);
+    }
+    return rows.map((r) => {
+      const linkedChars = charsByLowerLora.get(String(r.filename || "").toLowerCase()) || [];
+      return {
+        name: r.name,
+        modelId: r.modelId ?? null,
+        filename: r.filename,
+        filePath: r.filePath ?? null,
+        fileSize: r.fileSize ?? null,
+        sha256Hash: r.sha256Hash ?? null,
+        autov2Hash: r.autov2Hash ?? null,
+        loraCategory: r.loraCategory || "unclassified",
+        isInstalled: Boolean(r.isInstalled),
+        isDownloadedPendingImport: Boolean(!r.isInstalled && r.downloadFilePath),
+        comfyuiPath: r.comfyuiPath ?? null,
+        downloadFilePath: r.downloadFilePath ?? null,
+        isHidden: Boolean(r.isHidden),
+        downloadUrl: r.downloadUrl ?? null,
+        civitaiId: r.civitaiId ?? null,
+        civitaiVersionId: r.civitaiVersionId ?? null,
+        civitaiUrl: r.civitaiUrl ?? null,
+        baseModel: r.baseModel ?? null,
+        recommendedWeight: r.recommendedWeight !== null && r.recommendedWeight !== void 0 ? Number(r.recommendedWeight) : null,
+        civitaiDescription: r.civitaiDescription ?? null,
+        previewImages: parsePreviewImagesJson(r.previewImagesJson, r.modelId),
+        civitaiFetchedAt: r.civitaiFetchedAt ?? null,
+        hfRepoId: r.hfRepoId ?? null,
+        userNotes: r.userNotes ?? null,
+        nickname: r.nickname || null,
+        mentionEnabled: Boolean(r.mentionEnabled),
+        defaultModelStrength: Number(r.defaultModelStrength ?? 1),
+        defaultClipStrength: Number(r.defaultClipStrength ?? 1),
+        triggerWord: r.triggerWord || null,
+        llmDescription: r.llmDescription || null,
+        civitaiCreatorUsername: r.civitaiCreatorUsername || null,
+        isOwnCivitaiUpload: Boolean(r.isOwnCivitaiUpload),
+        civitaiStats: parseCivitaiStatsJson(r.civitaiStatsJson),
+        civitaiComments: parseCivitaiCommentsJson(r.civitaiCommentsJson),
+        civitaiStatsSyncedAt: r.civitaiStatsSyncedAt || null,
+        imageCount: Number(r.imageCount || 0),
+        workflowCount: Number(r.workflowCount || 0),
+        averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
+        minModelStrength: r.minModelStrength !== null ? Number(Number(r.minModelStrength).toFixed(2)) : null,
+        maxModelStrength: r.maxModelStrength !== null ? Number(Number(r.maxModelStrength).toFixed(2)) : null,
+        avgModelStrength: r.avgModelStrength !== null ? Number(Number(r.avgModelStrength).toFixed(2)) : null,
+        minClipStrength: r.minClipStrength !== null ? Number(Number(r.minClipStrength).toFixed(2)) : null,
+        maxClipStrength: r.maxClipStrength !== null ? Number(Number(r.maxClipStrength).toFixed(2)) : null,
+        characters: linkedChars
+      };
+    });
   });
 }
 var init_galleryQueryService = __esm({
@@ -11685,6 +12100,8 @@ var init_galleryQueryService = __esm({
     init_civitaiModelStatsHelper();
     init_civitaiActivitySyncService();
     init_characterService();
+    init_galleryPoolCache();
+    init_stampedCatalogCache();
   }
 });
 
@@ -14087,10 +14504,18 @@ var init_imagesRoutes = __esm({
     imagesRouter.post("/query", (req, res) => {
       try {
         const filters = req.body || {};
-        const items = queryGalleryImages(filters);
-        res.json({ items, total: items.length });
+        const result = queryGalleryImagesPage(filters);
+        res.json(result);
       } catch (err) {
         res.status(500).json({ error: err?.message || "Failed to query images" });
+      }
+    });
+    imagesRouter.get("/civitai-share/unseen", (_req, res) => {
+      try {
+        const items = listUnseenCivitaiActivity();
+        res.json({ items });
+      } catch (err) {
+        res.status(500).json({ error: err?.message || "Failed to load unseen Civitai activity" });
       }
     });
     imagesRouter.post("/civitai-share/seen-all", (_req, res) => {
@@ -16640,10 +17065,13 @@ var init_lorasRoutes = __esm({
     init_civitaiModelEnrichmentService();
     init_modelInventoryService();
     lorasRouter = Router3();
-    lorasRouter.get("/loras", (_req, res) => {
+    lorasRouter.get("/loras", (req, res) => {
       try {
-        triggerBackgroundCivitaiLinkHealOnce();
-        res.json({ items: listLoraExplorerItems() });
+        const compact = req.query.mode === "compact";
+        if (!compact) {
+          triggerBackgroundCivitaiLinkHealOnce();
+        }
+        res.json({ items: listLoraExplorerItems({ compact }) });
       } catch (err) {
         res.status(500).json({ error: err?.message || "Failed to list LoRAs" });
       }
@@ -16720,9 +17148,10 @@ var init_modelsRoutes = __esm({
     init_civitaiModelEnrichmentService();
     init_civitaiCreatorModelsService();
     modelsRouter = Router4();
-    modelsRouter.get("/models/inventory", (_req, res) => {
+    modelsRouter.get("/models/inventory", (req, res) => {
       try {
-        res.json({ items: listModelInventory() });
+        const compact = req.query.mode === "compact";
+        res.json({ items: listModelInventory({ compact }) });
       } catch (err) {
         res.status(500).json({ error: err?.message || "Failed to list model inventory" });
       }
@@ -19718,9 +20147,10 @@ function invalidateWorkflowDefaultsCache(workflowId) {
     workflowDefaultsCache.clear();
   }
 }
-function listWorkflowLibraryItems() {
-  const rows = db.prepare(
-    `
+function listWorkflowLibraryItems(options) {
+  const savedOnly = Boolean(options?.savedOnly);
+  return getOrBuildStampedCatalog(savedOnly ? "workflows:saved" : "workflows:all", () => {
+    const baseSelect = `
       SELECT
         w.id,
         w.name,
@@ -19735,72 +20165,86 @@ function listWorkflowLibraryItems() {
         COUNT(DISTINCT iw.image_id) AS imageCount
       FROM workflows w
       LEFT JOIN image_workflows iw ON iw.workflow_id = w.id
-      GROUP BY w.id
-      ORDER BY w.is_default DESC, w.is_saved_library DESC, w.updated_at DESC
-    `
-  ).all();
-  const charRows = db.prepare(
-    `SELECT cw.workflow_id AS workflowId, c.id, c.name, cw.role_label AS roleLabel
-       FROM character_workflows cw
-       JOIN characters c ON c.id = cw.character_id`
-  ).all();
-  const charsByWf = /* @__PURE__ */ new Map();
-  for (const cr of charRows) {
-    const { workflowId, ...rest } = cr;
-    const arr = charsByWf.get(workflowId) || [];
-    arr.push(rest);
-    charsByWf.set(workflowId, arr);
-  }
-  return rows.map((r) => {
-    const wfId = Number(r.id);
-    let defaultMegapixels = null;
-    let defaultAspectRatio = null;
-    let defaultSteps = null;
-    let defaultCheckpoint = null;
-    if ((r.is_default || r.is_saved_library) && (r.has_api || r.has_visual)) {
-      const stamp = `${r.workflow_hash || ""}|${r.updated_at || ""}`;
-      const cached = workflowDefaultsCache.get(wfId);
-      if (cached && cached.stamp === stamp) {
-        defaultMegapixels = cached.defaultMegapixels;
-        defaultAspectRatio = cached.defaultAspectRatio;
-        defaultSteps = cached.defaultSteps;
-        defaultCheckpoint = cached.defaultCheckpoint;
-      } else {
-        try {
-          const wfDefaults = getWorkflowDefaults(wfId);
-          defaultMegapixels = wfDefaults.defaultMegapixels ?? null;
-          defaultAspectRatio = wfDefaults.defaultAspectRatio ?? null;
-          defaultSteps = wfDefaults.defaultSteps ?? null;
-          defaultCheckpoint = wfDefaults.defaultCheckpoint ?? null;
-          workflowDefaultsCache.set(wfId, {
-            stamp,
-            defaultMegapixels,
-            defaultAspectRatio,
-            defaultSteps,
-            defaultCheckpoint
-          });
-        } catch {
+    `;
+    let rows = db.prepare(
+      savedOnly ? `${baseSelect}
+             WHERE w.is_saved_library = 1 OR w.is_default = 1
+             GROUP BY w.id
+             ORDER BY w.is_default DESC, w.is_saved_library DESC, w.updated_at DESC` : `${baseSelect}
+             GROUP BY w.id
+             ORDER BY w.is_default DESC, w.is_saved_library DESC, w.updated_at DESC`
+    ).all();
+    if (savedOnly && rows.length === 0) {
+      rows = db.prepare(
+        `${baseSelect}
+           GROUP BY w.id
+           ORDER BY w.updated_at DESC
+           LIMIT 1`
+      ).all();
+    }
+    const charRows = db.prepare(
+      `SELECT cw.workflow_id AS workflowId, c.id, c.name, cw.role_label AS roleLabel
+         FROM character_workflows cw
+         JOIN characters c ON c.id = cw.character_id`
+    ).all();
+    const charsByWf = /* @__PURE__ */ new Map();
+    for (const cr of charRows) {
+      const { workflowId, ...rest } = cr;
+      const arr = charsByWf.get(workflowId) || [];
+      arr.push(rest);
+      charsByWf.set(workflowId, arr);
+    }
+    return rows.map((r) => {
+      const wfId = Number(r.id);
+      let defaultMegapixels = null;
+      let defaultAspectRatio = null;
+      let defaultSteps = null;
+      let defaultCheckpoint = null;
+      if ((r.is_default || r.is_saved_library) && (r.has_api || r.has_visual)) {
+        const stamp = `${r.workflow_hash || ""}|${r.updated_at || ""}`;
+        const cached = workflowDefaultsCache.get(wfId);
+        if (cached && cached.stamp === stamp) {
+          defaultMegapixels = cached.defaultMegapixels;
+          defaultAspectRatio = cached.defaultAspectRatio;
+          defaultSteps = cached.defaultSteps;
+          defaultCheckpoint = cached.defaultCheckpoint;
+        } else {
+          try {
+            const wfDefaults = getWorkflowDefaults(wfId);
+            defaultMegapixels = wfDefaults.defaultMegapixels ?? null;
+            defaultAspectRatio = wfDefaults.defaultAspectRatio ?? null;
+            defaultSteps = wfDefaults.defaultSteps ?? null;
+            defaultCheckpoint = wfDefaults.defaultCheckpoint ?? null;
+            workflowDefaultsCache.set(wfId, {
+              stamp,
+              defaultMegapixels,
+              defaultAspectRatio,
+              defaultSteps,
+              defaultCheckpoint
+            });
+          } catch {
+          }
         }
       }
-    }
-    return {
-      id: r.id,
-      name: r.name,
-      description: r.description || "",
-      isSavedLibrary: Boolean(r.is_saved_library),
-      isDefault: Boolean(r.is_default),
-      hasVisualWorkflow: Boolean(r.has_visual),
-      hasApiWorkflow: Boolean(r.has_api),
-      workflowHash: r.workflow_hash,
-      imageCount: Number(r.imageCount || 0),
-      characters: charsByWf.get(r.id) || [],
-      defaultMegapixels,
-      defaultAspectRatio,
-      defaultSteps,
-      defaultCheckpoint,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at
-    };
+      return {
+        id: r.id,
+        name: r.name,
+        description: r.description || "",
+        isSavedLibrary: Boolean(r.is_saved_library),
+        isDefault: Boolean(r.is_default),
+        hasVisualWorkflow: Boolean(r.has_visual),
+        hasApiWorkflow: Boolean(r.has_api),
+        workflowHash: r.workflow_hash,
+        imageCount: Number(r.imageCount || 0),
+        characters: charsByWf.get(r.id) || [],
+        defaultMegapixels,
+        defaultAspectRatio,
+        defaultSteps,
+        defaultCheckpoint,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at
+      };
+    });
   });
 }
 function getWorkflowRecordById(wfId) {
@@ -19915,6 +20359,7 @@ var init_workflowLibraryService = __esm({
   "src/server/services/workflowLibraryService.ts"() {
     init_db();
     init_workflowCompilerService();
+    init_stampedCatalogCache();
     WorkflowServiceError = class extends Error {
       constructor(statusCode, message) {
         super(message);
@@ -19932,9 +20377,10 @@ var init_workflowsRoutes = __esm({
   "src/server/routes/workflowsRoutes.ts"() {
     init_workflowLibraryService();
     workflowsRouter = Router6();
-    workflowsRouter.get("/workflows", (_req, res) => {
+    workflowsRouter.get("/workflows", (req, res) => {
       try {
-        res.json({ items: listWorkflowLibraryItems() });
+        const savedOnly = req.query.scope === "saved";
+        res.json({ items: listWorkflowLibraryItems({ savedOnly }) });
       } catch (err) {
         res.status(500).json({ error: err?.message || "Failed to list workflows" });
       }

@@ -10,7 +10,7 @@ import type {
 } from '../shared/types.ts';
 
 interface UseLiveStatusPollingParams {
-  allImages: ImageRecord[];
+  visibleImages: ImageRecord[];
   characters: CharacterProfile[];
   pushToast: (text: string, type?: AppToastMessage['type']) => void;
   onRefreshWorkspace: () => Promise<void>;
@@ -22,7 +22,7 @@ interface UseLiveStatusPollingParams {
  * restores failed Conversation turns into Quick Gen, and syncs the browser tab title.
  */
 export function useLiveStatusPolling({
-  allImages,
+  visibleImages,
   characters,
   pushToast,
   onRefreshWorkspace,
@@ -53,15 +53,15 @@ export function useLiveStatusPolling({
   const lastIndexedAtRef = useRef<number | null>(null);
   const lastWorkspaceVersionRef = useRef<number | null>(null);
   const lastWakeRefreshAtRef = useRef<number>(Date.now());
-  const allImageIdsRef = useRef<Set<number>>(new Set());
-  const allImagesRef = useRef<ImageRecord[]>([]);
+  const visibleImageIdsRef = useRef<Set<number>>(new Set());
+  const visibleImagesRef = useRef<ImageRecord[]>([]);
   const charactersRef = useRef<CharacterProfile[]>([]);
   const lastSeenErrorIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    allImagesRef.current = allImages;
+    visibleImagesRef.current = visibleImages;
     const ids = new Set<number>();
-    for (const img of allImages) {
+    for (const img of visibleImages) {
       ids.add(img.id);
       if (img.seriesItems) {
         for (const si of img.seriesItems) {
@@ -69,8 +69,8 @@ export function useLiveStatusPolling({
         }
       }
     }
-    allImageIdsRef.current = ids;
-  }, [allImages]);
+    visibleImageIdsRef.current = ids;
+  }, [visibleImages]);
 
   useEffect(() => {
     charactersRef.current = characters;
@@ -137,9 +137,17 @@ export function useLiveStatusPolling({
             const matchedChar = rec.characterId
               ? charactersRef.current.find((c) => c.id === rec.characterId) || null
               : null;
-            const sourceImg = rec.branchFromImageId
-              ? allImagesRef.current.find((img) => img.id === rec.branchFromImageId) || null
+            let sourceImg = rec.branchFromImageId
+              ? visibleImagesRef.current.find((img) => img.id === rec.branchFromImageId) || null
               : null;
+            if (!sourceImg && rec.branchFromImageId) {
+              try {
+                const detailRes = await api.getImageDetail(rec.branchFromImageId, rec.seriesId);
+                sourceImg = detailRes.image || null;
+              } catch {
+                sourceImg = null;
+              }
+            }
             const latestExcludedMsg = [...rec.chatMessages]
               .reverse()
               .find((m) => Array.isArray(m.excludedLoras) && m.excludedLoras.length > 0);
@@ -173,7 +181,7 @@ export function useLiveStatusPolling({
         const hasUnindexedGhost = (status.ghostItems || []).some(
           (g) =>
             g.state === 'indexing' &&
-            (!g.outputImageId || !allImageIdsRef.current.has(g.outputImageId))
+            (!g.outputImageId || !visibleImageIdsRef.current.has(g.outputImageId))
         );
 
         const isInitialPoll = lastWorkspaceVersionRef.current === null && lastIndexedAtRef.current === null;
@@ -318,12 +326,12 @@ export function useLiveStatusPolling({
     };
   }, [pushToast]);
 
-  // Filter out ghost cards once their indexed image (or stacked iteration) exists in allImages
+  // Filter out ghost cards once their indexed image (or stacked iteration) exists in visibleImages
   const activeGhostItems = useMemo(() => {
     const raw = comfyStatus.ghostItems || [];
     if (raw.length === 0) return [];
     const knownIds = new Set<number>();
-    for (const img of allImages) {
+    for (const img of visibleImages) {
       knownIds.add(img.id);
       if (img.seriesItems) {
         for (const si of img.seriesItems) {
@@ -332,7 +340,7 @@ export function useLiveStatusPolling({
       }
     }
     return raw.filter((g) => !g.outputImageId || !knownIds.has(g.outputImageId));
-  }, [comfyStatus.ghostItems, allImages]);
+  }, [comfyStatus.ghostItems, visibleImages]);
 
   return {
     comfyStatus,

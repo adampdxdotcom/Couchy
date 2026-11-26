@@ -21,7 +21,7 @@ interface LoraAndModelManagerViewProps {
   loras: LoraExplorerItem[];
   models: ModelInventoryItem[];
   presets?: LoraPreset[];
-  allImages: ImageRecord[];
+  refreshVersion?: number;
   pillTypeSettings?: PillTypeSettings;
   civitaiActivityNotificationsEnabled?: boolean;
   onRefresh: () => Promise<void>;
@@ -40,7 +40,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
   loras,
   models,
   presets = [],
-  allImages,
+  refreshVersion = 0,
   pillTypeSettings,
   civitaiActivityNotificationsEnabled = true,
   onRefresh,
@@ -328,7 +328,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
     return (
       <LoraDetailView
         lora={selectedLora}
-        allImages={allImages}
+        refreshVersion={refreshVersion}
         impactReport={impactReport}
         isFetchingCivitai={Boolean(
           selectedLora.modelId && fetchingModelId === selectedLora.modelId
@@ -364,7 +364,7 @@ export const LoraAndModelManagerView: React.FC<LoraAndModelManagerViewProps> = (
     return (
       <BaseModelDetailView
         model={selectedModel}
-        allImages={allImages}
+        refreshVersion={refreshVersion}
         impactReport={impactReport}
         isFetchingCivitai={fetchingModelId === selectedModel.id}
         onBack={() => {

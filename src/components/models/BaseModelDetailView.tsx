@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ArrowLeft,
   AtSign,
@@ -11,15 +11,15 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
+import { useScopedGalleryImages } from '../../hooks/useScopedGalleryImages.ts';
 import { formatBytes, getModelAvailabilityInfo } from '../../shared/utils.ts';
 import type { ImageRecord, ModelInventoryItem } from '../../shared/types.ts';
-import { normalizeLoraKey } from '../quickgen/quickGenUtils.ts';
 import { formatModelTypeLabel, isBaseModelType } from './BaseModelExplorerGrid.tsx';
 import { InlineEditableTitle } from '../shared/InlineEditableTitle.tsx';
 
 interface BaseModelDetailViewProps {
   model: ModelInventoryItem;
-  allImages: ImageRecord[];
+  refreshVersion?: number;
   impactReport: any | null;
   isFetchingCivitai: boolean;
   onBack: () => void;
@@ -48,7 +48,7 @@ interface BaseModelDetailViewProps {
  */
 export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
   model,
-  allImages,
+  refreshVersion = 0,
   impactReport,
   isFetchingCivitai,
   onBack,
@@ -64,17 +64,25 @@ export const BaseModelDetailView: React.FC<BaseModelDetailViewProps> = ({
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const isBase = isBaseModelType(model.modelType);
   const avail = getModelAvailabilityInfo(model);
-  const targetKey = normalizeLoraKey(model.filename);
 
-  const associatedImages = allImages.filter(
-    (img) =>
-      (img.checkpointName && normalizeLoraKey(img.checkpointName) === targetKey) ||
-      img.models.some((m) => normalizeLoraKey(m.modelName) === targetKey)
+  const scopedFilter = useMemo(
+    () => ({
+      modelName: model.filename,
+      rejectedMode: 'include' as const,
+      archivedMode: 'include' as const,
+      sortBy: 'newest' as const,
+    }),
+    [model.filename]
   );
-  const highestRated = [...associatedImages]
-    .filter((i) => i.rating >= 4)
-    .sort((a, b) => b.rating - a.rating)
-    .slice(0, 6);
+  const { items: associatedImages } = useScopedGalleryImages(scopedFilter, refreshVersion);
+  const highestRated = useMemo(
+    () =>
+      [...associatedImages]
+        .filter((i) => i.rating >= 4)
+        .sort((a, b) => b.rating - a.rating)
+        .slice(0, 6),
+    [associatedImages]
+  );
 
   const previews = model.previewImages || [];
 

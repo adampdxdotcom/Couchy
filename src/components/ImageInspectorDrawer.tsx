@@ -39,7 +39,6 @@ interface ImageInspectorDrawerProps {
   initialIterationId?: number | null;
   galleryCards?: ImageRecord[];
   galleryFilter?: InspectorVisibilityFilter;
-  allImages?: ImageRecord[];
   loras?: LoraExplorerItem[];
   models?: ModelInventoryItem[];
   presets?: LoraPreset[];
@@ -94,7 +93,6 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
   initialIterationId = null,
   galleryCards = [],
   galleryFilter,
-  allImages = [],
   loras = [],
   models = [],
   presets = [],
@@ -180,7 +178,6 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
     initialIterationId,
     galleryCards,
     galleryFilter,
-    allImages,
     ghostItems,
     onClose,
     onPrev,
@@ -968,7 +965,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
           targetSlot="B"
           currentSlotAId={activeImage.id}
           currentSlotBId={compareImage?.id ?? null}
-          initialImages={allImages}
+          initialImages={galleryCards}
           characters={characters}
           loras={loras}
           onSelectImage={(pickedImg) => {

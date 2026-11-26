@@ -231,6 +231,12 @@ export interface CharacterProfile {
   averageRating: number;
   firstGenerationDate: string | null;
   latestGenerationDate: string | null;
+  recentSamples?: {
+    id: number;
+    filename: string;
+    thumbnailUrl: string;
+    positivePrompt: string | null;
+  }[];
   createdAt: string;
   updatedAt: string;
 }
@@ -567,6 +573,9 @@ export interface GalleryFilterState {
   civitaiShareMode?: CivitaiShareFilterMode;
   dateFrom: string;
   dateTo: string;
+  workflowId?: number | null;
+  modelName?: string;
+  limit?: number;
 }
 
 export type AspectRatioPreset = '1:1' | '3:4' | '4:3' | '16:9' | '9:16' | '2:3' | '3:2';

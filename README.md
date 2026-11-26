@@ -35,7 +35,7 @@ Browse by topic on GitHub, or open **System &rarr; Help** inside Couchy to read 
 | [Characters & Generation Studio](./docs/characters-and-studio.md) | Character roster, portrait framing, portrait analysis, Assisted Identification & batch studio |
 | [LoRAs, Models, Presets & Downloader](./docs/loras-models-and-downloader.md) | LoRA & Base Model explorers, LoRA Presets, metadata enrichment, Civitai/HF downloader & Early Access |
 | [Civitai Integration](./docs/civitai-integration.md) | `Civitai Activity Notifications` switch, draft sharing, pulled post & LoRA stats/comments, auto-match & manual linking |
-| [Workflows & System Administration](./docs/workflows-and-system.md) | Structured Krea 2 Node Editor, validation tests, System toggles & all 8 System tabs |
+| [Workflows & System Administration](./docs/workflows-and-system.md) | Structured Krea 2 Node Editor, validation tests, System & export metadata switches & all 8 System tabs |
 | [Keyboard Shortcuts & Hotkeys](./docs/keyboard-shortcuts.md) | Inspector, Gallery, and Quick Gen Box hotkeys |
 | [Configuration & Technical Reference](./docs/technical-reference.md) | Full `docker-compose.yml`, `extra_model_paths.yaml`, Agent prompt contracts, architecture & backups |
 

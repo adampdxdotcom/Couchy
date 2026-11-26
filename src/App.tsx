@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import { api } from './api/client.ts';
 import type { GenerationReadinessResponse } from './shared/apiTypes.ts';
+import type { ImageRecord } from './shared/types.ts';
 import { TopNavHeader, type WorkspaceTab } from './components/TopNavHeader.tsx';
 import { GalleryFilterBar, type GalleryViewLayout } from './components/GalleryFilterBar.tsx';
 import { GalleryGridView } from './components/GalleryGridView.tsx';
@@ -31,6 +32,7 @@ export default function App() {
   const [thumbScale, setThumbScale] = useState<'sm' | 'md' | 'lg'>('md');
   const [inspectedImageId, setInspectedImageId] = useState<number | null>(null);
   const [inspectedIterationId, setInspectedIterationId] = useState<number | null>(null);
+  const [inspectedFallbackImage, setInspectedFallbackImage] = useState<ImageRecord | null>(null);
   const [selectedCharacterId, setSelectedCharacterId] = useState<number | null>(null);
   const [quickGenPrefill, setQuickGenPrefill] = useState<QuickGenPrefill | null>(null);
   const [readiness, setReadiness] = useState<GenerationReadinessResponse | null>(null);
@@ -66,18 +68,27 @@ export default function App() {
   }, []);
 
   const openInspectedImage = useCallback(
-    (cardId: number | null, iterationId: number | null = null) => {
+    (
+      cardId: number | null,
+      iterationId: number | null = null,
+      seedRecord: ImageRecord | null = null
+    ) => {
       setInspectedImageId(cardId);
       setInspectedIterationId(cardId === null ? null : iterationId);
+      if (cardId === null) {
+        setInspectedFallbackImage(null);
+      } else if (seedRecord && seedRecord.id === cardId) {
+        setInspectedFallbackImage(seedRecord);
+      }
     },
     []
   );
 
   const toasts = useAppToasts();
-  const workspace = useWorkspaceData();
+  const workspace = useWorkspaceData(activeTab);
 
   const livePolling = useLiveStatusPolling({
-    allImages: workspace.allImages,
+    visibleImages: workspace.images,
     characters: workspace.characters,
     pushToast: toasts.pushToast,
     onRefreshWorkspace: workspace.refreshWorkspaceData,
@@ -91,8 +102,7 @@ export default function App() {
   }, [livePolling.refreshComfyStatus, workspace.refreshWorkspaceData]);
 
   const civitaiNotifications = useCivitaiNotifications({
-    allImages: workspace.allImages,
-    isLoadingImages: workspace.isLoadingImages,
+    refreshVersion: workspace.refreshVersion,
     notificationsEnabled: workspace.healthData?.config?.civitaiActivityNotificationsEnabled !== false,
     pushToast: toasts.pushToast,
     onRefreshAll: refreshAll,
@@ -123,8 +133,6 @@ export default function App() {
     setInspectedImageId,
     images: workspace.images,
     setImages: workspace.setImages,
-    allImages: workspace.allImages,
-    setAllImages: workspace.setAllImages,
     characters: workspace.characters,
     models: workspace.models,
     filters: workspace.filters,
@@ -136,10 +144,43 @@ export default function App() {
     setQuickGenPrefill,
   });
 
+  const inspectedFromGallery =
+    inspectedImageId !== null
+      ? workspace.images.find((i) => i.id === inspectedImageId) || null
+      : null;
+
+  // Fetch full record on demand when opening an image ID that is outside the active gallery page
+  useEffect(() => {
+    if (inspectedImageId === null) {
+      setInspectedFallbackImage(null);
+      return;
+    }
+    if (inspectedFromGallery) return;
+    if (inspectedFallbackImage?.id === inspectedImageId) return;
+
+    let cancelled = false;
+    api
+      .getImageDetail(inspectedImageId)
+      .then((res) => {
+        if (!cancelled && res.image) {
+          setInspectedFallbackImage(res.image);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setInspectedImageId(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inspectedImageId, inspectedFromGallery, inspectedFallbackImage?.id]);
+
   const inspectedImage =
-    workspace.images.find((i) => i.id === inspectedImageId) ||
-    workspace.allImages.find((i) => i.id === inspectedImageId) ||
-    null;
+    inspectedFromGallery ||
+    (inspectedFallbackImage && inspectedFallbackImage.id === inspectedImageId
+      ? inspectedFallbackImage
+      : null);
 
   const inspectedIdx = workspace.images.findIndex((i) => i.id === inspectedImageId);
   const showQuickGenBar =
@@ -185,7 +226,7 @@ export default function App() {
             onLayoutChange={setLayout}
             thumbScale={thumbScale}
             onThumbScaleChange={setThumbScale}
-            totalMatching={workspace.images.length}
+            totalMatching={workspace.totalImages}
             page={workspace.currentGalleryPage}
             totalPages={workspace.totalGalleryPages}
             onPageChange={workspace.handleGalleryPageChange}
@@ -276,6 +317,12 @@ export default function App() {
             filters={workspace.filters}
             page={workspace.currentGalleryPage}
             pageSize={workspace.galleryPageSize}
+            totalImages={workspace.totalImages}
+            hasMore={workspace.hasMoreGalleryImages}
+            isLoadingMore={workspace.isLoadingMore}
+            onLoadMore={() => {
+              void workspace.loadMoreGalleryImages();
+            }}
             infiniteScroll={workspace.infiniteScroll}
             isLoading={workspace.isLoadingImages}
             layout={layout}
@@ -331,7 +378,7 @@ export default function App() {
         {activeTab === 'characters' && (
           <CharacterExplorerView
             characters={workspace.characters}
-            allImages={workspace.allImages}
+            refreshVersion={workspace.refreshVersion}
             ghostItems={livePolling.activeGhostItems}
             loras={workspace.visibleLoras}
             models={workspace.models}
@@ -341,7 +388,7 @@ export default function App() {
             selectedCharacterId={selectedCharacterId}
             onSelectCharacterId={setSelectedCharacterId}
             onRefresh={refreshAll}
-            onOpenImage={(img) => openInspectedImage(img.id)}
+            onOpenImage={(img) => openInspectedImage(img.id, null, img)}
             onFilterGalleryByCharacter={(charId, addonFilter) => {
               workspace.setGalleryPage(1);
               workspace.setFilters({
@@ -389,9 +436,8 @@ export default function App() {
             models={workspace.models}
             workflows={workspace.workflows}
             checkpoints={workspace.checkpoints}
-            allImages={workspace.allImages}
             onRefreshAll={refreshAll}
-            onOpenImage={(img) => openInspectedImage(img.id)}
+            onOpenImageId={(imageId) => openInspectedImage(imageId)}
             onOpenSystemSettings={() => {
               setSystemSubTab('lm_studio');
               setActiveTab('system');
@@ -404,13 +450,13 @@ export default function App() {
             loras={workspace.loras}
             models={workspace.models}
             presets={workspace.presets}
-            allImages={workspace.allImages}
+            refreshVersion={workspace.refreshVersion}
             pillTypeSettings={workspace.pillTypeSettings}
             civitaiActivityNotificationsEnabled={
               workspace.healthData?.config?.civitaiActivityNotificationsEnabled !== false
             }
             onRefresh={refreshAll}
-            onOpenImage={(img) => openInspectedImage(img.id)}
+            onOpenImage={(img) => openInspectedImage(img.id, null, img)}
             onFilterGalleryByLora={(loraFilename) => {
               workspace.setFilters({ ...INITIAL_FILTERS, loras: [loraFilename] });
               setActiveTab('gallery');
@@ -426,12 +472,12 @@ export default function App() {
         {activeTab === 'workflows' && (
           <WorkflowLibraryView
             workflows={workspace.workflows}
-            allImages={workspace.allImages}
+            refreshVersion={workspace.refreshVersion}
             models={workspace.models}
             loras={workspace.visibleLoras}
             checkpoints={workspace.checkpoints}
             onRefresh={refreshAll}
-            onOpenImage={(img) => openInspectedImage(img.id)}
+            onOpenImage={(img) => openInspectedImage(img.id, null, img)}
             onPushToast={toasts.pushToast}
           />
         )}
@@ -457,7 +503,6 @@ export default function App() {
             rejectedMode: workspace.filters.rejectedMode,
             archivedMode: workspace.filters.archivedMode,
           }}
-          allImages={workspace.allImages}
           loras={workspace.visibleLoras}
           models={workspace.models}
           presets={workspace.presets}
@@ -469,11 +514,23 @@ export default function App() {
           onPrev={
             inspectedIdx > 0
               ? () => openInspectedImage(workspace.images[inspectedIdx - 1].id)
+              : inspectedIdx === 0 && !workspace.infiniteScroll && workspace.currentGalleryPage > 1
+              ? () => {
+                  void workspace.loadAdjacentPageForInspector('prev').then((target) => {
+                    if (target) openInspectedImage(target.id, null, target);
+                  });
+                }
               : undefined
           }
           onNext={
             inspectedIdx >= 0 && inspectedIdx < workspace.images.length - 1
               ? () => openInspectedImage(workspace.images[inspectedIdx + 1].id)
+              : inspectedIdx === workspace.images.length - 1 && workspace.hasMoreGalleryImages
+              ? () => {
+                  void workspace.loadAdjacentPageForInspector('next').then((target) => {
+                    if (target) openInspectedImage(target.id, null, target);
+                  });
+                }
               : undefined
           }
           onUpdated={refreshAll}
@@ -528,7 +585,6 @@ export default function App() {
           loras={workspace.visibleLoras}
           models={workspace.models}
           presets={workspace.presets}
-          allImages={workspace.allImages}
           workflows={workspace.workflows}
           prefillPayload={quickGenPrefill}
           onClearPrefill={handleClearQuickGenPrefill}

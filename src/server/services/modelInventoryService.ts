@@ -19,6 +19,7 @@ import {
 import { invalidateInstalledModelsCache } from './civitai/civitaiModelEnrichmentService.ts';
 import { invalidateStorageUsageStatsCache } from './storageStatsService.ts';
 import { notifyWorkspaceDataChanged } from './liveMonitor/liveMonitorState.ts';
+import { getOrBuildStampedCatalog } from './stampedCatalogCache.ts';
 import type { ModelInventoryItem, ModelType } from '../../shared/types.ts';
 
 export interface LoraMentionConfigInput {
@@ -389,72 +390,147 @@ async function runSyncModelInventoryOnce(): Promise<ModelInventoryItem[]> {
   return listModelInventory();
 }
 
-export function listModelInventory(): ModelInventoryItem[] {
-  const rows = db
-    .prepare(
-      `
-      SELECT
-        m.*,
-        COUNT(DISTINCT i.id) AS dependentImageCount,
-        COUNT(DISTINCT iw.workflow_id) AS dependentWorkflowCount,
-        AVG(CASE WHEN rt.rating > 0 THEN rt.rating ELSE NULL END) AS avgRating
-      FROM models m
-      LEFT JOIN image_models im ON LOWER(im.model_name) = LOWER(m.filename)
-      LEFT JOIN images i ON i.id = im.image_id AND i.is_missing = 0
-      LEFT JOIN ratings rt ON rt.content_hash = i.content_hash
-      LEFT JOIN image_workflows iw ON iw.image_id = i.id
-      GROUP BY m.id
-      ORDER BY m.is_installed DESC, dependentImageCount DESC, m.filename COLLATE NOCASE ASC
-    `
-    )
-    .all() as any[];
+/**
+ * Lists model inventory. When `compact` is true, runs a zero-join query directly against `models`
+ * and omits heavy Civitai HTML descriptions, stats, and comment arrays (keeping at most 1 cover
+ * preview URL for Quick Gen @mention avatars).
+ */
+export function listModelInventory(options?: { compact?: boolean }): ModelInventoryItem[] {
+  const compact = Boolean(options?.compact);
+  return getOrBuildStampedCatalog(compact ? 'models:compact' : 'models:full', () => {
+    if (compact) {
+      const rows = db
+        .prepare(
+          `
+          SELECT
+            id, name, filename, model_type, lora_category, file_path, file_size,
+            sha256_hash, autov2_hash, is_installed, comfyui_path, download_file_path,
+            is_hidden, source_type, download_url, civitai_id, civitai_version_id,
+            civitai_url, base_model, recommended_weight, preview_images_json,
+            civitai_fetched_at, hf_repo_id, user_notes, nickname, mention_enabled,
+            llm_description, last_seen_at, civitai_creator_username,
+            is_own_civitai_upload, civitai_stats_synced_at
+          FROM models
+          ORDER BY is_installed DESC, filename COLLATE NOCASE ASC
+        `
+        )
+        .all() as any[];
 
-  return rows.map((r) => {
-    const isInstalled = Boolean(r.is_installed);
-    const downloadFilePath = r.download_file_path || null;
-    return {
-      id: r.id,
-      name: r.name,
-      filename: r.filename,
-      modelType: r.model_type,
-      loraCategory: r.lora_category || 'unclassified',
-      filePath: r.file_path || null,
-      fileSize: r.file_size ?? null,
-      sha256Hash: r.sha256_hash || null,
-      autov2Hash: r.autov2_hash || null,
-      isInstalled,
-      isDownloadedPendingImport: Boolean(!isInstalled && downloadFilePath),
-      comfyuiPath: r.comfyui_path || null,
-      downloadFilePath,
-      isHidden: Boolean(r.is_hidden),
-      sourceType: r.source_type,
-      downloadUrl: r.download_url || null,
-      civitaiId: r.civitai_id || null,
-      civitaiVersionId: r.civitai_version_id || null,
-      civitaiUrl: r.civitai_url || null,
-      baseModel: r.base_model || null,
-      recommendedWeight:
-        r.recommended_weight !== null && r.recommended_weight !== undefined
-          ? Number(r.recommended_weight)
-          : null,
-      civitaiDescription: r.civitai_description || null,
-      previewImages: parsePreviewImagesJson(r.preview_images_json, r.id),
-      civitaiFetchedAt: r.civitai_fetched_at || null,
-      hfRepoId: r.hf_repo_id || null,
-      userNotes: r.user_notes || null,
-      nickname: r.nickname || null,
-      mentionEnabled: Boolean(r.mention_enabled),
-      llmDescription: r.llm_description || null,
-      averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
-      lastSeenAt: r.last_seen_at,
-      dependentImageCount: Number(r.dependentImageCount || 0),
-      dependentWorkflowCount: Number(r.dependentWorkflowCount || 0),
-      civitaiCreatorUsername: r.civitai_creator_username || null,
-      isOwnCivitaiUpload: Boolean(r.is_own_civitai_upload),
-      civitaiStats: parseCivitaiStatsJson(r.civitai_stats_json),
-      civitaiComments: parseCivitaiCommentsJson(r.civitai_comments_json),
-      civitaiStatsSyncedAt: r.civitai_stats_synced_at || null,
-    };
+      return rows.map((r) => {
+        const isInstalled = Boolean(r.is_installed);
+        const downloadFilePath = r.download_file_path || null;
+        return {
+          id: r.id,
+          name: r.name,
+          filename: r.filename,
+          modelType: r.model_type,
+          loraCategory: r.lora_category || 'unclassified',
+          filePath: r.file_path || null,
+          fileSize: r.file_size ?? null,
+          sha256Hash: r.sha256_hash || null,
+          autov2Hash: r.autov2_hash || null,
+          isInstalled,
+          isDownloadedPendingImport: Boolean(!isInstalled && downloadFilePath),
+          comfyuiPath: r.comfyui_path || null,
+          downloadFilePath,
+          isHidden: Boolean(r.is_hidden),
+          sourceType: r.source_type,
+          downloadUrl: r.download_url || null,
+          civitaiId: r.civitai_id || null,
+          civitaiVersionId: r.civitai_version_id || null,
+          civitaiUrl: r.civitai_url || null,
+          baseModel: r.base_model || null,
+          recommendedWeight:
+            r.recommended_weight !== null && r.recommended_weight !== undefined
+              ? Number(r.recommended_weight)
+              : null,
+          civitaiDescription: null,
+          previewImages: parsePreviewImagesJson(r.preview_images_json, r.id).slice(0, 1),
+          civitaiFetchedAt: r.civitai_fetched_at || null,
+          hfRepoId: r.hf_repo_id || null,
+          userNotes: r.user_notes || null,
+          nickname: r.nickname || null,
+          mentionEnabled: Boolean(r.mention_enabled),
+          llmDescription: r.llm_description || null,
+          averageRating: 0,
+          lastSeenAt: r.last_seen_at,
+          dependentImageCount: 0,
+          dependentWorkflowCount: 0,
+          civitaiCreatorUsername: r.civitai_creator_username || null,
+          isOwnCivitaiUpload: Boolean(r.is_own_civitai_upload),
+          civitaiStats: null,
+          civitaiComments: [],
+          civitaiStatsSyncedAt: r.civitai_stats_synced_at || null,
+        };
+      });
+    }
+
+    const rows = db
+      .prepare(
+        `
+        SELECT
+          m.*,
+          COUNT(DISTINCT i.id) AS dependentImageCount,
+          COUNT(DISTINCT iw.workflow_id) AS dependentWorkflowCount,
+          AVG(CASE WHEN rt.rating > 0 THEN rt.rating ELSE NULL END) AS avgRating
+        FROM models m
+        LEFT JOIN image_models im ON LOWER(im.model_name) = LOWER(m.filename)
+        LEFT JOIN images i ON i.id = im.image_id AND i.is_missing = 0
+        LEFT JOIN ratings rt ON rt.content_hash = i.content_hash
+        LEFT JOIN image_workflows iw ON iw.image_id = i.id
+        GROUP BY m.id
+        ORDER BY m.is_installed DESC, dependentImageCount DESC, m.filename COLLATE NOCASE ASC
+      `
+      )
+      .all() as any[];
+
+    return rows.map((r) => {
+      const isInstalled = Boolean(r.is_installed);
+      const downloadFilePath = r.download_file_path || null;
+      return {
+        id: r.id,
+        name: r.name,
+        filename: r.filename,
+        modelType: r.model_type,
+        loraCategory: r.lora_category || 'unclassified',
+        filePath: r.file_path || null,
+        fileSize: r.file_size ?? null,
+        sha256Hash: r.sha256_hash || null,
+        autov2Hash: r.autov2_hash || null,
+        isInstalled,
+        isDownloadedPendingImport: Boolean(!isInstalled && downloadFilePath),
+        comfyuiPath: r.comfyui_path || null,
+        downloadFilePath,
+        isHidden: Boolean(r.is_hidden),
+        sourceType: r.source_type,
+        downloadUrl: r.download_url || null,
+        civitaiId: r.civitai_id || null,
+        civitaiVersionId: r.civitai_version_id || null,
+        civitaiUrl: r.civitai_url || null,
+        baseModel: r.base_model || null,
+        recommendedWeight:
+          r.recommended_weight !== null && r.recommended_weight !== undefined
+            ? Number(r.recommended_weight)
+            : null,
+        civitaiDescription: r.civitai_description || null,
+        previewImages: parsePreviewImagesJson(r.preview_images_json, r.id),
+        civitaiFetchedAt: r.civitai_fetched_at || null,
+        hfRepoId: r.hf_repo_id || null,
+        userNotes: r.user_notes || null,
+        nickname: r.nickname || null,
+        mentionEnabled: Boolean(r.mention_enabled),
+        llmDescription: r.llm_description || null,
+        averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
+        lastSeenAt: r.last_seen_at,
+        dependentImageCount: Number(r.dependentImageCount || 0),
+        dependentWorkflowCount: Number(r.dependentWorkflowCount || 0),
+        civitaiCreatorUsername: r.civitai_creator_username || null,
+        isOwnCivitaiUpload: Boolean(r.is_own_civitai_upload),
+        civitaiStats: parseCivitaiStatsJson(r.civitai_stats_json),
+        civitaiComments: parseCivitaiCommentsJson(r.civitai_comments_json),
+        civitaiStatsSyncedAt: r.civitai_stats_synced_at || null,
+      };
+    });
   });
 }
 

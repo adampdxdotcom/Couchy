@@ -11,6 +11,11 @@ import {
 } from './civitai/civitaiModelStatsHelper.ts';
 import { summarizeCivitaiDraftRows } from './civitai/civitaiActivitySyncService.ts';
 import { getCharacterPortraitMetadataMap } from './characterService.ts';
+import {
+  getOrBuildCollapsedGalleryPool,
+  getOrBuildHydratedGalleryPool,
+} from './galleryPoolCache.ts';
+import { getOrBuildStampedCatalog } from './stampedCatalogCache.ts';
 import type {
   GalleryFilterState,
   ImageRecord,
@@ -664,11 +669,21 @@ function evaluateSinglePredicate(img: ImageRecord, predicate: string): boolean {
   );
 }
 
-/**
- * Queries and filters images according to GalleryFilterState.
- */
-export function queryGalleryImages(filters: Partial<GalleryFilterState>): ImageRecord[] {
-  const rows = db
+export interface GalleryQueryPageParams extends Partial<GalleryFilterState> {
+  page?: number;
+  pageSize?: number;
+}
+
+export interface GalleryQueryPageResult {
+  items: ImageRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+function loadRawActiveGalleryRows(): any[] {
+  return db
     .prepare(
       `
       SELECT
@@ -685,21 +700,35 @@ export function queryGalleryImages(filters: Partial<GalleryFilterState>): ImageR
     `
     )
     .all() as any[];
+}
 
+/**
+ * Queries, filters, sorts, and optionally paginates gallery images using a stamp-invalidated
+ * server-side collapsed pool cache so page flips and filter changes avoid repeated full scans.
+ */
+export function queryGalleryImagesPage(filters: GalleryQueryPageParams): GalleryQueryPageResult {
   const hasTextSearch = Boolean(filters.query && filters.query.trim());
-  let items = hydrateImageRecords(rows, { includeVisualTags: hasTextSearch });
-
-  // Rejected & Archived filtering
   const rejectedMode = filters.rejectedMode || 'exclude';
-  if (rejectedMode === 'exclude') items = items.filter((i) => !i.isRejected);
-  else if (rejectedMode === 'only') items = items.filter((i) => i.isRejected);
-
   const archivedMode = filters.archivedMode || 'exclude';
-  if (archivedMode === 'exclude') items = items.filter((i) => !i.isArchived);
-  else if (archivedMode === 'only') items = items.filter((i) => i.isArchived);
 
-  // Collapse iteration stacks to their single representative card (poster/hearted or most recent)
-  items = collapseSeriesInGalleryPool(items);
+  const collapsedKey = `${rejectedMode}|${archivedMode}|${hasTextSearch ? 'vt1' : 'vt0'}`;
+  const baseCollapsedPool = getOrBuildCollapsedGalleryPool(collapsedKey, () => {
+    const hydratedPool = getOrBuildHydratedGalleryPool(hasTextSearch, () =>
+      hydrateImageRecords(loadRawActiveGalleryRows(), { includeVisualTags: hasTextSearch })
+    );
+
+    let filtered = hydratedPool;
+    if (rejectedMode === 'exclude') filtered = filtered.filter((i) => !i.isRejected);
+    else if (rejectedMode === 'only') filtered = filtered.filter((i) => i.isRejected);
+
+    if (archivedMode === 'exclude') filtered = filtered.filter((i) => !i.isArchived);
+    else if (archivedMode === 'only') filtered = filtered.filter((i) => i.isArchived);
+
+    return collapseSeriesInGalleryPool(filtered);
+  });
+
+  // Shallow-copy so downstream filtering/sorting never mutates the cached pool
+  let items = baseCollapsedPool.slice();
 
   if (filters.favoritesOnly) {
     items = items.filter((i) => i.isFavorite);
@@ -710,6 +739,37 @@ export function queryGalleryImages(filters: Partial<GalleryFilterState>): ImageR
   if (filters.checkpoint) {
     const ck = filters.checkpoint.toLowerCase();
     items = items.filter((i) => (i.checkpointName || '').toLowerCase() === ck);
+  }
+  if (filters.modelName && filters.modelName.trim()) {
+    const normalizeModelKey = (raw: string) =>
+      raw
+        .trim()
+        .replace(/\\/g, '/')
+        .split('/')
+        .pop()!
+        .replace(/\.(safetensors|ckpt|pt|pth|bin|gguf)$/i, '')
+        .toLowerCase();
+    const targetKey = normalizeModelKey(filters.modelName);
+    // Bulk gallery hydration omits image_models rows for speed, so look up matching model_name links directly
+    const matchedModelImageIds = new Set<number>();
+    const modelRows = db
+      .prepare('SELECT image_id AS imageId, model_name AS modelName FROM image_models')
+      .all() as { imageId: number; modelName: string }[];
+    for (const mr of modelRows) {
+      if (mr.modelName && normalizeModelKey(mr.modelName) === targetKey) {
+        matchedModelImageIds.add(Number(mr.imageId));
+      }
+    }
+    items = items.filter(
+      (i) =>
+        matchedModelImageIds.has(i.id) ||
+        (i.checkpointName && normalizeModelKey(i.checkpointName) === targetKey) ||
+        i.models.some((m) => normalizeModelKey(m.modelName) === targetKey)
+    );
+  }
+  if (filters.workflowId !== undefined && filters.workflowId !== null) {
+    const wfId = Number(filters.workflowId);
+    items = items.filter((i) => i.workflowId === wfId);
   }
   if (filters.dependencyStatus) {
     items = items.filter((i) => i.dependencyStatus === filters.dependencyStatus);
@@ -813,161 +873,316 @@ export function queryGalleryImages(filters: Partial<GalleryFilterState>): ImageR
     }
   });
 
-  // Strip Inspector-only visualTags from bulk list responses (GET /api/images/:id provides full tags)
-  for (const item of items) {
-    if (item.visualTags && item.visualTags.length > 0) {
-      item.visualTags = [];
-    }
+  const total = items.length;
+  const hasPagination =
+    typeof filters.page === 'number' && Number.isFinite(filters.page) && filters.page >= 1;
+
+  let page = 1;
+  let pageSize = total;
+  let totalPages = 1;
+
+  if (hasPagination) {
+    const requestedPageSize =
+      typeof filters.pageSize === 'number' && Number.isFinite(filters.pageSize)
+        ? Math.min(500, Math.max(1, Math.floor(filters.pageSize)))
+        : 48;
+    pageSize = requestedPageSize;
+    totalPages = Math.max(1, Math.ceil(total / pageSize));
+    page = Math.min(Math.max(1, Math.floor(filters.page!)), totalPages);
+    const startIdx = (page - 1) * pageSize;
+    items = items.slice(startIdx, startIdx + pageSize);
+  } else if (typeof filters.limit === 'number' && filters.limit > 0 && items.length > filters.limit) {
+    // Optional result cap for lightweight scoped views (e.g., Workflow detail or Compare picker)
+    items = items.slice(0, Math.floor(filters.limit));
+    pageSize = items.length;
   }
 
-  return items;
+  // Strip Inspector-only visualTags from bulk list responses without mutating cached records
+  const sanitized = hasTextSearch
+    ? items.map((item) =>
+        item.visualTags && item.visualTags.length > 0 ? { ...item, visualTags: [] } : item
+      )
+    : items;
+
+  return {
+    items: sanitized,
+    total,
+    page,
+    pageSize,
+    totalPages,
+  };
+}
+
+/**
+ * Queries and filters images according to GalleryFilterState (unpaginated convenience wrapper).
+ */
+export function queryGalleryImages(filters: Partial<GalleryFilterState>): ImageRecord[] {
+  return queryGalleryImagesPage(filters).items;
 }
 
 /**
  * Aggregates LoRA Explorer records combining installed models and extracted image_loras.
+ * When `compact` is true, omits heavy Civitai descriptions/comments/stats/previews and multi-table
+ * workflow/rating/character joins so Gallery & Quick Gen startup stay lightweight.
  */
-export function listLoraExplorerItems(): LoraExplorerItem[] {
-  const rows = db
-    .prepare(
+export function listLoraExplorerItems(options?: { compact?: boolean }): LoraExplorerItem[] {
+  const compact = Boolean(options?.compact);
+  return getOrBuildStampedCatalog(compact ? 'loras:compact' : 'loras:full', () => {
+    if (compact) {
+      const countRows = db
+        .prepare(
+          `SELECT LOWER(il.lora_name) AS lowerName, COUNT(DISTINCT il.image_id) AS imageCount
+           FROM image_loras il
+           JOIN images i ON i.id = il.image_id AND i.is_missing = 0
+           GROUP BY LOWER(il.lora_name)`
+        )
+        .all() as { lowerName: string; imageCount: number }[];
+      const countByLower = new Map<string, number>();
+      for (const c of countRows) {
+        countByLower.set(c.lowerName, Number(c.imageCount || 0));
+      }
+
+      const compactRows = db
+        .prepare(
+          `SELECT
+             m.id AS modelId,
+             m.filename,
+             COALESCE(m.name, REPLACE(m.filename, '.safetensors', '')) AS name,
+             m.file_path AS filePath,
+             m.file_size AS fileSize,
+             m.sha256_hash AS sha256Hash,
+             m.autov2_hash AS autov2Hash,
+             COALESCE(m.lora_category, 'unclassified') AS loraCategory,
+             COALESCE(m.is_installed, 0) AS isInstalled,
+             m.comfyui_path AS comfyuiPath,
+             m.download_file_path AS downloadFilePath,
+             COALESCE(m.is_hidden, 0) AS isHidden,
+             m.download_url AS downloadUrl,
+             m.civitai_id AS civitaiId,
+             m.civitai_version_id AS civitaiVersionId,
+             m.civitai_url AS civitaiUrl,
+             m.base_model AS baseModel,
+             m.recommended_weight AS recommendedWeight,
+             m.civitai_fetched_at AS civitaiFetchedAt,
+             m.hf_repo_id AS hfRepoId,
+             m.user_notes AS userNotes,
+             m.nickname AS nickname,
+             COALESCE(m.mention_enabled, 0) AS mentionEnabled,
+             COALESCE(m.default_model_strength, 1.0) AS defaultModelStrength,
+             COALESCE(m.default_clip_strength, 1.0) AS defaultClipStrength,
+             m.trigger_word AS triggerWord,
+             m.llm_description AS llmDescription,
+             m.civitai_creator_username AS civitaiCreatorUsername,
+             COALESCE(m.is_own_civitai_upload, 0) AS isOwnCivitaiUpload,
+             m.civitai_stats_synced_at AS civitaiStatsSyncedAt
+           FROM models m
+           WHERE m.model_type = 'lora'
+           GROUP BY LOWER(m.filename)`
+        )
+        .all() as any[];
+
+      return compactRows
+        .map((r) => {
+          const lower = String(r.filename || '').toLowerCase();
+          return {
+            name: r.name,
+            modelId: r.modelId ?? null,
+            filename: r.filename,
+            filePath: r.filePath ?? null,
+            fileSize: r.fileSize ?? null,
+            sha256Hash: r.sha256Hash ?? null,
+            autov2Hash: r.autov2Hash ?? null,
+            loraCategory: r.loraCategory || 'unclassified',
+            isInstalled: Boolean(r.isInstalled),
+            isDownloadedPendingImport: Boolean(!r.isInstalled && r.downloadFilePath),
+            comfyuiPath: r.comfyuiPath ?? null,
+            downloadFilePath: r.downloadFilePath ?? null,
+            isHidden: Boolean(r.isHidden),
+            downloadUrl: r.downloadUrl ?? null,
+            civitaiId: r.civitaiId ?? null,
+            civitaiVersionId: r.civitaiVersionId ?? null,
+            civitaiUrl: r.civitaiUrl ?? null,
+            baseModel: r.baseModel ?? null,
+            recommendedWeight:
+              r.recommendedWeight !== null && r.recommendedWeight !== undefined
+                ? Number(r.recommendedWeight)
+                : null,
+            civitaiDescription: null,
+            previewImages: [],
+            civitaiFetchedAt: r.civitaiFetchedAt ?? null,
+            hfRepoId: r.hfRepoId ?? null,
+            userNotes: r.userNotes ?? null,
+            nickname: r.nickname || null,
+            mentionEnabled: Boolean(r.mentionEnabled),
+            defaultModelStrength: Number(r.defaultModelStrength ?? 1.0),
+            defaultClipStrength: Number(r.defaultClipStrength ?? 1.0),
+            triggerWord: r.triggerWord || null,
+            llmDescription: r.llmDescription || null,
+            civitaiCreatorUsername: r.civitaiCreatorUsername || null,
+            isOwnCivitaiUpload: Boolean(r.isOwnCivitaiUpload),
+            civitaiStats: null,
+            civitaiComments: [],
+            civitaiStatsSyncedAt: r.civitaiStatsSyncedAt || null,
+            imageCount: countByLower.get(lower) ?? 0,
+            workflowCount: 0,
+            averageRating: 0,
+            minModelStrength: null,
+            maxModelStrength: null,
+            avgModelStrength: null,
+            minClipStrength: null,
+            maxClipStrength: null,
+            characters: [],
+          };
+        })
+        .sort(
+          (a, b) =>
+            b.imageCount - a.imageCount ||
+            a.filename.localeCompare(b.filename, undefined, { sensitivity: 'base' })
+        );
+    }
+
+    const rows = db
+      .prepare(
+        `
+        SELECT
+          COALESCE(m.filename, il.lora_name) AS filename,
+          COALESCE(m.name, REPLACE(il.lora_name, '.safetensors', '')) AS name,
+          m.id AS modelId,
+          m.file_path AS filePath,
+          m.file_size AS fileSize,
+          m.sha256_hash AS sha256Hash,
+          m.autov2_hash AS autov2Hash,
+          COALESCE(m.lora_category, 'unclassified') AS loraCategory,
+          COALESCE(m.is_installed, 0) AS isInstalled,
+          m.comfyui_path AS comfyuiPath,
+          m.download_file_path AS downloadFilePath,
+          COALESCE(m.is_hidden, 0) AS isHidden,
+          m.download_url AS downloadUrl,
+          m.civitai_id AS civitaiId,
+          m.civitai_version_id AS civitaiVersionId,
+          m.civitai_url AS civitaiUrl,
+          m.base_model AS baseModel,
+          m.recommended_weight AS recommendedWeight,
+          m.civitai_description AS civitaiDescription,
+          m.preview_images_json AS previewImagesJson,
+          m.civitai_fetched_at AS civitaiFetchedAt,
+          m.hf_repo_id AS hfRepoId,
+          m.user_notes AS userNotes,
+          m.nickname AS nickname,
+          COALESCE(m.mention_enabled, 0) AS mentionEnabled,
+          COALESCE(m.default_model_strength, 1.0) AS defaultModelStrength,
+          COALESCE(m.default_clip_strength, 1.0) AS defaultClipStrength,
+          m.trigger_word AS triggerWord,
+          m.llm_description AS llmDescription,
+          m.civitai_creator_username AS civitaiCreatorUsername,
+          COALESCE(m.is_own_civitai_upload, 0) AS isOwnCivitaiUpload,
+          m.civitai_stats_json AS civitaiStatsJson,
+          m.civitai_comments_json AS civitaiCommentsJson,
+          m.civitai_stats_synced_at AS civitaiStatsSyncedAt,
+          COUNT(DISTINCT il.image_id) AS imageCount,
+          COUNT(DISTINCT iw.workflow_id) AS workflowCount,
+          AVG(CASE WHEN r.rating > 0 THEN r.rating ELSE NULL END) AS avgRating,
+          MIN(il.model_strength) AS minModelStrength,
+          MAX(il.model_strength) AS maxModelStrength,
+          AVG(il.model_strength) AS avgModelStrength,
+          MIN(il.clip_strength) AS minClipStrength,
+          MAX(il.clip_strength) AS maxClipStrength
+        FROM models m
+        LEFT JOIN image_loras il ON LOWER(il.lora_name) = LOWER(m.filename)
+        LEFT JOIN images i ON i.id = il.image_id AND i.is_missing = 0
+        LEFT JOIN ratings r ON r.content_hash = i.content_hash
+        LEFT JOIN image_workflows iw ON iw.image_id = i.id
+        WHERE m.model_type = 'lora'
+        GROUP BY LOWER(m.filename)
+        ORDER BY imageCount DESC, m.filename COLLATE NOCASE ASC
       `
-      SELECT
-        COALESCE(m.filename, il.lora_name) AS filename,
-        COALESCE(m.name, REPLACE(il.lora_name, '.safetensors', '')) AS name,
-        m.id AS modelId,
-        m.file_path AS filePath,
-        m.file_size AS fileSize,
-        m.sha256_hash AS sha256Hash,
-        m.autov2_hash AS autov2Hash,
-        COALESCE(m.lora_category, 'unclassified') AS loraCategory,
-        COALESCE(m.is_installed, 0) AS isInstalled,
-        m.comfyui_path AS comfyuiPath,
-        m.download_file_path AS downloadFilePath,
-        COALESCE(m.is_hidden, 0) AS isHidden,
-        m.download_url AS downloadUrl,
-        m.civitai_id AS civitaiId,
-        m.civitai_version_id AS civitaiVersionId,
-        m.civitai_url AS civitaiUrl,
-        m.base_model AS baseModel,
-        m.recommended_weight AS recommendedWeight,
-        m.civitai_description AS civitaiDescription,
-        m.preview_images_json AS previewImagesJson,
-        m.civitai_fetched_at AS civitaiFetchedAt,
-        m.hf_repo_id AS hfRepoId,
-        m.user_notes AS userNotes,
-        m.nickname AS nickname,
-        COALESCE(m.mention_enabled, 0) AS mentionEnabled,
-        COALESCE(m.default_model_strength, 1.0) AS defaultModelStrength,
-        COALESCE(m.default_clip_strength, 1.0) AS defaultClipStrength,
-        m.trigger_word AS triggerWord,
-        m.llm_description AS llmDescription,
-        m.civitai_creator_username AS civitaiCreatorUsername,
-        COALESCE(m.is_own_civitai_upload, 0) AS isOwnCivitaiUpload,
-        m.civitai_stats_json AS civitaiStatsJson,
-        m.civitai_comments_json AS civitaiCommentsJson,
-        m.civitai_stats_synced_at AS civitaiStatsSyncedAt,
-        COUNT(DISTINCT il.image_id) AS imageCount,
-        COUNT(DISTINCT iw.workflow_id) AS workflowCount,
-        AVG(CASE WHEN r.rating > 0 THEN r.rating ELSE NULL END) AS avgRating,
-        MIN(il.model_strength) AS minModelStrength,
-        MAX(il.model_strength) AS maxModelStrength,
-        AVG(il.model_strength) AS avgModelStrength,
-        MIN(il.clip_strength) AS minClipStrength,
-        MAX(il.clip_strength) AS maxClipStrength
-      FROM models m
-      LEFT JOIN image_loras il ON LOWER(il.lora_name) = LOWER(m.filename)
-      LEFT JOIN images i ON i.id = il.image_id AND i.is_missing = 0
-      LEFT JOIN ratings r ON r.content_hash = i.content_hash
-      LEFT JOIN image_workflows iw ON iw.image_id = i.id
-      WHERE m.model_type = 'lora'
-      GROUP BY LOWER(m.filename)
-      ORDER BY imageCount DESC, m.filename COLLATE NOCASE ASC
-    `
-    )
-    .all() as any[];
+      )
+      .all() as any[];
 
-  const portraitMap = getCharacterPortraitMetadataMap();
+    const portraitMap = getCharacterPortraitMetadataMap();
 
-  // Bulk-fetch all LoRA-to-character links in one query instead of N+1 per LoRA row
-  const allLinkedCharRows = db
-    .prepare(
-      `SELECT LOWER(cl.lora_name) AS lowerLoraName, c.id, c.name, cl.appearance_label AS appearanceLabel
-       FROM character_loras cl
-       JOIN characters c ON c.id = cl.character_id`
-    )
-    .all() as { lowerLoraName: string; id: number; name: string; appearanceLabel: string }[];
+    // Bulk-fetch all LoRA-to-character links in one query instead of N+1 per LoRA row
+    const allLinkedCharRows = db
+      .prepare(
+        `SELECT LOWER(cl.lora_name) AS lowerLoraName, c.id, c.name, cl.appearance_label AS appearanceLabel
+         FROM character_loras cl
+         JOIN characters c ON c.id = cl.character_id`
+      )
+      .all() as { lowerLoraName: string; id: number; name: string; appearanceLabel: string }[];
 
-  const charsByLowerLora = new Map<string, LoraExplorerItem['characters']>();
+    const charsByLowerLora = new Map<string, LoraExplorerItem['characters']>();
 
-  for (const c of allLinkedCharRows) {
-    const portraitInfo = portraitMap.get(c.id);
-    const entry = {
-      id: c.id,
-      name: c.name,
-      appearanceLabel: c.appearanceLabel,
-      portraitThumbnailUrl: portraitInfo?.url ?? null,
-      portraitCrop: portraitInfo?.crop ?? null,
-    };
-    const arr = charsByLowerLora.get(c.lowerLoraName);
-    if (arr) arr.push(entry);
-    else charsByLowerLora.set(c.lowerLoraName, [entry]);
-  }
+    for (const c of allLinkedCharRows) {
+      const portraitInfo = portraitMap.get(c.id);
+      const entry = {
+        id: c.id,
+        name: c.name,
+        appearanceLabel: c.appearanceLabel,
+        portraitThumbnailUrl: portraitInfo?.url ?? null,
+        portraitCrop: portraitInfo?.crop ?? null,
+      };
+      const arr = charsByLowerLora.get(c.lowerLoraName);
+      if (arr) arr.push(entry);
+      else charsByLowerLora.set(c.lowerLoraName, [entry]);
+    }
 
-  return rows.map((r) => {
-    const linkedChars = charsByLowerLora.get(String(r.filename || '').toLowerCase()) || [];
+    return rows.map((r) => {
+      const linkedChars = charsByLowerLora.get(String(r.filename || '').toLowerCase()) || [];
 
-    return {
-      name: r.name,
-      modelId: r.modelId ?? null,
-      filename: r.filename,
-      filePath: r.filePath ?? null,
-      fileSize: r.fileSize ?? null,
-      sha256Hash: r.sha256Hash ?? null,
-      autov2Hash: r.autov2Hash ?? null,
-      loraCategory: r.loraCategory || 'unclassified',
-      isInstalled: Boolean(r.isInstalled),
-      isDownloadedPendingImport: Boolean(!r.isInstalled && r.downloadFilePath),
-      comfyuiPath: r.comfyuiPath ?? null,
-      downloadFilePath: r.downloadFilePath ?? null,
-      isHidden: Boolean(r.isHidden),
-      downloadUrl: r.downloadUrl ?? null,
-      civitaiId: r.civitaiId ?? null,
-      civitaiVersionId: r.civitaiVersionId ?? null,
-      civitaiUrl: r.civitaiUrl ?? null,
-      baseModel: r.baseModel ?? null,
-      recommendedWeight:
-        r.recommendedWeight !== null && r.recommendedWeight !== undefined
-          ? Number(r.recommendedWeight)
-          : null,
-      civitaiDescription: r.civitaiDescription ?? null,
-      previewImages: parsePreviewImagesJson(r.previewImagesJson, r.modelId),
-      civitaiFetchedAt: r.civitaiFetchedAt ?? null,
-      hfRepoId: r.hfRepoId ?? null,
-      userNotes: r.userNotes ?? null,
-      nickname: r.nickname || null,
-      mentionEnabled: Boolean(r.mentionEnabled),
-      defaultModelStrength: Number(r.defaultModelStrength ?? 1.0),
-      defaultClipStrength: Number(r.defaultClipStrength ?? 1.0),
-      triggerWord: r.triggerWord || null,
-      llmDescription: r.llmDescription || null,
-      civitaiCreatorUsername: r.civitaiCreatorUsername || null,
-      isOwnCivitaiUpload: Boolean(r.isOwnCivitaiUpload),
-      civitaiStats: parseCivitaiStatsJson(r.civitaiStatsJson),
-      civitaiComments: parseCivitaiCommentsJson(r.civitaiCommentsJson),
-      civitaiStatsSyncedAt: r.civitaiStatsSyncedAt || null,
-      imageCount: Number(r.imageCount || 0),
-      workflowCount: Number(r.workflowCount || 0),
-      averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
-      minModelStrength:
-        r.minModelStrength !== null ? Number(Number(r.minModelStrength).toFixed(2)) : null,
-      maxModelStrength:
-        r.maxModelStrength !== null ? Number(Number(r.maxModelStrength).toFixed(2)) : null,
-      avgModelStrength:
-        r.avgModelStrength !== null ? Number(Number(r.avgModelStrength).toFixed(2)) : null,
-      minClipStrength:
-        r.minClipStrength !== null ? Number(Number(r.minClipStrength).toFixed(2)) : null,
-      maxClipStrength:
-        r.maxClipStrength !== null ? Number(Number(r.maxClipStrength).toFixed(2)) : null,
-      characters: linkedChars,
-    };
+      return {
+        name: r.name,
+        modelId: r.modelId ?? null,
+        filename: r.filename,
+        filePath: r.filePath ?? null,
+        fileSize: r.fileSize ?? null,
+        sha256Hash: r.sha256Hash ?? null,
+        autov2Hash: r.autov2Hash ?? null,
+        loraCategory: r.loraCategory || 'unclassified',
+        isInstalled: Boolean(r.isInstalled),
+        isDownloadedPendingImport: Boolean(!r.isInstalled && r.downloadFilePath),
+        comfyuiPath: r.comfyuiPath ?? null,
+        downloadFilePath: r.downloadFilePath ?? null,
+        isHidden: Boolean(r.isHidden),
+        downloadUrl: r.downloadUrl ?? null,
+        civitaiId: r.civitaiId ?? null,
+        civitaiVersionId: r.civitaiVersionId ?? null,
+        civitaiUrl: r.civitaiUrl ?? null,
+        baseModel: r.baseModel ?? null,
+        recommendedWeight:
+          r.recommendedWeight !== null && r.recommendedWeight !== undefined
+            ? Number(r.recommendedWeight)
+            : null,
+        civitaiDescription: r.civitaiDescription ?? null,
+        previewImages: parsePreviewImagesJson(r.previewImagesJson, r.modelId),
+        civitaiFetchedAt: r.civitaiFetchedAt ?? null,
+        hfRepoId: r.hfRepoId ?? null,
+        userNotes: r.userNotes ?? null,
+        nickname: r.nickname || null,
+        mentionEnabled: Boolean(r.mentionEnabled),
+        defaultModelStrength: Number(r.defaultModelStrength ?? 1.0),
+        defaultClipStrength: Number(r.defaultClipStrength ?? 1.0),
+        triggerWord: r.triggerWord || null,
+        llmDescription: r.llmDescription || null,
+        civitaiCreatorUsername: r.civitaiCreatorUsername || null,
+        isOwnCivitaiUpload: Boolean(r.isOwnCivitaiUpload),
+        civitaiStats: parseCivitaiStatsJson(r.civitaiStatsJson),
+        civitaiComments: parseCivitaiCommentsJson(r.civitaiCommentsJson),
+        civitaiStatsSyncedAt: r.civitaiStatsSyncedAt || null,
+        imageCount: Number(r.imageCount || 0),
+        workflowCount: Number(r.workflowCount || 0),
+        averageRating: Number(r.avgRating ? Number(r.avgRating).toFixed(2) : 0),
+        minModelStrength:
+          r.minModelStrength !== null ? Number(Number(r.minModelStrength).toFixed(2)) : null,
+        maxModelStrength:
+          r.maxModelStrength !== null ? Number(Number(r.maxModelStrength).toFixed(2)) : null,
+        avgModelStrength:
+          r.avgModelStrength !== null ? Number(Number(r.avgModelStrength).toFixed(2)) : null,
+        minClipStrength:
+          r.minClipStrength !== null ? Number(Number(r.minClipStrength).toFixed(2)) : null,
+        maxClipStrength:
+          r.maxClipStrength !== null ? Number(Number(r.maxClipStrength).toFixed(2)) : null,
+        characters: linkedChars,
+      };
+    });
   });
 }

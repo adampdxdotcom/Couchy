@@ -3,7 +3,6 @@ import { DEFAULT_PILL_TYPE_SETTINGS } from '../../shared/pillSettings.ts';
 import type {
   CharacterProfile,
   GenerationLoraSelection,
-  ImageRecord,
   LoraExplorerItem,
   LoraPreset,
   ModelInventoryItem,
@@ -23,7 +22,6 @@ interface UseQuickGenMentionsParams {
   loras: LoraExplorerItem[];
   models?: ModelInventoryItem[];
   presets?: LoraPreset[];
-  allImages: ImageRecord[];
   prompt: string;
   setPrompt: React.Dispatch<React.SetStateAction<string>>;
   attachedCharacter: CharacterProfile | null;
@@ -46,7 +44,6 @@ export function useQuickGenMentions({
   loras,
   models = [],
   presets = [],
-  allImages,
   prompt,
   setPrompt,
   attachedCharacter,
@@ -83,11 +80,10 @@ export function useQuickGenMentions({
         loras,
         models,
         presets,
-        allImages,
         query: mentionQuery,
         tab: mentionTab,
       }),
-    [characters, loras, models, presets, allImages, mentionQuery, mentionTab]
+    [characters, loras, models, presets, mentionQuery, mentionTab]
   );
 
   useEffect(() => {

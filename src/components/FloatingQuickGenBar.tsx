@@ -39,7 +39,6 @@ interface FloatingQuickGenBarProps {
   loras?: LoraExplorerItem[];
   models?: ModelInventoryItem[];
   presets?: LoraPreset[];
-  allImages: ImageRecord[];
   workflows: WorkflowLibraryItem[];
   prefillPayload?: QuickGenPrefill | null;
   onClearPrefill?: () => void;
@@ -60,7 +59,6 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
   loras = [],
   models = [],
   presets = [],
-  allImages,
   workflows,
   prefillPayload,
   onClearPrefill,
@@ -105,7 +103,6 @@ export const FloatingQuickGenBar: React.FC<FloatingQuickGenBarProps> = ({
     loras,
     models,
     presets,
-    allImages,
     prompt: submitState.prompt,
     setPrompt: submitState.setPrompt,
     attachedCharacter: submitState.attachedCharacter,

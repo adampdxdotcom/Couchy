@@ -5,7 +5,6 @@ import type {
   CharacterProfile,
   GenerationBatchRecord,
   GenerationLoraSelection,
-  ImageRecord,
   LmStudioStatus,
   LoraExplorerItem,
   ModelInventoryItem,
@@ -29,9 +28,8 @@ interface GenerationStudioViewProps {
   models?: ModelInventoryItem[];
   workflows: WorkflowLibraryItem[];
   checkpoints: string[];
-  allImages: ImageRecord[];
   onRefreshAll: () => Promise<void>;
-  onOpenImage: (img: ImageRecord) => void;
+  onOpenImageId: (imageId: number) => void;
   onOpenSystemSettings?: () => void;
 }
 
@@ -41,9 +39,8 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
   models = [],
   workflows,
   checkpoints,
-  allImages,
   onRefreshAll,
-  onOpenImage,
+  onOpenImageId,
   onOpenSystemSettings,
 }) => {
   // 1. Character, LoRA Stack & Trigger Word State
@@ -534,11 +531,10 @@ export const GenerationStudioView: React.FC<GenerationStudioViewProps> = ({
           {/* Historical Batches Queue */}
           <BatchQueueHistory
             batches={batches}
-            allImages={allImages}
             onRefreshBatches={() =>
               api.listGenerationBatches().then((res) => setBatches(res.items || []))
             }
-            onOpenImage={onOpenImage}
+            onOpenImageId={onOpenImageId}
           />
         </div>
       </div>

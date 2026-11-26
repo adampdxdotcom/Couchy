@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client.ts';
 import { normalizePillTypeSettings } from '../shared/pillSettings.ts';
 import { OptimisticRejectionTracker } from './optimisticRejectionTracker.ts';
+import type { WorkspaceTab } from '../components/TopNavHeader.tsx';
 import type {
   CharacterProfile,
   GalleryFilterState,
@@ -60,12 +61,13 @@ export function isDefaultFilters(f: GalleryFilterState): boolean {
 }
 
 /**
- * Loads core workspace entities (images, characters, LoRAs, models, presets, workflows,
- * organization metadata, health config) and manages Gallery filtering & pagination state.
+ * Loads core workspace entities and manages true server-side paginated Gallery state
+ * (using slim catalogs on startup and lazily upgrading full LoRA/Model catalogs on the LoRAs tab).
  */
-export function useWorkspaceData() {
+export function useWorkspaceData(activeTab: WorkspaceTab = 'gallery') {
   const [filters, setFilters] = useState<GalleryFilterState>(INITIAL_FILTERS);
   const [galleryPage, setGalleryPage] = useState<number>(1);
+  const [loadedInfinitePages, setLoadedInfinitePages] = useState<number>(1);
   const [infiniteScroll, setInfiniteScroll] = useState<boolean>(() => {
     try {
       return localStorage.getItem('couchy_gallery_infinite_scroll') === 'true';
@@ -76,8 +78,9 @@ export function useWorkspaceData() {
   const galleryPageSize = 48;
 
   const [images, setImages] = useState<ImageRecord[]>([]);
-  const [allImages, setAllImages] = useState<ImageRecord[]>([]);
+  const [totalImages, setTotalImages] = useState<number>(0);
   const [isLoadingImages, setIsLoadingImages] = useState<boolean>(true);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [characters, setCharacters] = useState<CharacterProfile[]>([]);
   const [loras, setLoras] = useState<LoraExplorerItem[]>([]);
   const [models, setModels] = useState<ModelInventoryItem[]>([]);
@@ -92,18 +95,33 @@ export function useWorkspaceData() {
   const [checkpoints, setCheckpoints] = useState<string[]>([]);
   const [savedSearches, setSavedSearches] = useState<SavedSearchPreset[]>([]);
   const [healthData, setHealthData] = useState<any>(null);
+  const [refreshVersion, setRefreshVersion] = useState<number>(0);
 
-  // Live refs prevent stale search/filter closures and out-of-order responses from overwriting cleared results
+  // Live refs keep async fetches race-safe across filter edits, page flips, and silent refreshes
   const filtersRef = useRef<GalleryFilterState>(filters);
   filtersRef.current = filters;
-  const allImagesRef = useRef<ImageRecord[]>(allImages);
-  allImagesRef.current = allImages;
-  const filterQuerySeqRef = useRef<number>(0);
-  const filterAbortRef = useRef<AbortController | null>(null);
+  const galleryPageRef = useRef<number>(galleryPage);
+  galleryPageRef.current = galleryPage;
+  const infiniteScrollRef = useRef<boolean>(infiniteScroll);
+  infiniteScrollRef.current = infiniteScroll;
+  const loadedInfinitePagesRef = useRef<number>(loadedInfinitePages);
+  loadedInfinitePagesRef.current = loadedInfinitePages;
+  const totalImagesRef = useRef<number>(totalImages);
+  totalImagesRef.current = totalImages;
+  const imagesRef = useRef<ImageRecord[]>(images);
+  imagesRef.current = images;
+
+  const galleryQuerySeqRef = useRef<number>(0);
+  const galleryAbortRef = useRef<AbortController | null>(null);
+  const loadMoreInFlightRef = useRef<boolean>(false);
   const metadataQuerySeqRef = useRef<number>(0);
-  const metadataAbortRef = useRef<AbortController | null>(null);
+  const fullCatalogSeqRef = useRef<number>(0);
+  const activeTabRef = useRef<WorkspaceTab>(activeTab);
+  activeTabRef.current = activeTab;
+  const hasFullModelCatalogsRef = useRef<boolean>(false);
   const rejectionTrackerRef = useRef<OptimisticRejectionTracker>(new OptimisticRejectionTracker());
   const prevQueryRef = useRef<string>(filters.query);
+  const didInitGalleryRef = useRef<boolean>(false);
 
   const beginRejectMutation = useCallback((imageId: number, nextRejected: boolean) => {
     return rejectionTrackerRef.current.beginMutation(imageId, nextRejected);
@@ -116,63 +134,96 @@ export function useWorkspaceData() {
     []
   );
 
-  const cancelPendingMetadataQuery = useCallback(() => {
-    metadataQuerySeqRef.current += 1;
-    if (metadataAbortRef.current) {
-      metadataAbortRef.current.abort();
-      metadataAbortRef.current = null;
+  const cancelPendingGalleryQuery = useCallback(() => {
+    galleryQuerySeqRef.current += 1;
+    if (galleryAbortRef.current) {
+      galleryAbortRef.current.abort();
+      galleryAbortRef.current = null;
     }
+    loadMoreInFlightRef.current = false;
   }, []);
 
-  const cancelPendingFilterQuery = useCallback(() => {
-    filterQuerySeqRef.current += 1;
-    if (filterAbortRef.current) {
-      filterAbortRef.current.abort();
-      filterAbortRef.current = null;
-    }
-  }, []);
+  /**
+   * Fetches a single server-paginated slice (or preserved infinite-scroll depth) for the gallery.
+   */
+  const fetchGallerySlice = useCallback(
+    async (
+      targetFilters: GalleryFilterState,
+      options: {
+        page: number;
+        pageSize?: number;
+        silent?: boolean;
+      }
+    ): Promise<{ items: ImageRecord[]; total: number; page: number; totalPages: number } | null> => {
+      cancelPendingGalleryQuery();
+      const seq = galleryQuerySeqRef.current;
+      const controller = new AbortController();
+      galleryAbortRef.current = controller;
+      const queryTicket = rejectionTrackerRef.current.beginQuery();
+      const requestedPageSize = options.pageSize ?? galleryPageSize;
 
-  const loadMetadataAndEntities = useCallback(async () => {
-    cancelPendingMetadataQuery();
-    const seq = metadataQuerySeqRef.current;
-    const controller = new AbortController();
-    metadataAbortRef.current = controller;
-    const queryTicket = rejectionTrackerRef.current.beginQuery();
+      if (!options.silent) {
+        setIsLoadingImages(true);
+      }
 
-    // Prioritize querying gallery images immediately so cards render without waiting for secondary metadata
-    const imagesPromise = api
-      .queryImages(
-        { rejectedMode: 'include', archivedMode: 'include' },
-        { signal: controller.signal }
-      )
-      .then((unfilteredRes) => {
-        if (seq !== metadataQuerySeqRef.current) return;
-        const allItems = rejectionTrackerRef.current.reconcileAllImages(
-          unfilteredRes.items || [],
-          queryTicket.startEpoch
+      try {
+        const res = await api.queryImages(
+          { ...targetFilters, page: options.page, pageSize: requestedPageSize },
+          { signal: controller.signal }
         );
-        allImagesRef.current = allItems;
-        setAllImages(allItems);
-        if (isDefaultFilters(filtersRef.current)) {
-          cancelPendingFilterQuery();
-          setImages(allItems.filter((img) => !img.isRejected && !img.isArchived));
+        if (seq !== galleryQuerySeqRef.current) return null;
+
+        const reconciled = rejectionTrackerRef.current.reconcileFilteredImages(
+          res.items || [],
+          queryTicket.startEpoch,
+          targetFilters.rejectedMode
+        );
+        const total = typeof res.total === 'number' ? res.total : reconciled.length;
+        const resolvedPage = res.page ?? options.page;
+        const resolvedTotalPages = res.totalPages ?? Math.max(1, Math.ceil(total / galleryPageSize));
+
+        imagesRef.current = reconciled;
+        totalImagesRef.current = total;
+        setImages(reconciled);
+        setTotalImages(total);
+        if (!infiniteScrollRef.current && resolvedPage !== galleryPageRef.current) {
+          setGalleryPage(resolvedPage);
         }
-      })
-      .catch((err: any) => {
-        if (err?.name === 'AbortError' || seq !== metadataQuerySeqRef.current) return;
-        console.error('Failed to query images:', err);
-      })
-      .finally(() => {
+
+        return {
+          items: reconciled,
+          total,
+          page: resolvedPage,
+          totalPages: resolvedTotalPages,
+        };
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || seq !== galleryQuerySeqRef.current) return null;
+        console.error('Failed to query gallery images:', err);
+        return null;
+      } finally {
         rejectionTrackerRef.current.endQuery(queryTicket.queryId);
-        if (seq === metadataQuerySeqRef.current) {
-          if (metadataAbortRef.current === controller) {
-            metadataAbortRef.current = null;
+        if (seq === galleryQuerySeqRef.current) {
+          if (galleryAbortRef.current === controller) {
+            galleryAbortRef.current = null;
           }
           setIsLoadingImages(false);
         }
-      });
+      }
+    },
+    [cancelPendingGalleryQuery, galleryPageSize]
+  );
 
-    // Apply each workspace metadata endpoint independently as soon as it resolves so fast settings/filters render immediately
+  /**
+   * Loads workspace catalogs independently. Uses compact LoRA/Model payloads and saved-only
+   * workflows outside the LoRAs & Models tab to keep startup and Gallery refreshes lean.
+   */
+  const loadMetadataAndEntities = useCallback(async () => {
+    const seq = ++metadataQuerySeqRef.current;
+    fullCatalogSeqRef.current += 1;
+    const needsFullCatalogs = activeTabRef.current === 'loras';
+    const catalogMode = needsFullCatalogs ? 'full' : 'compact';
+    hasFullModelCatalogsRef.current = needsFullCatalogs;
+
     const metaPromises = [
       api
         .getHealth()
@@ -197,13 +248,13 @@ export function useWorkspaceData() {
         })
         .catch(() => {}),
       api
-        .listLoras()
+        .listLoras({ mode: catalogMode })
         .then((res) => {
           if (seq === metadataQuerySeqRef.current) setLoras(res.items || []);
         })
         .catch(() => {}),
       api
-        .listModelInventory()
+        .listModelInventory({ mode: catalogMode })
         .then((res) => {
           if (seq === metadataQuerySeqRef.current) setModels(res.items || []);
         })
@@ -215,126 +266,230 @@ export function useWorkspaceData() {
         })
         .catch(() => {}),
       api
-        .listWorkflows()
+        .listWorkflows({ scope: 'saved' })
         .then((res) => {
           if (seq === metadataQuerySeqRef.current) setWorkflows(res.items || []);
         })
         .catch(() => {}),
     ];
 
-    await Promise.allSettled([imagesPromise, ...metaPromises]);
-  }, [cancelPendingMetadataQuery, cancelPendingFilterQuery]);
+    await Promise.allSettled(metaPromises);
+  }, []);
 
-  const loadFilteredImages = useCallback(
-    async (targetFilters: GalleryFilterState, options?: { silent?: boolean }) => {
-      // Always cancel any earlier in-flight filter request and advance sequence counter
-      cancelPendingFilterQuery();
-      const seq = filterQuerySeqRef.current;
-
-      if (isDefaultFilters(targetFilters)) {
-        if (allImagesRef.current.length > 0) {
-          setImages(allImagesRef.current.filter((img) => !img.isRejected && !img.isArchived));
-        }
-        setIsLoadingImages(false);
-        return;
-      }
-
-      const controller = new AbortController();
-      filterAbortRef.current = controller;
-      const queryTicket = rejectionTrackerRef.current.beginQuery();
-
-      if (!options?.silent) {
-        setIsLoadingImages(true);
-      }
-      try {
-        const res = await api.queryImages(targetFilters, { signal: controller.signal });
-        if (seq !== filterQuerySeqRef.current) return;
-        const reconciled = rejectionTrackerRef.current.reconcileFilteredImages(
-          res.items || [],
-          queryTicket.startEpoch,
-          targetFilters.rejectedMode
-        );
-        setImages(reconciled);
-      } catch (err: any) {
-        if (err?.name === 'AbortError' || seq !== filterQuerySeqRef.current) return;
-        console.error('Failed to query filtered images:', err);
-      } finally {
-        rejectionTrackerRef.current.endQuery(queryTicket.queryId);
-        if (seq === filterQuerySeqRef.current) {
-          if (filterAbortRef.current === controller) {
-            filterAbortRef.current = null;
-          }
-          setIsLoadingImages(false);
-        }
-      }
-    },
-    [cancelPendingFilterQuery]
-  );
-
+  // Lazily upgrade LoRAs & Models to full enriched payloads (descriptions, stats, comments, previews)
+  // the first time the user visits the LoRAs & Models tab (or after a refresh while on another tab).
   useEffect(() => {
-    loadMetadataAndEntities();
+    if (activeTab !== 'loras' || hasFullModelCatalogsRef.current) return;
+
+    const seq = ++fullCatalogSeqRef.current;
+    let cancelled = false;
+    Promise.all([api.listLoras({ mode: 'full' }), api.listModelInventory({ mode: 'full' })])
+      .then(([loraRes, modelRes]) => {
+        if (cancelled || seq !== fullCatalogSeqRef.current) return;
+        setLoras(loraRes.items || []);
+        setModels(modelRes.items || []);
+        hasFullModelCatalogsRef.current = true;
+      })
+      .catch(() => {
+        // Keep compact catalogs visible if upgrade fails transiently
+      });
+
     return () => {
-      cancelPendingMetadataQuery();
-      cancelPendingFilterQuery();
+      cancelled = true;
     };
-  }, [loadMetadataAndEntities, cancelPendingMetadataQuery, cancelPendingFilterQuery]);
+  }, [activeTab]);
 
+  // Initial mount: fire page-1 gallery query and metadata endpoints immediately in parallel
   useEffect(() => {
-    const queryChanged = prevQueryRef.current !== filters.query;
-    prevQueryRef.current = filters.query;
+    didInitGalleryRef.current = true;
+    void fetchGallerySlice(filtersRef.current, { page: 1, pageSize: galleryPageSize });
+    void loadMetadataAndEntities();
+    return () => {
+      cancelPendingGalleryQuery();
+      metadataQuerySeqRef.current += 1;
+      fullCatalogSeqRef.current += 1;
+    };
+  }, [fetchGallerySlice, loadMetadataAndEntities, cancelPendingGalleryQuery, galleryPageSize]);
 
-    if (isDefaultFilters(filters)) {
-      cancelPendingFilterQuery();
-      if (allImagesRef.current.length > 0) {
-        setImages(allImagesRef.current.filter((img) => !img.isRejected && !img.isArchived));
-      }
-      setIsLoadingImages(false);
+  // Re-query page 1 whenever filters change (debounced for active search typing)
+  const isFirstFilterEffectRef = useRef<boolean>(true);
+  useEffect(() => {
+    if (isFirstFilterEffectRef.current) {
+      isFirstFilterEffectRef.current = false;
+      prevQueryRef.current = filters.query;
       return;
     }
 
-    // Debounce active text typing so intermediate keystrokes don't race; run filter toggles immediately
+    const queryChanged = prevQueryRef.current !== filters.query;
+    prevQueryRef.current = filters.query;
+
+    setGalleryPage(1);
+    setLoadedInfinitePages(1);
+    loadedInfinitePagesRef.current = 1;
+
+    const silent = imagesRef.current.length > 0;
     const delayMs = queryChanged && filters.query.trim().length > 0 ? 180 : 0;
     if (delayMs === 0) {
-      void loadFilteredImages(filters, { silent: allImagesRef.current.length > 0 });
+      void fetchGallerySlice(filters, { page: 1, pageSize: galleryPageSize, silent });
       return;
     }
 
     const timer = window.setTimeout(() => {
-      void loadFilteredImages(filters, { silent: allImagesRef.current.length > 0 });
+      void fetchGallerySlice(filters, { page: 1, pageSize: galleryPageSize, silent });
     }, delayMs);
     return () => {
       window.clearTimeout(timer);
     };
-  }, [filters, loadFilteredImages, cancelPendingFilterQuery]);
+  }, [filters, fetchGallerySlice, galleryPageSize]);
+
+  /** Appends the next server page (48 items) when Infinite Scroll reaches the bottom sentinel. */
+  const loadMoreGalleryImages = useCallback(async (): Promise<ImageRecord[]> => {
+    if (loadMoreInFlightRef.current) return [];
+    const totalPages = Math.max(1, Math.ceil(totalImagesRef.current / galleryPageSize));
+    const nextPage = loadedInfinitePagesRef.current + 1;
+    if (nextPage > totalPages) return [];
+
+    loadMoreInFlightRef.current = true;
+    setIsLoadingMore(true);
+    const activeSeq = galleryQuerySeqRef.current;
+    const queryTicket = rejectionTrackerRef.current.beginQuery();
+
+    try {
+      const res = await api.queryImages({
+        ...filtersRef.current,
+        page: nextPage,
+        pageSize: galleryPageSize,
+      });
+      if (activeSeq !== galleryQuerySeqRef.current) return [];
+
+      const incoming = rejectionTrackerRef.current.reconcileFilteredImages(
+        res.items || [],
+        queryTicket.startEpoch,
+        filtersRef.current.rejectedMode
+      );
+      const total = typeof res.total === 'number' ? res.total : totalImagesRef.current;
+
+      setTotalImages(total);
+      totalImagesRef.current = total;
+      setLoadedInfinitePages(nextPage);
+      loadedInfinitePagesRef.current = nextPage;
+      setImages((prev) => {
+        const seen = new Set(prev.map((i) => i.id));
+        const appended = incoming.filter((i) => !seen.has(i.id));
+        const merged = appended.length > 0 ? [...prev, ...appended] : prev;
+        imagesRef.current = merged;
+        return merged;
+      });
+      return incoming;
+    } catch (err) {
+      console.error('Failed to load next gallery page:', err);
+      return [];
+    } finally {
+      rejectionTrackerRef.current.endQuery(queryTicket.queryId);
+      loadMoreInFlightRef.current = false;
+      setIsLoadingMore(false);
+    }
+  }, [galleryPageSize]);
 
   const refreshWorkspaceData = useCallback(async () => {
-    await loadMetadataAndEntities();
-    // Read latest filters from ref after metadata refresh finishes so cleared searches never resurrect
-    const latestFilters = filtersRef.current;
-    if (!isDefaultFilters(latestFilters)) {
-      await loadFilteredImages(latestFilters, { silent: true });
-    }
-  }, [loadMetadataAndEntities, loadFilteredImages]);
+    setRefreshVersion((v) => v + 1);
+    const currentFilters = filtersRef.current;
+    const galleryPromise = infiniteScrollRef.current
+      ? fetchGallerySlice(currentFilters, {
+          page: 1,
+          pageSize: Math.max(galleryPageSize, loadedInfinitePagesRef.current * galleryPageSize),
+          silent: true,
+        })
+      : fetchGallerySlice(currentFilters, {
+          page: galleryPageRef.current,
+          pageSize: galleryPageSize,
+          silent: true,
+        });
+    await Promise.allSettled([galleryPromise, loadMetadataAndEntities()]);
+  }, [fetchGallerySlice, loadMetadataAndEntities, galleryPageSize]);
 
-  const totalGalleryPages = Math.max(1, Math.ceil(images.length / galleryPageSize));
+  const totalGalleryPages = Math.max(1, Math.ceil(totalImages / galleryPageSize));
   const currentGalleryPage = Math.min(Math.max(1, galleryPage), totalGalleryPages);
+  const hasMoreGalleryImages = infiniteScroll
+    ? images.length < totalImages
+    : currentGalleryPage < totalGalleryPages;
 
-  const handleInfiniteScrollChange = useCallback((enabled: boolean) => {
-    setInfiniteScroll(enabled);
-    try {
-      localStorage.setItem('couchy_gallery_infinite_scroll', String(enabled));
-    } catch {
-      // ignore storage errors
-    }
-  }, []);
+  const handleInfiniteScrollChange = useCallback(
+    (enabled: boolean) => {
+      setInfiniteScroll(enabled);
+      infiniteScrollRef.current = enabled;
+      try {
+        localStorage.setItem('couchy_gallery_infinite_scroll', String(enabled));
+      } catch {
+        // ignore storage errors
+      }
+      if (enabled) {
+        const pagesToKeep = Math.min(Math.max(1, galleryPageRef.current), 3);
+        setLoadedInfinitePages(pagesToKeep);
+        loadedInfinitePagesRef.current = pagesToKeep;
+        void fetchGallerySlice(filtersRef.current, {
+          page: 1,
+          pageSize: pagesToKeep * galleryPageSize,
+          silent: true,
+        });
+      } else {
+        setGalleryPage(1);
+        setLoadedInfinitePages(1);
+        loadedInfinitePagesRef.current = 1;
+        void fetchGallerySlice(filtersRef.current, {
+          page: 1,
+          pageSize: galleryPageSize,
+          silent: true,
+        });
+      }
+    },
+    [fetchGallerySlice, galleryPageSize]
+  );
 
   const handleGalleryPageChange = useCallback(
     (nextPage: number) => {
-      const clamped = Math.min(Math.max(1, nextPage), totalGalleryPages);
+      const totalPages = Math.max(1, Math.ceil(totalImagesRef.current / galleryPageSize));
+      const clamped = Math.min(Math.max(1, nextPage), totalPages);
       setGalleryPage(clamped);
+      galleryPageRef.current = clamped;
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      void fetchGallerySlice(filtersRef.current, {
+        page: clamped,
+        pageSize: galleryPageSize,
+        silent: false,
+      });
     },
-    [totalGalleryPages]
+    [fetchGallerySlice, galleryPageSize]
+  );
+
+  /**
+   * Loads the previous or next gallery page when arrowing past a page boundary inside the Inspector,
+   * returning the adjacent boundary card so chronological walkthrough continues seamlessly across pages.
+   */
+  const loadAdjacentPageForInspector = useCallback(
+    async (direction: 'prev' | 'next'): Promise<ImageRecord | null> => {
+      if (infiniteScrollRef.current) {
+        if (direction === 'prev') return null;
+        const appended = await loadMoreGalleryImages();
+        return appended[0] || null;
+      }
+
+      const totalPages = Math.max(1, Math.ceil(totalImagesRef.current / galleryPageSize));
+      const targetPage =
+        direction === 'next' ? galleryPageRef.current + 1 : galleryPageRef.current - 1;
+      if (targetPage < 1 || targetPage > totalPages) return null;
+
+      setGalleryPage(targetPage);
+      galleryPageRef.current = targetPage;
+      const res = await fetchGallerySlice(filtersRef.current, {
+        page: targetPage,
+        pageSize: galleryPageSize,
+        silent: true,
+      });
+      if (!res || res.items.length === 0) return null;
+      return direction === 'next' ? res.items[0] : res.items[res.items.length - 1];
+    },
+    [fetchGallerySlice, galleryPageSize, loadMoreGalleryImages]
   );
 
   const pillTypeSettings = useMemo(
@@ -355,9 +510,12 @@ export function useWorkspaceData() {
     handleInfiniteScrollChange,
     images,
     setImages,
-    allImages,
-    setAllImages,
+    totalImages,
+    hasMoreGalleryImages,
     isLoadingImages,
+    isLoadingMore,
+    loadMoreGalleryImages,
+    loadAdjacentPageForInspector,
     characters,
     loras,
     visibleLoras,
@@ -370,6 +528,7 @@ export function useWorkspaceData() {
     savedSearches,
     healthData,
     pillTypeSettings,
+    refreshVersion,
     loadMetadataAndEntities,
     refreshWorkspaceData,
     beginRejectMutation,

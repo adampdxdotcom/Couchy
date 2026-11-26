@@ -83,6 +83,10 @@ interface GalleryGridViewProps {
   filters?: GalleryFilterState;
   page: number;
   pageSize?: number;
+  totalImages?: number;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
   infiniteScroll: boolean;
   layout: GalleryViewLayout;
   thumbScale: 'sm' | 'md' | 'lg';
@@ -155,6 +159,10 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   filters,
   page,
   pageSize = 48,
+  totalImages,
+  hasMore = false,
+  isLoadingMore = false,
+  onLoadMore,
   infiniteScroll,
   layout,
   thumbScale,
@@ -185,39 +193,21 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
   const [bulkTagInput, setBulkTagInput] = useState('');
   const [bulkCharId, setBulkCharId] = useState('');
   const [bulkColId, setBulkColId] = useState('');
-  const [infiniteVisibleCount, setInfiniteVisibleCount] = useState<number>(pageSize);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
-  const totalPages = Math.max(1, Math.ceil(images.length / pageSize));
-  const currentPage = Math.min(Math.max(1, page), totalPages);
+  const effectiveTotal = typeof totalImages === 'number' ? totalImages : images.length;
+  const currentPage = Math.max(1, page);
 
-  // When switching into infinite scroll, keep at least the current page's depth visible
+  // IntersectionObserver requests the next server page (+48 images) when Infinite Scroll nears the bottom
   useEffect(() => {
-    if (infiniteScroll) {
-      setInfiniteVisibleCount((prev) => Math.max(prev, currentPage * pageSize));
-    } else {
-      setInfiniteVisibleCount(pageSize);
-    }
-  }, [infiniteScroll, currentPage, pageSize]);
-
-  // Reset infinite scroll slice to 1 batch (48) when the filtered image set is replaced/narrowed
-  useEffect(() => {
-    setInfiniteVisibleCount((prev) => {
-      if (images.length <= pageSize) return pageSize;
-      return Math.min(Math.max(pageSize, prev), images.length);
-    });
-  }, [images.length, pageSize]);
-
-  // IntersectionObserver to load +48 images per scroll batch when Infinite Scroll is active
-  useEffect(() => {
-    if (!infiniteScroll) return;
+    if (!infiniteScroll || !hasMore || isLoadingMore || isLoading || !onLoadMore) return;
     const node = sentinelRef.current;
     if (!node) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) {
-          setInfiniteVisibleCount((prev) => Math.min(images.length, prev + pageSize));
+          onLoadMore();
         }
       },
       { rootMargin: '400px' }
@@ -225,11 +215,10 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
 
     observer.observe(node);
     return () => observer.disconnect();
-  }, [infiniteScroll, images.length, pageSize, infiniteVisibleCount]);
+  }, [infiniteScroll, hasMore, isLoadingMore, isLoading, onLoadMore]);
 
-  const pagedImages = infiniteScroll
-    ? images.slice(0, Math.min(images.length, infiniteVisibleCount))
-    : images.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  // Images are already server-paginated (48 per page, or accumulated pages in Infinite Scroll mode)
+  const pagedImages = images;
 
   const getGridClasses = () => {
     if (layout === 'masonry') {
@@ -1062,20 +1051,24 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
         })}
       </div>
 
-      {/* Infinite Scroll Bottom Sentinel (+48 images per batch) */}
-      {infiniteScroll && pagedImages.length < images.length && (
+      {/* Infinite Scroll Bottom Sentinel (+48 server-paginated images per batch) */}
+      {infiniteScroll && hasMore && (
         <div
           ref={sentinelRef}
           className="py-6 flex flex-col items-center justify-center gap-2 text-xs text-zinc-400 font-mono tabular-nums"
         >
           <button
             type="button"
-            onClick={() =>
-              setInfiniteVisibleCount((prev) => Math.min(images.length, prev + pageSize))
-            }
-            className="px-3.5 py-1.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 rounded-lg transition-colors cursor-pointer"
+            disabled={isLoadingMore}
+            onClick={() => onLoadMore?.()}
+            className="px-3.5 py-1.5 bg-zinc-900 border border-zinc-800 hover:border-zinc-700 disabled:opacity-60 text-zinc-300 rounded-lg transition-colors cursor-pointer"
           >
-            Showing {pagedImages.length} of {images.length} · Load next {Math.min(pageSize, images.length - pagedImages.length)}
+            {isLoadingMore
+              ? `Loading next batch… (${pagedImages.length} of ${effectiveTotal})`
+              : `Showing ${pagedImages.length} of ${effectiveTotal} · Load next ${Math.min(
+                  pageSize,
+                  Math.max(0, effectiveTotal - pagedImages.length)
+                )}`}
           </button>
         </div>
       )}

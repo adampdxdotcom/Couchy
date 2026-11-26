@@ -274,7 +274,6 @@ export function buildMentionEntries(params: {
   loras: LoraExplorerItem[];
   models?: ModelInventoryItem[];
   presets?: LoraPreset[];
-  allImages: ImageRecord[];
   query: string;
   tab: MentionTab;
 }): {
@@ -288,7 +287,7 @@ export function buildMentionEntries(params: {
     presets: number;
   };
 } {
-  const { characters, loras, models = [], presets = [], allImages, query, tab } = params;
+  const { characters, loras, models = [], presets = [], query, tab } = params;
   const q = query.trim().toLowerCase();
   const directCharEntries: MentionEntry[] = [];
   const loraEntries: MentionEntry[] = [];
@@ -297,11 +296,9 @@ export function buildMentionEntries(params: {
   const imagePromptEntries: MentionEntry[] = [];
 
   for (const char of characters) {
-    const charImages = allImages.filter((img) =>
-      img.characters.some((c) => c.characterId === char.id && c.status === 'confirmed')
-    );
+    const charSamples = char.recentSamples || [];
     const fallbackThumb =
-      char.portraitThumbnailUrl || (charImages.length > 0 ? charImages[0].thumbnailUrl : null);
+      char.portraitThumbnailUrl || (charSamples.length > 0 ? charSamples[0].thumbnailUrl : null);
 
     const matchesChar =
       !q ||
@@ -323,7 +320,7 @@ export function buildMentionEntries(params: {
     }
 
     if (matchesChar || q.length >= 2) {
-      for (const img of charImages.slice(0, 4)) {
+      for (const img of charSamples.slice(0, 4)) {
         const promptLine = (img.positivePrompt || '').trim();
         const shortTitle = promptLine
           ? promptLine.slice(0, 42) + (promptLine.length > 42 ? '...' : '')

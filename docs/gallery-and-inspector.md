@@ -9,6 +9,7 @@
   - Multi-facet filters for **Characters** (`Match ALL` / `Match ANY` + *Include suggestions*), **LoRAs** (`Match ALL` / `Match ANY` + **Min / Max Strength**), **Favorites Only**, **Min Rating**, **Checkpoint** *(the Gallery label for a Krea 2 Base Model)*, **Collection**, **Tags**, **Date Range**, **Dependency Status** (`Exact Match`, `Available`, `Incomplete`, `Unknown`), **Civitai Share Status** (`Shared on Civitai`, `Draft Only`, `Published`, `Has Likes/Comments`, `New Activity` — propagated across collapsed **Series Stacks**), and **Rejected / Archived** modes.
   - **9 Sort Orders**, named **Saved Search Presets**, and **`ZIP (N)`** filtered export.
 - **Bulk Toolbar**: Select cards or **`Shift + Click`** ranges to batch-apply **Ratings**, **Favorite**, **Archive**, **Reject**, **Tag**, **Character**, **Collection**, or **Selected ZIP** export.
+- **Downloads & Export Metadata**: Single-photo downloads (from the Inspector) and filtered/selected **`ZIP`** exports stream your original file untouched by default. You can optionally enable **Insert Couchy Metadata on Export** (standard XMP photo metadata + `couchy` JSON) and/or **Insert Civitai Metadata on Export** (Civitai/A1111 `parameters` + resource hashes) under **System** to inject metadata in-memory on export without altering files on disk—see [Export Metadata Switches](./workflows-and-system.md#export-metadata-switches-downloads--zip).
 
 ## Series Stack Hierarchy
 

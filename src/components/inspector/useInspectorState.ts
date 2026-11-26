@@ -49,7 +49,6 @@ interface UseInspectorStateParams {
   initialIterationId?: number | null;
   galleryCards?: ImageRecord[];
   galleryFilter?: InspectorVisibilityFilter;
-  allImages: ImageRecord[];
   ghostItems: QueuedGhostCardItem[];
   onClose: () => void;
   onPrev?: () => void;
@@ -84,7 +83,6 @@ export function useInspectorState({
   initialIterationId = null,
   galleryCards = [],
   galleryFilter,
-  allImages,
   ghostItems,
   onClose,
   onPrev,
@@ -158,7 +156,7 @@ export function useInspectorState({
       ? detailData.image
       : cachedSelectedDetail?.image && cachedSelectedDetail.image.id === selectedIterationId
       ? cachedSelectedDetail.image
-      : allImages.find((img) => img.id === selectedIterationId) ||
+      : galleryCards.find((img) => img.id === selectedIterationId) ||
         (matchingSeriesStep
           ? {
               ...(detailData?.image || image),
@@ -186,7 +184,7 @@ export function useInspectorState({
   const compareImage: ImageRecord | null = compareSelection
     ? compareDetailImage && compareDetailImage.id === compareSelection.imageId
       ? compareDetailImage
-      : allImages.find((img) => img.id === compareSelection.imageId) ||
+      : galleryCards.find((img) => img.id === compareSelection.imageId) ||
         (matchingCompareStep
           ? {
               ...image,
@@ -286,23 +284,23 @@ export function useInspectorState({
       const target = navTargets.prevPhoto;
       return () => applyPhotoNavTarget(target);
     }
-    return onSelectGalleryCard ? undefined : onPrev;
-  }, [applyPhotoNavTarget, navTargets.prevPhoto, onPrev, onSelectGalleryCard]);
+    return onPrev;
+  }, [applyPhotoNavTarget, navTargets.prevPhoto, onPrev]);
 
   const handleNextPhoto = useMemo(() => {
     if (navTargets.nextPhoto) {
       const target = navTargets.nextPhoto;
       return () => applyPhotoNavTarget(target);
     }
-    return onSelectGalleryCard ? undefined : onNext;
-  }, [applyPhotoNavTarget, navTargets.nextPhoto, onNext, onSelectGalleryCard]);
+    return onNext;
+  }, [applyPhotoNavTarget, navTargets.nextPhoto, onNext]);
 
   const handlePrevStack = useMemo(() => {
     if (navTargets.prevStackCardId !== null && onSelectGalleryCard) {
       const cardId = navTargets.prevStackCardId;
       return () => onSelectGalleryCard(cardId, null);
     }
-    return onSelectGalleryCard ? undefined : onPrev;
+    return onPrev;
   }, [navTargets.prevStackCardId, onPrev, onSelectGalleryCard]);
 
   const handleNextStack = useMemo(() => {
@@ -310,7 +308,7 @@ export function useInspectorState({
       const cardId = navTargets.nextStackCardId;
       return () => onSelectGalleryCard(cardId, null);
     }
-    return onSelectGalleryCard ? undefined : onNext;
+    return onNext;
   }, [navTargets.nextStackCardId, onNext, onSelectGalleryCard]);
 
   // Background-prefetch adjacent chronological photos (in-stack or cross-stack) for snappy navigation

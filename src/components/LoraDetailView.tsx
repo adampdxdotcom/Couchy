@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ArrowLeft,
   AtSign,
@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '../api/client.ts';
+import { useScopedGalleryImages } from '../hooks/useScopedGalleryImages.ts';
 import { formatBytes, getModelAvailabilityInfo } from '../shared/utils.ts';
 import type { ImageRecord, LoraCategory, LoraExplorerItem } from '../shared/types.ts';
 import { CharacterPortraitImage } from './character/CharacterPortraitImage.tsx';
@@ -20,7 +21,7 @@ import { LinkCivitaiModelModal } from './models/LinkCivitaiModelModal.tsx';
 
 interface LoraDetailViewProps {
   lora: LoraExplorerItem;
-  allImages: ImageRecord[];
+  refreshVersion?: number;
   impactReport: any | null;
   isFetchingCivitai: boolean;
   isRefreshingStats?: boolean;
@@ -67,7 +68,7 @@ interface LoraDetailViewProps {
  */
 export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
   lora,
-  allImages,
+  refreshVersion = 0,
   impactReport,
   isFetchingCivitai,
   isRefreshingStats = false,
@@ -91,13 +92,24 @@ export const LoraDetailView: React.FC<LoraDetailViewProps> = ({
   const [showLinkModal, setShowLinkModal] = useState(false);
   const avail = getModelAvailabilityInfo(lora);
 
-  const associatedImages = allImages.filter((img) =>
-    img.loras.some((l) => l.loraName.toLowerCase() === lora.filename.toLowerCase())
+  const scopedFilter = useMemo(
+    () => ({
+      loras: [lora.filename],
+      rejectedMode: 'include' as const,
+      archivedMode: 'include' as const,
+      sortBy: 'newest' as const,
+    }),
+    [lora.filename]
   );
-  const highestRated = [...associatedImages]
-    .filter((i) => i.rating >= 4)
-    .sort((a, b) => b.rating - a.rating)
-    .slice(0, 6);
+  const { items: associatedImages } = useScopedGalleryImages(scopedFilter, refreshVersion);
+  const highestRated = useMemo(
+    () =>
+      [...associatedImages]
+        .filter((i) => i.rating >= 4)
+        .sort((a, b) => b.rating - a.rating)
+        .slice(0, 6),
+    [associatedImages]
+  );
 
   const previews = lora.previewImages || [];
   const characterPortrait =

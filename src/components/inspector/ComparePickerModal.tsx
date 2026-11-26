@@ -54,64 +54,65 @@ export const ComparePickerModal: React.FC<ComparePickerModalProps> = ({
     favoritesOnly;
 
   useEffect(() => {
-    if (!hasActiveFilter) {
-      setItems(defaultPool);
-      setIsLoading(false);
-      return;
-    }
-
     let cancelled = false;
+    const controller = new AbortController();
     setIsLoading(true);
+    const delayMs = hasActiveFilter ? 180 : 0;
+
     const timer = window.setTimeout(async () => {
       try {
-        const res = await api.queryImages({
-          query: query.trim(),
-          characterIds: characterId ? [Number(characterId)] : [],
-          loras: loraName ? [loraName] : [],
-          minRating,
-          favoritesOnly,
-          rejectedMode: 'exclude',
-          archivedMode: 'exclude',
-          sortBy: 'newest',
-        });
+        const res = await api.queryImages(
+          {
+            query: query.trim(),
+            characterIds: characterId ? [Number(characterId)] : [],
+            loras: loraName ? [loraName] : [],
+            minRating,
+            favoritesOnly,
+            rejectedMode: 'exclude',
+            archivedMode: 'exclude',
+            sortBy: 'newest',
+            limit: hasActiveFilter ? 120 : 60,
+          },
+          { signal: controller.signal }
+        );
         if (!cancelled) {
           setItems(res.items || []);
         }
-      } catch {
-        if (!cancelled) {
-          // Graceful client-side fallback if query request fails
-          const q = query.trim().toLowerCase();
-          setItems(
-            defaultPool.filter((img) => {
-              if (favoritesOnly && !img.isFavorite) return false;
-              if (minRating > 0 && img.rating < minRating) return false;
-              if (
-                characterId &&
-                !img.characters.some((c) => c.characterId === Number(characterId))
-              ) {
-                return false;
-              }
-              if (
-                loraName &&
-                !img.loras.some((l) => l.loraName.toLowerCase() === loraName.toLowerCase())
-              ) {
-                return false;
-              }
-              if (q) {
-                const hay = `${img.filename} ${img.positivePrompt || ''} ${img.checkpointName || ''}`.toLowerCase();
-                if (!hay.includes(q)) return false;
-              }
-              return true;
-            })
-          );
-        }
+      } catch (err: any) {
+        if (cancelled || err?.name === 'AbortError') return;
+        // Graceful client-side fallback if query request fails
+        const q = query.trim().toLowerCase();
+        setItems(
+          defaultPool.filter((img) => {
+            if (favoritesOnly && !img.isFavorite) return false;
+            if (minRating > 0 && img.rating < minRating) return false;
+            if (
+              characterId &&
+              !img.characters.some((c) => c.characterId === Number(characterId))
+            ) {
+              return false;
+            }
+            if (
+              loraName &&
+              !img.loras.some((l) => l.loraName.toLowerCase() === loraName.toLowerCase())
+            ) {
+              return false;
+            }
+            if (q) {
+              const hay = `${img.filename} ${img.positivePrompt || ''} ${img.checkpointName || ''}`.toLowerCase();
+              if (!hay.includes(q)) return false;
+            }
+            return true;
+          })
+        );
       } finally {
         if (!cancelled) setIsLoading(false);
       }
-    }, 180);
+    }, delayMs);
 
     return () => {
       cancelled = true;
+      controller.abort();
       window.clearTimeout(timer);
     };
   }, [hasActiveFilter, query, characterId, loraName, minRating, favoritesOnly, defaultPool]);

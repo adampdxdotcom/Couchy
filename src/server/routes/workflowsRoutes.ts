@@ -11,11 +11,12 @@ export const workflowsRouter = Router();
 
 /**
  * GET /api/workflows
- * Lists workflows in the Independent Workflow Library and extracted image workflows.
+ * Lists workflows in the Independent Workflow Library (supports `?scope=saved` for slim startup payloads).
  */
-workflowsRouter.get('/workflows', (_req, res) => {
+workflowsRouter.get('/workflows', (req, res) => {
   try {
-    res.json({ items: listWorkflowLibraryItems() });
+    const savedOnly = req.query.scope === 'saved';
+    res.json({ items: listWorkflowLibraryItems({ savedOnly }) });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to list workflows' });
   }

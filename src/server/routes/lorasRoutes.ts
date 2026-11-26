@@ -8,12 +8,15 @@ export const lorasRouter = Router();
 
 /**
  * GET /api/loras
- * Returns LoRA Explorer items with image counts, strength ranges, ratings, and character associations.
+ * Returns LoRA Explorer items (supports `?mode=compact` for slim startup/gallery payloads).
  */
-lorasRouter.get('/loras', (_req, res) => {
+lorasRouter.get('/loras', (req, res) => {
   try {
-    triggerBackgroundCivitaiLinkHealOnce();
-    res.json({ items: listLoraExplorerItems() });
+    const compact = req.query.mode === 'compact';
+    if (!compact) {
+      triggerBackgroundCivitaiLinkHealOnce();
+    }
+    res.json({ items: listLoraExplorerItems({ compact }) });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to list LoRAs' });
   }

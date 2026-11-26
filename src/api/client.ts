@@ -146,10 +146,16 @@ export const api = {
     requestJson<{ ok: boolean }>(`/api/organization/saved-searches/${id}`, { method: 'DELETE' }),
 
   queryImages: (
-    filters: Partial<GalleryFilterState>,
+    filters: Partial<GalleryFilterState> & { page?: number; pageSize?: number },
     options?: { signal?: AbortSignal }
   ) =>
-    requestJson<{ items: ImageRecord[]; total: number }>('/api/images/query', {
+    requestJson<{
+      items: ImageRecord[];
+      total: number;
+      page?: number;
+      pageSize?: number;
+      totalPages?: number;
+    }>('/api/images/query', {
       method: 'POST',
       body: JSON.stringify(filters),
       signal: options?.signal,
@@ -183,6 +189,16 @@ export const api = {
     requestJson<{ ok: boolean; updated: boolean }>(`/api/images/${id}/civitai-share/seen`, {
       method: 'POST',
     }),
+
+  getUnseenCivitaiActivity: () =>
+    requestJson<{
+      items: Array<{
+        imageId: number;
+        reactionCount: number;
+        commentCount: number;
+        hasUnseenActivity: boolean;
+      }>;
+    }>('/api/images/civitai-share/unseen'),
 
   markAllCivitaiShareSeen: () =>
     requestJson<{ ok: boolean; updatedCount: number }>('/api/images/civitai-share/seen-all', {
@@ -366,7 +382,10 @@ export const api = {
     }),
 
   // LoRAs, Models & Workflows
-  listLoras: () => requestJson<{ items: LoraExplorerItem[] }>('/api/loras'),
+  listLoras: (opts?: { mode?: 'compact' | 'full' }) =>
+    requestJson<{ items: LoraExplorerItem[] }>(
+      opts?.mode === 'compact' ? '/api/loras?mode=compact' : '/api/loras'
+    ),
 
   classifyLora: (loraName: string, loraCategory: LoraCategory, userNotes?: string) =>
     requestJson<{ ok: boolean; items: LoraExplorerItem[] }>('/api/loras/classify', {
@@ -395,7 +414,10 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  listModelInventory: () => requestJson<{ items: ModelInventoryItem[] }>('/api/models/inventory'),
+  listModelInventory: (opts?: { mode?: 'compact' | 'full' }) =>
+    requestJson<{ items: ModelInventoryItem[] }>(
+      opts?.mode === 'compact' ? '/api/models/inventory?mode=compact' : '/api/models/inventory'
+    ),
 
   listPresets: () => requestJson<{ items: LoraPreset[] }>('/api/presets'),
 
@@ -595,7 +617,10 @@ export const api = {
       body: JSON.stringify(payload || {}),
     }),
 
-  listWorkflows: () => requestJson<{ items: WorkflowLibraryItem[] }>('/api/workflows'),
+  listWorkflows: (opts?: { scope?: 'saved' | 'all' }) =>
+    requestJson<{ items: WorkflowLibraryItem[] }>(
+      opts?.scope === 'saved' ? '/api/workflows?scope=saved' : '/api/workflows'
+    ),
 
   getWorkflow: (id: number) =>
     requestJson<{ workflow: WorkflowDetailRecord }>(`/api/workflows/${id}`),

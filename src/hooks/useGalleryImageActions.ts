@@ -23,8 +23,7 @@ interface UseGalleryImageActionsParams {
   setInspectedImageId: React.Dispatch<React.SetStateAction<number | null>>;
   images: ImageRecord[];
   setImages: React.Dispatch<React.SetStateAction<ImageRecord[]>>;
-  allImages: ImageRecord[];
-  setAllImages: React.Dispatch<React.SetStateAction<ImageRecord[]>>;
+  setAllImages?: React.Dispatch<React.SetStateAction<ImageRecord[]>>;
   characters: CharacterProfile[];
   models: ModelInventoryItem[];
   filters: GalleryFilterState;
@@ -47,7 +46,6 @@ export function useGalleryImageActions({
   setInspectedImageId,
   images,
   setImages,
-  allImages,
   setAllImages,
   characters,
   models,
@@ -253,26 +251,27 @@ export function useGalleryImageActions({
   const handleQuickFavorite = useCallback(
     async (id: number, isFavorite: boolean) => {
       const favoritedAt = isFavorite ? new Date().toISOString() : null;
-      const targetImg = allImages.find((img) => img.id === id);
+      const targetImg = images.find((img) => img.id === id);
       setImages((prev) =>
         prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
       );
-      setAllImages((prev) =>
+      setAllImages?.((prev) =>
         prev.map((img) => (img.id === id ? { ...img, isFavorite, favoritedAt } : img))
       );
       await api.updateImageAnnotations(id, { isFavorite });
-      if ((targetImg?.seriesCount || 1) > 1) {
+      // Refresh if favoriting a series poster or an image opened from a scoped detail view
+      if (!targetImg || (targetImg.seriesCount || 1) > 1) {
         await onRefreshAll();
       }
       pushToast(isFavorite ? 'Added to Favorites' : 'Removed from Favorites', 'info');
     },
-    [allImages, onRefreshAll, pushToast, setAllImages, setImages]
+    [images, onRefreshAll, pushToast, setAllImages, setImages]
   );
 
   const handleQuickRate = useCallback(
     async (id: number, rating: number) => {
       setImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
-      setAllImages((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
+      setAllImages?.((prev) => prev.map((img) => (img.id === id ? { ...img, rating } : img)));
       await api.updateImageAnnotations(id, { rating });
       pushToast(rating > 0 ? `Rated image ★ ${rating}` : 'Cleared image rating', 'info');
     },
@@ -282,7 +281,7 @@ export function useGalleryImageActions({
   const handleQuickReject = useCallback(
     async (id: number, nextRejected: boolean) => {
       const mutationToken = beginRejectMutation ? beginRejectMutation(id, nextRejected) : 0;
-      setAllImages((prev) =>
+      setAllImages?.((prev) =>
         prev.map((img) => (img.id === id ? { ...img, isRejected: nextRejected } : img))
       );
       setImages((prev) => {

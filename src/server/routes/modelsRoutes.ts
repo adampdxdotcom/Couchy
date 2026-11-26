@@ -22,11 +22,12 @@ export const modelsRouter = Router();
 
 /**
  * GET /api/models/inventory
- * Returns known model inventory and Missing Dependencies summary.
+ * Returns known model inventory (supports `?mode=compact` for zero-join slim startup payloads).
  */
-modelsRouter.get('/models/inventory', (_req, res) => {
+modelsRouter.get('/models/inventory', (req, res) => {
   try {
-    res.json({ items: listModelInventory() });
+    const compact = req.query.mode === 'compact';
+    res.json({ items: listModelInventory({ compact }) });
   } catch (err: any) {
     res.status(500).json({ error: err?.message || 'Failed to list model inventory' });
   }

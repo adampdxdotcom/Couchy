@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client.ts';
-import type { CivitaiActivityAlertSummary } from '../shared/apiTypes.ts';
-import type { AppToastMessage, ImageRecord } from '../shared/types.ts';
+import type {
+  CivitaiActivityAlertSummary,
+  CivitaiUnseenActivityItem,
+} from '../shared/apiTypes.ts';
+import type { AppToastMessage } from '../shared/types.ts';
 
 interface UseCivitaiNotificationsParams {
-  allImages: ImageRecord[];
-  isLoadingImages: boolean;
+  refreshVersion: number;
   notificationsEnabled: boolean;
   pushToast: (text: string, type?: AppToastMessage['type']) => void;
   onRefreshAll: () => Promise<void>;
@@ -14,88 +16,88 @@ interface UseCivitaiNotificationsParams {
 }
 
 /**
- * Computes persistent unseen Civitai activity from hydrated gallery records,
- * emits a session toast when background sync detects new reactions/comments,
+ * Fetches compact unseen Civitai activity directly from `/api/images/civitai-share/unseen`
+ * without scanning the full gallery image list, emits a toast on newly detected activity,
  * and handles opening or dismissing the persistent header alert.
  */
 export function useCivitaiNotifications({
-  allImages,
-  isLoadingImages,
+  refreshVersion,
   notificationsEnabled,
   pushToast,
   onRefreshAll,
   onOpenImage,
   onFilterGalleryUnseen,
 }: UseCivitaiNotificationsParams) {
+  const [unseenItems, setUnseenItems] = useState<CivitaiUnseenActivityItem[]>([]);
   const baselineReadyRef = useRef(false);
-  const prevCountsRef = useRef<Map<number, { reactions: number; comments: number; unseen: boolean }>>(
-    new Map()
-  );
+  const prevCountsRef = useRef<Map<number, { reactions: number; comments: number }>>(new Map());
 
-  const unseenImages = useMemo(
-    () =>
-      allImages.filter(
-        (img) =>
-          !img.isRejected &&
-          !img.isArchived &&
-          Boolean(img.civitaiShareSummary?.hasUnseenActivity)
-      ),
-    [allImages]
-  );
-
-  // Detect newly arrived Civitai reactions/comments after initial hydration and log to Recent Messages
   useEffect(() => {
-    if (isLoadingImages) return;
+    if (!notificationsEnabled) {
+      setUnseenItems([]);
+      return;
+    }
 
-    const nextMap = new Map<number, { reactions: number; comments: number; unseen: boolean }>();
-    let newlyDetectedPosts = 0;
+    let cancelled = false;
+    api
+      .getUnseenCivitaiActivity()
+      .then((res) => {
+        if (cancelled) return;
+        const items = res.items || [];
+        setUnseenItems(items);
 
-    for (const img of allImages) {
-      const s = img.civitaiShareSummary;
-      if (!s) continue;
-      const reactions = Number(s.reactionCount || 0);
-      const comments = Number(s.commentCount || 0);
-      const unseen = Boolean(s.hasUnseenActivity);
-      nextMap.set(img.id, { reactions, comments, unseen });
+        const nextMap = new Map<number, { reactions: number; comments: number }>();
+        let newlyDetectedPosts = 0;
 
-      if (baselineReadyRef.current && notificationsEnabled && !img.isRejected && !img.isArchived && unseen) {
-        const prev = prevCountsRef.current.get(img.id);
-        if (!prev || !prev.unseen || reactions > prev.reactions || comments > prev.comments) {
-          newlyDetectedPosts += 1;
+        for (const item of items) {
+          const reactions = Number(item.reactionCount || 0);
+          const comments = Number(item.commentCount || 0);
+          nextMap.set(item.imageId, { reactions, comments });
+
+          if (baselineReadyRef.current) {
+            const prev = prevCountsRef.current.get(item.imageId);
+            if (!prev || reactions > prev.reactions || comments > prev.comments) {
+              newlyDetectedPosts += 1;
+            }
+          }
         }
-      }
-    }
 
-    if (baselineReadyRef.current && newlyDetectedPosts > 0 && notificationsEnabled) {
-      pushToast(
-        newlyDetectedPosts === 1
-          ? 'New Civitai activity on a shared post'
-          : `New Civitai activity on ${newlyDetectedPosts} shared posts`,
-        'warning'
-      );
-    }
+        if (baselineReadyRef.current && newlyDetectedPosts > 0) {
+          pushToast(
+            newlyDetectedPosts === 1
+              ? 'New Civitai activity on a shared post'
+              : `New Civitai activity on ${newlyDetectedPosts} shared posts`,
+            'warning'
+          );
+        }
 
-    baselineReadyRef.current = true;
-    prevCountsRef.current = nextMap;
-  }, [allImages, isLoadingImages, notificationsEnabled, pushToast]);
+        baselineReadyRef.current = true;
+        prevCountsRef.current = nextMap;
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [notificationsEnabled, refreshVersion, pushToast]);
 
   const civitaiAlert: CivitaiActivityAlertSummary | null = useMemo(() => {
-    if (!notificationsEnabled || unseenImages.length === 0) return null;
+    if (!notificationsEnabled || unseenItems.length === 0) return null;
 
     let reactionCount = 0;
     let commentCount = 0;
-    for (const img of unseenImages) {
-      reactionCount += Number(img.civitaiShareSummary?.reactionCount || 0);
-      commentCount += Number(img.civitaiShareSummary?.commentCount || 0);
+    for (const item of unseenItems) {
+      reactionCount += Number(item.reactionCount || 0);
+      commentCount += Number(item.commentCount || 0);
     }
 
     return {
-      imageCount: unseenImages.length,
-      singleImageId: unseenImages.length === 1 ? unseenImages[0].id : null,
+      imageCount: unseenItems.length,
+      singleImageId: unseenItems.length === 1 ? unseenItems[0].imageId : null,
       reactionCount,
       commentCount,
     };
-  }, [notificationsEnabled, unseenImages]);
+  }, [notificationsEnabled, unseenItems]);
 
   const handleOpenCivitaiAlert = useCallback(() => {
     if (!civitaiAlert) return;
@@ -109,6 +111,8 @@ export function useCivitaiNotifications({
   const handleDismissCivitaiAlert = useCallback(async () => {
     try {
       await api.markAllCivitaiShareSeen();
+      setUnseenItems([]);
+      prevCountsRef.current = new Map();
       await onRefreshAll();
     } catch (err: any) {
       pushToast(err?.message || 'Failed to mark Civitai activity as seen', 'error');

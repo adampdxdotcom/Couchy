@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { db } from '../db.ts';
 import { getExecutableApiGraph, getWorkflowDefaults } from './workflowCompilerService.ts';
+import { getOrBuildStampedCatalog } from './stampedCatalogCache.ts';
 import type { WorkflowLibraryItem } from '../../shared/types.ts';
 
 export class WorkflowServiceError extends Error {
@@ -33,14 +34,13 @@ export function invalidateWorkflowDefaultsCache(workflowId?: number): void {
 }
 
 /**
- * Lists saved library workflows and extracted image workflows with character links and default dimensions.
- * Only parses default generation settings for saved/default library workflows (with stamp caching)
- * to avoid synchronously parsing thousands of historical extracted workflow JSON blobs on every load.
+ * Lists saved library workflows (or all extracted workflows when `savedOnly` is false)
+ * with stamp-cached projection so startup never scans thousands of historical extracted rows.
  */
-export function listWorkflowLibraryItems(): WorkflowLibraryItem[] {
-  const rows = db
-    .prepare(
-      `
+export function listWorkflowLibraryItems(options?: { savedOnly?: boolean }): WorkflowLibraryItem[] {
+  const savedOnly = Boolean(options?.savedOnly);
+  return getOrBuildStampedCatalog(savedOnly ? 'workflows:saved' : 'workflows:all', () => {
+    const baseSelect = `
       SELECT
         w.id,
         w.name,
@@ -55,79 +55,101 @@ export function listWorkflowLibraryItems(): WorkflowLibraryItem[] {
         COUNT(DISTINCT iw.image_id) AS imageCount
       FROM workflows w
       LEFT JOIN image_workflows iw ON iw.workflow_id = w.id
-      GROUP BY w.id
-      ORDER BY w.is_default DESC, w.is_saved_library DESC, w.updated_at DESC
-    `
-    )
-    .all() as any[];
+    `;
 
-  const charRows = db
-    .prepare(
-      `SELECT cw.workflow_id AS workflowId, c.id, c.name, cw.role_label AS roleLabel
-       FROM character_workflows cw
-       JOIN characters c ON c.id = cw.character_id`
-    )
-    .all() as any[];
-  const charsByWf = new Map<number, any[]>();
-  for (const cr of charRows) {
-    const { workflowId, ...rest } = cr;
-    const arr = charsByWf.get(workflowId) || [];
-    arr.push(rest);
-    charsByWf.set(workflowId, arr);
-  }
+    let rows = db
+      .prepare(
+        savedOnly
+          ? `${baseSelect}
+             WHERE w.is_saved_library = 1 OR w.is_default = 1
+             GROUP BY w.id
+             ORDER BY w.is_default DESC, w.is_saved_library DESC, w.updated_at DESC`
+          : `${baseSelect}
+             GROUP BY w.id
+             ORDER BY w.is_default DESC, w.is_saved_library DESC, w.updated_at DESC`
+      )
+      .all() as any[];
 
-  return rows.map((r) => {
-    const wfId = Number(r.id);
-    let defaultMegapixels: number | null = null;
-    let defaultAspectRatio: string | null = null;
-    let defaultSteps: number | null = null;
-    let defaultCheckpoint: string | null = null;
+    // Graceful fallback for unseeded installs with zero saved workflows
+    if (savedOnly && rows.length === 0) {
+      rows = db
+        .prepare(
+          `${baseSelect}
+           GROUP BY w.id
+           ORDER BY w.updated_at DESC
+           LIMIT 1`
+        )
+        .all() as any[];
+    }
 
-    if ((r.is_default || r.is_saved_library) && (r.has_api || r.has_visual)) {
-      const stamp = `${r.workflow_hash || ''}|${r.updated_at || ''}`;
-      const cached = workflowDefaultsCache.get(wfId);
-      if (cached && cached.stamp === stamp) {
-        defaultMegapixels = cached.defaultMegapixels;
-        defaultAspectRatio = cached.defaultAspectRatio;
-        defaultSteps = cached.defaultSteps;
-        defaultCheckpoint = cached.defaultCheckpoint;
-      } else {
-        try {
-          const wfDefaults = getWorkflowDefaults(wfId);
-          defaultMegapixels = wfDefaults.defaultMegapixels ?? null;
-          defaultAspectRatio = wfDefaults.defaultAspectRatio ?? null;
-          defaultSteps = wfDefaults.defaultSteps ?? null;
-          defaultCheckpoint = wfDefaults.defaultCheckpoint ?? null;
-          workflowDefaultsCache.set(wfId, {
-            stamp,
-            defaultMegapixels,
-            defaultAspectRatio,
-            defaultSteps,
-            defaultCheckpoint,
-          });
-        } catch {
-          // ignore unparseable workflow defaults
+    const charRows = db
+      .prepare(
+        `SELECT cw.workflow_id AS workflowId, c.id, c.name, cw.role_label AS roleLabel
+         FROM character_workflows cw
+         JOIN characters c ON c.id = cw.character_id`
+      )
+      .all() as any[];
+    const charsByWf = new Map<number, any[]>();
+    for (const cr of charRows) {
+      const { workflowId, ...rest } = cr;
+      const arr = charsByWf.get(workflowId) || [];
+      arr.push(rest);
+      charsByWf.set(workflowId, arr);
+    }
+
+    return rows.map((r) => {
+      const wfId = Number(r.id);
+      let defaultMegapixels: number | null = null;
+      let defaultAspectRatio: string | null = null;
+      let defaultSteps: number | null = null;
+      let defaultCheckpoint: string | null = null;
+
+      if ((r.is_default || r.is_saved_library) && (r.has_api || r.has_visual)) {
+        const stamp = `${r.workflow_hash || ''}|${r.updated_at || ''}`;
+        const cached = workflowDefaultsCache.get(wfId);
+        if (cached && cached.stamp === stamp) {
+          defaultMegapixels = cached.defaultMegapixels;
+          defaultAspectRatio = cached.defaultAspectRatio;
+          defaultSteps = cached.defaultSteps;
+          defaultCheckpoint = cached.defaultCheckpoint;
+        } else {
+          try {
+            const wfDefaults = getWorkflowDefaults(wfId);
+            defaultMegapixels = wfDefaults.defaultMegapixels ?? null;
+            defaultAspectRatio = wfDefaults.defaultAspectRatio ?? null;
+            defaultSteps = wfDefaults.defaultSteps ?? null;
+            defaultCheckpoint = wfDefaults.defaultCheckpoint ?? null;
+            workflowDefaultsCache.set(wfId, {
+              stamp,
+              defaultMegapixels,
+              defaultAspectRatio,
+              defaultSteps,
+              defaultCheckpoint,
+            });
+          } catch {
+            // ignore unparseable workflow defaults
+          }
         }
       }
-    }
-    return {
-      id: r.id,
-      name: r.name,
-      description: r.description || '',
-      isSavedLibrary: Boolean(r.is_saved_library),
-      isDefault: Boolean(r.is_default),
-      hasVisualWorkflow: Boolean(r.has_visual),
-      hasApiWorkflow: Boolean(r.has_api),
-      workflowHash: r.workflow_hash,
-      imageCount: Number(r.imageCount || 0),
-      characters: charsByWf.get(r.id) || [],
-      defaultMegapixels,
-      defaultAspectRatio,
-      defaultSteps,
-      defaultCheckpoint,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    };
+      return {
+        id: r.id,
+        name: r.name,
+        description: r.description || '',
+        isSavedLibrary: Boolean(r.is_saved_library),
+        isDefault: Boolean(r.is_default),
+        hasVisualWorkflow: Boolean(r.has_visual),
+        hasApiWorkflow: Boolean(r.has_api),
+        workflowHash: r.workflow_hash,
+        imageCount: Number(r.imageCount || 0),
+        characters: charsByWf.get(r.id) || [],
+        defaultMegapixels,
+        defaultAspectRatio,
+        defaultSteps,
+        defaultCheckpoint,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+      };
+    });
   });
 }
 

@@ -158,6 +158,73 @@ export function summarizeCivitaiDraftRows(rows: any[]): CivitaiShareSummary | nu
 }
 
 /**
+ * Returns a compact list of non-rejected, non-archived shared images that currently have
+ * unseen Civitai reactions or comments without hydrating the full gallery pool.
+ */
+export function listUnseenCivitaiActivity(): Array<{
+  imageId: number;
+  reactionCount: number;
+  commentCount: number;
+  hasUnseenActivity: boolean;
+}> {
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        i.id AS resolved_image_id,
+        d.*
+      FROM image_civitai_drafts d
+      JOIN images i
+        ON (d.image_id = i.id OR (d.image_content_hash != '' AND d.image_content_hash = i.content_hash))
+      LEFT JOIN ratings r ON r.content_hash = i.content_hash
+      WHERE i.is_missing = 0
+        AND COALESCE(i.is_uploaded_reference, 0) = 0
+        AND COALESCE(r.is_rejected, 0) = 0
+        AND COALESCE(r.is_archived, 0) = 0
+        AND d.status = 'published'
+        AND (
+          COALESCE(d.reaction_count, 0) > COALESCE(d.seen_reaction_count, 0)
+          OR COALESCE(d.comment_count, 0) > COALESCE(d.seen_comment_count, 0)
+        )
+      ORDER BY d.id DESC
+    `
+    )
+    .all() as any[];
+
+  if (rows.length === 0) return [];
+
+  // Group by image and deduplicate draft rows per post via summarizeCivitaiDraftRows
+  const rowsByImageId = new Map<number, any[]>();
+  for (const row of rows) {
+    const imgId = Number(row.resolved_image_id);
+    const list = rowsByImageId.get(imgId);
+    if (list) list.push(row);
+    else rowsByImageId.set(imgId, [row]);
+  }
+
+  const out: Array<{
+    imageId: number;
+    reactionCount: number;
+    commentCount: number;
+    hasUnseenActivity: boolean;
+  }> = [];
+
+  for (const [imageId, imgRows] of rowsByImageId.entries()) {
+    const summary = summarizeCivitaiDraftRows(imgRows);
+    if (summary && summary.hasUnseenActivity) {
+      out.push({
+        imageId,
+        reactionCount: summary.reactionCount,
+        commentCount: summary.commentCount,
+        hasUnseenActivity: true,
+      });
+    }
+  }
+
+  return out;
+}
+
+/**
  * Extracts total reactions, detailed reaction breakdown, per-image stats, and comment count
  * from Civitai `/api/v1/images?postId=...` items.
  */

@@ -2,13 +2,15 @@ import { db } from '../db.ts';
 import type { CharacterProfile, LoraCategory, PortraitCrop } from '../../shared/types.ts';
 import { normalizePortraitCrop } from '../../shared/utils.ts';
 import { invalidateInstalledModelsCache } from './civitai/civitaiModelEnrichmentService.ts';
+import { getOrBuildStampedCatalog } from './stampedCatalogCache.ts';
 
 /**
  * First-Class Character Organization & Assisted Character Identification Service.
  * Uses batched bulk queries for listing all characters to avoid 6-7 N+1 queries per character.
  */
 export function listCharacterProfiles(): CharacterProfile[] {
-  const rows = db
+  return getOrBuildStampedCatalog('characters:list', () => {
+    const rows = db
     .prepare(
       `
       SELECT
@@ -142,6 +144,58 @@ export function listCharacterProfiles(): CharacterProfile[] {
     statsByChar.set(st.characterId, st);
   }
 
+  // Single batched query for up to 4 recent confirmed images per character (used by Quick Gen @mentions)
+  const samplesByChar = new Map<
+    number,
+    NonNullable<CharacterProfile['recentSamples']>
+  >();
+  for (const s of db
+    .prepare(
+      `
+      WITH ranked AS (
+        SELECT
+          ic.character_id AS characterId,
+          i.id,
+          i.filename,
+          i.content_hash AS contentHash,
+          m.positive_prompt AS positivePrompt,
+          ROW_NUMBER() OVER (
+            PARTITION BY ic.character_id
+            ORDER BY i.file_mtime DESC, i.id DESC
+          ) AS rn
+        FROM image_characters ic
+        JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+        LEFT JOIN ratings r ON r.content_hash = i.content_hash
+        LEFT JOIN image_metadata m ON m.image_id = i.id
+        WHERE ic.status = 'confirmed'
+          AND COALESCE(i.is_uploaded_reference, 0) = 0
+          AND COALESCE(r.is_rejected, 0) = 0
+      )
+      SELECT characterId, id, filename, contentHash, positivePrompt
+      FROM ranked
+      WHERE rn <= 4
+      ORDER BY characterId ASC, rn ASC
+    `
+    )
+    .all() as Array<{
+    characterId: number;
+    id: number;
+    filename: string;
+    contentHash: string | null;
+    positivePrompt: string | null;
+  }>) {
+    const hashParam = s.contentHash ? `?h=${String(s.contentHash).slice(0, 12)}` : '';
+    const entry = {
+      id: Number(s.id),
+      filename: s.filename,
+      thumbnailUrl: `/api/images/${s.id}/thumbnail${hashParam}`,
+      positivePrompt: s.positivePrompt ?? null,
+    };
+    const arr = samplesByChar.get(s.characterId);
+    if (arr) arr.push(entry);
+    else samplesByChar.set(s.characterId, [entry]);
+  }
+
   return rows.map((row) => {
     const stats = statsByChar.get(row.id);
     const portraitId = resolveCharacterPortraitId(row);
@@ -167,9 +221,11 @@ export function listCharacterProfiles(): CharacterProfile[] {
       averageRating: Number(stats?.avgRating ? Number(stats.avgRating).toFixed(2) : 0),
       firstGenerationDate: stats?.firstGen || null,
       latestGenerationDate: stats?.latestGen || null,
+      recentSamples: samplesByChar.get(row.id) || [],
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  });
   });
 }
 
@@ -393,6 +449,41 @@ function buildCharacterProfile(row: any): CharacterProfile {
     .get(row.id) as any;
 
   const portraitId = resolveCharacterPortraitId(row);
+  const recentSamples = (
+    db
+      .prepare(
+        `
+        SELECT
+          i.id,
+          i.filename,
+          i.content_hash AS contentHash,
+          m.positive_prompt AS positivePrompt
+        FROM image_characters ic
+        JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+        LEFT JOIN ratings r ON r.content_hash = i.content_hash
+        LEFT JOIN image_metadata m ON m.image_id = i.id
+        WHERE ic.character_id = ?
+          AND ic.status = 'confirmed'
+          AND COALESCE(i.is_uploaded_reference, 0) = 0
+          AND COALESCE(r.is_rejected, 0) = 0
+        ORDER BY i.file_mtime DESC, i.id DESC
+        LIMIT 4
+      `
+      )
+      .all(row.id) as Array<{
+      id: number;
+      filename: string;
+      contentHash: string | null;
+      positivePrompt: string | null;
+    }>
+  ).map((s) => ({
+    id: Number(s.id),
+    filename: s.filename,
+    thumbnailUrl: `/api/images/${s.id}/thumbnail${
+      s.contentHash ? `?h=${String(s.contentHash).slice(0, 12)}` : ''
+    }`,
+    positivePrompt: s.positivePrompt ?? null,
+  }));
 
   return {
     id: row.id,
@@ -422,6 +513,7 @@ function buildCharacterProfile(row: any): CharacterProfile {
     averageRating: Number(stats?.avgRating ? Number(stats.avgRating).toFixed(2) : 0),
     firstGenerationDate: stats?.firstGen || null,
     latestGenerationDate: stats?.latestGen || null,
+    recentSamples,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

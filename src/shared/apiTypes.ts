@@ -92,6 +92,13 @@ export interface CivitaiActivityAlertSummary {
   commentCount: number;
 }
 
+export interface CivitaiUnseenActivityItem {
+  imageId: number;
+  reactionCount: number;
+  commentCount: number;
+  hasUnseenActivity: boolean;
+}
+
 export interface DatabaseBackupEntry {
   filename: string;
   sizeBytes: number;
