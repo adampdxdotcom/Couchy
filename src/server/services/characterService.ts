@@ -5,6 +5,7 @@ import { invalidateInstalledModelsCache } from './civitai/civitaiModelEnrichment
 
 /**
  * First-Class Character Organization & Assisted Character Identification Service.
+ * Uses batched bulk queries for listing all characters to avoid 6-7 N+1 queries per character.
  */
 export function listCharacterProfiles(): CharacterProfile[] {
   const rows = db
@@ -21,7 +22,155 @@ export function listCharacterProfiles(): CharacterProfile[] {
     )
     .all() as any[];
 
-  return rows.map((row) => buildCharacterProfile(row));
+  if (rows.length === 0) return [];
+
+  const aliasesByChar = new Map<number, { id: number; alias: string }[]>();
+  for (const a of db
+    .prepare('SELECT character_id AS characterId, id, alias FROM character_aliases ORDER BY alias ASC')
+    .all() as { characterId: number; id: number; alias: string }[]) {
+    const arr = aliasesByChar.get(a.characterId);
+    const item = { id: a.id, alias: a.alias };
+    if (arr) arr.push(item);
+    else aliasesByChar.set(a.characterId, [item]);
+  }
+
+  const lorasByChar = new Map<number, any[]>();
+  for (const l of db
+    .prepare(
+      `
+      SELECT
+        cl.character_id AS characterId,
+        cl.id,
+        cl.model_id AS modelId,
+        cl.lora_name AS loraName,
+        cl.lora_hash AS loraHash,
+        cl.lora_category AS loraCategory,
+        cl.appearance_label AS appearanceLabel,
+        COALESCE(cl.trigger_word, '') AS triggerWord,
+        cl.notes,
+        COALESCE(m.is_installed, 0) AS isInstalled,
+        m.download_file_path AS downloadFilePath
+      FROM character_loras cl
+      LEFT JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
+      GROUP BY cl.id
+      ORDER BY cl.lora_name ASC
+    `
+    )
+    .all() as any[]) {
+    const { characterId, ...rest } = l;
+    const isInstalled = Boolean(rest.isInstalled);
+    const enriched = {
+      ...rest,
+      isInstalled,
+      isDownloadedPendingImport: Boolean(!isInstalled && rest.downloadFilePath),
+    };
+    const arr = lorasByChar.get(characterId);
+    if (arr) arr.push(enriched);
+    else lorasByChar.set(characterId, [enriched]);
+  }
+
+  const workflowsByChar = new Map<number, any[]>();
+  for (const wf of db
+    .prepare(
+      `
+      SELECT
+        cw.character_id AS characterId,
+        cw.workflow_id AS workflowId,
+        w.name AS workflowName,
+        cw.role_label AS roleLabel
+      FROM character_workflows cw
+      JOIN workflows w ON w.id = cw.workflow_id
+    `
+    )
+    .all() as any[]) {
+    const { characterId, ...rest } = wf;
+    const arr = workflowsByChar.get(characterId);
+    if (arr) arr.push(rest);
+    else workflowsByChar.set(characterId, [rest]);
+  }
+
+  const tagsByChar = new Map<number, any[]>();
+  for (const t of db
+    .prepare(
+      `
+      SELECT ct.character_id AS characterId, t.id, t.name, t.color
+      FROM character_tags ct
+      JOIN tags t ON t.id = ct.tag_id
+    `
+    )
+    .all() as any[]) {
+    const { characterId, ...rest } = t;
+    const arr = tagsByChar.get(characterId);
+    if (arr) arr.push(rest);
+    else tagsByChar.set(characterId, [rest]);
+  }
+
+  const colsByChar = new Map<number, any[]>();
+  for (const col of db
+    .prepare(
+      `
+      SELECT cc.character_id AS characterId, col.id, col.name
+      FROM character_collections cc
+      JOIN collections col ON col.id = cc.collection_id
+    `
+    )
+    .all() as any[]) {
+    const { characterId, ...rest } = col;
+    const arr = colsByChar.get(characterId);
+    if (arr) arr.push(rest);
+    else colsByChar.set(characterId, [rest]);
+  }
+
+  const statsByChar = new Map<number, any>();
+  for (const st of db
+    .prepare(
+      `
+      SELECT
+        ic.character_id AS characterId,
+        SUM(CASE WHEN ic.status = 'confirmed' THEN 1 ELSE 0 END) AS confirmedCount,
+        SUM(CASE WHEN ic.status = 'suggested' THEN 1 ELSE 0 END) AS suggestedCount,
+        AVG(CASE WHEN ic.status = 'confirmed' AND r.rating > 0 THEN r.rating ELSE NULL END) AS avgRating,
+        MIN(CASE WHEN ic.status = 'confirmed' THEN i.file_mtime ELSE NULL END) AS firstGen,
+        MAX(CASE WHEN ic.status = 'confirmed' THEN i.file_mtime ELSE NULL END) AS latestGen
+      FROM image_characters ic
+      LEFT JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+      LEFT JOIN ratings r ON r.content_hash = ic.image_content_hash
+      GROUP BY ic.character_id
+    `
+    )
+    .all() as any[]) {
+    statsByChar.set(st.characterId, st);
+  }
+
+  return rows.map((row) => {
+    const stats = statsByChar.get(row.id);
+    const portraitId = resolveCharacterPortraitId(row);
+
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description || '',
+      physicalDescription: row.physical_description || '',
+      notes: row.notes || '',
+      portraitImageId: portraitId,
+      portraitContentHash: row.portrait_content_hash || null,
+      portraitThumbnailUrl: portraitId ? `/api/images/${portraitId}/thumbnail` : null,
+      portraitCrop: normalizePortraitCrop(row.portrait_crop_json),
+      allowCivitaiShare: Boolean(row.allow_civitai_share),
+      aliases: aliasesByChar.get(row.id) || [],
+      loras: lorasByChar.get(row.id) || [],
+      workflows: workflowsByChar.get(row.id) || [],
+      tags: tagsByChar.get(row.id) || [],
+      collections: colsByChar.get(row.id) || [],
+      confirmedImageCount: Number(stats?.confirmedCount || 0),
+      suggestedImageCount: Number(stats?.suggestedCount || 0),
+      averageRating: Number(stats?.avgRating ? Number(stats.avgRating).toFixed(2) : 0),
+      firstGenerationDate: stats?.firstGen || null,
+      latestGenerationDate: stats?.latestGen || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  });
 }
 
 export function getCharacterProfileById(characterId: number): CharacterProfile | null {

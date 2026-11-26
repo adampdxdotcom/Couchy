@@ -11,8 +11,31 @@ export class WorkflowServiceError extends Error {
   }
 }
 
+interface CachedWorkflowDefaults {
+  stamp: string;
+  defaultMegapixels: number | null;
+  defaultAspectRatio: string | null;
+  defaultSteps: number | null;
+  defaultCheckpoint: string | null;
+}
+
+const workflowDefaultsCache = new Map<number, CachedWorkflowDefaults>();
+
+/**
+ * Clears cached parsed workflow defaults (called after workflow edits or default changes).
+ */
+export function invalidateWorkflowDefaultsCache(workflowId?: number): void {
+  if (workflowId !== undefined) {
+    workflowDefaultsCache.delete(workflowId);
+  } else {
+    workflowDefaultsCache.clear();
+  }
+}
+
 /**
  * Lists saved library workflows and extracted image workflows with character links and default dimensions.
+ * Only parses default generation settings for saved/default library workflows (with stamp caching)
+ * to avoid synchronously parsing thousands of historical extracted workflow JSON blobs on every load.
  */
 export function listWorkflowLibraryItems(): WorkflowLibraryItem[] {
   const rows = db
@@ -54,19 +77,37 @@ export function listWorkflowLibraryItems(): WorkflowLibraryItem[] {
   }
 
   return rows.map((r) => {
+    const wfId = Number(r.id);
     let defaultMegapixels: number | null = null;
     let defaultAspectRatio: string | null = null;
     let defaultSteps: number | null = null;
     let defaultCheckpoint: string | null = null;
-    if (r.has_api || r.has_visual) {
-      try {
-        const wfDefaults = getWorkflowDefaults(Number(r.id));
-        defaultMegapixels = wfDefaults.defaultMegapixels ?? null;
-        defaultAspectRatio = wfDefaults.defaultAspectRatio ?? null;
-        defaultSteps = wfDefaults.defaultSteps ?? null;
-        defaultCheckpoint = wfDefaults.defaultCheckpoint ?? null;
-      } catch {
-        // ignore unparseable workflow defaults
+
+    if ((r.is_default || r.is_saved_library) && (r.has_api || r.has_visual)) {
+      const stamp = `${r.workflow_hash || ''}|${r.updated_at || ''}`;
+      const cached = workflowDefaultsCache.get(wfId);
+      if (cached && cached.stamp === stamp) {
+        defaultMegapixels = cached.defaultMegapixels;
+        defaultAspectRatio = cached.defaultAspectRatio;
+        defaultSteps = cached.defaultSteps;
+        defaultCheckpoint = cached.defaultCheckpoint;
+      } else {
+        try {
+          const wfDefaults = getWorkflowDefaults(wfId);
+          defaultMegapixels = wfDefaults.defaultMegapixels ?? null;
+          defaultAspectRatio = wfDefaults.defaultAspectRatio ?? null;
+          defaultSteps = wfDefaults.defaultSteps ?? null;
+          defaultCheckpoint = wfDefaults.defaultCheckpoint ?? null;
+          workflowDefaultsCache.set(wfId, {
+            stamp,
+            defaultMegapixels,
+            defaultAspectRatio,
+            defaultSteps,
+            defaultCheckpoint,
+          });
+        } catch {
+          // ignore unparseable workflow defaults
+        }
       }
     }
     return {
@@ -123,6 +164,7 @@ export function setDefaultWorkflow(wfId: number): any {
     ).run(wfId);
   });
   tx();
+  invalidateWorkflowDefaultsCache();
 
   return db.prepare('SELECT * FROM workflows WHERE id = ?').get(wfId);
 }
@@ -187,6 +229,7 @@ export function saveOrUpdateWorkflow(input: {
       ).run(nextName, nextDesc, nextVisual, nextApi, nextDefault, wfId);
     });
     tx();
+    invalidateWorkflowDefaultsCache(wfId);
 
     return db.prepare('SELECT * FROM workflows WHERE id = ?').get(wfId);
   }
@@ -225,6 +268,7 @@ export function saveOrUpdateWorkflow(input: {
     );
   });
   tx();
+  invalidateWorkflowDefaultsCache();
 
   return db.prepare('SELECT * FROM workflows WHERE workflow_hash = ?').get(wfHash);
 }

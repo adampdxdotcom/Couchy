@@ -7,6 +7,7 @@ import { migrationsV29 } from './db/migrationsV29.ts';
 import { migrationsV30 } from './db/migrationsV30.ts';
 import { migrationsV31 } from './db/migrationsV31.ts';
 import { migrationsV32 } from './db/migrationsV32.ts';
+import { migrationsV33 } from './db/migrationsV33.ts';
 import { seedPromptsAndLlmSettings } from './db/seedPromptsAndLlm.ts';
 import { seedWorkflowsAndInstances } from './db/seedWorkflowsAndInstances.ts';
 
@@ -27,6 +28,7 @@ const ALL_MIGRATIONS: SchemaMigration[] = [
   ...migrationsV30,
   ...migrationsV31,
   ...migrationsV32,
+  ...migrationsV33,
 ];
 
 /**

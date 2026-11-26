@@ -875,24 +875,33 @@ export function listLoraExplorerItems(): LoraExplorerItem[] {
 
   const portraitMap = getCharacterPortraitMetadataMap();
 
-  const getChars = db.prepare(`
-    SELECT c.id, c.name, cl.appearance_label AS appearanceLabel
-    FROM character_loras cl
-    JOIN characters c ON c.id = cl.character_id
-    WHERE LOWER(cl.lora_name) = LOWER(?)
-  `);
+  // Bulk-fetch all LoRA-to-character links in one query instead of N+1 per LoRA row
+  const allLinkedCharRows = db
+    .prepare(
+      `SELECT LOWER(cl.lora_name) AS lowerLoraName, c.id, c.name, cl.appearance_label AS appearanceLabel
+       FROM character_loras cl
+       JOIN characters c ON c.id = cl.character_id`
+    )
+    .all() as { lowerLoraName: string; id: number; name: string; appearanceLabel: string }[];
+
+  const charsByLowerLora = new Map<string, LoraExplorerItem['characters']>();
+
+  for (const c of allLinkedCharRows) {
+    const portraitInfo = portraitMap.get(c.id);
+    const entry = {
+      id: c.id,
+      name: c.name,
+      appearanceLabel: c.appearanceLabel,
+      portraitThumbnailUrl: portraitInfo?.url ?? null,
+      portraitCrop: portraitInfo?.crop ?? null,
+    };
+    const arr = charsByLowerLora.get(c.lowerLoraName);
+    if (arr) arr.push(entry);
+    else charsByLowerLora.set(c.lowerLoraName, [entry]);
+  }
 
   return rows.map((r) => {
-    const linkedChars = (
-      getChars.all(r.filename) as { id: number; name: string; appearanceLabel: string }[]
-    ).map((c) => {
-      const portraitInfo = portraitMap.get(c.id);
-      return {
-        ...c,
-        portraitThumbnailUrl: portraitInfo?.url ?? null,
-        portraitCrop: portraitInfo?.crop ?? null,
-      };
-    });
+    const linkedChars = charsByLowerLora.get(String(r.filename || '').toLowerCase()) || [];
 
     return {
       name: r.name,

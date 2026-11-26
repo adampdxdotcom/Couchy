@@ -8,6 +8,15 @@ import {
 
 export { DEFAULT_CONVERSATION_SYSTEM_PROMPT, DEFAULT_BATCH_EXPANSION_PROMPT };
 
+const LM_STATUS_CACHE_TTL_MS = 5000;
+const lmStatusCache = new Map<string, { expiresAt: number; status: LmStudioStatus }>();
+const lmStatusInFlight = new Map<string, Promise<LmStudioStatus>>();
+
+/** Clears cached Local LLM health probes (called after settings or template edits). */
+export function invalidateLmStudioStatusCache(): void {
+  lmStatusCache.clear();
+}
+
 function mapGuidingRow(row: any): LmStudioGuidingTemplate {
   return {
     id: row.id,
@@ -80,6 +89,7 @@ export function saveLmStudioGuidingTemplate(payload: {
   });
 
   const savedId = tx();
+  invalidateLmStudioStatusCache();
   const savedRow = db.prepare('SELECT * FROM lm_studio_prompt_templates WHERE id = ?').get(savedId);
   return {
     template: mapGuidingRow(savedRow),
@@ -101,6 +111,7 @@ export function deleteLmStudioGuidingTemplate(id: number): LmStudioGuidingTempla
       db.prepare('UPDATE lm_studio_prompt_templates SET is_default = 1 WHERE id = ?').run(first.id);
     }
   }
+  invalidateLmStudioStatusCache();
   return listLmStudioGuidingTemplates();
 }
 
@@ -189,6 +200,7 @@ export function updateLmStudioSettings(payload: {
   );
 
   appConfig.lmStudioUrl = nextUrl;
+  invalidateLmStudioStatusCache();
   return {
     baseUrl: nextUrl,
     selectedModel: nextModel,
@@ -357,12 +369,55 @@ async function detectLoadedServerModels(
 /**
  * Checks connectivity to Local LLM (/v1/models), detects currently loaded models,
  * resolves the active model (auto-following loaded models unless manually pinned),
- * and returns guiding templates.
+ * and returns guiding templates. Coalesces concurrent requests and caches results for 5s
+ * so simultaneous startup probes (/readiness + /lmstudio/status) share one network check.
  */
-export async function checkLmStudioStatus(customBaseUrl?: string): Promise<LmStudioStatus> {
+export async function checkLmStudioStatus(
+  customBaseUrl?: string,
+  options?: { forceRefresh?: boolean }
+): Promise<LmStudioStatus> {
   const settings = getLmStudioSettings();
-  const guidingTemplates = listLmStudioGuidingTemplates();
   const baseUrl = (customBaseUrl || settings.baseUrl).replace(/\/+$/, '');
+  const forceRefresh = Boolean(options?.forceRefresh);
+  const cacheKey = `${baseUrl}|${settings.selectedModel}|${settings.followLoadedModel ? '1' : '0'}`;
+
+  if (!forceRefresh) {
+    const cached = lmStatusCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.status;
+    }
+    const existing = lmStatusInFlight.get(cacheKey);
+    if (existing) {
+      return existing;
+    }
+  }
+
+  const probePromise = runLmStudioStatusProbe(baseUrl, customBaseUrl, settings)
+    .then((status) => {
+      lmStatusCache.set(cacheKey, {
+        expiresAt: Date.now() + LM_STATUS_CACHE_TTL_MS,
+        status,
+      });
+      return status;
+    })
+    .finally(() => {
+      if (lmStatusInFlight.get(cacheKey) === probePromise) {
+        lmStatusInFlight.delete(cacheKey);
+      }
+    });
+
+  if (!forceRefresh) {
+    lmStatusInFlight.set(cacheKey, probePromise);
+  }
+  return probePromise;
+}
+
+async function runLmStudioStatusProbe(
+  baseUrl: string,
+  customBaseUrl: string | undefined,
+  settings: ReturnType<typeof getLmStudioSettings>
+): Promise<LmStudioStatus> {
+  const guidingTemplates = listLmStudioGuidingTemplates();
   const modelsEndpoint = baseUrl.endsWith('/v1') ? `${baseUrl}/models` : `${baseUrl}/v1/models`;
 
   try {

@@ -4,6 +4,7 @@ import { appConfig } from '../config.ts';
 import { getExecutableApiGraph } from './workflowCompilerService.ts';
 import { checkLmStudioStatus } from './llm/llmClientService.ts';
 import { extractComfyObjectInfoChoices } from './modelInventoryService.ts';
+import { invalidateWorkflowDefaultsCache } from './workflowLibraryService.ts';
 import type { GenerationReadinessResponse, ReadinessCheckItem } from '../../shared/apiTypes.ts';
 
 const REQUIRED_KREA2_NODES = [
@@ -325,6 +326,7 @@ export async function setDefaultWorkflowUnet(
      SET api_workflow_json = ?, updated_at = datetime('now')
      WHERE id = ?`
   ).run(JSON.stringify(graph, null, 2), wfRow.id);
+  invalidateWorkflowDefaultsCache(wfRow.id);
 
   return getGenerationReadiness();
 }

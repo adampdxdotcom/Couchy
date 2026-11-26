@@ -162,7 +162,7 @@ generationRouter.get('/lmstudio/status', async (req, res) => {
 generationRouter.post('/lmstudio/config', async (req, res) => {
   try {
     const updated = updateLmStudioSettings(req.body || {});
-    const status = await checkLmStudioStatus(updated.baseUrl);
+    const status = await checkLmStudioStatus(updated.baseUrl, { forceRefresh: true });
     res.json(status);
   } catch (err: unknown) {
     res.status(400).json({ error: getErrorMessage(err, 'Failed to update Local LLM settings.') });

@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import path from 'path';
 import { appConfig } from './src/server/config.ts';
 import { logger } from './src/server/logger.ts';
@@ -6,6 +7,8 @@ import { logger } from './src/server/logger.ts';
 async function startServer() {
   const outerApp = express();
   const innerApp = express();
+  // Compress JSON/text API responses >= 1 KB (already-compressed WebP/PNG/ZIP streams are auto-skipped)
+  innerApp.use(compression({ threshold: 1024 }));
   innerApp.use(express.json({ limit: '25mb' }));
 
   const disableHmr = process.env.DISABLE_HMR === 'true';

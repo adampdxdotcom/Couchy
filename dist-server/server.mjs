@@ -1047,6 +1047,29 @@ var init_migrationsV32 = __esm({
   }
 });
 
+// src/server/db/migrationsV33.ts
+var migrationsV33;
+var init_migrationsV33 = __esm({
+  "src/server/db/migrationsV33.ts"() {
+    migrationsV33 = [
+      {
+        version: 33,
+        name: "startup_query_performance_indexes",
+        sql: `
+      CREATE INDEX IF NOT EXISTS idx_image_models_name_lower ON image_models(LOWER(model_name));
+      CREATE INDEX IF NOT EXISTS idx_char_loras_name_lower ON character_loras(LOWER(lora_name));
+      CREATE INDEX IF NOT EXISTS idx_char_loras_char_id ON character_loras(character_id);
+      CREATE INDEX IF NOT EXISTS idx_char_aliases_char_id ON character_aliases(character_id);
+      CREATE INDEX IF NOT EXISTS idx_char_workflows_char_id ON character_workflows(character_id);
+      CREATE INDEX IF NOT EXISTS idx_char_tags_char_id ON character_tags(character_id);
+      CREATE INDEX IF NOT EXISTS idx_char_collections_char_id ON character_collections(character_id);
+      CREATE INDEX IF NOT EXISTS idx_image_workflows_image_id ON image_workflows(image_id);
+    `
+      }
+    ];
+  }
+});
+
 // src/shared/agentPromptDefaults.ts
 var DEFAULT_CONVERSATION_SYSTEM_PROMPT, DEFAULT_BATCH_EXPANSION_PROMPT;
 var init_agentPromptDefaults = __esm({
@@ -1490,6 +1513,7 @@ var init_db = __esm({
     init_migrationsV30();
     init_migrationsV31();
     init_migrationsV32();
+    init_migrationsV33();
     init_seedPromptsAndLlm();
     init_seedWorkflowsAndInstances();
     db = new Database(appConfig.databasePath);
@@ -1503,7 +1527,8 @@ var init_db = __esm({
       ...migrationsV29,
       ...migrationsV30,
       ...migrationsV31,
-      ...migrationsV32
+      ...migrationsV32,
+      ...migrationsV33
     ];
   }
 });
@@ -5003,7 +5028,135 @@ function listCharacterProfiles() {
       ORDER BY c.name COLLATE NOCASE ASC
     `
   ).all();
-  return rows.map((row) => buildCharacterProfile(row));
+  if (rows.length === 0) return [];
+  const aliasesByChar = /* @__PURE__ */ new Map();
+  for (const a of db.prepare("SELECT character_id AS characterId, id, alias FROM character_aliases ORDER BY alias ASC").all()) {
+    const arr = aliasesByChar.get(a.characterId);
+    const item = { id: a.id, alias: a.alias };
+    if (arr) arr.push(item);
+    else aliasesByChar.set(a.characterId, [item]);
+  }
+  const lorasByChar = /* @__PURE__ */ new Map();
+  for (const l of db.prepare(
+    `
+      SELECT
+        cl.character_id AS characterId,
+        cl.id,
+        cl.model_id AS modelId,
+        cl.lora_name AS loraName,
+        cl.lora_hash AS loraHash,
+        cl.lora_category AS loraCategory,
+        cl.appearance_label AS appearanceLabel,
+        COALESCE(cl.trigger_word, '') AS triggerWord,
+        cl.notes,
+        COALESCE(m.is_installed, 0) AS isInstalled,
+        m.download_file_path AS downloadFilePath
+      FROM character_loras cl
+      LEFT JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
+      GROUP BY cl.id
+      ORDER BY cl.lora_name ASC
+    `
+  ).all()) {
+    const { characterId, ...rest } = l;
+    const isInstalled = Boolean(rest.isInstalled);
+    const enriched = {
+      ...rest,
+      isInstalled,
+      isDownloadedPendingImport: Boolean(!isInstalled && rest.downloadFilePath)
+    };
+    const arr = lorasByChar.get(characterId);
+    if (arr) arr.push(enriched);
+    else lorasByChar.set(characterId, [enriched]);
+  }
+  const workflowsByChar = /* @__PURE__ */ new Map();
+  for (const wf of db.prepare(
+    `
+      SELECT
+        cw.character_id AS characterId,
+        cw.workflow_id AS workflowId,
+        w.name AS workflowName,
+        cw.role_label AS roleLabel
+      FROM character_workflows cw
+      JOIN workflows w ON w.id = cw.workflow_id
+    `
+  ).all()) {
+    const { characterId, ...rest } = wf;
+    const arr = workflowsByChar.get(characterId);
+    if (arr) arr.push(rest);
+    else workflowsByChar.set(characterId, [rest]);
+  }
+  const tagsByChar = /* @__PURE__ */ new Map();
+  for (const t of db.prepare(
+    `
+      SELECT ct.character_id AS characterId, t.id, t.name, t.color
+      FROM character_tags ct
+      JOIN tags t ON t.id = ct.tag_id
+    `
+  ).all()) {
+    const { characterId, ...rest } = t;
+    const arr = tagsByChar.get(characterId);
+    if (arr) arr.push(rest);
+    else tagsByChar.set(characterId, [rest]);
+  }
+  const colsByChar = /* @__PURE__ */ new Map();
+  for (const col of db.prepare(
+    `
+      SELECT cc.character_id AS characterId, col.id, col.name
+      FROM character_collections cc
+      JOIN collections col ON col.id = cc.collection_id
+    `
+  ).all()) {
+    const { characterId, ...rest } = col;
+    const arr = colsByChar.get(characterId);
+    if (arr) arr.push(rest);
+    else colsByChar.set(characterId, [rest]);
+  }
+  const statsByChar = /* @__PURE__ */ new Map();
+  for (const st of db.prepare(
+    `
+      SELECT
+        ic.character_id AS characterId,
+        SUM(CASE WHEN ic.status = 'confirmed' THEN 1 ELSE 0 END) AS confirmedCount,
+        SUM(CASE WHEN ic.status = 'suggested' THEN 1 ELSE 0 END) AS suggestedCount,
+        AVG(CASE WHEN ic.status = 'confirmed' AND r.rating > 0 THEN r.rating ELSE NULL END) AS avgRating,
+        MIN(CASE WHEN ic.status = 'confirmed' THEN i.file_mtime ELSE NULL END) AS firstGen,
+        MAX(CASE WHEN ic.status = 'confirmed' THEN i.file_mtime ELSE NULL END) AS latestGen
+      FROM image_characters ic
+      LEFT JOIN images i ON i.content_hash = ic.image_content_hash AND i.is_missing = 0
+      LEFT JOIN ratings r ON r.content_hash = ic.image_content_hash
+      GROUP BY ic.character_id
+    `
+  ).all()) {
+    statsByChar.set(st.characterId, st);
+  }
+  return rows.map((row) => {
+    const stats = statsByChar.get(row.id);
+    const portraitId = resolveCharacterPortraitId(row);
+    return {
+      id: row.id,
+      name: row.name,
+      description: row.description || "",
+      physicalDescription: row.physical_description || "",
+      notes: row.notes || "",
+      portraitImageId: portraitId,
+      portraitContentHash: row.portrait_content_hash || null,
+      portraitThumbnailUrl: portraitId ? `/api/images/${portraitId}/thumbnail` : null,
+      portraitCrop: normalizePortraitCrop(row.portrait_crop_json),
+      allowCivitaiShare: Boolean(row.allow_civitai_share),
+      aliases: aliasesByChar.get(row.id) || [],
+      loras: lorasByChar.get(row.id) || [],
+      workflows: workflowsByChar.get(row.id) || [],
+      tags: tagsByChar.get(row.id) || [],
+      collections: colsByChar.get(row.id) || [],
+      confirmedImageCount: Number(stats?.confirmedCount || 0),
+      suggestedImageCount: Number(stats?.suggestedCount || 0),
+      averageRating: Number(stats?.avgRating ? Number(stats.avgRating).toFixed(2) : 0),
+      firstGenerationDate: stats?.firstGen || null,
+      latestGenerationDate: stats?.latestGen || null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  });
 }
 function getCharacterProfileById(characterId) {
   const row = db.prepare(
@@ -11438,21 +11591,27 @@ function listLoraExplorerItems() {
     `
   ).all();
   const portraitMap = getCharacterPortraitMetadataMap();
-  const getChars = db.prepare(`
-    SELECT c.id, c.name, cl.appearance_label AS appearanceLabel
-    FROM character_loras cl
-    JOIN characters c ON c.id = cl.character_id
-    WHERE LOWER(cl.lora_name) = LOWER(?)
-  `);
+  const allLinkedCharRows = db.prepare(
+    `SELECT LOWER(cl.lora_name) AS lowerLoraName, c.id, c.name, cl.appearance_label AS appearanceLabel
+       FROM character_loras cl
+       JOIN characters c ON c.id = cl.character_id`
+  ).all();
+  const charsByLowerLora = /* @__PURE__ */ new Map();
+  for (const c of allLinkedCharRows) {
+    const portraitInfo = portraitMap.get(c.id);
+    const entry = {
+      id: c.id,
+      name: c.name,
+      appearanceLabel: c.appearanceLabel,
+      portraitThumbnailUrl: portraitInfo?.url ?? null,
+      portraitCrop: portraitInfo?.crop ?? null
+    };
+    const arr = charsByLowerLora.get(c.lowerLoraName);
+    if (arr) arr.push(entry);
+    else charsByLowerLora.set(c.lowerLoraName, [entry]);
+  }
   return rows.map((r) => {
-    const linkedChars = getChars.all(r.filename).map((c) => {
-      const portraitInfo = portraitMap.get(c.id);
-      return {
-        ...c,
-        portraitThumbnailUrl: portraitInfo?.url ?? null,
-        portraitCrop: portraitInfo?.crop ?? null
-      };
-    });
+    const linkedChars = charsByLowerLora.get(String(r.filename || "").toLowerCase()) || [];
     return {
       name: r.name,
       modelId: r.modelId ?? null,
@@ -14302,6 +14461,9 @@ var init_imagesRoutes = __esm({
 });
 
 // src/server/services/llm/llmClientService.ts
+function invalidateLmStudioStatusCache() {
+  lmStatusCache.clear();
+}
 function mapGuidingRow(row) {
   return {
     id: row.id,
@@ -14353,6 +14515,7 @@ function saveLmStudioGuidingTemplate(payload) {
     return Number(info.lastInsertRowid);
   });
   const savedId = tx();
+  invalidateLmStudioStatusCache();
   const savedRow = db.prepare("SELECT * FROM lm_studio_prompt_templates WHERE id = ?").get(savedId);
   return {
     template: mapGuidingRow(savedRow),
@@ -14368,6 +14531,7 @@ function deleteLmStudioGuidingTemplate(id) {
       db.prepare("UPDATE lm_studio_prompt_templates SET is_default = 1 WHERE id = ?").run(first.id);
     }
   }
+  invalidateLmStudioStatusCache();
   return listLmStudioGuidingTemplates();
 }
 function getLmStudioSettings() {
@@ -14412,6 +14576,7 @@ function updateLmStudioSettings(payload) {
     nextBatchExpansionPrompt
   );
   appConfig.lmStudioUrl = nextUrl;
+  invalidateLmStudioStatusCache();
   return {
     baseUrl: nextUrl,
     selectedModel: nextModel,
@@ -14524,10 +14689,39 @@ async function detectLoadedServerModels(baseUrl, availableModels) {
     detectedProvider: "openai_multi"
   };
 }
-async function checkLmStudioStatus(customBaseUrl) {
+async function checkLmStudioStatus(customBaseUrl, options) {
   const settings = getLmStudioSettings();
-  const guidingTemplates = listLmStudioGuidingTemplates();
   const baseUrl = (customBaseUrl || settings.baseUrl).replace(/\/+$/, "");
+  const forceRefresh = Boolean(options?.forceRefresh);
+  const cacheKey = `${baseUrl}|${settings.selectedModel}|${settings.followLoadedModel ? "1" : "0"}`;
+  if (!forceRefresh) {
+    const cached = lmStatusCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.status;
+    }
+    const existing = lmStatusInFlight.get(cacheKey);
+    if (existing) {
+      return existing;
+    }
+  }
+  const probePromise = runLmStudioStatusProbe(baseUrl, customBaseUrl, settings).then((status) => {
+    lmStatusCache.set(cacheKey, {
+      expiresAt: Date.now() + LM_STATUS_CACHE_TTL_MS,
+      status
+    });
+    return status;
+  }).finally(() => {
+    if (lmStatusInFlight.get(cacheKey) === probePromise) {
+      lmStatusInFlight.delete(cacheKey);
+    }
+  });
+  if (!forceRefresh) {
+    lmStatusInFlight.set(cacheKey, probePromise);
+  }
+  return probePromise;
+}
+async function runLmStudioStatusProbe(baseUrl, customBaseUrl, settings) {
+  const guidingTemplates = listLmStudioGuidingTemplates();
   const modelsEndpoint = baseUrl.endsWith("/v1") ? `${baseUrl}/models` : `${baseUrl}/v1/models`;
   try {
     const controller = new AbortController();
@@ -14623,11 +14817,15 @@ async function checkLmStudioVisionSupport(baseUrl, modelId) {
     return false;
   }
 }
+var LM_STATUS_CACHE_TTL_MS, lmStatusCache, lmStatusInFlight;
 var init_llmClientService = __esm({
   "src/server/services/llm/llmClientService.ts"() {
     init_db();
     init_config();
     init_agentPromptDefaults();
+    LM_STATUS_CACHE_TTL_MS = 5e3;
+    lmStatusCache = /* @__PURE__ */ new Map();
+    lmStatusInFlight = /* @__PURE__ */ new Map();
   }
 });
 
@@ -19497,6 +19695,13 @@ var init_modelDownloadsRoutes = __esm({
 
 // src/server/services/workflowLibraryService.ts
 import crypto10 from "crypto";
+function invalidateWorkflowDefaultsCache(workflowId) {
+  if (workflowId !== void 0) {
+    workflowDefaultsCache.delete(workflowId);
+  } else {
+    workflowDefaultsCache.clear();
+  }
+}
 function listWorkflowLibraryItems() {
   const rows = db.prepare(
     `
@@ -19531,18 +19736,35 @@ function listWorkflowLibraryItems() {
     charsByWf.set(workflowId, arr);
   }
   return rows.map((r) => {
+    const wfId = Number(r.id);
     let defaultMegapixels = null;
     let defaultAspectRatio = null;
     let defaultSteps = null;
     let defaultCheckpoint = null;
-    if (r.has_api || r.has_visual) {
-      try {
-        const wfDefaults = getWorkflowDefaults(Number(r.id));
-        defaultMegapixels = wfDefaults.defaultMegapixels ?? null;
-        defaultAspectRatio = wfDefaults.defaultAspectRatio ?? null;
-        defaultSteps = wfDefaults.defaultSteps ?? null;
-        defaultCheckpoint = wfDefaults.defaultCheckpoint ?? null;
-      } catch {
+    if ((r.is_default || r.is_saved_library) && (r.has_api || r.has_visual)) {
+      const stamp = `${r.workflow_hash || ""}|${r.updated_at || ""}`;
+      const cached = workflowDefaultsCache.get(wfId);
+      if (cached && cached.stamp === stamp) {
+        defaultMegapixels = cached.defaultMegapixels;
+        defaultAspectRatio = cached.defaultAspectRatio;
+        defaultSteps = cached.defaultSteps;
+        defaultCheckpoint = cached.defaultCheckpoint;
+      } else {
+        try {
+          const wfDefaults = getWorkflowDefaults(wfId);
+          defaultMegapixels = wfDefaults.defaultMegapixels ?? null;
+          defaultAspectRatio = wfDefaults.defaultAspectRatio ?? null;
+          defaultSteps = wfDefaults.defaultSteps ?? null;
+          defaultCheckpoint = wfDefaults.defaultCheckpoint ?? null;
+          workflowDefaultsCache.set(wfId, {
+            stamp,
+            defaultMegapixels,
+            defaultAspectRatio,
+            defaultSteps,
+            defaultCheckpoint
+          });
+        } catch {
+        }
       }
     }
     return {
@@ -19590,6 +19812,7 @@ function setDefaultWorkflow(wfId) {
     ).run(wfId);
   });
   tx();
+  invalidateWorkflowDefaultsCache();
   return db.prepare("SELECT * FROM workflows WHERE id = ?").get(wfId);
 }
 function saveOrUpdateWorkflow(input) {
@@ -19636,6 +19859,7 @@ function saveOrUpdateWorkflow(input) {
       ).run(nextName, nextDesc, nextVisual, nextApi, nextDefault, wfId);
     });
     tx2();
+    invalidateWorkflowDefaultsCache(wfId);
     return db.prepare("SELECT * FROM workflows WHERE id = ?").get(wfId);
   }
   if (!visualWorkflowJson && !apiWorkflowJson) {
@@ -19667,9 +19891,10 @@ function saveOrUpdateWorkflow(input) {
     );
   });
   tx();
+  invalidateWorkflowDefaultsCache();
   return db.prepare("SELECT * FROM workflows WHERE workflow_hash = ?").get(wfHash);
 }
-var WorkflowServiceError;
+var WorkflowServiceError, workflowDefaultsCache;
 var init_workflowLibraryService = __esm({
   "src/server/services/workflowLibraryService.ts"() {
     init_db();
@@ -19680,6 +19905,7 @@ var init_workflowLibraryService = __esm({
         this.statusCode = statusCode;
       }
     };
+    workflowDefaultsCache = /* @__PURE__ */ new Map();
   }
 });
 
@@ -22495,6 +22721,7 @@ async function setDefaultWorkflowUnet(unetFilename) {
      SET api_workflow_json = ?, updated_at = datetime('now')
      WHERE id = ?`
   ).run(JSON.stringify(graph, null, 2), wfRow.id);
+  invalidateWorkflowDefaultsCache(wfRow.id);
   return getGenerationReadiness();
 }
 var REQUIRED_KREA2_NODES;
@@ -22505,6 +22732,7 @@ var init_readinessService = __esm({
     init_workflowCompilerService();
     init_llmClientService();
     init_modelInventoryService();
+    init_workflowLibraryService();
     REQUIRED_KREA2_NODES = [
       "Power Lora Loader (rgthree)",
       "ResolutionSelector",
@@ -24336,7 +24564,7 @@ var init_generationRoutes = __esm({
     generationRouter.post("/lmstudio/config", async (req, res) => {
       try {
         const updated = updateLmStudioSettings(req.body || {});
-        const status = await checkLmStudioStatus(updated.baseUrl);
+        const status = await checkLmStudioStatus(updated.baseUrl, { forceRefresh: true });
         res.json(status);
       } catch (err) {
         res.status(400).json({ error: getErrorMessage(err, "Failed to update Local LLM settings.") });
@@ -24801,10 +25029,12 @@ var init_presetsRoutes = __esm({
 init_config();
 init_logger();
 import express from "express";
+import compression from "compression";
 import path35 from "path";
 async function startServer() {
   const outerApp = express();
   const innerApp = express();
+  innerApp.use(compression({ threshold: 1024 }));
   innerApp.use(express.json({ limit: "25mb" }));
   const disableHmr = process.env.DISABLE_HMR === "true";
   let viteServer = null;
