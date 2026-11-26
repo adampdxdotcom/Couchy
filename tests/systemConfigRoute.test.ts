@@ -95,15 +95,23 @@ describe('systemRoutes /api/config & /api/health security and validation', () =>
 
     const healthBody = JSON.parse(healthText);
     assert.equal(healthBody.config.civitaiActivityNotificationsEnabled, true);
+    assert.equal(healthBody.config.insertCouchyMetadataOnExport, false);
+    assert.equal(healthBody.config.insertCivitaiMetadataOnExport, false);
 
-    const disableNotifRes = await fetch(`${baseUrl}/api/config`, {
+    const toggleRes = await fetch(`${baseUrl}/api/config`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ civitaiActivityNotificationsEnabled: false }),
+      body: JSON.stringify({
+        civitaiActivityNotificationsEnabled: false,
+        insertCouchyMetadataOnExport: true,
+        insertCivitaiMetadataOnExport: true,
+      }),
     });
-    assert.equal(disableNotifRes.status, 200);
-    const disableNotifBody = await disableNotifRes.json();
-    assert.equal(disableNotifBody.config.civitaiActivityNotificationsEnabled, false);
+    assert.equal(toggleRes.status, 200);
+    const toggleBody = await toggleRes.json();
+    assert.equal(toggleBody.config.civitaiActivityNotificationsEnabled, false);
+    assert.equal(toggleBody.config.insertCouchyMetadataOnExport, true);
+    assert.equal(toggleBody.config.insertCivitaiMetadataOnExport, true);
   });
 
   it('rejects invalid URLs, relative directory paths, and out-of-range backup intervals without mutating config', async () => {

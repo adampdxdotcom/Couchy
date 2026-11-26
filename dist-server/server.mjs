@@ -11513,6 +11513,430 @@ var init_galleryQueryService = __esm({
   }
 });
 
+// src/server/services/civitai/civitaiImagePayload.ts
+import fs16 from "fs";
+import path16 from "path";
+import sharp4 from "sharp";
+function crc32(buf) {
+  let c = 4294967295;
+  for (let i = 0; i < buf.length; i++) {
+    c ^= buf[i];
+    for (let j = 0; j < 8; j++) {
+      c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+    }
+  }
+  return (c ^ 4294967295) >>> 0;
+}
+function isLatin1(text) {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code > 255 || code === 0) return false;
+  }
+  return true;
+}
+function quoteInfotextValue(value) {
+  return /[,\n:"]/.test(value) ? JSON.stringify(value) : value;
+}
+function upsertPngTextChunk(pngBuffer, keyword, text, forceITXt = false) {
+  if (pngBuffer.length < 8 || !pngBuffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    return pngBuffer;
+  }
+  const chunks = [];
+  let offset = 8;
+  while (offset + 12 <= pngBuffer.length) {
+    const length = pngBuffer.readUInt32BE(offset);
+    const type = pngBuffer.toString("ascii", offset + 4, offset + 8);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > pngBuffer.length) break;
+    const data = pngBuffer.subarray(dataStart, dataEnd);
+    let matchesKeyword = false;
+    if (type === "tEXt" || type === "iTXt" || type === "zTXt") {
+      const nul = data.indexOf(0);
+      if (nul !== -1 && data.toString("latin1", 0, nul) === keyword) {
+        matchesKeyword = true;
+      }
+    }
+    if (!matchesKeyword) {
+      chunks.push({ type, data });
+    }
+    offset = dataEnd + 4;
+    if (type === "IEND") break;
+  }
+  const keyBytes = Buffer.from(keyword, "latin1");
+  const newChunk = !forceITXt && isLatin1(text) ? {
+    type: "tEXt",
+    data: Buffer.concat([keyBytes, Buffer.from([0]), Buffer.from(text, "latin1")])
+  } : {
+    type: "iTXt",
+    data: Buffer.concat([keyBytes, Buffer.from([0, 0, 0, 0, 0]), Buffer.from(text, "utf8")])
+  };
+  const insertIdx = chunks.findIndex((c) => c.type !== "IHDR");
+  chunks.splice(insertIdx === -1 ? chunks.length : insertIdx, 0, newChunk);
+  const outParts = [PNG_SIGNATURE];
+  for (const chunk of chunks) {
+    const lenBuf = Buffer.alloc(4);
+    lenBuf.writeUInt32BE(chunk.data.length, 0);
+    const body = Buffer.concat([Buffer.from(chunk.type, "ascii"), chunk.data]);
+    const crcBuf = Buffer.alloc(4);
+    crcBuf.writeUInt32BE(crc32(body), 0);
+    outParts.push(lenBuf, body, crcBuf);
+  }
+  return Buffer.concat(outParts);
+}
+function resolveVersionId(rawVersionId, civitaiUrl, downloadUrl) {
+  const parsed = parseIdsFromCivitaiUrl(civitaiUrl || downloadUrl);
+  const ver = Number(rawVersionId || parsed.versionId || 0);
+  return Number.isInteger(ver) && ver > 0 ? ver : null;
+}
+function buildA1111ParameterText(imageId, width, height) {
+  const meta = db.prepare(
+    `SELECT positive_prompt, negative_prompt, seed, steps, cfg, sampler, scheduler, checkpoint_name, checkpoint_hash
+       FROM image_metadata
+       WHERE image_id = ?`
+  ).get(imageId);
+  const loras = db.prepare(
+    `SELECT il.id AS row_id, il.lora_name, il.lora_hash, il.model_strength,
+              m.autov2_hash, m.sha256_hash, m.civitai_version_id, m.civitai_url, m.download_url
+       FROM image_loras il
+       LEFT JOIN models m ON m.id = il.model_id OR LOWER(m.filename) = LOWER(il.lora_name)
+       WHERE il.image_id = ?
+       ORDER BY il.id ASC`
+  ).all(imageId);
+  const checkpoints = db.prepare(
+    `SELECT im.model_name, im.model_hash,
+              m.autov2_hash, m.sha256_hash, m.civitai_version_id, m.civitai_url, m.download_url
+       FROM image_models im
+       LEFT JOIN models m ON m.id = im.model_id OR LOWER(m.filename) = LOWER(im.model_name)
+       WHERE im.image_id = ? AND im.model_type IN ('checkpoint', 'diffusion')`
+  ).all(imageId);
+  const lines = [];
+  if (meta?.positive_prompt) lines.push(String(meta.positive_prompt).trim());
+  if (meta?.negative_prompt) lines.push(`Negative prompt: ${String(meta.negative_prompt).trim()}`);
+  const settings = [];
+  const stepVal = meta?.steps !== null && meta?.steps !== void 0 ? Number(meta.steps) : 8;
+  settings.push(`Steps: ${Number.isFinite(stepVal) ? stepVal : 8}`);
+  if (meta?.sampler) {
+    const samplerText = meta.scheduler ? `${meta.sampler} ${meta.scheduler}` : String(meta.sampler);
+    settings.push(`Sampler: ${quoteInfotextValue(samplerText)}`);
+  }
+  if (meta?.cfg !== null && meta?.cfg !== void 0) settings.push(`CFG scale: ${meta.cfg}`);
+  if (meta?.seed) settings.push(`Seed: ${meta.seed}`);
+  if (width > 0 && height > 0) settings.push(`Size: ${width}x${height}`);
+  const primaryCkpt = checkpoints[0];
+  const ckptName = meta?.checkpoint_name || primaryCkpt?.model_name;
+  if (ckptName) {
+    settings.push(`Model: ${quoteInfotextValue(path16.parse(String(ckptName)).name)}`);
+  }
+  const ckptHash = primaryCkpt?.autov2_hash || (meta?.checkpoint_hash || primaryCkpt?.model_hash || primaryCkpt?.sha256_hash || "").slice(0, 10);
+  if (ckptHash) {
+    settings.push(`Model hash: ${ckptHash}`);
+  }
+  const hashesRecord = {};
+  if (ckptHash) {
+    hashesRecord.model = ckptHash;
+  }
+  const civitaiResources = [];
+  const seenVersionIds = /* @__PURE__ */ new Set();
+  if (primaryCkpt) {
+    const ckptVerId = resolveVersionId(
+      primaryCkpt.civitai_version_id,
+      primaryCkpt.civitai_url,
+      primaryCkpt.download_url
+    );
+    if (ckptVerId && !seenVersionIds.has(ckptVerId)) {
+      seenVersionIds.add(ckptVerId);
+      civitaiResources.push({ type: "checkpoint", modelVersionId: ckptVerId });
+    }
+  }
+  const seenRowIds = /* @__PURE__ */ new Set();
+  const loraHashEntries = [];
+  for (const l of loras) {
+    if (seenRowIds.has(l.row_id)) continue;
+    seenRowIds.add(l.row_id);
+    const shortName = path16.parse(l.lora_name).name;
+    const hash = l.autov2_hash || (l.lora_hash || l.sha256_hash || "").slice(0, 10);
+    if (hash) {
+      loraHashEntries.push(`${shortName}: ${hash}`);
+      hashesRecord[`lora:${shortName}`] = hash;
+    }
+    const verId = resolveVersionId(l.civitai_version_id, l.civitai_url, l.download_url);
+    if (verId && !seenVersionIds.has(verId)) {
+      seenVersionIds.add(verId);
+      const weight = l.model_strength !== null && l.model_strength !== void 0 ? Number(Number(l.model_strength).toFixed(3)) : 1;
+      civitaiResources.push({ type: "lora", modelVersionId: verId, weight });
+    }
+  }
+  if (loraHashEntries.length > 0) {
+    settings.push(`Lora hashes: "${loraHashEntries.join(", ")}"`);
+  }
+  if (Object.keys(hashesRecord).length > 0) {
+    settings.push(`Hashes: ${JSON.stringify(hashesRecord)}`);
+  }
+  if (civitaiResources.length > 0) {
+    settings.push(`Civitai resources: ${JSON.stringify(civitaiResources)}`);
+  }
+  if (settings.length > 0) {
+    lines.push(settings.join(", "));
+  }
+  return lines.join("\n");
+}
+async function prepareCivitaiImagePayload(imageId, diskPath, width, height, uploadMode) {
+  const paramText = buildA1111ParameterText(imageId, width, height);
+  if (uploadMode === "original_png") {
+    const rawBuffer = fs16.readFileSync(diskPath);
+    const ext = path16.extname(diskPath).toLowerCase();
+    const contentType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".webp" ? "image/webp" : "image/png";
+    const uploadBuffer = contentType === "image/png" && paramText.trim() ? upsertPngTextChunk(rawBuffer, "parameters", paramText) : rawBuffer;
+    return {
+      base64Data: uploadBuffer.toString("base64"),
+      contentType,
+      width,
+      height,
+      byteLength: uploadBuffer.length,
+      uploadMode: "original_png"
+    };
+  }
+  const encodeJpeg = async (quality) => {
+    let pipeline = sharp4(diskPath).rotate().jpeg({ quality, mozjpeg: true });
+    if (paramText.trim()) {
+      pipeline = pipeline.withExif({ IFD2: { UserComment: paramText } });
+    }
+    return pipeline.toBuffer();
+  };
+  let jpegBuffer = await encodeJpeg(94);
+  if (jpegBuffer.length > MAX_FALLBACK_JPEG_BYTES) {
+    jpegBuffer = await encodeJpeg(86);
+  }
+  const outMeta = await sharp4(jpegBuffer).metadata();
+  return {
+    base64Data: jpegBuffer.toString("base64"),
+    contentType: "image/jpeg",
+    width: Number(outMeta.width || width),
+    height: Number(outMeta.height || height),
+    byteLength: jpegBuffer.length,
+    uploadMode: "jpeg_exif"
+  };
+}
+var MAX_FALLBACK_JPEG_BYTES, PNG_SIGNATURE;
+var init_civitaiImagePayload = __esm({
+  "src/server/services/civitai/civitaiImagePayload.ts"() {
+    init_db();
+    init_civitaiHttpAndParse();
+    MAX_FALLBACK_JPEG_BYTES = 9.5 * 1024 * 1024;
+    PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  }
+});
+
+// src/server/services/exportMetadataService.ts
+import fs17 from "fs";
+import path17 from "path";
+import sharp5 from "sharp";
+function getExportMetadataSettings() {
+  const map = getSettingsMap([
+    "insert_couchy_metadata_on_export",
+    "insert_civitai_metadata_on_export"
+  ]);
+  return {
+    insertCouchy: getBoolSetting("insert_couchy_metadata_on_export", false, map),
+    insertCivitai: getBoolSetting("insert_civitai_metadata_on_export", false, map)
+  };
+}
+function escapeXml(raw) {
+  return raw.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+function dedupeStrings(values) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const raw of values) {
+    const clean = String(raw ?? "").trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+  }
+  return out;
+}
+function buildCouchyExportMetadata(imageId) {
+  const img = db.prepare(
+    `SELECT
+         i.id, i.filename, i.content_hash, i.width, i.height, i.file_mtime,
+         r.rating, r.is_favorite, r.notes,
+         m.positive_prompt, m.negative_prompt, m.seed, m.steps, m.cfg, m.sampler, m.scheduler,
+         m.checkpoint_name, m.generation_date
+       FROM images i
+       LEFT JOIN ratings r ON r.content_hash = i.content_hash
+       LEFT JOIN image_metadata m ON m.image_id = i.id
+       WHERE i.id = ?`
+  ).get(imageId);
+  if (!img) return null;
+  const characters = db.prepare(
+    `SELECT c.name
+         FROM image_characters ic
+         JOIN characters c ON c.id = ic.character_id
+         WHERE ic.image_content_hash = ? AND ic.status = 'confirmed'
+         ORDER BY c.name COLLATE NOCASE ASC`
+  ).all(img.content_hash).map((r) => r.name);
+  const tags = db.prepare(
+    `SELECT t.name
+         FROM image_tags it
+         JOIN tags t ON t.id = it.tag_id
+         WHERE it.image_content_hash = ?
+         ORDER BY t.name COLLATE NOCASE ASC`
+  ).all(img.content_hash).map((r) => r.name);
+  const collections = db.prepare(
+    `SELECT col.name
+         FROM collection_images ci
+         JOIN collections col ON col.id = ci.collection_id
+         WHERE ci.image_content_hash = ?
+         ORDER BY col.name COLLATE NOCASE ASC`
+  ).all(img.content_hash).map((r) => r.name);
+  const rawLoras = db.prepare(
+    `SELECT il.lora_name, il.model_strength,
+              m.name AS display_name, m.nickname
+       FROM image_loras il
+       LEFT JOIN models m ON m.id = il.model_id OR LOWER(m.filename) = LOWER(il.lora_name)
+       WHERE il.image_id = ?
+       ORDER BY il.id ASC`
+  ).all(imageId);
+  const loras = rawLoras.map((l) => ({
+    name: (l.display_name || path17.parse(l.lora_name).name).trim(),
+    filename: l.lora_name,
+    ...l.nickname ? { nickname: `@${l.nickname}` } : {},
+    ...l.model_strength !== null && l.model_strength !== void 0 ? { strength: Number(l.model_strength) } : {}
+  }));
+  const draftRow = db.prepare(
+    `SELECT published_url
+       FROM image_civitai_drafts
+       WHERE (image_id = ? OR image_content_hash = ?)
+         AND published_url IS NOT NULL AND published_url != ''
+       ORDER BY id DESC LIMIT 1`
+  ).get(imageId, img.content_hash);
+  const rating = Number(img.rating || 0);
+  const isFavorite = Boolean(img.is_favorite);
+  const notes = typeof img.notes === "string" ? img.notes.trim() : "";
+  const positivePrompt = typeof img.positive_prompt === "string" ? img.positive_prompt.trim() : "";
+  const createdDate = String(img.generation_date || img.file_mtime || "").trim();
+  const descriptionParts = [notes, positivePrompt].filter(Boolean);
+  const description = descriptionParts.join("\n\n");
+  const keywords = dedupeStrings([
+    ...characters,
+    ...tags,
+    ...collections,
+    ...loras.map((l) => l.name)
+  ]);
+  const xmpLines = [
+    '<?xpacket begin="\uFEFF" id="W5M0MpCehiHzreSzNTczkc9d"?>',
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/">',
+    '  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">',
+    '    <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:xmp="http://ns.adobe.com/xap/1.0/">',
+    "      <xmp:CreatorTool>Couchy</xmp:CreatorTool>"
+  ];
+  if (createdDate) {
+    xmpLines.push(`      <xmp:CreateDate>${escapeXml(createdDate)}</xmp:CreateDate>`);
+  }
+  if (rating > 0 && rating <= 5) {
+    xmpLines.push(`      <xmp:Rating>${Math.round(rating)}</xmp:Rating>`);
+  }
+  if (isFavorite) {
+    xmpLines.push("      <xmp:Label>Favorite</xmp:Label>");
+  }
+  if (description) {
+    xmpLines.push(
+      '      <dc:description><rdf:Alt><rdf:li xml:lang="x-default">' + escapeXml(description) + "</rdf:li></rdf:Alt></dc:description>"
+    );
+  }
+  if (keywords.length > 0) {
+    xmpLines.push("      <dc:subject><rdf:Bag>");
+    for (const kw of keywords) {
+      xmpLines.push(`        <rdf:li>${escapeXml(kw)}</rdf:li>`);
+    }
+    xmpLines.push("      </rdf:Bag></dc:subject>");
+  }
+  xmpLines.push(
+    "    </rdf:Description>",
+    "  </rdf:RDF>",
+    "</x:xmpmeta>",
+    '<?xpacket end="w"?>'
+  );
+  const couchyPayload = {
+    version: 1,
+    source: "couchy",
+    ...rating > 0 ? { rating } : {},
+    ...isFavorite ? { isFavorite: true } : {},
+    ...notes ? { notes } : {},
+    ...characters.length > 0 ? { characters } : {},
+    ...tags.length > 0 ? { tags } : {},
+    ...collections.length > 0 ? { collections } : {},
+    ...img.checkpoint_name ? { checkpoint: img.checkpoint_name } : {},
+    ...loras.length > 0 ? { loras } : {},
+    ...draftRow?.published_url ? { civitaiUrl: draftRow.published_url } : {}
+  };
+  return {
+    xmpPacket: xmpLines.join("\n"),
+    couchyJson: JSON.stringify(couchyPayload),
+    description
+  };
+}
+async function prepareExportImageBuffer(imageId, diskPath, overrideSettings) {
+  const settings = overrideSettings ?? getExportMetadataSettings();
+  if (!settings.insertCouchy && !settings.insertCivitai) {
+    return null;
+  }
+  const rawBuf = await fs17.promises.readFile(diskPath);
+  const imgDims = db.prepare("SELECT width, height FROM images WHERE id = ?").get(imageId);
+  const width = Number(imgDims?.width || 0);
+  const height = Number(imgDims?.height || 0);
+  const couchyMeta = settings.insertCouchy ? buildCouchyExportMetadata(imageId) : null;
+  const civitaiParams = settings.insertCivitai ? buildA1111ParameterText(imageId, width, height).trim() : "";
+  if (!couchyMeta && !civitaiParams) {
+    return null;
+  }
+  if (rawBuf.length >= 8 && rawBuf.subarray(0, 8).equals(PNG_SIGNATURE2)) {
+    let outBuf = rawBuf;
+    if (civitaiParams) {
+      outBuf = upsertPngTextChunk(outBuf, "parameters", civitaiParams);
+    }
+    if (couchyMeta) {
+      outBuf = upsertPngTextChunk(outBuf, "couchy", couchyMeta.couchyJson);
+      outBuf = upsertPngTextChunk(outBuf, "XML:com.adobe.xmp", couchyMeta.xmpPacket, true);
+    }
+    return outBuf;
+  }
+  try {
+    let pipeline = sharp5(rawBuf).keepMetadata();
+    if (couchyMeta) {
+      pipeline = pipeline.withXmp(couchyMeta.xmpPacket);
+    }
+    const exifPatch = {};
+    if (couchyMeta) {
+      exifPatch.IFD0 = {
+        Software: "Couchy",
+        ...couchyMeta.description ? { ImageDescription: couchyMeta.description } : {}
+      };
+    }
+    if (civitaiParams) {
+      exifPatch.IFD2 = { UserComment: civitaiParams };
+    }
+    if (Object.keys(exifPatch).length > 0) {
+      pipeline = pipeline.withExifMerge(exifPatch);
+    }
+    return await pipeline.toBuffer();
+  } catch {
+    return rawBuf;
+  }
+}
+var PNG_SIGNATURE2;
+var init_exportMetadataService = __esm({
+  "src/server/services/exportMetadataService.ts"() {
+    init_db();
+    init_settingsService();
+    init_civitaiImagePayload();
+    PNG_SIGNATURE2 = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  }
+});
+
 // src/shared/types.ts
 var init_types = __esm({
   "src/shared/types.ts"() {
@@ -11521,7 +11945,7 @@ var init_types = __esm({
 });
 
 // src/server/services/workflowCompilerService.ts
-import fs16 from "fs";
+import fs18 from "fs";
 function computeDimensionsFromMegapixels(aspectRatio, megapixels) {
   const mp = Math.max(0.1, Math.min(10, Number(megapixels) || 1));
   const totalPixels = mp * 1e6;
@@ -11558,9 +11982,9 @@ function getExecutableApiGraph(workflowRow) {
     } catch {
     }
   }
-  if (workflowRow.workflow_hash === "default-krea2-turbo-workflow" && fs16.existsSync(PRIMARY_WORKFLOW_PATH2)) {
+  if (workflowRow.workflow_hash === "default-krea2-turbo-workflow" && fs18.existsSync(PRIMARY_WORKFLOW_PATH2)) {
     try {
-      const parsed = JSON.parse(fs16.readFileSync(PRIMARY_WORKFLOW_PATH2, "utf-8"));
+      const parsed = JSON.parse(fs18.readFileSync(PRIMARY_WORKFLOW_PATH2, "utf-8"));
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed.nodes)) {
         return parsed;
       }
@@ -11957,7 +12381,7 @@ function compileWorkflowForGeneration(params) {
   return graph;
 }
 function compileUpscaleWorkflow(params) {
-  const rawJson = fs16.readFileSync(UPSCALE_WORKFLOW_PATH, "utf-8");
+  const rawJson = fs18.readFileSync(UPSCALE_WORKFLOW_PATH, "utf-8");
   const graph = JSON.parse(rawJson);
   const cleanSubfolder = (params.subfolder || "").trim().replace(/^\/+|\/+$/g, "");
   const sourceSuffix = params.sourceType === "input" ? "[input]" : "[output]";
@@ -12008,8 +12432,8 @@ var init_workflowCompilerService = __esm({
 });
 
 // src/server/services/comfyuiService.ts
-import fs17 from "fs";
-import path16 from "path";
+import fs19 from "fs";
+import path18 from "path";
 function formatComfyHistoryError(messages) {
   if (Array.isArray(messages)) {
     for (const msg of messages) {
@@ -12083,8 +12507,8 @@ function pollComfyPromptCompletion(options) {
                 if (!firstOutputSpec) {
                   firstOutputSpec = { filename, subfolder };
                 }
-                const fullPath = path16.join(appConfig.comfyuiOutputDir, subfolder, filename);
-                if (fs17.existsSync(fullPath)) {
+                const fullPath = path18.join(appConfig.comfyuiOutputDir, subfolder, filename);
+                if (fs19.existsSync(fullPath)) {
                   const resIndex = await indexSingleImageFile(
                     fullPath,
                     appConfig.comfyuiOutputDir,
@@ -12507,7 +12931,7 @@ async function submitImageUpscale(params) {
     throw new Error("Image not found.");
   }
   const origPath = resolveImageDiskPath(imgRow);
-  if (imgRow.is_missing || !fs17.existsSync(origPath)) {
+  if (imgRow.is_missing || !fs19.existsSync(origPath)) {
     throw new Error("Original image file is missing on disk.");
   }
   const conn = await testComfyUiConnection();
@@ -12516,12 +12940,12 @@ async function submitImageUpscale(params) {
   }
   const targetMp = Math.max(0.5, Math.min(10, Number(params.targetMegapixels) || 6));
   let loadFilename = imgRow.filename;
-  let loadSubfolder = path16.dirname(imgRow.relative_path) === "." ? "" : path16.dirname(imgRow.relative_path);
+  let loadSubfolder = path18.dirname(imgRow.relative_path) === "." ? "" : path18.dirname(imgRow.relative_path);
   let loadSourceType = "output";
   try {
-    const fileBuf = fs17.readFileSync(origPath);
+    const fileBuf = fs19.readFileSync(origPath);
     const form = new FormData();
-    form.append("image", new Blob([fileBuf]), path16.basename(origPath));
+    form.append("image", new Blob([fileBuf]), path18.basename(origPath));
     form.append("overwrite", "true");
     form.append("type", "input");
     const uploadRes = await fetch(`${appConfig.comfyuiUrl}/upload/image`, {
@@ -12538,7 +12962,7 @@ async function submitImageUpscale(params) {
     }
   } catch {
   }
-  const baseStem = path16.basename(imgRow.filename, path16.extname(imgRow.filename));
+  const baseStem = path18.basename(imgRow.filename, path18.extname(imgRow.filename));
   const upscalePayload = compileUpscaleWorkflow({
     imageFilename: loadFilename,
     subfolder: loadSubfolder,
@@ -12609,9 +13033,9 @@ var init_comfyuiService = __esm({
 });
 
 // src/server/services/civitai/civitaiShareCore.ts
-import fs18 from "fs";
-import path17 from "path";
-import sharp4 from "sharp";
+import fs20 from "fs";
+import path19 from "path";
+import sharp6 from "sharp";
 function classifyPromptGraphMetadata(promptChunk, workflowChunk) {
   const classTypes = [];
   if (promptChunk && promptChunk.trim()) {
@@ -12651,7 +13075,7 @@ function classifyPromptGraphMetadata(promptChunk, workflowChunk) {
   return { hasNativeMetadata: false, isStandaloneUpscale: hasUpscaleNode };
 }
 async function inspectDiskImageNativeMetadata(diskPath) {
-  if (!diskPath || !fs18.existsSync(diskPath)) {
+  if (!diskPath || !fs20.existsSync(diskPath)) {
     return {
       fileExists: false,
       fileSizeBytes: 0,
@@ -12659,8 +13083,8 @@ async function inspectDiskImageNativeMetadata(diskPath) {
       isStandaloneUpscale: false
     };
   }
-  const stat = fs18.statSync(diskPath);
-  const ext = path17.extname(diskPath).toLowerCase();
+  const stat = fs20.statSync(diskPath);
+  const ext = path19.extname(diskPath).toLowerCase();
   if (ext === ".png") {
     const chunks = readPngTextChunks(diskPath);
     if (chunks.parameters && chunks.parameters.trim().length > 0) {
@@ -12680,7 +13104,7 @@ async function inspectDiskImageNativeMetadata(diskPath) {
     };
   }
   try {
-    const meta = await sharp4(diskPath).metadata();
+    const meta = await sharp6(diskPath).metadata();
     const exifText = meta.exif ? meta.exif.toString("latin1") : "";
     const hasExifGen = /Steps:\s*\d+/i.test(exifText) || /Sampler:/i.test(exifText) || /Negative prompt:/i.test(exifText);
     return {
@@ -12862,7 +13286,7 @@ async function inspectCoreImageShare(imageRow, hasCivitaiKey, allowUncharacteriz
        WHERE it.image_content_hash = ?
        ORDER BY t.name ASC`
   ).all(imageRow.content_hash);
-  const stem = path17.parse(imageRow.filename).name;
+  const stem = path19.parse(imageRow.filename).name;
   const defaultTitle = linkedCharacters.length > 0 ? `${linkedCharacters.map((c) => c.name).join(" & ")} \u2014 ${stem}` : stem;
   return {
     eligibleForContent: exclusionCode === null,
@@ -12875,7 +13299,7 @@ async function inspectCoreImageShare(imageRow, hasCivitaiKey, allowUncharacteriz
     fileSizeBytes,
     width: Number(imageRow.width || 0),
     height: Number(imageRow.height || 0),
-    format: String(imageRow.format || path17.extname(imageRow.filename).replace(/^\./, "")),
+    format: String(imageRow.format || path19.extname(imageRow.filename).replace(/^\./, "")),
     linkedCharacters,
     prefilledTitle: defaultTitle,
     prefilledDescription: metaRow?.positive_prompt ? String(metaRow.positive_prompt).trim() : "",
@@ -13147,221 +13571,6 @@ var init_civitaiShareEligibility = __esm({
     init_civitaiCommentsService();
     init_civitaiShareCore();
     init_civitaiShareStackEligibility();
-  }
-});
-
-// src/server/services/civitai/civitaiImagePayload.ts
-import fs19 from "fs";
-import path18 from "path";
-import sharp5 from "sharp";
-function crc32(buf) {
-  let c = 4294967295;
-  for (let i = 0; i < buf.length; i++) {
-    c ^= buf[i];
-    for (let j = 0; j < 8; j++) {
-      c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
-    }
-  }
-  return (c ^ 4294967295) >>> 0;
-}
-function isLatin1(text) {
-  for (let i = 0; i < text.length; i++) {
-    const code = text.charCodeAt(i);
-    if (code > 255 || code === 0) return false;
-  }
-  return true;
-}
-function quoteInfotextValue(value) {
-  return /[,\n:"]/.test(value) ? JSON.stringify(value) : value;
-}
-function upsertPngTextChunk(pngBuffer, keyword, text) {
-  if (pngBuffer.length < 8 || !pngBuffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
-    return pngBuffer;
-  }
-  const chunks = [];
-  let offset = 8;
-  while (offset + 12 <= pngBuffer.length) {
-    const length = pngBuffer.readUInt32BE(offset);
-    const type = pngBuffer.toString("ascii", offset + 4, offset + 8);
-    const dataStart = offset + 8;
-    const dataEnd = dataStart + length;
-    if (dataEnd + 4 > pngBuffer.length) break;
-    const data = pngBuffer.subarray(dataStart, dataEnd);
-    let matchesKeyword = false;
-    if (type === "tEXt" || type === "iTXt" || type === "zTXt") {
-      const nul = data.indexOf(0);
-      if (nul !== -1 && data.toString("latin1", 0, nul) === keyword) {
-        matchesKeyword = true;
-      }
-    }
-    if (!matchesKeyword) {
-      chunks.push({ type, data });
-    }
-    offset = dataEnd + 4;
-    if (type === "IEND") break;
-  }
-  const keyBytes = Buffer.from(keyword, "latin1");
-  const newChunk = isLatin1(text) ? {
-    type: "tEXt",
-    data: Buffer.concat([keyBytes, Buffer.from([0]), Buffer.from(text, "latin1")])
-  } : {
-    type: "iTXt",
-    data: Buffer.concat([keyBytes, Buffer.from([0, 0, 0, 0, 0]), Buffer.from(text, "utf8")])
-  };
-  const insertIdx = chunks.findIndex((c) => c.type !== "IHDR");
-  chunks.splice(insertIdx === -1 ? chunks.length : insertIdx, 0, newChunk);
-  const outParts = [PNG_SIGNATURE];
-  for (const chunk of chunks) {
-    const lenBuf = Buffer.alloc(4);
-    lenBuf.writeUInt32BE(chunk.data.length, 0);
-    const body = Buffer.concat([Buffer.from(chunk.type, "ascii"), chunk.data]);
-    const crcBuf = Buffer.alloc(4);
-    crcBuf.writeUInt32BE(crc32(body), 0);
-    outParts.push(lenBuf, body, crcBuf);
-  }
-  return Buffer.concat(outParts);
-}
-function resolveVersionId(rawVersionId, civitaiUrl, downloadUrl) {
-  const parsed = parseIdsFromCivitaiUrl(civitaiUrl || downloadUrl);
-  const ver = Number(rawVersionId || parsed.versionId || 0);
-  return Number.isInteger(ver) && ver > 0 ? ver : null;
-}
-function buildA1111ParameterText(imageId, width, height) {
-  const meta = db.prepare(
-    `SELECT positive_prompt, negative_prompt, seed, steps, cfg, sampler, scheduler, checkpoint_name, checkpoint_hash
-       FROM image_metadata
-       WHERE image_id = ?`
-  ).get(imageId);
-  const loras = db.prepare(
-    `SELECT il.id AS row_id, il.lora_name, il.lora_hash, il.model_strength,
-              m.autov2_hash, m.sha256_hash, m.civitai_version_id, m.civitai_url, m.download_url
-       FROM image_loras il
-       LEFT JOIN models m ON m.id = il.model_id OR LOWER(m.filename) = LOWER(il.lora_name)
-       WHERE il.image_id = ?
-       ORDER BY il.id ASC`
-  ).all(imageId);
-  const checkpoints = db.prepare(
-    `SELECT im.model_name, im.model_hash,
-              m.autov2_hash, m.sha256_hash, m.civitai_version_id, m.civitai_url, m.download_url
-       FROM image_models im
-       LEFT JOIN models m ON m.id = im.model_id OR LOWER(m.filename) = LOWER(im.model_name)
-       WHERE im.image_id = ? AND im.model_type IN ('checkpoint', 'diffusion')`
-  ).all(imageId);
-  const lines = [];
-  if (meta?.positive_prompt) lines.push(String(meta.positive_prompt).trim());
-  if (meta?.negative_prompt) lines.push(`Negative prompt: ${String(meta.negative_prompt).trim()}`);
-  const settings = [];
-  const stepVal = meta?.steps !== null && meta?.steps !== void 0 ? Number(meta.steps) : 8;
-  settings.push(`Steps: ${Number.isFinite(stepVal) ? stepVal : 8}`);
-  if (meta?.sampler) {
-    const samplerText = meta.scheduler ? `${meta.sampler} ${meta.scheduler}` : String(meta.sampler);
-    settings.push(`Sampler: ${quoteInfotextValue(samplerText)}`);
-  }
-  if (meta?.cfg !== null && meta?.cfg !== void 0) settings.push(`CFG scale: ${meta.cfg}`);
-  if (meta?.seed) settings.push(`Seed: ${meta.seed}`);
-  if (width > 0 && height > 0) settings.push(`Size: ${width}x${height}`);
-  const primaryCkpt = checkpoints[0];
-  const ckptName = meta?.checkpoint_name || primaryCkpt?.model_name;
-  if (ckptName) {
-    settings.push(`Model: ${quoteInfotextValue(path18.parse(String(ckptName)).name)}`);
-  }
-  const ckptHash = primaryCkpt?.autov2_hash || (meta?.checkpoint_hash || primaryCkpt?.model_hash || primaryCkpt?.sha256_hash || "").slice(0, 10);
-  if (ckptHash) {
-    settings.push(`Model hash: ${ckptHash}`);
-  }
-  const hashesRecord = {};
-  if (ckptHash) {
-    hashesRecord.model = ckptHash;
-  }
-  const civitaiResources = [];
-  const seenVersionIds = /* @__PURE__ */ new Set();
-  if (primaryCkpt) {
-    const ckptVerId = resolveVersionId(
-      primaryCkpt.civitai_version_id,
-      primaryCkpt.civitai_url,
-      primaryCkpt.download_url
-    );
-    if (ckptVerId && !seenVersionIds.has(ckptVerId)) {
-      seenVersionIds.add(ckptVerId);
-      civitaiResources.push({ type: "checkpoint", modelVersionId: ckptVerId });
-    }
-  }
-  const seenRowIds = /* @__PURE__ */ new Set();
-  const loraHashEntries = [];
-  for (const l of loras) {
-    if (seenRowIds.has(l.row_id)) continue;
-    seenRowIds.add(l.row_id);
-    const shortName = path18.parse(l.lora_name).name;
-    const hash = l.autov2_hash || (l.lora_hash || l.sha256_hash || "").slice(0, 10);
-    if (hash) {
-      loraHashEntries.push(`${shortName}: ${hash}`);
-      hashesRecord[`lora:${shortName}`] = hash;
-    }
-    const verId = resolveVersionId(l.civitai_version_id, l.civitai_url, l.download_url);
-    if (verId && !seenVersionIds.has(verId)) {
-      seenVersionIds.add(verId);
-      const weight = l.model_strength !== null && l.model_strength !== void 0 ? Number(Number(l.model_strength).toFixed(3)) : 1;
-      civitaiResources.push({ type: "lora", modelVersionId: verId, weight });
-    }
-  }
-  if (loraHashEntries.length > 0) {
-    settings.push(`Lora hashes: "${loraHashEntries.join(", ")}"`);
-  }
-  if (Object.keys(hashesRecord).length > 0) {
-    settings.push(`Hashes: ${JSON.stringify(hashesRecord)}`);
-  }
-  if (civitaiResources.length > 0) {
-    settings.push(`Civitai resources: ${JSON.stringify(civitaiResources)}`);
-  }
-  if (settings.length > 0) {
-    lines.push(settings.join(", "));
-  }
-  return lines.join("\n");
-}
-async function prepareCivitaiImagePayload(imageId, diskPath, width, height, uploadMode) {
-  const paramText = buildA1111ParameterText(imageId, width, height);
-  if (uploadMode === "original_png") {
-    const rawBuffer = fs19.readFileSync(diskPath);
-    const ext = path18.extname(diskPath).toLowerCase();
-    const contentType = ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".webp" ? "image/webp" : "image/png";
-    const uploadBuffer = contentType === "image/png" && paramText.trim() ? upsertPngTextChunk(rawBuffer, "parameters", paramText) : rawBuffer;
-    return {
-      base64Data: uploadBuffer.toString("base64"),
-      contentType,
-      width,
-      height,
-      byteLength: uploadBuffer.length,
-      uploadMode: "original_png"
-    };
-  }
-  const encodeJpeg = async (quality) => {
-    let pipeline = sharp5(diskPath).rotate().jpeg({ quality, mozjpeg: true });
-    if (paramText.trim()) {
-      pipeline = pipeline.withExif({ IFD2: { UserComment: paramText } });
-    }
-    return pipeline.toBuffer();
-  };
-  let jpegBuffer = await encodeJpeg(94);
-  if (jpegBuffer.length > MAX_FALLBACK_JPEG_BYTES) {
-    jpegBuffer = await encodeJpeg(86);
-  }
-  const outMeta = await sharp5(jpegBuffer).metadata();
-  return {
-    base64Data: jpegBuffer.toString("base64"),
-    contentType: "image/jpeg",
-    width: Number(outMeta.width || width),
-    height: Number(outMeta.height || height),
-    byteLength: jpegBuffer.length,
-    uploadMode: "jpeg_exif"
-  };
-}
-var MAX_FALLBACK_JPEG_BYTES, PNG_SIGNATURE;
-var init_civitaiImagePayload = __esm({
-  "src/server/services/civitai/civitaiImagePayload.ts"() {
-    init_db();
-    init_civitaiHttpAndParse();
-    MAX_FALLBACK_JPEG_BYTES = 9.5 * 1024 * 1024;
-    PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   }
 });
 
@@ -13674,15 +13883,22 @@ __export(imagesRoutes_exports, {
   imagesRouter: () => imagesRouter
 });
 import { Router } from "express";
-import fs20 from "fs";
-import path19 from "path";
+import fs21 from "fs";
+import path20 from "path";
 import * as archiverPkg from "archiver";
+function getImageMimeType(filename) {
+  const ext = path20.extname(filename).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".webp") return "image/webp";
+  return "image/png";
+}
 var createZipArchive, imagesRouter;
 var init_imagesRoutes = __esm({
   "src/server/routes/imagesRoutes.ts"() {
     init_db();
     init_config();
     init_galleryQueryService();
+    init_exportMetadataService();
     init_seriesService();
     init_characterService();
     init_scannerService();
@@ -13761,24 +13977,24 @@ var init_imagesRoutes = __esm({
         res.status(404).end();
         return;
       }
-      const expectedThumbPath = path19.join(appConfig.thumbnailPath, `${row.content_hash}.webp`);
-      if (fs20.existsSync(expectedThumbPath)) {
+      const expectedThumbPath = path20.join(appConfig.thumbnailPath, `${row.content_hash}.webp`);
+      if (fs21.existsSync(expectedThumbPath)) {
         if (row.thumbnail_path !== expectedThumbPath) {
           db.prepare("UPDATE images SET thumbnail_path = ? WHERE id = ?").run(expectedThumbPath, row.id);
         }
         res.setHeader("Content-Type", "image/webp");
         res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-        res.sendFile(path19.resolve(expectedThumbPath));
+        res.sendFile(path20.resolve(expectedThumbPath));
         return;
       }
       const origPath = resolveImageDiskPath(row);
-      if (fs20.existsSync(origPath)) {
+      if (fs21.existsSync(origPath)) {
         const { thumbPath } = await ensureWebpThumbnail(origPath, row.content_hash);
-        if (thumbPath && fs20.existsSync(thumbPath)) {
+        if (thumbPath && fs21.existsSync(thumbPath)) {
           db.prepare("UPDATE images SET thumbnail_path = ? WHERE id = ?").run(thumbPath, row.id);
           res.setHeader("Content-Type", "image/webp");
           res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-          res.sendFile(path19.resolve(thumbPath));
+          res.sendFile(path20.resolve(thumbPath));
           return;
         }
         res.sendFile(origPath);
@@ -13786,7 +14002,7 @@ var init_imagesRoutes = __esm({
       }
       res.status(404).end();
     });
-    imagesRouter.get("/:id/file", (req, res) => {
+    imagesRouter.get("/:id/file", async (req, res) => {
       const id = Number(req.params.id);
       const row = db.prepare(
         "SELECT relative_path, filename, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference FROM images WHERE id = ?"
@@ -13796,11 +14012,22 @@ var init_imagesRoutes = __esm({
         return;
       }
       const origPath = resolveImageDiskPath(row);
-      if (!fs20.existsSync(origPath)) {
+      if (!fs21.existsSync(origPath)) {
         res.status(404).json({ error: "Original file missing on disk" });
         return;
       }
       if (req.query.download === "1") {
+        try {
+          const enrichedBuffer = await prepareExportImageBuffer(id, origPath);
+          if (enrichedBuffer) {
+            res.setHeader("Content-Type", getImageMimeType(row.filename));
+            res.attachment(row.filename);
+            res.setHeader("Content-Length", String(enrichedBuffer.length));
+            res.send(enrichedBuffer);
+            return;
+          }
+        } catch {
+        }
         res.download(origPath, row.filename);
         return;
       }
@@ -13942,7 +14169,7 @@ var init_imagesRoutes = __esm({
         res.status(500).json({ error: err?.message || "Bulk operation failed" });
       }
     });
-    imagesRouter.post("/export-zip", (req, res) => {
+    imagesRouter.post("/export-zip", async (req, res) => {
       try {
         const { imageIds, filters, archiveName } = req.body || {};
         let targetIds = [];
@@ -13955,6 +14182,8 @@ var init_imagesRoutes = __esm({
           res.status(400).json({ error: "No matching images to export" });
           return;
         }
+        const exportSettings = getExportMetadataSettings();
+        const shouldInjectMetadata = exportSettings.insertCouchy || exportSettings.insertCivitai;
         const zipFilename = `${(archiveName || "couchy-export").replace(/[^a-zA-Z0-9_-]/g, "_")}.zip`;
         res.setHeader("Content-Type", "application/zip");
         res.setHeader("Content-Disposition", `attachment; filename="${zipFilename}"`);
@@ -13972,15 +14201,25 @@ var init_imagesRoutes = __esm({
           ).get(id);
           if (!row) continue;
           const absPath = resolveImageDiskPath(row);
-          if (!fs20.existsSync(absPath)) continue;
+          if (!fs21.existsSync(absPath)) continue;
           let entryName = row.filename;
           if (usedNames.has(entryName)) {
             entryName = `${id}_${row.filename}`;
           }
           usedNames.add(entryName);
+          if (shouldInjectMetadata) {
+            try {
+              const enriched = await prepareExportImageBuffer(id, absPath, exportSettings);
+              if (enriched) {
+                archive.append(enriched, { name: entryName });
+                continue;
+              }
+            } catch {
+            }
+          }
           archive.file(absPath, { name: entryName });
         }
-        archive.finalize();
+        await archive.finalize();
       } catch (err) {
         if (!res.headersSent) {
           res.status(500).json({ error: err?.message || "Failed to export ZIP" });
@@ -14863,18 +15102,18 @@ var init_llmPromptUtils = __esm({
 
 // src/server/services/llm/llmImageAnalysisService.ts
 import crypto7 from "crypto";
-import fs21 from "fs";
-import path20 from "path";
+import fs22 from "fs";
+import path21 from "path";
 function archiveUploadedPromptImage1Mp(imageBuffer, mimeHeader) {
   if (!getBoolSetting("save_uploaded_prompt_images", false)) return null;
   try {
-    fs21.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
+    fs22.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
     const hashPrefix = crypto7.createHash("sha256").update(imageBuffer).digest("hex").slice(0, 10);
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const mimeLower = mimeHeader.toLowerCase();
     const ext = mimeLower.includes("png") ? "png" : mimeLower.includes("webp") ? "webp" : "jpg";
     const generatedName = `prompt-1mp-${timestamp}-${hashPrefix}.${ext}`;
-    fs21.writeFileSync(path20.join(appConfig.uploadedImagesDir, generatedName), imageBuffer);
+    fs22.writeFileSync(path21.join(appConfig.uploadedImagesDir, generatedName), imageBuffer);
     invalidateStorageUsageStatsCache();
     return generatedName;
   } catch (err) {
@@ -15278,26 +15517,26 @@ var init_faceAlignmentUtils = __esm({
 });
 
 // src/server/services/faceRecognitionService.ts
-import fs22 from "fs";
-import path21 from "path";
+import fs23 from "fs";
+import path22 from "path";
 import { Readable as Readable2 } from "stream";
-import sharp6 from "sharp";
+import sharp7 from "sharp";
 import * as ort2 from "onnxruntime-node";
 function getFaceModelDir() {
-  const dir = path21.join(appConfig.localModelsDir, "insightface-buffalo-l");
-  fs22.mkdirSync(dir, { recursive: true });
+  const dir = path22.join(appConfig.localModelsDir, "insightface-buffalo-l");
+  fs23.mkdirSync(dir, { recursive: true });
   return dir;
 }
 function getDetModelPath() {
-  return path21.join(getFaceModelDir(), "det_10g.onnx");
+  return path22.join(getFaceModelDir(), "det_10g.onnx");
 }
 function getRecModelPath() {
-  return path21.join(getFaceModelDir(), "w600k_r50.onnx");
+  return path22.join(getFaceModelDir(), "w600k_r50.onnx");
 }
 function areFaceModelsDownloaded() {
   try {
-    const detStat = fs22.statSync(getDetModelPath());
-    const recStat = fs22.statSync(getRecModelPath());
+    const detStat = fs23.statSync(getDetModelPath());
+    const recStat = fs23.statSync(getRecModelPath());
     return detStat.size > 5e6 && recStat.size > 5e7;
   } catch {
     return false;
@@ -15314,9 +15553,9 @@ async function downloadFileAtomic(urls, destPath) {
       }
       const res = await fetch(url, { headers, redirect: "follow" });
       if (!res.ok || !res.body) {
-        throw new Error(`HTTP ${res.status} downloading ${path21.basename(destPath)}`);
+        throw new Error(`HTTP ${res.status} downloading ${path22.basename(destPath)}`);
       }
-      const fileStream = fs22.createWriteStream(partPath);
+      const fileStream = fs23.createWriteStream(partPath);
       const nodeStream = Readable2.fromWeb(res.body);
       await new Promise((resolve, reject) => {
         nodeStream.on("error", (err) => {
@@ -15327,27 +15566,27 @@ async function downloadFileAtomic(urls, destPath) {
         fileStream.on("finish", resolve);
         nodeStream.pipe(fileStream);
       });
-      fs22.renameSync(partPath, destPath);
+      fs23.renameSync(partPath, destPath);
       return;
     } catch (err) {
       lastErr = err;
       try {
-        if (fs22.existsSync(partPath)) fs22.unlinkSync(partPath);
+        if (fs23.existsSync(partPath)) fs23.unlinkSync(partPath);
       } catch {
       }
     }
   }
-  throw lastErr instanceof Error ? lastErr : new Error(`Failed to download ${path21.basename(destPath)}`);
+  throw lastErr instanceof Error ? lastErr : new Error(`Failed to download ${path22.basename(destPath)}`);
 }
 async function ensureFaceModelsReady() {
   if (areFaceModelsDownloaded() && detSession && recSession) return;
   if (ensureModelsPromise) return ensureModelsPromise;
   ensureModelsPromise = (async () => {
     try {
-      if (!fs22.existsSync(getDetModelPath()) || fs22.statSync(getDetModelPath()).size < 5e6) {
+      if (!fs23.existsSync(getDetModelPath()) || fs23.statSync(getDetModelPath()).size < 5e6) {
         await downloadFileAtomic(MODEL_DOWNLOAD_MIRRORS["det_10g.onnx"], getDetModelPath());
       }
-      if (!fs22.existsSync(getRecModelPath()) || fs22.statSync(getRecModelPath()).size < 5e7) {
+      if (!fs23.existsSync(getRecModelPath()) || fs23.statSync(getRecModelPath()).size < 5e7) {
         await downloadFileAtomic(MODEL_DOWNLOAD_MIRRORS["w600k_r50.onnx"], getRecModelPath());
       }
       if (!detSession) {
@@ -15424,13 +15663,13 @@ async function extractFaceEmbeddings(imageInput, maxFaces = 5) {
   if (!detSession || !recSession) {
     throw new Error("Face recognition models could not be initialized.");
   }
-  const { data: rgbBuffer, info } = await sharp6(imageInput).rotate().flatten({ background: { r: 0, g: 0, b: 0 } }).resize(1600, 1600, { fit: "inside", withoutEnlargement: true }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+  const { data: rgbBuffer, info } = await sharp7(imageInput).rotate().flatten({ background: { r: 0, g: 0, b: 0 } }).resize(1600, 1600, { fit: "inside", withoutEnlargement: true }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
   const srcW = info.width;
   const srcH = info.height;
   const scale = Math.min(DET_INPUT_SIZE / srcW, DET_INPUT_SIZE / srcH);
   const resizedW = Math.max(1, Math.round(srcW * scale));
   const resizedH = Math.max(1, Math.round(srcH * scale));
-  const { data: detRgb } = await sharp6(rgbBuffer, {
+  const { data: detRgb } = await sharp7(rgbBuffer, {
     raw: { width: srcW, height: srcH, channels: 3 }
   }).resize(resizedW, resizedH).extend({
     top: 0,
@@ -15554,7 +15793,7 @@ async function syncCharacterFaceEmbeddings() {
         relative_path: src.relativePath,
         is_uploaded_reference: src.isUploadedRef
       });
-      if (!fs22.existsSync(diskPath)) continue;
+      if (!fs23.existsSync(diskPath)) continue;
       try {
         const faces = await extractFaceEmbeddings(diskPath, src.sourceKind === "portrait" ? 2 : 3);
         if (faces.length === 0) continue;
@@ -15701,8 +15940,8 @@ __export(charactersRoutes_exports, {
   charactersRouter: () => charactersRouter
 });
 import { Router as Router2 } from "express";
-import fs23 from "fs";
-import sharp7 from "sharp";
+import fs24 from "fs";
+import sharp8 from "sharp";
 var charactersRouter, updateCharacterHandler;
 var init_charactersRoutes = __esm({
   "src/server/routes/charactersRoutes.ts"() {
@@ -15926,11 +16165,11 @@ var init_charactersRoutes = __esm({
           return;
         }
         const origPath = resolveImageDiskPath(imgRow);
-        if (!fs23.existsSync(origPath)) {
+        if (!fs24.existsSync(origPath)) {
           res.status(404).json({ error: "Portrait image file is missing on disk." });
           return;
         }
-        const resizedBuffer = await sharp7(origPath).rotate().resize(1024, 1024, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
+        const resizedBuffer = await sharp8(origPath).rotate().resize(1024, 1024, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 90 }).toBuffer();
         const dataUrl = `data:image/jpeg;base64,${resizedBuffer.toString("base64")}`;
         const analysis = await analyzeCharacterPortraitPhysicalTraits({
           imageBuffer: resizedBuffer,
@@ -16257,8 +16496,8 @@ var init_lorasRoutes = __esm({
 
 // src/server/routes/modelsRoutes.ts
 import { Router as Router4 } from "express";
-import fs24 from "fs";
-import path22 from "path";
+import fs25 from "fs";
+import path23 from "path";
 var modelsRouter;
 var init_modelsRoutes = __esm({
   "src/server/routes/modelsRoutes.ts"() {
@@ -16385,13 +16624,13 @@ var init_modelsRoutes = __esm({
     });
     modelsRouter.get("/models/:id/preview/:filename", (req, res) => {
       const targetPath = resolveSafeModelPreviewPath(req.params.filename);
-      if (!targetPath || !fs24.existsSync(targetPath)) {
+      if (!targetPath || !fs25.existsSync(targetPath)) {
         res.status(404).end();
         return;
       }
       res.setHeader("Content-Type", "image/webp");
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      res.sendFile(path22.resolve(targetPath));
+      res.sendFile(path23.resolve(targetPath));
     });
     modelsRouter.get("/models/:name/impact", (req, res) => {
       try {
@@ -16462,9 +16701,9 @@ var init_modelsRoutes = __esm({
 
 // src/server/services/civitai/civitaiImageShareService.ts
 import crypto8 from "crypto";
-import fs25 from "fs";
-import path23 from "path";
-import sharp8 from "sharp";
+import fs26 from "fs";
+import path24 from "path";
+import sharp9 from "sharp";
 function clampWeight(val, fallback = 1) {
   const n = Number(val);
   if (!Number.isFinite(n)) return fallback;
@@ -16643,12 +16882,12 @@ async function fetchAndSaveCivitaiInspirationImage(imageUrl) {
       return null;
     }
     const inputBuf = Buffer.from(arrayBuf);
-    const { data: rotatedBuf, info: rotatedInfo } = await sharp8(inputBuf).rotate().toBuffer({ resolveWithObject: true });
+    const { data: rotatedBuf, info: rotatedInfo } = await sharp9(inputBuf).rotate().toBuffer({ resolveWithObject: true });
     const srcW = Number(rotatedInfo.width || 0);
     const srcH = Number(rotatedInfo.height || 0);
     if (srcW <= 0 || srcH <= 0) return null;
     const totalPixels = srcW * srcH;
-    let pipeline = sharp8(rotatedBuf);
+    let pipeline = sharp9(rotatedBuf);
     let outW = srcW;
     let outH = srcH;
     if (totalPixels > CIVITAI_INSPIRATION_MAX_PIXELS) {
@@ -16659,11 +16898,11 @@ async function fetchAndSaveCivitaiInspirationImage(imageUrl) {
     }
     const { data: outBuf, info: outInfo } = await pipeline.jpeg({ quality: 88, mozjpeg: true }).toBuffer({ resolveWithObject: true });
     if (outBuf.length === 0) return null;
-    fs25.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
+    fs26.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
     const hashPrefix = crypto8.createHash("sha256").update(outBuf).digest("hex").slice(0, 10);
     const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     const filename = `civitai-1mp-${timestamp}-${hashPrefix}.jpg`;
-    fs25.writeFileSync(path23.join(appConfig.uploadedImagesDir, filename), outBuf);
+    fs26.writeFileSync(path24.join(appConfig.uploadedImagesDir, filename), outBuf);
     invalidateStorageUsageStatsCache();
     return {
       filename,
@@ -16937,7 +17176,7 @@ var init_civitaiImageShareService = __esm({
 });
 
 // src/server/services/modelSearchService.ts
-import path24 from "path";
+import path25 from "path";
 async function searchCivitaiModels(query, typeFilter) {
   const trimmed = query.trim();
   if (/^https?:\/\/(www\.)?civitai\.(com|red)\//i.test(trimmed)) {
@@ -17130,13 +17369,13 @@ async function searchHuggingFaceModels(query, typeFilter) {
     const availableFiles = [];
     for (const s of siblings) {
       const rfilename = String(s.rfilename || "");
-      const ext = path24.extname(rfilename).toLowerCase();
+      const ext = path25.extname(rfilename).toLowerCase();
       if (!DOWNLOAD_WEIGHT_EXTS.has(ext)) continue;
       const inferred = inferSubfolderAndTypeFromPath(rfilename, tags);
       const encodedPath = rfilename.split("/").map((seg) => encodeURIComponent(seg)).join("/");
       availableFiles.push({
         rfilename,
-        filename: path24.basename(rfilename),
+        filename: path25.basename(rfilename),
         fileSize: typeof s.size === "number" ? s.size : s.lfs?.size ?? null,
         sha256Hash: s.lfs?.oid ? String(s.lfs.oid).toUpperCase() : null,
         downloadUrl: `https://huggingface.co/${repoId}/resolve/main/${encodedPath}`,
@@ -17190,7 +17429,7 @@ async function resolveDirectModelUrl(rawInput) {
       throw new Error(`No supported model weight files found in Hugging Face repo ${hfParsed.repoId}.`);
     }
     const matchedFile = (hfParsed.filePath ? repoData.files.find(
-      (f) => f.rfilename.toLowerCase() === hfParsed.filePath.toLowerCase() || f.filename.toLowerCase() === path24.basename(hfParsed.filePath).toLowerCase()
+      (f) => f.rfilename.toLowerCase() === hfParsed.filePath.toLowerCase() || f.filename.toLowerCase() === path25.basename(hfParsed.filePath).toLowerCase()
     ) : null) || repoData.files[0];
     const suggestedLoraCategory = matchedFile.modelType === "lora" ? classifyLoraFromMetadata({
       name: repoData.repoId,
@@ -17224,8 +17463,8 @@ async function resolveDirectModelUrl(rawInput) {
   }
   if (/^https?:\/\//i.test(input)) {
     const parsedUrl = new URL(input);
-    const rawBasename = decodeURIComponent(path24.basename(parsedUrl.pathname)) || "downloaded_model.safetensors";
-    const cleanFilename = DOWNLOAD_WEIGHT_EXTS.has(path24.extname(rawBasename).toLowerCase()) ? rawBasename : `${rawBasename}.safetensors`;
+    const rawBasename = decodeURIComponent(path25.basename(parsedUrl.pathname)) || "downloaded_model.safetensors";
+    const cleanFilename = DOWNLOAD_WEIGHT_EXTS.has(path25.extname(rawBasename).toLowerCase()) ? rawBasename : `${rawBasename}.safetensors`;
     const inferred = inferSubfolderAndTypeFromPath(parsedUrl.pathname);
     const suggestedLoraCategory = inferred.modelType === "lora" ? classifyLoraFromMetadata({
       name: cleanFilename,
@@ -17817,7 +18056,7 @@ var init_pillSettings = __esm({
 });
 
 // src/server/services/modelDownloadPostProcess.ts
-import path25 from "path";
+import path26 from "path";
 async function finalizeCompletedModelDownload(jobId, params, bytesDownloaded, actualHash, hashVerified) {
   db.prepare(
     `UPDATE download_jobs
@@ -17825,10 +18064,10 @@ async function finalizeCompletedModelDownload(jobId, params, bytesDownloaded, ac
          hash_verified = ?, error_message = NULL, completed_at = datetime('now')
      WHERE id = ?`
   ).run(bytesDownloaded, actualHash, hashVerified ? 1 : 0, jobId);
-  const resolvedDest = path25.resolve(params.destinationPath);
-  const resolvedComfyModels = path25.resolve(appConfig.comfyuiModelsDir || "");
+  const resolvedDest = path26.resolve(params.destinationPath);
+  const resolvedComfyModels = path26.resolve(appConfig.comfyuiModelsDir || "");
   const downloadedDirectlyIntoComfy = Boolean(
-    resolvedComfyModels && (resolvedDest === resolvedComfyModels || resolvedDest.startsWith(resolvedComfyModels + path25.sep))
+    resolvedComfyModels && (resolvedDest === resolvedComfyModels || resolvedDest.startsWith(resolvedComfyModels + path26.sep))
   );
   let resolvedLoraCategory = "unclassified";
   if (params.effectiveModelType === "lora") {
@@ -17939,8 +18178,8 @@ var init_modelDownloadPostProcess = __esm({
 });
 
 // src/server/services/modelDownloadExecutor.ts
-import fs26 from "fs";
-import path26 from "path";
+import fs27 from "fs";
+import path27 from "path";
 import crypto9 from "crypto";
 import { Readable as Readable3 } from "stream";
 function markDownloadJobPending(jobId) {
@@ -18023,7 +18262,7 @@ async function executeDownloadJob(jobId, params) {
   activeDownloadControllers.set(jobId, abortController);
   let fileStream = null;
   try {
-    fs26.mkdirSync(path26.dirname(params.destinationPath), { recursive: true });
+    fs27.mkdirSync(path27.dirname(params.destinationPath), { recursive: true });
     const headers = {};
     if (params.provider === "civitai" && appConfig.civitaiApiKey) {
       headers.Authorization = `Bearer ${appConfig.civitaiApiKey}`;
@@ -18052,7 +18291,7 @@ async function executeDownloadJob(jobId, params) {
     const totalBytes = Number(res.headers.get("content-length") || 0);
     db.prepare("UPDATE download_jobs SET total_bytes = ? WHERE id = ?").run(totalBytes, jobId);
     const hash = crypto9.createHash("sha256");
-    fileStream = fs26.createWriteStream(partPath);
+    fileStream = fs27.createWriteStream(partPath);
     let bytesDownloaded = 0;
     let lastUpdate = Date.now();
     const nodeReadable = Readable3.fromWeb(res.body);
@@ -18084,10 +18323,10 @@ async function executeDownloadJob(jobId, params) {
     const expected = params.expectedHash ? params.expectedHash.trim().toUpperCase() : null;
     const hashVerified = expected ? actualHash === expected || actualHash.startsWith(expected) : true;
     if (expected && !hashVerified) {
-      fs26.unlinkSync(partPath);
+      fs27.unlinkSync(partPath);
       throw new Error(`Hash mismatch: expected ${expected}, got ${actualHash}`);
     }
-    fs26.renameSync(partPath, params.destinationPath);
+    fs27.renameSync(partPath, params.destinationPath);
     await finalizeCompletedModelDownload(jobId, params, bytesDownloaded, actualHash, hashVerified);
   } catch (err) {
     if (fileStream) {
@@ -18096,9 +18335,9 @@ async function executeDownloadJob(jobId, params) {
       } catch {
       }
     }
-    if (fs26.existsSync(partPath)) {
+    if (fs27.existsSync(partPath)) {
       try {
-        fs26.unlinkSync(partPath);
+        fs27.unlinkSync(partPath);
       } catch {
       }
     }
@@ -18137,25 +18376,25 @@ var init_modelDownloadExecutor = __esm({
 });
 
 // src/server/services/modelDownloadConfirmationService.ts
-import fs27 from "fs";
-import path27 from "path";
+import fs28 from "fs";
+import path28 from "path";
 async function startConfirmedModelDownload(params) {
-  const safeFilename = path27.basename(params.filename.trim());
+  const safeFilename = path28.basename(params.filename.trim());
   if (!safeFilename || safeFilename.startsWith(".")) {
     throw new Error("Invalid destination filename.");
   }
   const defaultFolder = MODEL_TYPE_TO_DEFAULT_SUBFOLDER[params.modelType] || "checkpoints";
   const safeSubfolder = (params.subfolder || defaultFolder).replace(/[^a-zA-Z0-9_-]/g, "").toLowerCase();
   const effectiveModelType = SUBFOLDER_TO_MODEL_TYPE[safeSubfolder] || params.modelType;
-  const targetDir = path27.join(appConfig.downloadsDir, safeSubfolder);
-  const resolvedRoot = path27.resolve(appConfig.downloadsDir);
-  const resolvedTargetDir = path27.resolve(targetDir);
+  const targetDir = path28.join(appConfig.downloadsDir, safeSubfolder);
+  const resolvedRoot = path28.resolve(appConfig.downloadsDir);
+  const resolvedTargetDir = path28.resolve(targetDir);
   if (!resolvedTargetDir.startsWith(resolvedRoot)) {
     throw new Error("Destination directory validation failed.");
   }
-  fs27.mkdirSync(resolvedTargetDir, { recursive: true });
-  const destinationPath = path27.join(resolvedTargetDir, safeFilename);
-  if (fs27.existsSync(destinationPath) && !params.allowOverwrite) {
+  fs28.mkdirSync(resolvedTargetDir, { recursive: true });
+  const destinationPath = path28.join(resolvedTargetDir, safeFilename);
+  if (fs28.existsSync(destinationPath) && !params.allowOverwrite) {
     throw new Error(
       `File "${safeFilename}" already exists in ${resolvedTargetDir}. Confirm overwrite explicitly to replace it.`
     );
@@ -18271,8 +18510,8 @@ __export(downloadSchedulerService_exports, {
   runScheduledDownloadNow: () => runScheduledDownloadNow,
   startDownloadScheduler: () => startDownloadScheduler
 });
-import fs28 from "fs";
-import path28 from "path";
+import fs29 from "fs";
+import path29 from "path";
 function parseJobPayload(raw) {
   if (!raw) {
     return { subfolder: "checkpoints", allowOverwrite: false, retryCount: 0 };
@@ -18329,7 +18568,7 @@ async function refreshCivitaiScheduledMetadata(job, payload) {
       freshVer.baseModel,
       domain
     );
-    const targetBasename = path28.basename(String(job.destination_path || "")).toLowerCase();
+    const targetBasename = path29.basename(String(job.destination_path || "")).toLowerCase();
     const matched = files.find((f) => f.filename.toLowerCase() === targetBasename) || files[0];
     if (matched) {
       sourceUrl = matched.downloadUrl;
@@ -18342,8 +18581,8 @@ async function refreshCivitaiScheduledMetadata(job, payload) {
 async function runClaimedScheduledJob(job, skipEarlyAccessRefresh = false) {
   const payload = parseJobPayload(job.payload_json);
   const destinationPath = String(job.destination_path || "");
-  const safeFilename = path28.basename(destinationPath);
-  if (fs28.existsSync(destinationPath) && !payload.allowOverwrite) {
+  const safeFilename = path29.basename(destinationPath);
+  if (fs29.existsSync(destinationPath) && !payload.allowOverwrite) {
     db.prepare(
       `UPDATE download_jobs
        SET status = 'failed', error_message = ?, completed_at = datetime('now')
@@ -18569,8 +18808,8 @@ var init_downloadSchedulerService = __esm({
 });
 
 // src/server/services/modelRedownloadService.ts
-import fs29 from "fs";
-import path29 from "path";
+import fs30 from "fs";
+import path30 from "path";
 async function drainRedownloadQueue() {
   if (isProcessingRedownloadQueue) return;
   isProcessingRedownloadQueue = true;
@@ -18605,7 +18844,7 @@ async function drainRedownloadQueue() {
 function fileExistsWithSize(filePath) {
   if (!filePath || typeof filePath !== "string") return false;
   try {
-    const st = fs29.statSync(filePath);
+    const st = fs30.statSync(filePath);
     return st.isFile() && st.size > 0;
   } catch {
     return false;
@@ -18647,7 +18886,7 @@ function listMissingRedownloadCandidates() {
     `SELECT destination_path FROM download_jobs WHERE status IN ('downloading', 'queued')`
   ).all();
   const activeFilenames = new Set(
-    activeDownloadingJobs.map((j) => path29.basename(String(j.destination_path || "")).toLowerCase()).filter(Boolean)
+    activeDownloadingJobs.map((j) => path30.basename(String(j.destination_path || "")).toLowerCase()).filter(Boolean)
   );
   const allJobs = db.prepare(
     `SELECT * FROM download_jobs
@@ -18657,7 +18896,7 @@ function listMissingRedownloadCandidates() {
   const latestJobByFilename = /* @__PURE__ */ new Map();
   for (const job of allJobs) {
     const dest = String(job.destination_path || "");
-    const fname = path29.basename(dest).toLowerCase();
+    const fname = path30.basename(dest).toLowerCase();
     if (fname && !latestJobByFilename.has(fname)) {
       latestJobByFilename.set(fname, job);
     }
@@ -18671,14 +18910,14 @@ function listMissingRedownloadCandidates() {
   const candidates = /* @__PURE__ */ new Map();
   for (const m of modelsRows) {
     if (m.is_hidden) continue;
-    const safeFilename = path29.basename(String(m.filename || "").trim());
+    const safeFilename = path30.basename(String(m.filename || "").trim());
     if (!safeFilename) continue;
     const key = safeFilename.toLowerCase();
     if (activeFilenames.has(key)) continue;
     const matchingJob = latestJobByFilename.get(key) || null;
     const modelType = m.model_type || "lora";
     const defaultSubfolder = MODEL_TYPE_TO_DEFAULT_SUBFOLDER[modelType] || "loras";
-    const expectedDownloadPath = path29.join(appConfig.downloadsDir, defaultSubfolder, safeFilename);
+    const expectedDownloadPath = path30.join(appConfig.downloadsDir, defaultSubfolder, safeFilename);
     const existsOnDisk = fileExistsWithSize(m.file_path) || fileExistsWithSize(m.download_file_path) || fileExistsWithSize(matchingJob?.destination_path) || fileExistsWithSize(expectedDownloadPath);
     if (existsOnDisk) continue;
     let jobPayload = null;
@@ -18730,7 +18969,7 @@ function listMissingRedownloadCandidates() {
       continue;
     }
     const destPath = String(job.destination_path || "");
-    const safeFilename = path29.basename(destPath);
+    const safeFilename = path30.basename(destPath);
     if (!safeFilename) continue;
     if (fileExistsWithSize(destPath)) continue;
     const existingModel = modelsRows.find((m) => m.filename.toLowerCase() === key);
@@ -18787,9 +19026,9 @@ function listMissingRedownloadCandidates() {
 function createQueuedRedownloadTask(candidate) {
   const safeSubfolder = candidate.subfolder || MODEL_TYPE_TO_DEFAULT_SUBFOLDER[candidate.modelType] || "loras";
   const effectiveModelType = SUBFOLDER_TO_MODEL_TYPE[safeSubfolder] || candidate.modelType;
-  const targetDir = path29.resolve(path29.join(appConfig.downloadsDir, safeSubfolder));
-  fs29.mkdirSync(targetDir, { recursive: true });
-  const destinationPath = path29.join(targetDir, candidate.filename);
+  const targetDir = path30.resolve(path30.join(appConfig.downloadsDir, safeSubfolder));
+  fs30.mkdirSync(targetDir, { recursive: true });
+  const destinationPath = path30.join(targetDir, candidate.filename);
   const payloadJson = JSON.stringify({
     subfolder: safeSubfolder,
     allowOverwrite: true,
@@ -18858,7 +19097,7 @@ function adoptStuckOrOrphanedJobs() {
       continue;
     }
     const destPath = String(row.destination_path || "");
-    const safeFilename = path29.basename(destPath);
+    const safeFilename = path30.basename(destPath);
     if (!safeFilename) continue;
     if (fileExistsWithSize(destPath)) {
       db.prepare(
@@ -18902,12 +19141,12 @@ function startRedownloadMissingModels(options) {
   let candidates = listMissingRedownloadCandidates();
   if (options?.onlyJobId) {
     const targetJob = db.prepare("SELECT * FROM download_jobs WHERE id = ?").get(options.onlyJobId);
-    const targetFname = targetJob ? path29.basename(String(targetJob.destination_path || "")).toLowerCase() : "";
+    const targetFname = targetJob ? path30.basename(String(targetJob.destination_path || "")).toLowerCase() : "";
     candidates = candidates.filter(
       (c) => c.lastJobId === options.onlyJobId || targetFname && c.key === targetFname
     );
   } else if (options?.onlyFilename) {
-    const targetKey = path29.basename(options.onlyFilename.trim()).toLowerCase();
+    const targetKey = path30.basename(options.onlyFilename.trim()).toLowerCase();
     candidates = candidates.filter((c) => c.key === targetKey);
   }
   const createdJobs = [];
@@ -18941,9 +19180,9 @@ function ensureRedownloadQueueRunning() {
 function cleanupPartFilesForJob(destinationPath, jobId) {
   if (!destinationPath) return;
   for (const candidate of [`${destinationPath}.part.${jobId}`, `${destinationPath}.part`]) {
-    if (fs29.existsSync(candidate)) {
+    if (fs30.existsSync(candidate)) {
       try {
-        fs29.unlinkSync(candidate);
+        fs30.unlinkSync(candidate);
       } catch {
       }
     }
@@ -18996,7 +19235,7 @@ var init_modelRedownloadService = __esm({
 
 // src/server/routes/modelDownloadsRoutes.ts
 import { Router as Router5 } from "express";
-import path30 from "path";
+import path31 from "path";
 var modelDownloadsRouter;
 var init_modelDownloadsRoutes = __esm({
   "src/server/routes/modelDownloadsRoutes.ts"() {
@@ -19212,7 +19451,7 @@ var init_modelDownloadsRoutes = __esm({
       const missingByKey = new Set(missingCandidates.map((c) => c.key));
       const enriched = jobs.map((job) => {
         const destPath = typeof job.destination_path === "string" ? job.destination_path : "";
-        const baseName = destPath ? path30.basename(destPath).toLowerCase() : "";
+        const baseName = destPath ? path31.basename(destPath).toLowerCase() : "";
         const matched = (destPath ? byFilePath.get(destPath.toLowerCase()) : void 0) || (baseName ? byFilename.get(baseName) : void 0);
         let firstPreviewUrl = null;
         if (job.provider === "civitai" && matched?.preview_images_json) {
@@ -19586,16 +19825,16 @@ var init_modelsAndWorkflowsRoutes = __esm({
 });
 
 // src/server/services/backupService.ts
-import fs30 from "fs";
-import path31 from "path";
+import fs31 from "fs";
+import path32 from "path";
 async function createDatabaseBackup(label = "manual") {
-  fs30.mkdirSync(appConfig.backupPath, { recursive: true });
+  fs31.mkdirSync(appConfig.backupPath, { recursive: true });
   const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
   const safeLabel = label.replace(/[^a-zA-Z0-9_-]/g, "");
   const filename = `gallery-backup-${safeLabel}-${timestamp}.db`;
-  const destPath = path31.join(appConfig.backupPath, filename);
+  const destPath = path32.join(appConfig.backupPath, filename);
   await db.backup(destPath);
-  const stat = fs30.statSync(destPath);
+  const stat = fs31.statSync(destPath);
   const integrityRow = db.pragma("integrity_check", { simple: true });
   return {
     filename,
@@ -19606,10 +19845,10 @@ async function createDatabaseBackup(label = "manual") {
   };
 }
 function listDatabaseBackups() {
-  if (!fs30.existsSync(appConfig.backupPath)) return [];
-  return fs30.readdirSync(appConfig.backupPath).filter((f) => f.endsWith(".db") || f.endsWith(".json")).map((f) => {
-    const full = path31.join(appConfig.backupPath, f);
-    const stat = fs30.statSync(full);
+  if (!fs31.existsSync(appConfig.backupPath)) return [];
+  return fs31.readdirSync(appConfig.backupPath).filter((f) => f.endsWith(".db") || f.endsWith(".json")).map((f) => {
+    const full = path32.join(appConfig.backupPath, f);
+    const stat = fs31.statSync(full);
     return {
       filename: f,
       sizeBytes: stat.size,
@@ -19797,8 +20036,8 @@ var init_backupService = __esm({
 });
 
 // src/server/services/helpDocsService.ts
-import fs31 from "fs";
-import path32 from "path";
+import fs32 from "fs";
+import path33 from "path";
 function slugifyHeading(raw) {
   return raw.replace(/`([^`]*)`/g, "$1").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/\*\*([^*]+)\*\*/g, "$1").replace(/__([^_]+)__/g, "$1").replace(/&[a-z0-9#]+;/gi, " ").toLowerCase().trim().replace(/[^\w\s-]/g, "").replace(/ /g, "-");
 }
@@ -19820,8 +20059,8 @@ function shiftChapterHeadings(markdown) {
   }).join("\n").trim();
 }
 function listManualChapterFiles(docsDir) {
-  if (!fs31.existsSync(docsDir)) return [];
-  const entries = fs31.readdirSync(docsDir, { withFileTypes: true }).filter((d) => d.isFile() && d.name.toLowerCase().endsWith(".md")).map((d) => d.name);
+  if (!fs32.existsSync(docsDir)) return [];
+  const entries = fs32.readdirSync(docsDir, { withFileTypes: true }).filter((d) => d.isFile() && d.name.toLowerCase().endsWith(".md")).map((d) => d.name);
   if (entries.length === 0) return [];
   const available = new Set(entries);
   const ordered = [];
@@ -19897,9 +20136,9 @@ function loadStitchedManualFromDocs(docsDir) {
   const slugCounts = /* @__PURE__ */ new Map([["couchy-user-manual", 1]]);
   let latestMtimeMs = 0;
   for (const filename of chapterFiles) {
-    const fullPath = path32.join(docsDir, filename);
-    const raw = fs31.readFileSync(fullPath, "utf-8").trim();
-    const stat = fs31.statSync(fullPath);
+    const fullPath = path33.join(docsDir, filename);
+    const raw = fs32.readFileSync(fullPath, "utf-8").trim();
+    const stat = fs32.statSync(fullPath);
     if (stat.mtimeMs > latestMtimeMs) latestMtimeMs = stat.mtimeMs;
     const shifted = shiftChapterHeadings(raw);
     const slug = filename.replace(/\.md$/i, "");
@@ -19933,7 +20172,7 @@ function loadStitchedManualFromDocs(docsDir) {
   };
 }
 function getHelpDocsPayload(rootDir = process.cwd()) {
-  const docsDir = path32.join(rootDir, "docs");
+  const docsDir = path33.join(rootDir, "docs");
   const stitched = loadStitchedManualFromDocs(docsDir);
   if (stitched) {
     const parsed2 = parseReadmeSections(stitched.markdown, stitched.chapterByAnchor);
@@ -19952,12 +20191,12 @@ function getHelpDocsPayload(rootDir = process.cwd()) {
       updatedAt: stitched.updatedAt
     };
   }
-  const readmePath = path32.join(rootDir, "README.md");
-  if (!fs31.existsSync(readmePath)) {
+  const readmePath = path33.join(rootDir, "README.md");
+  if (!fs32.existsSync(readmePath)) {
     throw new Error("Help documentation was not found in docs/ or README.md.");
   }
-  const markdown = fs31.readFileSync(readmePath, "utf-8");
-  const stat = fs31.statSync(readmePath);
+  const markdown = fs32.readFileSync(readmePath, "utf-8");
+  const stat = fs32.statSync(readmePath);
   const parsed = parseReadmeSections(markdown);
   return {
     markdown,
@@ -22057,7 +22296,7 @@ var init_libraryUsageStatsService = __esm({
 });
 
 // src/server/services/readinessService.ts
-import fs32 from "fs";
+import fs33 from "fs";
 function matchesFilename(installedList, target) {
   const cleanTarget = target.trim().replace(/\\/g, "/").toLowerCase();
   if (!cleanTarget) return false;
@@ -22190,7 +22429,7 @@ async function getGenerationReadiness() {
   const imageCount = db.prepare(
     "SELECT COUNT(*) AS c FROM images WHERE is_missing = 0 AND COALESCE(is_uploaded_reference, 0) = 0"
   ).get().c;
-  const outputReadable = fs32.existsSync(appConfig.comfyuiOutputDir);
+  const outputReadable = fs33.existsSync(appConfig.comfyuiOutputDir);
   const scanCheck = {
     id: "library_scan",
     label: "Gallery Output Folder",
@@ -22281,8 +22520,8 @@ __export(systemRoutes_exports, {
   systemRouter: () => systemRouter
 });
 import { Router as Router9 } from "express";
-import fs33 from "fs";
-import path33 from "path";
+import fs34 from "fs";
+import path34 from "path";
 function buildSafeConfigSnapshot() {
   const settingsMap = getSettingsMap([
     "quick_gen_box_enabled",
@@ -22290,6 +22529,8 @@ function buildSafeConfigSnapshot() {
     "save_civitai_import_images",
     "allow_civitai_share_uncharacterized",
     "civitai_activity_notifications_enabled",
+    "insert_couchy_metadata_on_export",
+    "insert_civitai_metadata_on_export",
     "gallery_pill_colors_enabled",
     "pill_type_settings_json"
   ]);
@@ -22317,6 +22558,16 @@ function buildSafeConfigSnapshot() {
     civitaiActivityNotificationsEnabled: getBoolSetting(
       "civitai_activity_notifications_enabled",
       true,
+      settingsMap
+    ),
+    insertCouchyMetadataOnExport: getBoolSetting(
+      "insert_couchy_metadata_on_export",
+      false,
+      settingsMap
+    ),
+    insertCivitaiMetadataOnExport: getBoolSetting(
+      "insert_civitai_metadata_on_export",
+      false,
       settingsMap
     ),
     galleryPillColorsEnabled: getBoolSetting("gallery_pill_colors_enabled", false, settingsMap),
@@ -22348,10 +22599,10 @@ function validateAbsoluteDirectoryPath(rawPath, fieldName) {
   if (!trimmed || trimmed.includes("\0")) {
     throw new Error(`${fieldName} is invalid.`);
   }
-  if (!path33.isAbsolute(trimmed)) {
+  if (!path34.isAbsolute(trimmed)) {
     throw new Error(`${fieldName} must be an absolute path.`);
   }
-  return path33.resolve(trimmed);
+  return path34.resolve(trimmed);
 }
 var systemRouter;
 var init_systemRoutes = __esm({
@@ -22408,6 +22659,8 @@ var init_systemRoutes = __esm({
           saveCivitaiImportImages,
           allowCivitaiShareUncharacterized,
           civitaiActivityNotificationsEnabled,
+          insertCouchyMetadataOnExport,
+          insertCivitaiMetadataOnExport,
           galleryPillColorsEnabled,
           pillTypeSettings
         } = req.body || {};
@@ -22430,18 +22683,18 @@ var init_systemRoutes = __esm({
           );
         }
         if (nextOutputDir) {
-          fs33.mkdirSync(nextOutputDir, { recursive: true });
+          fs34.mkdirSync(nextOutputDir, { recursive: true });
           appConfig.comfyuiOutputDir = nextOutputDir;
           startFilesystemWatcher();
         }
         if (nextModelsDir) {
-          fs33.mkdirSync(nextModelsDir, { recursive: true });
+          fs34.mkdirSync(nextModelsDir, { recursive: true });
           appConfig.comfyuiModelsDir = nextModelsDir;
           startModelFilesystemWatcher();
           scheduleDebouncedModelSync("config-updated", 250);
         }
         if (nextDownloadsDir) {
-          fs33.mkdirSync(nextDownloadsDir, { recursive: true });
+          fs34.mkdirSync(nextDownloadsDir, { recursive: true });
           appConfig.downloadsDir = nextDownloadsDir;
         }
         if (nextBackupHours !== null) {
@@ -22467,6 +22720,18 @@ var init_systemRoutes = __esm({
           settingUpdates.push([
             "civitai_activity_notifications_enabled",
             civitaiActivityNotificationsEnabled ? "1" : "0"
+          ]);
+        }
+        if (insertCouchyMetadataOnExport !== void 0) {
+          settingUpdates.push([
+            "insert_couchy_metadata_on_export",
+            insertCouchyMetadataOnExport ? "1" : "0"
+          ]);
+        }
+        if (insertCivitaiMetadataOnExport !== void 0) {
+          settingUpdates.push([
+            "insert_civitai_metadata_on_export",
+            insertCivitaiMetadataOnExport ? "1" : "0"
           ]);
         }
         if (galleryPillColorsEnabled !== void 0) {
@@ -24536,7 +24801,7 @@ var init_presetsRoutes = __esm({
 init_config();
 init_logger();
 import express from "express";
-import path34 from "path";
+import path35 from "path";
 async function startServer() {
   const outerApp = express();
   const innerApp = express();
@@ -24608,10 +24873,10 @@ async function startServer() {
       viteServer = viteInstance;
       innerApp.use(viteInstance.middlewares);
     } else {
-      const distPath = path34.join(process.cwd(), "dist");
+      const distPath = path35.join(process.cwd(), "dist");
       innerApp.use(express.static(distPath));
       innerApp.get("*", (_req, res) => {
-        res.sendFile(path34.join(distPath, "index.html"));
+        res.sendFile(path35.join(distPath, "index.html"));
       });
     }
   })();

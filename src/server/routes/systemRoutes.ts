@@ -75,6 +75,8 @@ function buildSafeConfigSnapshot(): HealthConfigSnapshot {
     'save_civitai_import_images',
     'allow_civitai_share_uncharacterized',
     'civitai_activity_notifications_enabled',
+    'insert_couchy_metadata_on_export',
+    'insert_civitai_metadata_on_export',
     'gallery_pill_colors_enabled',
     'pill_type_settings_json',
   ]);
@@ -103,6 +105,16 @@ function buildSafeConfigSnapshot(): HealthConfigSnapshot {
     civitaiActivityNotificationsEnabled: getBoolSetting(
       'civitai_activity_notifications_enabled',
       true,
+      settingsMap
+    ),
+    insertCouchyMetadataOnExport: getBoolSetting(
+      'insert_couchy_metadata_on_export',
+      false,
+      settingsMap
+    ),
+    insertCivitaiMetadataOnExport: getBoolSetting(
+      'insert_civitai_metadata_on_export',
+      false,
       settingsMap
     ),
     galleryPillColorsEnabled: getBoolSetting('gallery_pill_colors_enabled', false, settingsMap),
@@ -196,6 +208,8 @@ systemRouter.patch('/config', (req, res) => {
       saveCivitaiImportImages,
       allowCivitaiShareUncharacterized,
       civitaiActivityNotificationsEnabled,
+      insertCouchyMetadataOnExport,
+      insertCivitaiMetadataOnExport,
       galleryPillColorsEnabled,
       pillTypeSettings,
     } = (req.body || {}) as UpdateConfigPayload;
@@ -272,6 +286,18 @@ systemRouter.patch('/config', (req, res) => {
       settingUpdates.push([
         'civitai_activity_notifications_enabled',
         civitaiActivityNotificationsEnabled ? '1' : '0',
+      ]);
+    }
+    if (insertCouchyMetadataOnExport !== undefined) {
+      settingUpdates.push([
+        'insert_couchy_metadata_on_export',
+        insertCouchyMetadataOnExport ? '1' : '0',
+      ]);
+    }
+    if (insertCivitaiMetadataOnExport !== undefined) {
+      settingUpdates.push([
+        'insert_civitai_metadata_on_export',
+        insertCivitaiMetadataOnExport ? '1' : '0',
       ]);
     }
     if (galleryPillColorsEnabled !== undefined) {

@@ -45,6 +45,8 @@ export interface HealthConfigSnapshot {
   saveCivitaiImportImages: boolean;
   allowCivitaiShareUncharacterized: boolean;
   civitaiActivityNotificationsEnabled: boolean;
+  insertCouchyMetadataOnExport: boolean;
+  insertCivitaiMetadataOnExport: boolean;
   galleryPillColorsEnabled: boolean;
   pillTypeSettings: PillTypeSettings;
   autoCleanCopiedModels: boolean;
@@ -77,6 +79,8 @@ export interface UpdateConfigPayload {
   saveCivitaiImportImages?: boolean;
   allowCivitaiShareUncharacterized?: boolean;
   civitaiActivityNotificationsEnabled?: boolean;
+  insertCouchyMetadataOnExport?: boolean;
+  insertCivitaiMetadataOnExport?: boolean;
   galleryPillColorsEnabled?: boolean;
   pillTypeSettings?: PillTypeSettings;
 }

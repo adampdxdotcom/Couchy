@@ -96,6 +96,12 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   );
   const [civitaiActivityNotificationsEnabled, setCivitaiActivityNotificationsEnabled] =
     useState<boolean>(healthData?.config?.civitaiActivityNotificationsEnabled !== false);
+  const [insertCouchyMetadataOnExport, setInsertCouchyMetadataOnExport] = useState<boolean>(
+    healthData?.config?.insertCouchyMetadataOnExport === true
+  );
+  const [insertCivitaiMetadataOnExport, setInsertCivitaiMetadataOnExport] = useState<boolean>(
+    healthData?.config?.insertCivitaiMetadataOnExport === true
+  );
   const [galleryPillColorsEnabled, setGalleryPillColorsEnabled] = useState<boolean>(
     healthData?.config?.galleryPillColorsEnabled === true
   );
@@ -129,6 +135,12 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
         healthData.config.civitaiActivityNotificationsEnabled !== false
       );
     }
+    if (healthData?.config?.insertCouchyMetadataOnExport !== undefined) {
+      setInsertCouchyMetadataOnExport(healthData.config.insertCouchyMetadataOnExport === true);
+    }
+    if (healthData?.config?.insertCivitaiMetadataOnExport !== undefined) {
+      setInsertCivitaiMetadataOnExport(healthData.config.insertCivitaiMetadataOnExport === true);
+    }
     if (healthData?.config?.galleryPillColorsEnabled !== undefined) {
       setGalleryPillColorsEnabled(healthData.config.galleryPillColorsEnabled === true);
     }
@@ -144,6 +156,8 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
     healthData?.config?.saveCivitaiImportImages,
     healthData?.config?.allowCivitaiShareUncharacterized,
     healthData?.config?.civitaiActivityNotificationsEnabled,
+    healthData?.config?.insertCouchyMetadataOnExport,
+    healthData?.config?.insertCivitaiMetadataOnExport,
     healthData?.config?.galleryPillColorsEnabled,
     healthData?.config?.pillTypeSettings,
     healthData?.visualTagger,
@@ -323,6 +337,8 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       saveCivitaiImportImages,
       allowCivitaiShareUncharacterized,
       civitaiActivityNotificationsEnabled,
+      insertCouchyMetadataOnExport,
+      insertCivitaiMetadataOnExport,
       galleryPillColorsEnabled,
       pillTypeSettings,
     });
@@ -418,6 +434,42 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
       await onRefreshAll();
     } catch (err: any) {
       setBackupMsg(`Failed to update Civitai activity notifications setting: ${err.message}`);
+    }
+  };
+
+  const handleToggleInsertCouchyMetadataOnExport = async (enabled: boolean) => {
+    setInsertCouchyMetadataOnExport(enabled);
+    try {
+      await api.updateConfig({
+        insertCouchyMetadataOnExport: enabled,
+      });
+      setBackupMsg(
+        enabled
+          ? 'Couchy XMP & JSON metadata will be embedded on image download/ZIP export.'
+          : 'Couchy export metadata disabled.'
+      );
+      setTimeout(() => setBackupMsg(null), 3000);
+      await onRefreshAll();
+    } catch (err: any) {
+      setBackupMsg(`Failed to update Couchy export metadata setting: ${err.message}`);
+    }
+  };
+
+  const handleToggleInsertCivitaiMetadataOnExport = async (enabled: boolean) => {
+    setInsertCivitaiMetadataOnExport(enabled);
+    try {
+      await api.updateConfig({
+        insertCivitaiMetadataOnExport: enabled,
+      });
+      setBackupMsg(
+        enabled
+          ? 'Civitai/A1111 parameters metadata will be embedded on image download/ZIP export.'
+          : 'Civitai export metadata disabled.'
+      );
+      setTimeout(() => setBackupMsg(null), 3000);
+      await onRefreshAll();
+    } catch (err: any) {
+      setBackupMsg(`Failed to update Civitai export metadata setting: ${err.message}`);
     }
   };
 
@@ -551,11 +603,15 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
         saveCivitaiImportImages={saveCivitaiImportImages}
         allowCivitaiShareUncharacterized={allowCivitaiShareUncharacterized}
         civitaiActivityNotificationsEnabled={civitaiActivityNotificationsEnabled}
+        insertCouchyMetadataOnExport={insertCouchyMetadataOnExport}
+        insertCivitaiMetadataOnExport={insertCivitaiMetadataOnExport}
         uploadedImagesDir={healthData?.config?.uploadedImagesDir}
         onToggleSaveUploadedPromptImages={handleToggleSaveUploadedPromptImages}
         onToggleSaveCivitaiImportImages={handleToggleSaveCivitaiImportImages}
         onToggleAllowCivitaiShareUncharacterized={handleToggleAllowCivitaiShareUncharacterized}
         onToggleCivitaiActivityNotifications={handleToggleCivitaiActivityNotifications}
+        onToggleInsertCouchyMetadataOnExport={handleToggleInsertCouchyMetadataOnExport}
+        onToggleInsertCivitaiMetadataOnExport={handleToggleInsertCivitaiMetadataOnExport}
       />
 
       {/* System Sub-Tab Navigation */}

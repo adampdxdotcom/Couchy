@@ -44,7 +44,12 @@ function quoteInfotextValue(value: string): string {
  * Inserts or replaces a PNG `parameters` text chunk in memory (`tEXt` or UTF-8 `iTXt`),
  * preserving all existing `prompt` / `workflow` chunks without touching the file on disk.
  */
-export function upsertPngTextChunk(pngBuffer: Buffer, keyword: string, text: string): Buffer {
+export function upsertPngTextChunk(
+  pngBuffer: Buffer,
+  keyword: string,
+  text: string,
+  forceITXt = false
+): Buffer {
   if (pngBuffer.length < 8 || !pngBuffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
     return pngBuffer;
   }
@@ -75,15 +80,16 @@ export function upsertPngTextChunk(pngBuffer: Buffer, keyword: string, text: str
   }
 
   const keyBytes = Buffer.from(keyword, 'latin1');
-  const newChunk = isLatin1(text)
-    ? {
-        type: 'tEXt',
-        data: Buffer.concat([keyBytes, Buffer.from([0]), Buffer.from(text, 'latin1')]),
-      }
-    : {
-        type: 'iTXt',
-        data: Buffer.concat([keyBytes, Buffer.from([0, 0, 0, 0, 0]), Buffer.from(text, 'utf8')]),
-      };
+  const newChunk =
+    !forceITXt && isLatin1(text)
+      ? {
+          type: 'tEXt',
+          data: Buffer.concat([keyBytes, Buffer.from([0]), Buffer.from(text, 'latin1')]),
+        }
+      : {
+          type: 'iTXt',
+          data: Buffer.concat([keyBytes, Buffer.from([0, 0, 0, 0, 0]), Buffer.from(text, 'utf8')]),
+        };
 
   const insertIdx = chunks.findIndex((c) => c.type !== 'IHDR');
   chunks.splice(insertIdx === -1 ? chunks.length : insertIdx, 0, newChunk);

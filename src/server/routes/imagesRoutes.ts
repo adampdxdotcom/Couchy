@@ -11,6 +11,10 @@ const createZipArchive = ((archiverPkg as any).default || archiverPkg) as (
 import { appConfig } from '../config.ts';
 import { hydrateImageRecords, queryGalleryImages } from '../services/galleryQueryService.ts';
 import {
+  getExportMetadataSettings,
+  prepareExportImageBuffer,
+} from '../services/exportMetadataService.ts';
+import {
   enrichSingleImageWithSeries,
   setExclusiveSeriesFavorite,
 } from '../services/seriesService.ts';
@@ -169,11 +173,19 @@ imagesRouter.get('/:id/thumbnail', async (req, res) => {
   res.status(404).end();
 });
 
+function getImageMimeType(filename: string): string {
+  const ext = path.extname(filename).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  return 'image/png';
+}
+
 /**
  * GET /api/images/:id/file
- * Serves the unaltered original image file (supports ?download=1 for attachment).
+ * Serves the unaltered original image file (supports ?download=1 for attachment,
+ * with optional in-memory Couchy/Civitai export metadata injection when enabled).
  */
-imagesRouter.get('/:id/file', (req, res) => {
+imagesRouter.get('/:id/file', async (req, res) => {
   const id = Number(req.params.id);
   const row = db
     .prepare(
@@ -195,6 +207,18 @@ imagesRouter.get('/:id/file', (req, res) => {
   }
 
   if (req.query.download === '1') {
+    try {
+      const enrichedBuffer = await prepareExportImageBuffer(id, origPath);
+      if (enrichedBuffer) {
+        res.setHeader('Content-Type', getImageMimeType(row.filename));
+        res.attachment(row.filename);
+        res.setHeader('Content-Length', String(enrichedBuffer.length));
+        res.send(enrichedBuffer);
+        return;
+      }
+    } catch {
+      // Fall back cleanly to original file stream on unexpected metadata error
+    }
     res.download(origPath, row.filename);
     return;
   }
@@ -374,9 +398,10 @@ imagesRouter.post('/bulk', (req, res) => {
 
 /**
  * POST /api/images/export-zip
- * Streams a ZIP archive of unaltered original image files by imageIds or filter criteria.
+ * Streams a ZIP archive of image files by imageIds or filter criteria, injecting
+ * Couchy/Civitai export metadata in memory when enabled in System settings.
  */
-imagesRouter.post('/export-zip', (req, res) => {
+imagesRouter.post('/export-zip', async (req, res) => {
   try {
     const { imageIds, filters, archiveName } = req.body || {};
     let targetIds: number[] = [];
@@ -391,6 +416,9 @@ imagesRouter.post('/export-zip', (req, res) => {
       res.status(400).json({ error: 'No matching images to export' });
       return;
     }
+
+    const exportSettings = getExportMetadataSettings();
+    const shouldInjectMetadata = exportSettings.insertCouchy || exportSettings.insertCivitai;
 
     const zipFilename = `${(archiveName || 'couchy-export').replace(/[^a-zA-Z0-9_-]/g, '_')}.zip`;
     res.setHeader('Content-Type', 'application/zip');
@@ -423,10 +451,22 @@ imagesRouter.post('/export-zip', (req, res) => {
         entryName = `${id}_${row.filename}`;
       }
       usedNames.add(entryName);
+
+      if (shouldInjectMetadata) {
+        try {
+          const enriched = await prepareExportImageBuffer(id, absPath, exportSettings);
+          if (enriched) {
+            archive.append(enriched, { name: entryName });
+            continue;
+          }
+        } catch {
+          // Fall back to unaltered disk file if enrichment fails for this entry
+        }
+      }
       archive.file(absPath, { name: entryName });
     }
 
-    archive.finalize();
+    await archive.finalize();
   } catch (err: any) {
     if (!res.headersSent) {
       res.status(500).json({ error: err?.message || 'Failed to export ZIP' });

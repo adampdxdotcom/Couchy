@@ -10,7 +10,7 @@
 
 ## System Administration & In-App Help
 
-The **System** workspace includes the top **Save Uploaded Prompt Images (1MP)**, **Save Civitai Import Images (1MP)** (controlling **Quick Gen Box** `Inspo` Step 1 archiving), **Share 0-Character Images (Civitai)** *(**Off** by default)*, and **Civitai Activity Notifications** *(**On** by default)* toggles, alongside 8 tabs:
+The **System** workspace includes the top **Save Uploaded Prompt Images (1MP)**, **Save Civitai Import Images (1MP)** (controlling **Quick Gen Box** `Inspo` Step 1 archiving), **Share 0-Character Images (Civitai)** *(**Off** by default)*, **Civitai Activity Notifications** *(**On** by default)*, **Insert Couchy Metadata on Export** *(**Off** by default; embeds standard XMP photo metadata + `couchy` JSON on single downloads and ZIP exports)*, and **Insert Civitai Metadata on Export** *(**Off** by default; embeds Civitai/A1111 `parameters` with resource IDs and LoRA hashes on single downloads and ZIP exports)* toggles, alongside 8 tabs:
 
 1. **Search**: Enable/disable local visual keyword tagging, switch **CPU vs. NVIDIA GPU**, adjust confidence threshold, and **Pause / Resume**, **Scan Unindexed**, or **Rescan All**.
 2. **Quick Gen & Pills**: Toggle the **Quick Gen Box**, **Gallery Pill Colors**, and per-type `@mention` insertion rules (Characters, Base Models, LoRAs).

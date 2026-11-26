@@ -5,11 +5,15 @@ interface WorkspacePreferencesSectionProps {
   saveCivitaiImportImages: boolean;
   allowCivitaiShareUncharacterized: boolean;
   civitaiActivityNotificationsEnabled: boolean;
+  insertCouchyMetadataOnExport: boolean;
+  insertCivitaiMetadataOnExport: boolean;
   uploadedImagesDir?: string;
   onToggleSaveUploadedPromptImages: (enabled: boolean) => Promise<void>;
   onToggleSaveCivitaiImportImages: (enabled: boolean) => Promise<void>;
   onToggleAllowCivitaiShareUncharacterized: (enabled: boolean) => Promise<void>;
   onToggleCivitaiActivityNotifications: (enabled: boolean) => Promise<void>;
+  onToggleInsertCouchyMetadataOnExport: (enabled: boolean) => Promise<void>;
+  onToggleInsertCivitaiMetadataOnExport: (enabled: boolean) => Promise<void>;
 }
 
 export const WorkspacePreferencesSection: React.FC<WorkspacePreferencesSectionProps> = ({
@@ -17,11 +21,15 @@ export const WorkspacePreferencesSection: React.FC<WorkspacePreferencesSectionPr
   saveCivitaiImportImages,
   allowCivitaiShareUncharacterized,
   civitaiActivityNotificationsEnabled,
+  insertCouchyMetadataOnExport,
+  insertCivitaiMetadataOnExport,
   uploadedImagesDir = 'data/uploaded',
   onToggleSaveUploadedPromptImages,
   onToggleSaveCivitaiImportImages,
   onToggleAllowCivitaiShareUncharacterized,
   onToggleCivitaiActivityNotifications,
+  onToggleInsertCouchyMetadataOnExport,
+  onToggleInsertCivitaiMetadataOnExport,
 }) => {
   return (
     <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -129,6 +137,62 @@ export const WorkspacePreferencesSection: React.FC<WorkspacePreferencesSectionPr
             type="checkbox"
             checked={civitaiActivityNotificationsEnabled}
             onChange={(e) => onToggleCivitaiActivityNotifications(e.target.checked)}
+            className="sr-only peer"
+          />
+          <div className="w-10 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all relative peer-checked:bg-indigo-600" />
+        </label>
+      </div>
+
+      {/* Export metadata switches (both Off by default; applied in-memory on download/ZIP) */}
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3.5 flex items-center justify-between gap-4">
+        <div className="space-y-0.5 min-w-0">
+          <h2 className="text-xs font-display font-semibold text-zinc-100">
+            Insert Couchy Metadata on Export
+          </h2>
+          <p
+            className="text-[11px] text-zinc-400 leading-snug truncate"
+            title="Embed XMP photo metadata (rating, characters, tags, LoRAs, notes) & Couchy JSON on download/ZIP"
+          >
+            Embed XMP photo metadata (rating, characters, tags, LoRAs, notes) &amp; Couchy JSON on
+            download/ZIP.
+          </p>
+        </div>
+
+        <label className="inline-flex items-center gap-2.5 cursor-pointer select-none shrink-0">
+          <span className="text-[11px] text-zinc-300 font-medium">
+            {insertCouchyMetadataOnExport ? 'On' : 'Off'}
+          </span>
+          <input
+            type="checkbox"
+            checked={insertCouchyMetadataOnExport}
+            onChange={(e) => onToggleInsertCouchyMetadataOnExport(e.target.checked)}
+            className="sr-only peer"
+          />
+          <div className="w-10 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all relative peer-checked:bg-indigo-600" />
+        </label>
+      </div>
+
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3.5 flex items-center justify-between gap-4">
+        <div className="space-y-0.5 min-w-0">
+          <h2 className="text-xs font-display font-semibold text-zinc-100">
+            Insert Civitai Metadata on Export
+          </h2>
+          <p
+            className="text-[11px] text-zinc-400 leading-snug truncate"
+            title="Embed Civitai/A1111 parameters, resource IDs & LoRA hashes on download/ZIP"
+          >
+            Embed Civitai/A1111 parameters, resource IDs &amp; LoRA hashes on download/ZIP.
+          </p>
+        </div>
+
+        <label className="inline-flex items-center gap-2.5 cursor-pointer select-none shrink-0">
+          <span className="text-[11px] text-zinc-300 font-medium">
+            {insertCivitaiMetadataOnExport ? 'On' : 'Off'}
+          </span>
+          <input
+            type="checkbox"
+            checked={insertCivitaiMetadataOnExport}
+            onChange={(e) => onToggleInsertCivitaiMetadataOnExport(e.target.checked)}
             className="sr-only peer"
           />
           <div className="w-10 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all relative peer-checked:bg-indigo-600" />
