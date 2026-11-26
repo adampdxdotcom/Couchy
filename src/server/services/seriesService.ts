@@ -559,7 +559,8 @@ interface RawSeriesMemberRow {
   poster_image_id: number | null;
   image_id: number;
   step_order: number;
-  chat_snapshot_json: string | null;
+  chat_snapshot_json?: string | null;
+  has_chat?: number;
   item_created_at: string;
   filename: string;
   content_hash: string;
@@ -577,8 +578,13 @@ function normalizeSeriesKind(raw: string | null | undefined): ImageSeriesKind {
   return raw === 'multi_shot' ? 'multi_shot' : 'iterative';
 }
 
-function buildSeriesItemRecord(r: RawSeriesMemberRow): ImageSeriesItem {
+function buildSeriesItemRecord(
+  r: RawSeriesMemberRow,
+  includeChatSnapshot = true
+): ImageSeriesItem {
   const hashParam = r.content_hash ? `?h=${String(r.content_hash).slice(0, 12)}` : '';
+  const chatSnapshot = includeChatSnapshot ? parseChatSnapshot(r.chat_snapshot_json) : [];
+  const hasChat = includeChatSnapshot ? chatSnapshot.length > 0 : Boolean(r.has_chat);
   return {
     seriesId: r.series_id,
     imageId: r.image_id,
@@ -591,7 +597,8 @@ function buildSeriesItemRecord(r: RawSeriesMemberRow): ImageSeriesItem {
     isFavorite: Boolean(r.is_favorite),
     rating: Number(r.rating || 0),
     createdAt: r.item_created_at,
-    chatSnapshot: parseChatSnapshot(r.chat_snapshot_json),
+    hasChat,
+    chatSnapshot,
     isUploadedReference: Boolean(r.is_uploaded_reference),
     isRejected: Boolean(r.is_rejected),
     isArchived: Boolean(r.is_archived),
@@ -632,6 +639,7 @@ export function enrichSingleImageWithSeries(
       seriesKind: 'iterative',
       seriesCount: 1,
       seriesItems: [],
+      hasChat: false,
       chatSnapshot: [],
     };
   }
@@ -658,7 +666,7 @@ export function enrichSingleImageWithSeries(
     )
     .all(chosenSeriesId) as RawSeriesMemberRow[];
 
-  const seriesItems = memberRows.map(buildSeriesItemRecord);
+  const seriesItems = memberRows.map((r) => buildSeriesItemRecord(r, true));
   const matchingItem = seriesItems.find((si) => si.imageId === img.id);
 
   return {
@@ -667,6 +675,7 @@ export function enrichSingleImageWithSeries(
     seriesKind: chosenSeriesKind,
     seriesCount: seriesItems.length,
     seriesItems,
+    hasChat: Boolean(matchingItem?.hasChat),
     chatSnapshot: matchingItem?.chatSnapshot || [],
   };
 }
@@ -676,6 +685,7 @@ export function enrichSingleImageWithSeries(
  * - The hearted (`isFavorite`) / `poster_image_id` member if one exists in the active pool
  * - Otherwise the most recent (`MAX(step_order)`) member in the active pool.
  * Standalone images not in any series are returned as-is.
+ * Uses a lightweight `hasChat` flag instead of parsing full `chat_snapshot_json` transcripts.
  */
 export function collapseSeriesInGalleryPool(pool: ImageRecord[]): ImageRecord[] {
   if (pool.length === 0) return [];
@@ -684,7 +694,10 @@ export function collapseSeriesInGalleryPool(pool: ImageRecord[]): ImageRecord[] 
     .prepare(
       `SELECT
          isi.series_id, s.series_kind, s.poster_image_id, isi.image_id, isi.step_order,
-         isi.chat_snapshot_json, isi.created_at AS item_created_at,
+         (isi.chat_snapshot_json IS NOT NULL
+          AND TRIM(isi.chat_snapshot_json) != ''
+          AND TRIM(isi.chat_snapshot_json) != '[]') AS has_chat,
+         isi.created_at AS item_created_at,
          i.filename, i.content_hash, i.width, i.height, i.is_missing,
          COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference,
          COALESCE(r.is_favorite, 0) AS is_favorite,
@@ -748,7 +761,7 @@ export function collapseSeriesInGalleryPool(pool: ImageRecord[]): ImageRecord[] 
     const baseRecord = poolById.get(posterMember.image_id);
     if (!baseRecord) continue;
 
-    const seriesItems = members.map(buildSeriesItemRecord);
+    const seriesItems = members.map((r) => buildSeriesItemRecord(r, false));
     const repItem = seriesItems.find((si) => si.imageId === posterMember.image_id);
     const seriesKind = normalizeSeriesKind(members[0]?.series_kind);
 
@@ -782,14 +795,15 @@ export function collapseSeriesInGalleryPool(pool: ImageRecord[]): ImageRecord[] 
     }
 
     // Use the latest member's fileMtime when sorting by newest if the poster is an older hearted step,
-    // or keep baseRecord fields while attaching full seriesItems
+    // or keep baseRecord fields while attaching lightweight seriesItems
     result.push({
       ...baseRecord,
       seriesId,
       seriesKind,
       seriesCount: seriesItems.length,
       seriesItems,
-      chatSnapshot: repItem?.chatSnapshot || [],
+      hasChat: Boolean(repItem?.hasChat),
+      chatSnapshot: [],
       civitaiShareSummary: mergedShareSummary,
     });
   }

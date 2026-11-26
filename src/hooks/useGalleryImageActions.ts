@@ -144,7 +144,7 @@ export function useGalleryImageActions({
   );
 
   const handleOpenConversationForImage = useCallback(
-    (img: ImageRecord) => {
+    async (img: ImageRecord) => {
       if (!lmStudioOnline) {
         pushToast(
           'Local LLM is offline — start your Local LLM server to use Conversation mode.',
@@ -166,19 +166,29 @@ export function useGalleryImageActions({
           : undefined;
 
       const isFromMultiShot = img.seriesKind === 'multi_shot';
+      let resolvedChatSnapshot = img.chatSnapshot || [];
+      if (!isFromMultiShot && resolvedChatSnapshot.length === 0 && (img.hasChat || img.seriesId)) {
+        try {
+          const detail = await api.getImageDetail(img.id, img.seriesId ?? undefined);
+          resolvedChatSnapshot = detail.image?.chatSnapshot || [];
+        } catch {
+          // Fall back to seeding conversation from positivePrompt if detail lookup fails
+        }
+      }
+
       let initialChatMessages: QuickGenChatMessage[] = [];
-      if (!isFromMultiShot && img.chatSnapshot && img.chatSnapshot.length > 0) {
-        const hasSubmittedFlag = img.chatSnapshot.some((m) => m.submitted);
+      if (!isFromMultiShot && resolvedChatSnapshot.length > 0) {
+        const hasSubmittedFlag = resolvedChatSnapshot.some((m) => m.submitted);
         if (hasSubmittedFlag) {
-          initialChatMessages = img.chatSnapshot;
+          initialChatMessages = resolvedChatSnapshot;
         } else {
           // Legacy snapshots without `submitted`: mark the latest assistant proposal as submitted
-          const lastProposalRevIdx = [...img.chatSnapshot]
+          const lastProposalRevIdx = [...resolvedChatSnapshot]
             .reverse()
             .findIndex((m) => m.role === 'assistant' && Boolean(m.proposedPrompt?.trim()));
           const targetIdx =
-            lastProposalRevIdx >= 0 ? img.chatSnapshot.length - 1 - lastProposalRevIdx : -1;
-          initialChatMessages = img.chatSnapshot.map((m, idx) =>
+            lastProposalRevIdx >= 0 ? resolvedChatSnapshot.length - 1 - lastProposalRevIdx : -1;
+          initialChatMessages = resolvedChatSnapshot.map((m, idx) =>
             idx === targetIdx ? { ...m, submitted: true } : m
           );
         }

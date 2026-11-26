@@ -144,7 +144,7 @@ export const SeriesIterationsStrip: React.FC<SeriesIterationsStripProps> = ({
       <div className="flex items-center gap-2 overflow-x-auto pb-1 pt-0.5">
         {displayItems.map((item, idx) => {
           const isSelected = item.imageId === activeImageId;
-          const hasChat = item.chatSnapshot && item.chatSnapshot.length > 0;
+          const hasChat = Boolean(item.hasChat || (item.chatSnapshot && item.chatSnapshot.length > 0));
           const isInspo = Boolean(item.isUploadedReference);
           return (
             <button

@@ -310,7 +310,8 @@ export function useLiveStatusPolling({
       }
     };
 
-    pollLmStudio();
+    // Defer initial Local LLM probe briefly so initial gallery & settings requests are not queued behind it
+    timer = setTimeout(pollLmStudio, 500);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);

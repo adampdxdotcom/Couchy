@@ -172,30 +172,57 @@ export function useWorkspaceData() {
         }
       });
 
-    const metaPromise = Promise.allSettled([
-      api.getHealth(),
-      api.getOrganizationMeta(),
-      api.listCharacters(),
-      api.listLoras(),
-      api.listModelInventory(),
-      api.listPresets(),
-      api.listWorkflows(),
-    ]).then(([healthRes, orgMetaRes, charRes, loraRes, modelRes, presetRes, wfRes]) => {
-      if (healthRes.status === 'fulfilled') setHealthData(healthRes.value);
-      if (orgMetaRes.status === 'fulfilled') {
-        setTags(orgMetaRes.value.tags || []);
-        setCollections(orgMetaRes.value.collections || []);
-        setCheckpoints(orgMetaRes.value.checkpoints || []);
-        setSavedSearches(orgMetaRes.value.savedSearches || []);
-      }
-      if (charRes.status === 'fulfilled') setCharacters(charRes.value.items || []);
-      if (loraRes.status === 'fulfilled') setLoras(loraRes.value.items || []);
-      if (modelRes.status === 'fulfilled') setModels(modelRes.value.items || []);
-      if (presetRes.status === 'fulfilled') setPresets(presetRes.value.items || []);
-      if (wfRes.status === 'fulfilled') setWorkflows(wfRes.value.items || []);
-    });
+    // Apply each workspace metadata endpoint independently as soon as it resolves so fast settings/filters render immediately
+    const metaPromises = [
+      api
+        .getHealth()
+        .then((res) => {
+          if (seq === metadataQuerySeqRef.current) setHealthData(res);
+        })
+        .catch(() => {}),
+      api
+        .getOrganizationMeta()
+        .then((res) => {
+          if (seq !== metadataQuerySeqRef.current) return;
+          setTags(res.tags || []);
+          setCollections(res.collections || []);
+          setCheckpoints(res.checkpoints || []);
+          setSavedSearches(res.savedSearches || []);
+        })
+        .catch(() => {}),
+      api
+        .listCharacters()
+        .then((res) => {
+          if (seq === metadataQuerySeqRef.current) setCharacters(res.items || []);
+        })
+        .catch(() => {}),
+      api
+        .listLoras()
+        .then((res) => {
+          if (seq === metadataQuerySeqRef.current) setLoras(res.items || []);
+        })
+        .catch(() => {}),
+      api
+        .listModelInventory()
+        .then((res) => {
+          if (seq === metadataQuerySeqRef.current) setModels(res.items || []);
+        })
+        .catch(() => {}),
+      api
+        .listPresets()
+        .then((res) => {
+          if (seq === metadataQuerySeqRef.current) setPresets(res.items || []);
+        })
+        .catch(() => {}),
+      api
+        .listWorkflows()
+        .then((res) => {
+          if (seq === metadataQuerySeqRef.current) setWorkflows(res.items || []);
+        })
+        .catch(() => {}),
+    ];
 
-    await Promise.allSettled([imagesPromise, metaPromise]);
+    await Promise.allSettled([imagesPromise, ...metaPromises]);
   }, [cancelPendingMetadataQuery, cancelPendingFilterQuery]);
 
   const loadFilteredImages = useCallback(

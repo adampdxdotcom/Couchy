@@ -845,7 +845,7 @@ export const GalleryGridView: React.FC<GalleryGridViewProps> = ({
                           title={
                             isMultiShotSet
                               ? 'Multi-shot set — open the Inspector & Series Mini Gallery to iterate on a specific shot'
-                              : img.chatSnapshot && img.chatSnapshot.length > 0
+                              : img.hasChat || (img.chatSnapshot && img.chatSnapshot.length > 0)
                               ? 'Continue Conversation in Quick Gen'
                               : 'Iterate on this image in Quick Gen Conversation mode'
                           }

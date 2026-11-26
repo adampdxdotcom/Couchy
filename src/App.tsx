@@ -44,16 +44,20 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    api
-      .getGenerationReadiness()
-      .then((res) => {
-        if (active) setReadiness(res);
-      })
-      .catch(() => {
-        // ignore startup check failure
-      });
+    // Defer non-critical readiness probe briefly so initial gallery & settings get HTTP/1.1 connection priority
+    const timer = window.setTimeout(() => {
+      api
+        .getGenerationReadiness()
+        .then((res) => {
+          if (active) setReadiness(res);
+        })
+        .catch(() => {
+          // ignore startup check failure
+        });
+    }, 450);
     return () => {
       active = false;
+      window.clearTimeout(timer);
     };
   }, []);
 

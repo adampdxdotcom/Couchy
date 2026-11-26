@@ -120,6 +120,7 @@ export interface ImageSeriesItem {
   isFavorite: boolean;
   rating: number;
   createdAt: string;
+  hasChat?: boolean;
   chatSnapshot: QuickGenChatMessage[];
   isUploadedReference?: boolean;
   isRejected?: boolean;
@@ -182,6 +183,7 @@ export interface ImageRecord {
   seriesKind?: ImageSeriesKind;
   seriesCount?: number;
   seriesItems?: ImageSeriesItem[];
+  hasChat?: boolean;
   chatSnapshot?: QuickGenChatMessage[];
   // Civitai share status & cached community activity
   civitaiShareSummary?: CivitaiShareSummary | null;

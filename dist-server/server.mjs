@@ -6156,8 +6156,10 @@ function setExclusiveSeriesFavorite(imageId, isFavorite) {
 function normalizeSeriesKind(raw) {
   return raw === "multi_shot" ? "multi_shot" : "iterative";
 }
-function buildSeriesItemRecord(r) {
+function buildSeriesItemRecord(r, includeChatSnapshot = true) {
   const hashParam = r.content_hash ? `?h=${String(r.content_hash).slice(0, 12)}` : "";
+  const chatSnapshot = includeChatSnapshot ? parseChatSnapshot(r.chat_snapshot_json) : [];
+  const hasChat = includeChatSnapshot ? chatSnapshot.length > 0 : Boolean(r.has_chat);
   return {
     seriesId: r.series_id,
     imageId: r.image_id,
@@ -6170,7 +6172,8 @@ function buildSeriesItemRecord(r) {
     isFavorite: Boolean(r.is_favorite),
     rating: Number(r.rating || 0),
     createdAt: r.item_created_at,
-    chatSnapshot: parseChatSnapshot(r.chat_snapshot_json),
+    hasChat,
+    chatSnapshot,
     isUploadedReference: Boolean(r.is_uploaded_reference),
     isRejected: Boolean(r.is_rejected),
     isArchived: Boolean(r.is_archived)
@@ -6195,6 +6198,7 @@ function enrichSingleImageWithSeries(img, preferredSeriesId) {
       seriesKind: "iterative",
       seriesCount: 1,
       seriesItems: [],
+      hasChat: false,
       chatSnapshot: []
     };
   }
@@ -6217,7 +6221,7 @@ function enrichSingleImageWithSeries(img, preferredSeriesId) {
        WHERE isi.series_id = ? AND i.is_missing = 0
        ORDER BY isi.step_order ASC`
   ).all(chosenSeriesId);
-  const seriesItems = memberRows.map(buildSeriesItemRecord);
+  const seriesItems = memberRows.map((r) => buildSeriesItemRecord(r, true));
   const matchingItem = seriesItems.find((si) => si.imageId === img.id);
   return {
     ...img,
@@ -6225,6 +6229,7 @@ function enrichSingleImageWithSeries(img, preferredSeriesId) {
     seriesKind: chosenSeriesKind,
     seriesCount: seriesItems.length,
     seriesItems,
+    hasChat: Boolean(matchingItem?.hasChat),
     chatSnapshot: matchingItem?.chatSnapshot || []
   };
 }
@@ -6233,7 +6238,10 @@ function collapseSeriesInGalleryPool(pool) {
   const allSeriesMemberRows = db.prepare(
     `SELECT
          isi.series_id, s.series_kind, s.poster_image_id, isi.image_id, isi.step_order,
-         isi.chat_snapshot_json, isi.created_at AS item_created_at,
+         (isi.chat_snapshot_json IS NOT NULL
+          AND TRIM(isi.chat_snapshot_json) != ''
+          AND TRIM(isi.chat_snapshot_json) != '[]') AS has_chat,
+         isi.created_at AS item_created_at,
          i.filename, i.content_hash, i.width, i.height, i.is_missing,
          COALESCE(i.is_uploaded_reference, 0) AS is_uploaded_reference,
          COALESCE(r.is_favorite, 0) AS is_favorite,
@@ -6279,7 +6287,7 @@ function collapseSeriesInGalleryPool(pool) {
     const posterMember = (posterId ? visibleMembers.find((m) => m.image_id === posterId && Boolean(m.is_favorite)) : void 0) || [...visibleMembers].reverse().find((m) => Boolean(m.is_favorite)) || visibleMembers[visibleMembers.length - 1];
     const baseRecord = poolById.get(posterMember.image_id);
     if (!baseRecord) continue;
-    const seriesItems = members.map(buildSeriesItemRecord);
+    const seriesItems = members.map((r) => buildSeriesItemRecord(r, false));
     const repItem = seriesItems.find((si) => si.imageId === posterMember.image_id);
     const seriesKind = normalizeSeriesKind(members[0]?.series_kind);
     let mergedShareSummary = baseRecord.civitaiShareSummary ?? null;
@@ -6308,7 +6316,8 @@ function collapseSeriesInGalleryPool(pool) {
       seriesKind,
       seriesCount: seriesItems.length,
       seriesItems,
-      chatSnapshot: repItem?.chatSnapshot || [],
+      hasChat: Boolean(repItem?.hasChat),
+      chatSnapshot: [],
       civitaiShareSummary: mergedShareSummary
     });
   }
@@ -10933,9 +10942,10 @@ var init_civitaiActivitySyncService = __esm({
 });
 
 // src/server/services/galleryQueryService.ts
-function hydrateImageRecords(rows) {
+function hydrateImageRecords(rows, options) {
   if (rows.length === 0) return [];
   const visualTaggerEnabled = getTaggerSettings().enabled;
+  const shouldLoadBulkVisualTags = visualTaggerEnabled && options?.includeVisualTags !== false;
   const modelRows = db.prepare(
     "SELECT id, LOWER(filename) AS lowerFilename, name, nickname, lora_category, is_installed, download_file_path FROM models"
   ).all();
@@ -11166,7 +11176,7 @@ function hydrateImageRecords(rows) {
         });
       }
     }
-    if (visualTaggerEnabled) {
+    if (shouldLoadBulkVisualTags) {
       const allVTags = db.prepare(
         `SELECT image_content_hash AS contentHash, tag, confidence
            FROM image_visual_tags
@@ -11429,7 +11439,8 @@ function queryGalleryImages(filters) {
         AND COALESCE(i.is_uploaded_reference, 0) = 0
     `
   ).all();
-  let items = hydrateImageRecords(rows);
+  const hasTextSearch = Boolean(filters.query && filters.query.trim());
+  let items = hydrateImageRecords(rows, { includeVisualTags: hasTextSearch });
   const rejectedMode = filters.rejectedMode || "exclude";
   if (rejectedMode === "exclude") items = items.filter((i) => !i.isRejected);
   else if (rejectedMode === "only") items = items.filter((i) => i.isRejected);
@@ -11532,6 +11543,11 @@ function queryGalleryImages(filters) {
         return b.fileMtime.localeCompare(a.fileMtime);
     }
   });
+  for (const item of items) {
+    if (item.visualTags && item.visualTags.length > 0) {
+      item.visualTags = [];
+    }
+  }
   return items;
 }
 function listLoraExplorerItems() {

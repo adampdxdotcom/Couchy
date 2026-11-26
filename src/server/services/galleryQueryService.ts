@@ -22,10 +22,14 @@ import type {
  * Hydrates full ImageRecord objects from database rows using batched bulk queries
  * (avoids N+1 per-image queries and avoids loading large workflow JSON blobs).
  */
-export function hydrateImageRecords(rows: any[]): ImageRecord[] {
+export function hydrateImageRecords(
+  rows: any[],
+  options?: { includeVisualTags?: boolean }
+): ImageRecord[] {
   if (rows.length === 0) return [];
 
   const visualTaggerEnabled = getTaggerSettings().enabled;
+  const shouldLoadBulkVisualTags = visualTaggerEnabled && options?.includeVisualTags !== false;
 
   // Build fast lookup for installed models by id and lowercase filename
   const modelRows = db
@@ -320,7 +324,7 @@ export function hydrateImageRecords(rows: any[]): ImageRecord[] {
       }
     }
 
-    if (visualTaggerEnabled) {
+    if (shouldLoadBulkVisualTags) {
       const allVTags = db
         .prepare(
           `SELECT image_content_hash AS contentHash, tag, confidence
@@ -682,7 +686,8 @@ export function queryGalleryImages(filters: Partial<GalleryFilterState>): ImageR
     )
     .all() as any[];
 
-  let items = hydrateImageRecords(rows);
+  const hasTextSearch = Boolean(filters.query && filters.query.trim());
+  let items = hydrateImageRecords(rows, { includeVisualTags: hasTextSearch });
 
   // Rejected & Archived filtering
   const rejectedMode = filters.rejectedMode || 'exclude';
@@ -807,6 +812,13 @@ export function queryGalleryImages(filters: Partial<GalleryFilterState>): ImageR
         return b.fileMtime.localeCompare(a.fileMtime);
     }
   });
+
+  // Strip Inspector-only visualTags from bulk list responses (GET /api/images/:id provides full tags)
+  for (const item of items) {
+    if (item.visualTags && item.visualTags.length > 0) {
+      item.visualTags = [];
+    }
+  }
 
   return items;
 }
