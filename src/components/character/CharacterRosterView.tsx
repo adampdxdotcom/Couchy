@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   GitMerge,
   Plus,
   Search,
+  Share2,
   Sparkles,
   User,
   UserPlus,
@@ -12,6 +13,7 @@ import { CharacterCard } from './CharacterCard.tsx';
 
 interface CharacterRosterViewProps {
   characters: CharacterProfile[];
+  civitaiApiActive?: boolean;
   onSelectCharacter: (charId: number) => void;
   onOpenCreateModal: () => void;
   onOpenMergeModal: () => void;
@@ -21,6 +23,7 @@ interface CharacterRosterViewProps {
 
 export const CharacterRosterView: React.FC<CharacterRosterViewProps> = ({
   characters,
+  civitaiApiActive = false,
   onSelectCharacter,
   onOpenCreateModal,
   onOpenMergeModal,
@@ -29,9 +32,21 @@ export const CharacterRosterView: React.FC<CharacterRosterViewProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'images' | 'rating' | 'recent'>('images');
+  const [civitaiEligibleOnly, setCivitaiEligibleOnly] = useState(false);
+
+  // Gracefully reset CivitAI filter if the API key becomes inactive
+  useEffect(() => {
+    if (!civitaiApiActive && civitaiEligibleOnly) {
+      setCivitaiEligibleOnly(false);
+    }
+  }, [civitaiApiActive, civitaiEligibleOnly]);
+
+  const civitaiEligibleCount = characters.filter((c) => c.allowCivitaiShare).length;
+  const isCivitaiFilterActive = civitaiApiActive && civitaiEligibleOnly;
 
   const filteredCharacters = characters
     .filter((c) => {
+      if (isCivitaiFilterActive && !c.allowCivitaiShare) return false;
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
       return (
@@ -100,7 +115,7 @@ export const CharacterRosterView: React.FC<CharacterRosterViewProps> = ({
         </div>
       )}
 
-      {/* Search & Sort Bar */}
+      {/* Search, CivitAI Filter & Sort Bar */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-zinc-900/80 border border-zinc-800/80 rounded-xl p-3">
         <div className="relative flex-1 min-w-0">
           <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -112,38 +127,86 @@ export const CharacterRosterView: React.FC<CharacterRosterViewProps> = ({
             className="w-full pl-9 pr-4 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-100"
           />
         </div>
-        <select
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as any)}
-          className="px-3 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 shrink-0"
-        >
-          <option value="images">Sort: Most Images</option>
-          <option value="rating">Sort: Highest Avg Rating</option>
-          <option value="recent">Sort: Most Recent Generation</option>
-          <option value="name">Sort: Character Name</option>
-        </select>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {civitaiApiActive && (
+            <button
+              type="button"
+              aria-pressed={isCivitaiFilterActive}
+              onClick={() => setCivitaiEligibleOnly((prev) => !prev)}
+              title="Show only characters with Share on CivitAI enabled"
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
+                isCivitaiFilterActive
+                  ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/20'
+                  : 'bg-zinc-950 border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-zinc-100'
+              }`}
+            >
+              <Share2 className="w-3.5 h-3.5 shrink-0" />
+              <span>CivitAI Eligible ({civitaiEligibleCount})</span>
+            </button>
+          )}
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as any)}
+            className="px-3 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded-lg text-zinc-200 shrink-0"
+          >
+            <option value="images">Sort: Most Images</option>
+            <option value="rating">Sort: Highest Avg Rating</option>
+            <option value="recent">Sort: Most Recent Generation</option>
+            <option value="name">Sort: Character Name</option>
+          </select>
+        </div>
       </div>
 
       {/* Character Cards Grid */}
       {filteredCharacters.length === 0 ? (
-        <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-12 text-center space-y-3">
-          <User className="w-10 h-10 text-zinc-600 mx-auto" />
-          <h3 className="text-sm font-display font-semibold text-zinc-200">
-            No Character Profiles Created Yet
-          </h3>
-          <p className="text-xs text-zinc-400 max-w-md mx-auto">
-            Create character profiles to group generations across multiple LoRAs, outfits, checkpoints,
-            and prompt aliases.
-          </p>
-          <button
-            type="button"
-            onClick={onOpenCreateModal}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Create First Character</span>
-          </button>
-        </div>
+        characters.length === 0 ? (
+          <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-12 text-center space-y-3">
+            <User className="w-10 h-10 text-zinc-600 mx-auto" />
+            <h3 className="text-sm font-display font-semibold text-zinc-200">
+              No Character Profiles Created Yet
+            </h3>
+            <p className="text-xs text-zinc-400 max-w-md mx-auto">
+              Create character profiles to group generations across multiple LoRAs, outfits, checkpoints,
+              and prompt aliases.
+            </p>
+            <button
+              type="button"
+              onClick={onOpenCreateModal}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Create First Character</span>
+            </button>
+          </div>
+        ) : (
+          <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-12 text-center space-y-3">
+            {isCivitaiFilterActive ? (
+              <Share2 className="w-10 h-10 text-zinc-600 mx-auto" />
+            ) : (
+              <Search className="w-10 h-10 text-zinc-600 mx-auto" />
+            )}
+            <h3 className="text-sm font-display font-semibold text-zinc-200">
+              {isCivitaiFilterActive
+                ? 'No CivitAI-Eligible Characters Match'
+                : 'No Characters Match Your Search'}
+            </h3>
+            <p className="text-xs text-zinc-400 max-w-md mx-auto">
+              {isCivitaiFilterActive && !searchQuery.trim()
+                ? 'Turn on "Share on CivitAI" inside any character profile to include them here.'
+                : 'Try adjusting your search query or clearing active filters to see all characters.'}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery('');
+                setCivitaiEligibleOnly(false);
+              }}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-100 rounded-lg cursor-pointer"
+            >
+              <span>Show All Characters</span>
+            </button>
+          </div>
+        )
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {filteredCharacters.map((char) => (

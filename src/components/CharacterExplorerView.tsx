@@ -29,6 +29,7 @@ interface CharacterExplorerViewProps {
   workflows: WorkflowLibraryItem[];
   collections: { id: number; name: string }[];
   pillTypeSettings?: PillTypeSettings;
+  civitaiApiActive?: boolean;
   selectedCharacterId?: number | null;
   onSelectCharacterId?: (id: number | null) => void;
   onRefresh: () => Promise<void>;
@@ -59,6 +60,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
   workflows,
   collections,
   pillTypeSettings,
+  civitaiApiActive = false,
   selectedCharacterId: controlledCharId,
   onSelectCharacterId,
   onRefresh,
@@ -303,6 +305,7 @@ export const CharacterExplorerView: React.FC<CharacterExplorerViewProps> = ({
     <>
       <CharacterRosterView
         characters={characters}
+        civitaiApiActive={civitaiApiActive}
         onSelectCharacter={setSelectedCharId}
         onOpenCreateModal={() => setShowCreateModal(true)}
         onOpenMergeModal={() => setShowMergeModal(true)}

@@ -385,6 +385,7 @@ export default function App() {
             workflows={workspace.workflows}
             collections={workspace.collections}
             pillTypeSettings={workspace.pillTypeSettings}
+            civitaiApiActive={Boolean(workspace.healthData?.config?.hasCivitaiKey)}
             selectedCharacterId={selectedCharacterId}
             onSelectCharacterId={setSelectedCharacterId}
             onRefresh={refreshAll}
