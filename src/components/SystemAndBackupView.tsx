@@ -13,6 +13,7 @@ import {
 import { api } from '../api/client.ts';
 import { normalizePillTypeSettings } from '../shared/pillSettings.ts';
 import type {
+  CharacterProfile,
   LmStudioStatus,
   PillTypeSettings,
   VisualTaggerStatus,
@@ -61,6 +62,9 @@ const SYSTEM_SUB_TABS: {
 
 interface SystemAndBackupViewProps {
   healthData: any;
+  characters: CharacterProfile[];
+  onOpenCharacter: (characterId: number) => void;
+  onOpenCharactersTab: () => void;
   onRefreshAll: () => Promise<void>;
   initialSubTab?: SystemSubTab;
   onReadinessUpdated?: (readiness: GenerationReadinessResponse) => void;
@@ -72,6 +76,9 @@ interface SystemAndBackupViewProps {
  */
 export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   healthData,
+  characters,
+  onOpenCharacter,
+  onOpenCharactersTab,
   onRefreshAll,
   initialSubTab = 'tagger',
   onReadinessUpdated,
@@ -750,6 +757,9 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
 
       {activeSubTab === 'civitai' && hasCivitaiKey && (
         <CivitaiSettingsSection
+          characters={characters}
+          onOpenCharacter={onOpenCharacter}
+          onOpenCharactersTab={onOpenCharactersTab}
           saveCivitaiImportImages={saveCivitaiImportImages}
           allowCivitaiShareUncharacterized={allowCivitaiShareUncharacterized}
           civitaiActivityNotificationsEnabled={civitaiActivityNotificationsEnabled}

@@ -2,6 +2,7 @@ import { db } from '../../db.ts';
 import { appConfig } from '../../config.ts';
 import { getCivitaiHeaders } from './civitaiHttpClient.ts';
 import { CivitaiMcpClient } from './civitaiMcpClient.ts';
+import { readEligibleCharacterCivitaiStats } from './civitaiEligibleCharacterStats.ts';
 import type {
   CivitaiUserProfileBadge,
   CivitaiUserProfileLink,
@@ -233,6 +234,7 @@ export async function getCivitaiUserProfile(options?: {
   const apiKey = (options?.deps?.apiKey ?? appConfig.civitaiApiKey ?? '').trim();
   const hasCivitaiKey = Boolean(apiKey);
   const couchySummary = readCouchyCivitaiSummary();
+  const eligibleCharacterStats = readEligibleCharacterCivitaiStats();
 
   if (!hasCivitaiKey) {
     return {
@@ -271,6 +273,7 @@ export async function getCivitaiUserProfile(options?: {
       profileUrl: null,
       accountSettingsUrl: 'https://civitai.com/user/account',
       couchySummary,
+      eligibleCharacterStats,
     };
   }
 
@@ -282,7 +285,7 @@ export async function getCivitaiUserProfile(options?: {
     cachedProfile.keyPrefix === keyPrefix &&
     Date.now() - cachedProfile.fetchedAt < PROFILE_CACHE_TTL_MS
   ) {
-    return { ...cachedProfile.data, couchySummary };
+    return { ...cachedProfile.data, couchySummary, eligibleCharacterStats };
   }
 
   const fetchFn = options?.deps?.fetchFn ?? fetch;
@@ -437,6 +440,7 @@ export async function getCivitaiUserProfile(options?: {
     profileUrl: username ? `https://civitai.com/user/${encodeURIComponent(username)}` : null,
     accountSettingsUrl: 'https://civitai.com/user/account',
     couchySummary,
+    eligibleCharacterStats,
   };
 
   if (!options?.deps && connected) {

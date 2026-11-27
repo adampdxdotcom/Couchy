@@ -496,6 +496,17 @@ export interface CivitaiUserProfileStats {
   leaderboardId: string | null;
 }
 
+export interface CivitaiEligibleCharacterCardStats {
+  characterId: number;
+  modelDownloadCount: number;
+  modelThumbsUpCount: number;
+  modelThumbsDownCount: number;
+  photoReactionCount: number;
+  photoCommentCount: number;
+  publishedPostCount: number;
+  draftPostCount: number;
+}
+
 export interface CivitaiUserProfileResponse {
   hasCivitaiKey: boolean;
   connected: boolean;
@@ -528,4 +539,5 @@ export interface CivitaiUserProfileResponse {
     publishedPostCount: number;
     ownUploadedModelsCount: number;
   };
+  eligibleCharacterStats: CivitaiEligibleCharacterCardStats[];
 }

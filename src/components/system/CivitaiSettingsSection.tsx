@@ -14,9 +14,14 @@ import {
   User,
 } from 'lucide-react';
 import { api } from '../../api/client.ts';
+import type { CharacterProfile } from '../../shared/types.ts';
 import type { CivitaiUserProfileResponse } from '../../shared/apiTypes.ts';
+import { CivitaiEligibleCharactersGallery } from './CivitaiEligibleCharactersGallery.tsx';
 
 interface CivitaiSettingsSectionProps {
+  characters: CharacterProfile[];
+  onOpenCharacter: (characterId: number) => void;
+  onOpenCharactersTab: () => void;
   saveCivitaiImportImages: boolean;
   allowCivitaiShareUncharacterized: boolean;
   civitaiActivityNotificationsEnabled: boolean;
@@ -55,6 +60,9 @@ function formatLinkLabel(url: string, type: string): string {
  * (identity, membership tier, badges, bio, links, creator stats) and Civitai preferences.
  */
 export const CivitaiSettingsSection: React.FC<CivitaiSettingsSectionProps> = ({
+  characters,
+  onOpenCharacter,
+  onOpenCharactersTab,
   saveCivitaiImportImages,
   allowCivitaiShareUncharacterized,
   civitaiActivityNotificationsEnabled,
@@ -407,6 +415,14 @@ export const CivitaiSettingsSection: React.FC<CivitaiSettingsSectionProps> = ({
           ) : null}
         </div>
       </section>
+
+      {/* CivitAI-Eligible Characters Portrait Gallery */}
+      <CivitaiEligibleCharactersGallery
+        characters={characters}
+        eligibleCharacterStats={profile?.eligibleCharacterStats ?? []}
+        onOpenCharacter={onOpenCharacter}
+        onOpenCharactersTab={onOpenCharactersTab}
+      />
 
       {/* Consolidated Civitai Workspace Preferences */}
       <section className="space-y-3">

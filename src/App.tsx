@@ -486,6 +486,15 @@ export default function App() {
         {activeTab === 'system' && (
           <SystemAndBackupView
             healthData={workspace.healthData}
+            characters={workspace.characters}
+            onOpenCharacter={(charId) => {
+              setSelectedCharacterId(charId);
+              setActiveTab('characters');
+            }}
+            onOpenCharactersTab={() => {
+              setSelectedCharacterId(null);
+              setActiveTab('characters');
+            }}
             onRefreshAll={refreshAll}
             initialSubTab={systemSubTab}
             onReadinessUpdated={setReadiness}

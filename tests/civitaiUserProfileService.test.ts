@@ -283,4 +283,151 @@ describe('getCivitaiUserProfile', () => {
     assert.equal(profile.connected, false);
     assert.ok(profile.error && profile.error.includes('Could not reach Civitai'));
   });
+
+  it('computes eligibleCharacterStats with Option A LoRA scoping, deduplication, and Downloads -> Reactions sorting', async () => {
+    // Seed 3 eligible characters with distinct download / reaction profiles:
+    // - Lyra: own Civitai LoRA (2 versions sharing civitai_id=500 -> 1500 downloads deduplicated, 90 thumbsUp)
+    //         + a popular 3rd-party style LoRA (99,000 downloads) that MUST be ignored under Option A
+    // - Nova: no own upload, falls back to character-category LoRA (400 downloads, 25 thumbsUp) + 30 photo reactions
+    // - Kira: no LoRA downloads, 220 cumulative photo reactions across 2 published posts (with duplicate post_id row)
+    const lyraId = Number(
+      ctx.db
+        .prepare(`INSERT INTO characters (name, allow_civitai_share) VALUES ('Lyra', 1)`)
+        .run().lastInsertRowid
+    );
+    const novaId = Number(
+      ctx.db
+        .prepare(`INSERT INTO characters (name, allow_civitai_share) VALUES ('Nova', 1)`)
+        .run().lastInsertRowid
+    );
+    const kiraId = Number(
+      ctx.db
+        .prepare(`INSERT INTO characters (name, allow_civitai_share) VALUES ('Kira', 1)`)
+        .run().lastInsertRowid
+    );
+
+    const ownV1Id = Number(
+      ctx.db
+        .prepare(
+          `INSERT INTO models (name, filename, model_type, lora_category, civitai_id, is_own_civitai_upload, civitai_stats_json)
+           VALUES ('Lyra v1', 'lyra_v1.safetensors', 'lora', 'character', '500', 1, ?)`
+        )
+        .run(JSON.stringify({ downloadCount: 1500, thumbsUpCount: 90, thumbsDownCount: 2 }))
+        .lastInsertRowid
+    );
+    const ownV2Id = Number(
+      ctx.db
+        .prepare(
+          `INSERT INTO models (name, filename, model_type, lora_category, civitai_id, is_own_civitai_upload, civitai_stats_json)
+           VALUES ('Lyra v2', 'lyra_v2.safetensors', 'lora', 'character', '500', 1, ?)`
+        )
+        .run(JSON.stringify({ downloadCount: 1500, thumbsUpCount: 90, thumbsDownCount: 2 }))
+        .lastInsertRowid
+    );
+    const styleLoraId = Number(
+      ctx.db
+        .prepare(
+          `INSERT INTO models (name, filename, model_type, lora_category, civitai_id, is_own_civitai_upload, civitai_stats_json)
+           VALUES ('Popular Style', 'pop_style.safetensors', 'lora', 'style', '999', 0, ?)`
+        )
+        .run(JSON.stringify({ downloadCount: 99000, thumbsUpCount: 5000, thumbsDownCount: 10 }))
+        .lastInsertRowid
+    );
+    const novaCharLoraId = Number(
+      ctx.db
+        .prepare(
+          `INSERT INTO models (name, filename, model_type, lora_category, civitai_id, is_own_civitai_upload, civitai_stats_json)
+           VALUES ('Nova Char', 'nova_char.safetensors', 'lora', 'character', '601', 0, ?)`
+        )
+        .run(JSON.stringify({ downloadCount: 400, thumbsUpCount: 25, thumbsDownCount: 0 }))
+        .lastInsertRowid
+    );
+
+    ctx.db
+      .prepare(
+        `INSERT INTO character_loras (character_id, model_id, lora_name, lora_category) VALUES
+          (?, ?, 'lyra_v1.safetensors', 'character'),
+          (?, ?, 'lyra_v2.safetensors', 'character'),
+          (?, ?, 'pop_style.safetensors', 'style'),
+          (?, ?, 'nova_char.safetensors', 'character'),
+          (?, ?, 'pop_style.safetensors', 'style')`
+      )
+      .run(lyraId, ownV1Id, lyraId, ownV2Id, lyraId, styleLoraId, novaId, novaCharLoraId, kiraId, styleLoraId);
+
+    const kImg1 = Number(
+      ctx.db
+        .prepare(
+          `INSERT INTO images (content_hash, relative_path, filename, file_size, width, height, format, file_mtime, is_missing, is_uploaded_reference)
+           VALUES ('kira-h1', 'k1.png', 'k1.png', 1024, 512, 512, 'png', '2026-11-05T00:00:00Z', 0, 0)`
+        )
+        .run().lastInsertRowid
+    );
+    const kImg2 = Number(
+      ctx.db
+        .prepare(
+          `INSERT INTO images (content_hash, relative_path, filename, file_size, width, height, format, file_mtime, is_missing, is_uploaded_reference)
+           VALUES ('kira-h2', 'k2.png', 'k2.png', 1024, 512, 512, 'png', '2026-11-06T00:00:00Z', 0, 0)`
+        )
+        .run().lastInsertRowid
+    );
+    const nImg1 = Number(
+      ctx.db
+        .prepare(
+          `INSERT INTO images (content_hash, relative_path, filename, file_size, width, height, format, file_mtime, is_missing, is_uploaded_reference)
+           VALUES ('nova-h1', 'n1.png', 'n1.png', 1024, 512, 512, 'png', '2026-11-07T00:00:00Z', 0, 0)`
+        )
+        .run().lastInsertRowid
+    );
+
+    ctx.db
+      .prepare(
+        `INSERT INTO image_characters (image_id, image_content_hash, character_id, status) VALUES
+          (?, 'kira-h1', ?, 'confirmed'),
+          (?, 'kira-h2', ?, 'confirmed'),
+          (?, 'nova-h1', ?, 'confirmed')`
+      )
+      .run(kImg1, kiraId, kImg2, kiraId, nImg1, novaId);
+
+    // Two rows sharing post 9001 for Kira -> must deduplicate so reactions = 140 + 80 = 220
+    ctx.db
+      .prepare(
+        `INSERT INTO image_civitai_drafts
+          (image_id, image_content_hash, civitai_post_id, draft_url, title, status, reaction_count, comment_count)
+         VALUES
+          (?, 'kira-h1', 9001, 'https://civitai.com/posts/9001', 'Kira Post 1', 'published', 140, 5),
+          (?, 'kira-h1', 9001, 'https://civitai.com/posts/9001', 'Kira Post 1 dup', 'published', 140, 5),
+          (?, 'kira-h2', 9002, 'https://civitai.com/posts/9002', 'Kira Post 2', 'published', 80, 2),
+          (?, 'nova-h1', 9003, 'https://civitai.com/posts/9003', 'Nova Post 1', 'published', 30, 1)`
+      )
+      .run(kImg1, kImg1, kImg2, nImg1);
+
+    const profile = await getCivitaiUserProfile({
+      forceRefresh: true,
+      deps: { apiKey: '' },
+    });
+
+    const byId = new Map(profile.eligibleCharacterStats.map((s) => [s.characterId, s]));
+    const lyra = byId.get(lyraId);
+    const nova = byId.get(novaId);
+    const kira = byId.get(kiraId);
+
+    assert.ok(lyra && nova && kira);
+    // Lyra: own upload deduplicated across v1 & v2, 3rd-party style ignored
+    assert.equal(lyra.modelDownloadCount, 1500);
+    assert.equal(lyra.modelThumbsUpCount, 90);
+    // Nova: falls back to character-category LoRA + photo reactions
+    assert.equal(nova.modelDownloadCount, 400);
+    assert.equal(nova.modelThumbsUpCount, 25);
+    assert.equal(nova.photoReactionCount, 30);
+    // Kira: style LoRA ignored (0 downloads), photo reactions deduplicated (140 + 80 = 220)
+    assert.equal(kira.modelDownloadCount, 0);
+    assert.equal(kira.photoReactionCount, 220);
+    assert.equal(kira.photoCommentCount, 7);
+    assert.equal(kira.publishedPostCount, 2);
+
+    // Ordering check: Lyra (1500 dl) -> Nova (400 dl) -> Kira (0 dl, 220 reactions)
+    const rankedIds = profile.eligibleCharacterStats.map((s) => s.characterId);
+    assert.ok(rankedIds.indexOf(lyraId) < rankedIds.indexOf(novaId));
+    assert.ok(rankedIds.indexOf(novaId) < rankedIds.indexOf(kiraId));
+  });
 });
