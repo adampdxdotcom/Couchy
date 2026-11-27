@@ -41,6 +41,7 @@ import {
   getGenerationReadiness,
   setDefaultWorkflowUnet,
 } from '../services/readinessService.ts';
+import { getCivitaiUserProfile } from '../services/civitai/civitaiUserProfileService.ts';
 import {
   getBoolSetting,
   getJsonSetting,
@@ -723,5 +724,20 @@ systemRouter.patch('/system/readiness/default-unet', async (req, res) => {
     res.json(result);
   } catch (err: unknown) {
     res.status(400).json({ error: getErrorMessage(err, 'Failed to update default workflow UNET') });
+  }
+});
+
+/**
+ * GET /api/system/civitai-profile
+ * Returns the authenticated Civitai user's profile (identity, badges, bio, links, stats)
+ * alongside local Couchy Civitai integration counts.
+ */
+systemRouter.get('/system/civitai-profile', async (req, res) => {
+  try {
+    const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    const profile = await getCivitaiUserProfile({ forceRefresh });
+    res.json(profile);
+  } catch (err: unknown) {
+    res.status(500).json({ error: getErrorMessage(err, 'Failed to load Civitai profile') });
   }
 });

@@ -42,6 +42,7 @@ import type {
   CivitaiShareDraftRequest,
   CivitaiShareDraftResponse,
   CivitaiShareEligibilityResponse,
+  CivitaiUserProfileResponse,
   ComfyUiTestResponse,
   DatabaseBackupEntry,
   DownloadJobRecord,
@@ -1021,4 +1022,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ url }),
     }),
+
+  getCivitaiUserProfile: (opts?: { refresh?: boolean }) =>
+    requestJson<CivitaiUserProfileResponse>(
+      opts?.refresh ? '/api/system/civitai-profile?refresh=1' : '/api/system/civitai-profile'
+    ),
 };

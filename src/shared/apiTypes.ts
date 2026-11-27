@@ -471,3 +471,61 @@ export interface CivitaiShareDraftResponse {
   draft: CivitaiDraftRecord;
 }
 
+export interface CivitaiUserProfileBadge {
+  id: number | string;
+  name: string;
+  description: string | null;
+  imageUrl: string | null;
+  animated: boolean;
+}
+
+export interface CivitaiUserProfileLink {
+  url: string;
+  type: string;
+}
+
+export interface CivitaiUserProfileStats {
+  uploadCount: number | null;
+  followerCount: number | null;
+  followingCount: number | null;
+  downloadCount: number | null;
+  thumbsUpCount: number | null;
+  generationCount: number | null;
+  tippedAmountCount: number | null;
+  leaderboardPosition: number | null;
+  leaderboardId: string | null;
+}
+
+export interface CivitaiUserProfileResponse {
+  hasCivitaiKey: boolean;
+  connected: boolean;
+  error: string | null;
+  syncedAt: string;
+  userId: number | null;
+  username: string | null;
+  tier: string | null;
+  status: string | null;
+  isMember: boolean;
+  subscriptions: string[];
+  isOnboarded: boolean | null;
+  muted: boolean;
+  isModerator: boolean;
+  createdAt: string | null;
+  avatarUrl: string | null;
+  coverImageUrl: string | null;
+  bio: string | null;
+  location: string | null;
+  nameplate: { name: string | null; color: string | null } | null;
+  badges: CivitaiUserProfileBadge[];
+  links: CivitaiUserProfileLink[];
+  stats: CivitaiUserProfileStats;
+  profileUrl: string | null;
+  accountSettingsUrl: string;
+  couchySummary: {
+    eligibleCharacterCount: number;
+    totalCharacterCount: number;
+    sharedDraftCount: number;
+    publishedPostCount: number;
+    ownUploadedModelsCount: number;
+  };
+}

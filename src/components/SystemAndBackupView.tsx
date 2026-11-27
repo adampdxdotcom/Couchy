@@ -1,5 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { BarChart3, BookOpen, Bot, Database, RefreshCw, Server, Sparkles, Tags } from 'lucide-react';
+import {
+  BarChart3,
+  BookOpen,
+  Bot,
+  Database,
+  RefreshCw,
+  Server,
+  Share2,
+  Sparkles,
+  Tags,
+} from 'lucide-react';
 import { api } from '../api/client.ts';
 import { normalizePillTypeSettings } from '../shared/pillSettings.ts';
 import type {
@@ -19,6 +29,7 @@ import { DatabaseBackupSection } from './system/DatabaseBackupSection.tsx';
 import { CollectionsAndScannerSection } from './system/CollectionsAndScannerSection.tsx';
 import { SystemHelpSection } from './system/SystemHelpSection.tsx';
 import { StatsSection } from './system/StatsSection.tsx';
+import { CivitaiSettingsSection } from './system/CivitaiSettingsSection.tsx';
 
 export type SystemSubTab =
   | 'tagger'
@@ -26,6 +37,7 @@ export type SystemSubTab =
   | 'stats'
   | 'lm_studio'
   | 'comfyui'
+  | 'civitai'
   | 'backup'
   | 'scanner'
   | 'help';
@@ -34,12 +46,14 @@ const SYSTEM_SUB_TABS: {
   id: SystemSubTab;
   label: string;
   icon: React.FC<{ className?: string }>;
+  requiresCivitaiKey?: boolean;
 }[] = [
   { id: 'tagger', label: 'Search', icon: Tags },
   { id: 'quick_gen', label: 'Quick Gen & Pills', icon: Sparkles },
   { id: 'stats', label: 'Stats', icon: BarChart3 },
   { id: 'lm_studio', label: 'Agent', icon: Bot },
   { id: 'comfyui', label: 'ComfyUI', icon: Server },
+  { id: 'civitai', label: 'Civitai', icon: Share2, requiresCivitaiKey: true },
   { id: 'backup', label: 'Database', icon: Database },
   { id: 'scanner', label: 'Metadata', icon: RefreshCw },
   { id: 'help', label: 'Help', icon: BookOpen },
@@ -62,11 +76,23 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
   initialSubTab = 'tagger',
   onReadinessUpdated,
 }) => {
+  const hasCivitaiKey = Boolean(healthData?.config?.hasCivitaiKey);
   const [activeSubTab, setActiveSubTab] = useState<SystemSubTab>(initialSubTab);
 
   useEffect(() => {
     setActiveSubTab(initialSubTab);
   }, [initialSubTab]);
+
+  // Gracefully fall back if Civitai API key is inactive while on the Civitai sub-tab
+  useEffect(() => {
+    if (!hasCivitaiKey && activeSubTab === 'civitai') {
+      setActiveSubTab('tagger');
+    }
+  }, [hasCivitaiKey, activeSubTab]);
+
+  const visibleSubTabs = SYSTEM_SUB_TABS.filter(
+    (tab) => !tab.requiresCivitaiKey || hasCivitaiKey
+  );
   const [comfyuiUrl, setComfyuiUrl] = useState(
     healthData?.config?.comfyuiUrl || 'http://comfyui:8188'
   );
@@ -606,6 +632,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
         insertCouchyMetadataOnExport={insertCouchyMetadataOnExport}
         insertCivitaiMetadataOnExport={insertCivitaiMetadataOnExport}
         uploadedImagesDir={healthData?.config?.uploadedImagesDir}
+        hideCivitaiToggles={hasCivitaiKey}
         onToggleSaveUploadedPromptImages={handleToggleSaveUploadedPromptImages}
         onToggleSaveCivitaiImportImages={handleToggleSaveCivitaiImportImages}
         onToggleAllowCivitaiShareUncharacterized={handleToggleAllowCivitaiShareUncharacterized}
@@ -620,7 +647,7 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
         aria-label="System settings sections"
         className="bg-zinc-900/90 border border-zinc-800 rounded-xl p-1.5 flex flex-wrap gap-1.5"
       >
-        {SYSTEM_SUB_TABS.map((tab) => {
+        {visibleSubTabs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeSubTab === tab.id;
           return (
@@ -719,6 +746,20 @@ export const SystemAndBackupView: React.FC<SystemAndBackupViewProps> = ({
             }}
           />
         </div>
+      )}
+
+      {activeSubTab === 'civitai' && hasCivitaiKey && (
+        <CivitaiSettingsSection
+          saveCivitaiImportImages={saveCivitaiImportImages}
+          allowCivitaiShareUncharacterized={allowCivitaiShareUncharacterized}
+          civitaiActivityNotificationsEnabled={civitaiActivityNotificationsEnabled}
+          insertCivitaiMetadataOnExport={insertCivitaiMetadataOnExport}
+          uploadedImagesDir={healthData?.config?.uploadedImagesDir}
+          onToggleSaveCivitaiImportImages={handleToggleSaveCivitaiImportImages}
+          onToggleAllowCivitaiShareUncharacterized={handleToggleAllowCivitaiShareUncharacterized}
+          onToggleCivitaiActivityNotifications={handleToggleCivitaiActivityNotifications}
+          onToggleInsertCivitaiMetadataOnExport={handleToggleInsertCivitaiMetadataOnExport}
+        />
       )}
 
       {activeSubTab === 'backup' && (

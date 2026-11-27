@@ -181,9 +181,13 @@ export class CivitaiMcpClient {
   }
 
   async getWhoAmI(): Promise<{
+    userId: number | null;
     username: string | null;
+    tier: string | null;
     muted?: boolean;
     isOnboarded?: boolean;
+    isModerator?: boolean;
+    raw?: Record<string, any> | null;
   }> {
     const info = await this.callTool<any>('whoami', {});
     const username =
@@ -192,10 +196,23 @@ export class CivitaiMcpClient {
         : typeof info?.user?.username === 'string' && info.user.username.trim()
         ? info.user.username.trim()
         : null;
+    const rawUserId = info?.user_id ?? info?.userId ?? info?.id ?? info?.user?.id ?? null;
+    const userId =
+      rawUserId !== null && Number.isFinite(Number(rawUserId)) ? Number(rawUserId) : null;
+    const rawTier =
+      info?.tier ?? info?.subscriptionTier ?? info?.user?.tier ?? null;
+    const tier = typeof rawTier === 'string' && rawTier.trim() ? rawTier.trim() : null;
     return {
+      userId,
       username,
+      tier,
       muted: Boolean(info?.muted ?? info?.isMuted),
-      isOnboarded: info?.isOnboarded !== false,
+      isOnboarded:
+        info?.isOnboarded === undefined && info?.is_onboarded === undefined
+          ? true
+          : info?.isOnboarded !== false && info?.is_onboarded !== false,
+      isModerator: Boolean(info?.isModerator ?? info?.is_moderator ?? info?.user?.isModerator),
+      raw: info && typeof info === 'object' ? info : null,
     };
   }
 
