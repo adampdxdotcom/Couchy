@@ -1,8 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Download, Heart, Share2, ThumbsUp, Users } from 'lucide-react';
 import type { CharacterProfile } from '../../shared/types.ts';
 import type { CivitaiEligibleCharacterCardStats } from '../../shared/apiTypes.ts';
 import { CharacterPortraitImage } from '../character/CharacterPortraitImage.tsx';
+
+const MY_UPLOADS_FIRST_STORAGE_KEY = 'couchy.civitaiGallery.myUploadsFirst';
 
 interface CivitaiEligibleCharactersGalleryProps {
   characters: CharacterProfile[];
@@ -17,9 +19,21 @@ function formatCompactCount(val: number): string {
   return val.toLocaleString();
 }
 
+function readInitialMyUploadsFirst(): boolean {
+  try {
+    const saved = window.localStorage.getItem(MY_UPLOADS_FIRST_STORAGE_KEY);
+    if (saved === 'false') return false;
+    if (saved === 'true') return true;
+  } catch {
+    // ignore storage errors
+  }
+  return true;
+}
+
 /**
  * Portrait gallery of CivitAI-eligible characters on Settings -> Civitai, styled after
- * CharacterCard, sorted by Civitai model downloads then cumulative photo reactions.
+ * CharacterCard, sorted by optional "My Uploads First", then Civitai model downloads
+ * and cumulative photo reactions.
  */
 export const CivitaiEligibleCharactersGallery: React.FC<CivitaiEligibleCharactersGalleryProps> = ({
   characters,
@@ -27,6 +41,17 @@ export const CivitaiEligibleCharactersGallery: React.FC<CivitaiEligibleCharacter
   onOpenCharacter,
   onOpenCharactersTab,
 }) => {
+  const [myUploadsFirst, setMyUploadsFirst] = useState<boolean>(readInitialMyUploadsFirst);
+
+  const handleToggleMyUploadsFirst = (enabled: boolean) => {
+    setMyUploadsFirst(enabled);
+    try {
+      window.localStorage.setItem(MY_UPLOADS_FIRST_STORAGE_KEY, String(enabled));
+    } catch {
+      // ignore storage errors
+    }
+  };
+
   const statsById = useMemo(() => {
     const map = new Map<number, CivitaiEligibleCharacterCardStats>();
     for (const s of eligibleCharacterStats) {
@@ -40,6 +65,11 @@ export const CivitaiEligibleCharactersGallery: React.FC<CivitaiEligibleCharacter
     return eligible.sort((a, b) => {
       const sa = statsById.get(a.id);
       const sb = statsById.get(b.id);
+      if (myUploadsFirst) {
+        const ownDiff =
+          Number(Boolean(sb?.hasOwnCivitaiUpload)) - Number(Boolean(sa?.hasOwnCivitaiUpload));
+        if (ownDiff !== 0) return ownDiff;
+      }
       const dlDiff = (sb?.modelDownloadCount ?? 0) - (sa?.modelDownloadCount ?? 0);
       if (dlDiff !== 0) return dlDiff;
       const reactDiff = (sb?.photoReactionCount ?? 0) - (sa?.photoReactionCount ?? 0);
@@ -50,11 +80,11 @@ export const CivitaiEligibleCharactersGallery: React.FC<CivitaiEligibleCharacter
       if (postDiff !== 0) return postDiff;
       return a.name.localeCompare(b.name);
     });
-  }, [characters, statsById]);
+  }, [characters, statsById, myUploadsFirst]);
 
   return (
     <section className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-display font-semibold text-zinc-100 flex items-center gap-2">
             <span>CivitAI-Eligible Characters</span>
@@ -66,6 +96,19 @@ export const CivitaiEligibleCharactersGallery: React.FC<CivitaiEligibleCharacter
             Ordered by Civitai model downloads, then cumulative photo reactions. Click a portrait to open their profile.
           </p>
         </div>
+
+        {sortedEligibleCharacters.length > 0 && (
+          <label className="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800 cursor-pointer select-none shrink-0">
+            <span className="text-[11px] text-zinc-200 font-medium">My Uploads First</span>
+            <input
+              type="checkbox"
+              checked={myUploadsFirst}
+              onChange={(e) => handleToggleMyUploadsFirst(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-9 h-5 bg-zinc-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-4 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all relative peer-checked:bg-indigo-600" />
+          </label>
+        )}
       </div>
 
       {sortedEligibleCharacters.length === 0 ? (
@@ -91,6 +134,7 @@ export const CivitaiEligibleCharactersGallery: React.FC<CivitaiEligibleCharacter
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
           {sortedEligibleCharacters.map((char) => {
             const stats = statsById.get(char.id);
+            const isOwnUpload = Boolean(stats?.hasOwnCivitaiUpload);
             const downloads = stats?.modelDownloadCount ?? 0;
             const thumbsUp = stats?.modelThumbsUpCount ?? 0;
             const photoReactions = stats?.photoReactionCount ?? 0;
@@ -114,9 +158,19 @@ export const CivitaiEligibleCharactersGallery: React.FC<CivitaiEligibleCharacter
                 </div>
 
                 <div className="p-3 space-y-1.5 w-full">
-                  <h4 className="text-xs font-display font-semibold text-zinc-100 group-hover:text-indigo-300 transition-colors truncate">
-                    {char.name}
-                  </h4>
+                  <div className="flex items-center justify-between gap-1.5">
+                    <h4 className="text-xs font-display font-semibold text-zinc-100 group-hover:text-indigo-300 transition-colors truncate">
+                      {char.name}
+                    </h4>
+                    {isOwnUpload && (
+                      <span
+                        title="Linked to your uploaded Civitai LoRA"
+                        className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 shrink-0"
+                      >
+                        Mine
+                      </span>
+                    )}
+                  </div>
 
                   {hasCivitaiRatings ? (
                     <div className="text-[11px] text-zinc-400 font-mono tabular-nums flex flex-wrap items-center gap-x-2.5 gap-y-1">

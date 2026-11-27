@@ -498,6 +498,7 @@ export interface CivitaiUserProfileStats {
 
 export interface CivitaiEligibleCharacterCardStats {
   characterId: number;
+  hasOwnCivitaiUpload: boolean;
   modelDownloadCount: number;
   modelThumbsUpCount: number;
   modelThumbsDownCount: number;

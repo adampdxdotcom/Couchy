@@ -413,13 +413,16 @@ describe('getCivitaiUserProfile', () => {
 
     assert.ok(lyra && nova && kira);
     // Lyra: own upload deduplicated across v1 & v2, 3rd-party style ignored
+    assert.equal(lyra.hasOwnCivitaiUpload, true);
     assert.equal(lyra.modelDownloadCount, 1500);
     assert.equal(lyra.modelThumbsUpCount, 90);
     // Nova: falls back to character-category LoRA + photo reactions
+    assert.equal(nova.hasOwnCivitaiUpload, false);
     assert.equal(nova.modelDownloadCount, 400);
     assert.equal(nova.modelThumbsUpCount, 25);
     assert.equal(nova.photoReactionCount, 30);
     // Kira: style LoRA ignored (0 downloads), photo reactions deduplicated (140 + 80 = 220)
+    assert.equal(kira.hasOwnCivitaiUpload, false);
     assert.equal(kira.modelDownloadCount, 0);
     assert.equal(kira.photoReactionCount, 220);
     assert.equal(kira.photoCommentCount, 7);
@@ -429,5 +432,35 @@ describe('getCivitaiUserProfile', () => {
     const rankedIds = profile.eligibleCharacterStats.map((s) => s.characterId);
     assert.ok(rankedIds.indexOf(lyraId) < rankedIds.indexOf(novaId));
     assert.ok(rankedIds.indexOf(novaId) < rankedIds.indexOf(kiraId));
+
+    // Character linked to an own upload whose civitai_stats_json is still NULL must still be flagged
+    const freshOwnCharId = Number(
+      ctx.db
+        .prepare(`INSERT INTO characters (name, allow_civitai_share) VALUES ('Zara', 1)`)
+        .run().lastInsertRowid
+    );
+    const freshOwnLoraId = Number(
+      ctx.db
+        .prepare(
+          `INSERT INTO models (name, filename, model_type, lora_category, is_own_civitai_upload)
+           VALUES ('Zara Own', 'zara_own.safetensors', 'lora', 'character', 1)`
+        )
+        .run().lastInsertRowid
+    );
+    ctx.db
+      .prepare(
+        `INSERT INTO character_loras (character_id, model_id, lora_name, lora_category)
+         VALUES (?, ?, 'zara_own.safetensors', 'character')`
+      )
+      .run(freshOwnCharId, freshOwnLoraId);
+
+    const refreshed = await getCivitaiUserProfile({
+      forceRefresh: true,
+      deps: { apiKey: '' },
+    });
+    const zara = refreshed.eligibleCharacterStats.find((s) => s.characterId === freshOwnCharId);
+    assert.ok(zara);
+    assert.equal(zara.hasOwnCivitaiUpload, true);
+    assert.equal(zara.modelDownloadCount, 0);
   });
 });

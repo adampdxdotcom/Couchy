@@ -23224,6 +23224,7 @@ function readEligibleCharacterCivitaiStats() {
   for (const row of eligibleRows) {
     statsMap.set(Number(row.id), {
       characterId: Number(row.id),
+      hasOwnCivitaiUpload: false,
       modelDownloadCount: 0,
       modelThumbsUpCount: 0,
       modelThumbsDownCount: 0,
@@ -23245,9 +23246,7 @@ function readEligibleCharacterCivitaiStats() {
        FROM characters c
        JOIN character_loras cl ON cl.character_id = c.id
        JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
-       WHERE COALESCE(c.allow_civitai_share, 0) = 1
-         AND m.civitai_stats_json IS NOT NULL
-         AND TRIM(m.civitai_stats_json) != ''`
+       WHERE COALESCE(c.allow_civitai_share, 0) = 1`
   ).all();
   const lorasByChar = /* @__PURE__ */ new Map();
   for (const row of loraRows) {
@@ -23260,6 +23259,7 @@ function readEligibleCharacterCivitaiStats() {
     const entry = statsMap.get(charId);
     if (!entry) continue;
     const ownRows = rows.filter((r) => Number(r.isOwnUpload) === 1);
+    entry.hasOwnCivitaiUpload = ownRows.length > 0;
     const scopedRows = ownRows.length > 0 ? ownRows : rows.filter((r) => {
       const cat = String(r.charLoraCategory || r.modelLoraCategory || "").toLowerCase();
       return cat === "character";

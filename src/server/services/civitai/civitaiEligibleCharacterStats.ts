@@ -44,6 +44,7 @@ export function readEligibleCharacterCivitaiStats(): CivitaiEligibleCharacterCar
   for (const row of eligibleRows) {
     statsMap.set(Number(row.id), {
       characterId: Number(row.id),
+      hasOwnCivitaiUpload: false,
       modelDownloadCount: 0,
       modelThumbsUpCount: 0,
       modelThumbsDownCount: 0,
@@ -54,7 +55,7 @@ export function readEligibleCharacterCivitaiStats(): CivitaiEligibleCharacterCar
     });
   }
 
-  // 1. Collect linked LoRA model stats for eligible characters
+  // 1. Collect linked LoRA model stats & own-upload ownership for eligible characters
   const loraRows = db
     .prepare(
       `SELECT
@@ -68,9 +69,7 @@ export function readEligibleCharacterCivitaiStats(): CivitaiEligibleCharacterCar
        FROM characters c
        JOIN character_loras cl ON cl.character_id = c.id
        JOIN models m ON m.id = cl.model_id OR LOWER(m.filename) = LOWER(cl.lora_name)
-       WHERE COALESCE(c.allow_civitai_share, 0) = 1
-         AND m.civitai_stats_json IS NOT NULL
-         AND TRIM(m.civitai_stats_json) != ''`
+       WHERE COALESCE(c.allow_civitai_share, 0) = 1`
     )
     .all() as LinkedLoraStatsRow[];
 
@@ -88,6 +87,7 @@ export function readEligibleCharacterCivitaiStats(): CivitaiEligibleCharacterCar
 
     // Option A: prefer own uploaded LoRAs; otherwise fall back to character-category LoRAs
     const ownRows = rows.filter((r) => Number(r.isOwnUpload) === 1);
+    entry.hasOwnCivitaiUpload = ownRows.length > 0;
     const scopedRows =
       ownRows.length > 0
         ? ownRows
