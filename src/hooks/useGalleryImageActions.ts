@@ -101,6 +101,11 @@ export function useGalleryImageActions({
       const isFromMultiShot = img.seriesKind === 'multi_shot';
       const hasExistingIterativeStack =
         stackFromSource && !isFromMultiShot && Boolean(img.seriesId) && (img.seriesCount || 1) > 1;
+      const sourceInspo = {
+        sourceImageId: img.id,
+        thumbnailUrl: img.thumbnailUrl || `/api/images/${img.id}/thumbnail`,
+        label: img.filename || `Image #${img.id}`,
+      };
 
       setQuickGenPrefill({
         prompt: promptText,
@@ -116,6 +121,8 @@ export function useGalleryImageActions({
             ? `Add to stack · ${img.filename}`
             : `New stack · ${img.filename}`
           : null,
+        inspirationImage: stackFromSource ? null : sourceInspo,
+        fallbackInspirationImage: stackFromSource ? sourceInspo : null,
         timestamp: Date.now(),
       });
 
@@ -129,7 +136,7 @@ export function useGalleryImageActions({
         ? hasExistingIterativeStack
           ? ' · adding to stack'
           : ' · new stack'
-        : '';
+        : ' · Inspo attached';
       const skippedNotice = unavailableLabel
         ? ` (skipped unavailable base model: ${unavailableLabel})`
         : '';

@@ -150,6 +150,94 @@ export async function indexUploadedInspirationImage(
   return imageId;
 }
 
+const LOCAL_INSPIRATION_MAX_PIXELS = 1_000_000;
+
+/**
+ * Creates (or reuses by content hash) a 1MP JPEG inspiration reference in `appConfig.uploadedImagesDir`
+ * from an existing local gallery image, then indexes it with `is_uploaded_reference = 1` so it can be
+ * attached as step #0 (`Inspo`) of a new generation stack without modifying the source image's stack.
+ */
+export async function createUploadedInspirationFromImageId(
+  sourceImageId: number,
+  positivePrompt?: string | null
+): Promise<number | null> {
+  const numericId = Number(sourceImageId);
+  if (!Number.isInteger(numericId) || numericId <= 0) return null;
+
+  const row = db
+    .prepare(
+      `SELECT id, content_hash, relative_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference
+       FROM images
+       WHERE id = ? AND is_missing = 0
+       LIMIT 1`
+    )
+    .get(numericId) as
+    | {
+        id: number;
+        content_hash: string;
+        relative_path: string;
+        is_uploaded_reference: number;
+      }
+    | undefined;
+
+  if (!row) return null;
+
+  // Source image is already an uploaded 1MP inspiration reference — reuse directly
+  if (row.is_uploaded_reference) {
+    return row.id;
+  }
+
+  const diskPath = resolveImageDiskPath(row);
+  const outputRoot = path.resolve(appConfig.comfyuiOutputDir);
+  if (!diskPath.startsWith(outputRoot + path.sep)) {
+    return null;
+  }
+
+  const hashPrefix = String(row.content_hash || '')
+    .replace(/[^a-fA-F0-9]/g, '')
+    .slice(0, 16);
+  if (!hashPrefix) return null;
+
+  const inspoFilename = `reuse-1mp-${hashPrefix}.jpg`;
+  const targetPath = path.resolve(appConfig.uploadedImagesDir, inspoFilename);
+  const uploadedRoot = path.resolve(appConfig.uploadedImagesDir);
+  if (!targetPath.startsWith(uploadedRoot + path.sep)) {
+    return null;
+  }
+
+  if (!(await pathExistsAsync(targetPath))) {
+    if (!(await pathExistsAsync(diskPath))) return null;
+    try {
+      const { data: rotatedBuf, info: rotatedInfo } = await sharp(diskPath)
+        .rotate()
+        .toBuffer({ resolveWithObject: true });
+      const srcW = Number(rotatedInfo.width || 0);
+      const srcH = Number(rotatedInfo.height || 0);
+      if (srcW <= 0 || srcH <= 0) return null;
+
+      let pipeline = sharp(rotatedBuf);
+      const totalPixels = srcW * srcH;
+      if (totalPixels > LOCAL_INSPIRATION_MAX_PIXELS) {
+        const scale = Math.sqrt(LOCAL_INSPIRATION_MAX_PIXELS / totalPixels);
+        const outW = Math.max(1, Math.round(srcW * scale));
+        const outH = Math.max(1, Math.round(srcH * scale));
+        pipeline = pipeline.resize(outW, outH, { fit: 'inside', withoutEnlargement: true });
+      }
+
+      const outBuf = await pipeline.jpeg({ quality: 88, mozjpeg: true }).toBuffer();
+      if (outBuf.length === 0) return null;
+
+      fs.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
+      fs.writeFileSync(targetPath, outBuf);
+      invalidateStorageUsageStatsCache();
+    } catch {
+      return null;
+    }
+  }
+
+  return indexUploadedInspirationImage(inspoFilename, positivePrompt);
+}
+
 /**
  * Background migration that ensures all indexed images have a 384px long-side WebP
  * thumbnail inside `data/thumbnails`, yielding between files so requests are never blocked.

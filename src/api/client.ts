@@ -824,6 +824,7 @@ export const api = {
     seriesId?: number | null;
     branchFromImageId?: number | null;
     inspirationFilename?: string | null;
+    inspirationSourceImageId?: number | null;
     chatMessages?: Array<{ role: string; content: string }>;
     chatSnapshot?: QuickGenChatMessage[];
   }) =>
@@ -900,6 +901,7 @@ export const api = {
     seriesId?: number | null;
     branchFromImageId?: number | null;
     inspirationFilename?: string | null;
+    inspirationSourceImageId?: number | null;
     chatSnapshot?: QuickGenChatMessage[];
   }) =>
     requestJson<{ batch: GenerationBatchRecord; batches: GenerationBatchRecord[] }>(

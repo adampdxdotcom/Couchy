@@ -563,7 +563,7 @@ export default function App() {
             }
           }}
           onOpenConversation={imageActions.handleOpenConversationForImage}
-          onReusePrompt={(img) => imageActions.handleReusePrompt(img, { stackFromSource: true })}
+          onReusePrompt={imageActions.handleReusePrompt}
           characters={workspace.characters}
           collections={workspace.collections}
           onFilterByLora={(loraName) => {

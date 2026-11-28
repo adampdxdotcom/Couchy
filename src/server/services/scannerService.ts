@@ -10,6 +10,7 @@ export { purgeCorruptZeroDimensionImages } from './scanner/corruptRecordCleanup.
 
 export {
   computeFileSha256,
+  createUploadedInspirationFromImageId,
   ensureWebpThumbnail,
   indexUploadedInspirationImage,
   resolveImageDiskPath,

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, Layers, Plus, RotateCcw, Search, Sparkles, X } from 'lucide-react';
+import { Check, Copy, Layers, Plus, RotateCcw, Search, X } from 'lucide-react';
 import {
   DEFAULT_PILL_TYPE_SETTINGS,
   resolveLoraCategoryStyle,
@@ -132,9 +132,7 @@ function areGenParamsModified(
 interface InspectorPositivePromptSectionProps {
   activeImage: ImageRecord;
   editablePositivePrompt: string;
-  editableLoras?: ImageLoraRecord[];
   onChangeEditablePositivePrompt: (value: string) => void;
-  onReusePrompt?: (image: ImageRecord) => void;
 }
 
 /**
@@ -145,9 +143,7 @@ export const InspectorPositivePromptSection: React.FC<
 > = ({
   activeImage,
   editablePositivePrompt,
-  editableLoras,
   onChangeEditablePositivePrompt,
-  onReusePrompt,
 }) => {
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<number | null>(null);
@@ -189,23 +185,6 @@ export const InspectorPositivePromptSection: React.FC<
             >
               {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
               <span>{copied ? 'Copied' : 'Copy'}</span>
-            </button>
-          )}
-          {onReusePrompt && (
-            <button
-              type="button"
-              onClick={() =>
-                onReusePrompt({
-                  ...activeImage,
-                  positivePrompt: editablePositivePrompt,
-                  loras: editableLoras ?? activeImage.loras,
-                })
-              }
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/40 text-indigo-300 hover:text-indigo-200 font-medium cursor-pointer transition-colors"
-              title="Load into Quick Gen Box to add to this image's stack (or start a new stack)"
-            >
-              <Sparkles className="w-3 h-3" />
-              <span>Quick Gen</span>
             </button>
           )}
         </div>

@@ -13,6 +13,7 @@ import {
 import { pollComfyPromptCompletion } from './comfyuiService.ts';
 import {
   copyImageMetadataToDerivedImage,
+  createUploadedInspirationFromImageId,
   indexUploadedInspirationImage,
 } from './scannerService.ts';
 import {
@@ -51,6 +52,7 @@ export interface DispatchGenerationBatchInput {
   seriesId?: number | null;
   branchFromImageId?: number | null;
   inspirationFilename?: string | null;
+  inspirationSourceImageId?: number | null;
   chatSnapshot?: QuickGenChatMessage[];
 }
 
@@ -414,16 +416,23 @@ export async function dispatchGenerationBatch(
 
   let effectiveSeriesId = input.seriesId ? Number(input.seriesId) : null;
   let inspirationImageId: number | null = null;
-  if (
-    !effectiveSeriesId &&
-    !input.branchFromImageId &&
-    typeof input.inspirationFilename === 'string' &&
-    input.inspirationFilename.trim()
-  ) {
-    inspirationImageId = await indexUploadedInspirationImage(
-      input.inspirationFilename.trim(),
-      promptList[0]
-    );
+  if (!effectiveSeriesId && !input.branchFromImageId) {
+    if (typeof input.inspirationFilename === 'string' && input.inspirationFilename.trim()) {
+      inspirationImageId = await indexUploadedInspirationImage(
+        input.inspirationFilename.trim(),
+        promptList[0]
+      );
+    } else if (
+      input.inspirationSourceImageId !== null &&
+      input.inspirationSourceImageId !== undefined &&
+      Number.isInteger(Number(input.inspirationSourceImageId)) &&
+      Number(input.inspirationSourceImageId) > 0
+    ) {
+      inspirationImageId = await createUploadedInspirationFromImageId(
+        Number(input.inspirationSourceImageId),
+        promptList[0]
+      );
+    }
   }
 
   if (

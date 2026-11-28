@@ -14,6 +14,7 @@ import {
   getCleanLoraLabel,
   isCharacterLora,
   normalizeLoraKey,
+  type QuickGenInspirationImage,
 } from './quickGenUtils.ts';
 import { patchLastAssistantExclusions } from './quickGenStackHelpers.ts';
 
@@ -40,7 +41,7 @@ interface UseQuickGenAgentAndBatchParams {
   batchCount: number;
   activeSeriesId: number | null;
   branchFromImageId: number | null;
-  inspirationFilename: string | null;
+  inspirationImage: QuickGenInspirationImage | null;
   resolveActiveLoraStack: () => { selectedLoras: GenerationLoraSelection[]; triggerWord: string };
   applyPreset: (
     preset: LoraPreset,
@@ -80,7 +81,7 @@ export function useQuickGenAgentAndBatch({
   batchCount,
   activeSeriesId,
   branchFromImageId,
-  inspirationFilename,
+  inspirationImage,
   resolveActiveLoraStack,
   applyPreset,
   resetQuickGenState,
@@ -284,7 +285,12 @@ export function useQuickGenAgentAndBatch({
           checkpointName: attachedCheckpoint || undefined,
           seriesId: null,
           branchFromImageId: null,
-          inspirationFilename: !activeSeriesId && !branchFromImageId ? inspirationFilename : null,
+          inspirationFilename:
+            !activeSeriesId && !branchFromImageId ? (inspirationImage?.filename ?? null) : null,
+          inspirationSourceImageId:
+            !activeSeriesId && !branchFromImageId
+              ? (inspirationImage?.sourceImageId ?? null)
+              : null,
           chatMessages: chatMessages.map((m) => ({ role: m.role, content: m.content })),
           chatSnapshot: snapshotForBatch,
         });
@@ -309,7 +315,12 @@ export function useQuickGenAgentAndBatch({
           checkpointName: attachedCheckpoint || undefined,
           seriesId: isMultiShotSet ? null : activeSeriesId,
           branchFromImageId: isMultiShotSet ? null : branchFromImageId,
-          inspirationFilename: !activeSeriesId && !branchFromImageId ? inspirationFilename : null,
+          inspirationFilename:
+            !activeSeriesId && !branchFromImageId ? (inspirationImage?.filename ?? null) : null,
+          inspirationSourceImageId:
+            !activeSeriesId && !branchFromImageId
+              ? (inspirationImage?.sourceImageId ?? null)
+              : null,
           chatSnapshot: snapshotForBatch,
         });
       }

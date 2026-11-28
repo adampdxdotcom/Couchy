@@ -1,5 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { BookmarkPlus, Dices, ExternalLink, Heart, Keyboard, Loader2, MessageSquare, Play, RotateCcw, Share2, Star, Trash2, X } from 'lucide-react';
+import {
+  BookmarkPlus,
+  Dices,
+  ExternalLink,
+  Heart,
+  Keyboard,
+  Loader2,
+  MessageSquare,
+  Play,
+  RotateCcw,
+  Share2,
+  Sparkles,
+  Star,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { api } from '../api/client.ts';
 import { SeriesIterationsStrip } from './inspector/SeriesIterationsStrip.tsx';
 import { SeriesMiniGalleryModal } from './inspector/SeriesMiniGalleryModal.tsx';
@@ -56,7 +71,7 @@ interface ImageInspectorDrawerProps {
   onAdvanceAfterReject?: (rejectedCardId: number) => void;
   onNavigateToImage?: (imageId: number) => void;
   onOpenConversation?: (image: ImageRecord) => void;
-  onReusePrompt?: (image: ImageRecord) => void;
+  onReusePrompt?: (image: ImageRecord, options?: { stackFromSource?: boolean }) => void;
   characters: CharacterProfile[];
   collections: { id: number; name: string }[];
   onFilterByLora: (loraFilename: string) => void;
@@ -487,7 +502,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
           onReusePrompt={
             onReusePrompt
               ? (targetImg) => {
-                  onReusePrompt(targetImg);
+                  onReusePrompt(targetImg, { stackFromSource: false });
                 }
               : undefined
           }
@@ -581,6 +596,27 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
                     <BookmarkPlus className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   )}
                 </button>
+
+                {onReusePrompt && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onReusePrompt(
+                        {
+                          ...activeImage,
+                          positivePrompt: editablePositivePrompt,
+                          loras: editableLoras ?? activeImage.loras,
+                        },
+                        { stackFromSource: true }
+                      )
+                    }
+                    className="p-1.5 rounded-lg border bg-zinc-950 border-zinc-800 text-zinc-400 hover:text-indigo-300 hover:border-indigo-500/50 cursor-pointer shrink-0 transition-colors"
+                    title="Send prompt & settings to Quick Gen (adds to stack; cancel stack pill to attach as Inspo)"
+                    aria-label="Send prompt and settings to Quick Gen"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -803,9 +839,7 @@ export const ImageInspectorDrawer: React.FC<ImageInspectorDrawerProps> = ({
               <InspectorPositivePromptSection
                 activeImage={activeImage}
                 editablePositivePrompt={editablePositivePrompt}
-                editableLoras={editableLoras}
                 onChangeEditablePositivePrompt={setEditablePositivePrompt}
-                onReusePrompt={onReusePrompt}
               />
 
               <InspectorWorkflowSection

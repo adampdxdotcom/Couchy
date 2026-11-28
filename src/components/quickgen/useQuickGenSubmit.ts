@@ -13,6 +13,7 @@ import {
   isCharacterLora,
   normalizeLoraKey,
   snapToHalfMp,
+  type QuickGenInspirationImage,
   type QuickGenPrefill,
 } from './quickGenUtils.ts';
 import { useQuickGenAttachments } from './useQuickGenAttachments.ts';
@@ -54,7 +55,17 @@ export function useQuickGenSubmit({
   const [activeSeriesId, setActiveSeriesId] = useState<number | null>(null);
   const [branchFromImageId, setBranchFromImageId] = useState<number | null>(null);
   const [stackSourceLabel, setStackSourceLabel] = useState<string | null>(null);
-  const [inspirationFilename, setInspirationFilename] = useState<string | null>(null);
+  const [inspirationImage, setInspirationImage] = useState<QuickGenInspirationImage | null>(null);
+  const [fallbackInspirationImage, setFallbackInspirationImage] =
+    useState<QuickGenInspirationImage | null>(null);
+
+  const setInspirationFilename: React.Dispatch<React.SetStateAction<string | null>> = (val) => {
+    setInspirationImage((prev) => {
+      const nextName = typeof val === 'function' ? val(prev?.filename ?? null) : val;
+      return nextName ? { filename: nextName, label: nextName } : null;
+    });
+    setFallbackInspirationImage(null);
+  };
 
   const [aspectRatio, setAspectRatio] = useState('2:3 (Portrait Photo)');
   const [megapixels, setMegapixels] = useState<number>(3.0);
@@ -134,7 +145,7 @@ export function useQuickGenSubmit({
     !attachedCheckpoint &&
     attachedLoras.length === 0 &&
     !stackSourceLabel &&
-    !inspirationFilename &&
+    !inspirationImage &&
     chatMessages.length === 0;
 
   const resetQuickGenState = (options?: {
@@ -147,7 +158,8 @@ export function useQuickGenSubmit({
     setActiveSeriesId(null);
     setBranchFromImageId(null);
     setStackSourceLabel(null);
-    setInspirationFilename(null);
+    setInspirationImage(null);
+    setFallbackInspirationImage(null);
     setAgentEnabled(false);
     setAttachedCharacter(null);
     setCharacterLoraStrength(1.0);
@@ -189,7 +201,9 @@ export function useQuickGenSubmit({
     setActiveSeriesId,
     setBranchFromImageId,
     setStackSourceLabel,
-    setInspirationFilename,
+    setInspirationImage,
+    fallbackInspirationImage,
+    setFallbackInspirationImage,
     setAspectRatio,
     setMegapixels,
     setBatchCount,
@@ -269,7 +283,7 @@ export function useQuickGenSubmit({
     batchCount,
     activeSeriesId,
     branchFromImageId,
-    inspirationFilename,
+    inspirationImage,
     resolveActiveLoraStack: attachments.resolveActiveLoraStack,
     applyPreset: attachments.applyPreset,
     resetQuickGenState,
@@ -332,7 +346,9 @@ export function useQuickGenSubmit({
     isInterrogating: mediaImport.isInterrogating,
     isImportingCivitai: mediaImport.isImportingCivitai,
     isQuickGenEmpty,
-    hasInspirationImage: Boolean(inspirationFilename),
+    inspirationImage,
+    hasFallbackInspiration: Boolean(fallbackInspirationImage),
+    hasInspirationImage: Boolean(inspirationImage),
     modelMatchEnabled: mediaImport.modelMatchEnabled,
     isMatchingFace: mediaImport.isMatchingFace,
     toggleModelMatch: mediaImport.toggleModelMatch,
@@ -345,6 +361,7 @@ export function useQuickGenSubmit({
     handleRemovePreset: attachments.handleRemovePreset,
     handleRemoveCheckpoint: attachments.handleRemoveCheckpoint,
     handleRemoveStackTarget: attachments.handleRemoveStackTarget,
+    handleRemoveInspiration: attachments.handleRemoveInspiration,
     handleRemoveLora: attachments.handleRemoveLora,
     handleUpdateLoraStrength: attachments.handleUpdateLoraStrength,
     handleUpdateCharacterStrength: attachments.handleUpdateCharacterStrength,

@@ -23,6 +23,13 @@ export interface QuickGenPrefillLora {
   portraitCrop?: PortraitCrop | null;
 }
 
+export interface QuickGenInspirationImage {
+  sourceImageId?: number | null;
+  filename?: string | null;
+  thumbnailUrl?: string | null;
+  label?: string | null;
+}
+
 export interface QuickGenPrefill {
   prompt: string;
   character?: CharacterProfile | null;
@@ -37,6 +44,8 @@ export interface QuickGenPrefill {
   seriesId?: number | null;
   branchFromImageId?: number | null;
   stackSourceLabel?: string | null;
+  inspirationImage?: QuickGenInspirationImage | null;
+  fallbackInspirationImage?: QuickGenInspirationImage | null;
   timestamp: number;
 }
 

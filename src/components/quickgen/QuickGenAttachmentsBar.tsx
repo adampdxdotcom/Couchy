@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bookmark, Cpu, Layers, X } from 'lucide-react';
+import { Bookmark, Cpu, Image as ImageIcon, Layers, X } from 'lucide-react';
 import {
   DEFAULT_PILL_TYPE_SETTINGS,
   PILL_COLOR_STYLES,
@@ -22,6 +22,7 @@ import {
   getCleanPresetLabel,
   normalizeLoraKey,
   resolveBaseModelDisplayLabel,
+  type QuickGenInspirationImage,
 } from './quickGenUtils.ts';
 
 interface QuickGenAttachmentsBarProps {
@@ -35,10 +36,13 @@ interface QuickGenAttachmentsBarProps {
   models?: ModelInventoryItem[];
   pillTypeSettings?: PillTypeSettings;
   stackSourceLabel?: string | null;
+  inspirationImage?: QuickGenInspirationImage | null;
+  hasFallbackInspiration?: boolean;
   onRemoveCharacter: () => void;
   onRemovePreset?: () => void;
   onRemoveCheckpoint?: () => void;
   onRemoveStackTarget?: () => void;
+  onRemoveInspiration?: () => void;
   onRemoveLora: (loraName: string) => void;
   onUpdateLoraStrength?: (loraName: string, nextStrength: number) => void;
   onUpdateCharacterStrength?: (nextStrength: number) => void;
@@ -73,10 +77,13 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
   models = [],
   pillTypeSettings = DEFAULT_PILL_TYPE_SETTINGS,
   stackSourceLabel = null,
+  inspirationImage = null,
+  hasFallbackInspiration = false,
   onRemoveCharacter,
   onRemovePreset,
   onRemoveCheckpoint,
   onRemoveStackTarget,
+  onRemoveInspiration,
   onRemoveLora,
   onUpdateLoraStrength,
   onUpdateCharacterStrength,
@@ -160,7 +167,8 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
     !attachedPreset &&
     !attachedCheckpoint &&
     visibleLoras.length === 0 &&
-    !stackSourceLabel
+    !stackSourceLabel &&
+    !inspirationImage
   ) {
     return null;
   }
@@ -258,7 +266,11 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
       {stackSourceLabel && (
         <div
           className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full border border-indigo-500/50 bg-indigo-950/60 text-indigo-200 text-xs shadow-sm max-w-full"
-          title="Generated photo will be added to this image's stack (click × to generate a standalone photo instead)"
+          title={
+            hasFallbackInspiration
+              ? "Generated photo will be added to this image's stack (click × to start a new stack using this photo as Inspo)"
+              : "Generated photo will be added to this image's stack (click × to generate a standalone photo instead)"
+          }
         >
           <Layers className="w-3.5 h-3.5 shrink-0 text-indigo-400" />
           <span className="font-medium truncate max-w-[200px] sm:max-w-[260px]">
@@ -269,7 +281,42 @@ export const QuickGenAttachmentsBar: React.FC<QuickGenAttachmentsBarProps> = ({
               type="button"
               onClick={onRemoveStackTarget}
               className="text-indigo-300/80 hover:text-white cursor-pointer ml-0.5 shrink-0"
-              title="Unlink stack (generate as a separate standalone photo)"
+              title={
+                hasFallbackInspiration
+                  ? 'Unlink stack (keep photo as Inspo for a new stack)'
+                  : 'Unlink stack (generate as a separate standalone photo)'
+              }
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {!stackSourceLabel && inspirationImage && (
+        <div
+          className="inline-flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-full border border-amber-500/45 bg-amber-950/45 text-amber-200 text-xs shadow-sm max-w-full"
+          title={`Attached as Inspo (#0 of new stack)${inspirationImage.label ? `: ${inspirationImage.label}` : ''}`}
+        >
+          {inspirationImage.thumbnailUrl ? (
+            <img
+              src={inspirationImage.thumbnailUrl}
+              alt="Inspo"
+              className="w-4 h-4 rounded-full object-cover border border-amber-400/50 shrink-0"
+            />
+          ) : (
+            <ImageIcon className="w-3.5 h-3.5 shrink-0 text-amber-400 ml-0.5" />
+          )}
+          <span className="font-medium truncate max-w-[160px] sm:max-w-[220px]">
+            Inspo
+            {inspirationImage.label ? ` · ${inspirationImage.label}` : ''}
+          </span>
+          {onRemoveInspiration && (
+            <button
+              type="button"
+              onClick={onRemoveInspiration}
+              className="text-amber-300/80 hover:text-white cursor-pointer ml-0.5 shrink-0"
+              title="Remove Inspo photo (generate standalone)"
             >
               <X className="w-3.5 h-3.5" />
             </button>

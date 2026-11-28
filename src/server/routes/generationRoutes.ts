@@ -273,6 +273,7 @@ generationRouter.post('/lmstudio/submit-agent-batch', async (req, res) => {
       seriesId?: number | null;
       branchFromImageId?: number | null;
       inspirationFilename?: string | null;
+      inspirationSourceImageId?: number | null;
       chatMessages?: Array<{ role: string; content: string }>;
       chatSnapshot?: QuickGenChatMessage[];
     };
@@ -302,6 +303,7 @@ generationRouter.post('/lmstudio/submit-agent-batch', async (req, res) => {
         seriesId: body.seriesId ?? null,
         branchFromImageId: body.branchFromImageId ?? null,
         inspirationFilename: body.inspirationFilename ?? null,
+        inspirationSourceImageId: body.inspirationSourceImageId ?? null,
         chatMessages: Array.isArray(body.chatMessages) ? body.chatMessages : undefined,
         chatSnapshot: body.chatSnapshot,
       });
@@ -425,6 +427,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
       seriesId?: number | null;
       branchFromImageId?: number | null;
       inspirationFilename?: string | null;
+      inspirationSourceImageId?: number | null;
       chatSnapshot?: QuickGenChatMessage[];
     };
     if (!body.workflowId) {
@@ -454,6 +457,7 @@ generationRouter.post('/submit-batch', async (req, res) => {
       seriesId: body.seriesId,
       branchFromImageId: body.branchFromImageId,
       inspirationFilename: body.inspirationFilename,
+      inspirationSourceImageId: body.inspirationSourceImageId,
       chatSnapshot: body.chatSnapshot,
     });
 

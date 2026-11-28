@@ -11,6 +11,7 @@ import {
   isCharacterLora,
   normalizeLoraKey,
   snapToHalfMp,
+  type QuickGenInspirationImage,
   type QuickGenPrefill,
 } from './quickGenUtils.ts';
 import {
@@ -36,7 +37,11 @@ interface UseQuickGenAttachmentsParams {
   setActiveSeriesId: React.Dispatch<React.SetStateAction<number | null>>;
   setBranchFromImageId: React.Dispatch<React.SetStateAction<number | null>>;
   setStackSourceLabel: React.Dispatch<React.SetStateAction<string | null>>;
-  setInspirationFilename: React.Dispatch<React.SetStateAction<string | null>>;
+  setInspirationImage: React.Dispatch<React.SetStateAction<QuickGenInspirationImage | null>>;
+  fallbackInspirationImage: QuickGenInspirationImage | null;
+  setFallbackInspirationImage: React.Dispatch<
+    React.SetStateAction<QuickGenInspirationImage | null>
+  >;
   setAspectRatio: React.Dispatch<React.SetStateAction<string>>;
   setMegapixels: React.Dispatch<React.SetStateAction<number>>;
   setBatchCount: React.Dispatch<React.SetStateAction<number>>;
@@ -74,7 +79,9 @@ export function useQuickGenAttachments({
   setActiveSeriesId,
   setBranchFromImageId,
   setStackSourceLabel,
-  setInspirationFilename,
+  setInspirationImage,
+  fallbackInspirationImage,
+  setFallbackInspirationImage,
   setAspectRatio,
   setMegapixels,
   setBatchCount,
@@ -109,7 +116,8 @@ export function useQuickGenAttachments({
     lastAppliedTimestampRef.current = prefillPayload.timestamp;
 
     setIsMinimized(false);
-    setInspirationFilename(null);
+    setInspirationImage(prefillPayload.inspirationImage ?? null);
+    setFallbackInspirationImage(prefillPayload.fallbackInspirationImage ?? null);
     setAttachedPreset(null);
 
     const excludedKeySet = new Set(
@@ -247,6 +255,16 @@ export function useQuickGenAttachments({
     setActiveSeriesId(null);
     setBranchFromImageId(null);
     setStackSourceLabel(null);
+    // Demote cancelled stack target to a single-image Inspo pill when available
+    if (fallbackInspirationImage) {
+      setInspirationImage(fallbackInspirationImage);
+      setFallbackInspirationImage(null);
+    }
+  };
+
+  const handleRemoveInspiration = () => {
+    setInspirationImage(null);
+    setFallbackInspirationImage(null);
   };
 
   const handleRemoveCharacter = () => {
@@ -334,6 +352,7 @@ export function useQuickGenAttachments({
     handleRemovePreset,
     handleRemoveCheckpoint,
     handleRemoveStackTarget,
+    handleRemoveInspiration,
     handleRemoveLora,
     handleUpdateLoraStrength,
     handleUpdateCharacterStrength,

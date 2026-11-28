@@ -8863,6 +8863,58 @@ async function indexUploadedInspirationImage(filename, positivePrompt) {
   invalidateStorageUsageStatsCache();
   return imageId;
 }
+async function createUploadedInspirationFromImageId(sourceImageId, positivePrompt) {
+  const numericId = Number(sourceImageId);
+  if (!Number.isInteger(numericId) || numericId <= 0) return null;
+  const row = db.prepare(
+    `SELECT id, content_hash, relative_path, COALESCE(is_uploaded_reference, 0) AS is_uploaded_reference
+       FROM images
+       WHERE id = ? AND is_missing = 0
+       LIMIT 1`
+  ).get(numericId);
+  if (!row) return null;
+  if (row.is_uploaded_reference) {
+    return row.id;
+  }
+  const diskPath = resolveImageDiskPath(row);
+  const outputRoot = path12.resolve(appConfig.comfyuiOutputDir);
+  if (!diskPath.startsWith(outputRoot + path12.sep)) {
+    return null;
+  }
+  const hashPrefix = String(row.content_hash || "").replace(/[^a-fA-F0-9]/g, "").slice(0, 16);
+  if (!hashPrefix) return null;
+  const inspoFilename = `reuse-1mp-${hashPrefix}.jpg`;
+  const targetPath = path12.resolve(appConfig.uploadedImagesDir, inspoFilename);
+  const uploadedRoot = path12.resolve(appConfig.uploadedImagesDir);
+  if (!targetPath.startsWith(uploadedRoot + path12.sep)) {
+    return null;
+  }
+  if (!await pathExistsAsync(targetPath)) {
+    if (!await pathExistsAsync(diskPath)) return null;
+    try {
+      const { data: rotatedBuf, info: rotatedInfo } = await sharp2(diskPath).rotate().toBuffer({ resolveWithObject: true });
+      const srcW = Number(rotatedInfo.width || 0);
+      const srcH = Number(rotatedInfo.height || 0);
+      if (srcW <= 0 || srcH <= 0) return null;
+      let pipeline = sharp2(rotatedBuf);
+      const totalPixels = srcW * srcH;
+      if (totalPixels > LOCAL_INSPIRATION_MAX_PIXELS) {
+        const scale = Math.sqrt(LOCAL_INSPIRATION_MAX_PIXELS / totalPixels);
+        const outW = Math.max(1, Math.round(srcW * scale));
+        const outH = Math.max(1, Math.round(srcH * scale));
+        pipeline = pipeline.resize(outW, outH, { fit: "inside", withoutEnlargement: true });
+      }
+      const outBuf = await pipeline.jpeg({ quality: 88, mozjpeg: true }).toBuffer();
+      if (outBuf.length === 0) return null;
+      fs12.mkdirSync(appConfig.uploadedImagesDir, { recursive: true });
+      fs12.writeFileSync(targetPath, outBuf);
+      invalidateStorageUsageStatsCache();
+    } catch {
+      return null;
+    }
+  }
+  return indexUploadedInspirationImage(inspoFilename, positivePrompt);
+}
 async function runBackgroundThumbnailMigration() {
   if (isThumbnailMigrationRunning) return;
   isThumbnailMigrationRunning = true;
@@ -8901,7 +8953,7 @@ async function runBackgroundThumbnailMigration() {
     isThumbnailMigrationRunning = false;
   }
 }
-var SUPPORTED_EXTENSIONS, isThumbnailMigrationRunning;
+var SUPPORTED_EXTENSIONS, isThumbnailMigrationRunning, LOCAL_INSPIRATION_MAX_PIXELS;
 var init_scannerMediaUtils = __esm({
   "src/server/services/scanner/scannerMediaUtils.ts"() {
     init_db();
@@ -8911,6 +8963,7 @@ var init_scannerMediaUtils = __esm({
     init_storageStatsService();
     SUPPORTED_EXTENSIONS = /* @__PURE__ */ new Set([".png", ".jpg", ".jpeg", ".webp"]);
     isThumbnailMigrationRunning = false;
+    LOCAL_INSPIRATION_MAX_PIXELS = 1e6;
   }
 });
 
@@ -9677,6 +9730,7 @@ __export(scannerService_exports, {
   backfillMissingImagePrompts: () => backfillMissingImagePrompts,
   computeFileSha256: () => computeFileSha256,
   copyImageMetadataToDerivedImage: () => copyImageMetadataToDerivedImage,
+  createUploadedInspirationFromImageId: () => createUploadedInspirationFromImageId,
   ensureWebpThumbnail: () => ensureWebpThumbnail,
   getActiveScanStatus: () => getActiveScanStatus,
   indexSingleImageFile: () => indexSingleImageFile,
@@ -21762,11 +21816,18 @@ async function dispatchGenerationBatch(input) {
   const serializedChatSnapshot = Array.isArray(input.chatSnapshot) && input.chatSnapshot.length > 0 ? JSON.stringify(input.chatSnapshot) : null;
   let effectiveSeriesId = input.seriesId ? Number(input.seriesId) : null;
   let inspirationImageId = null;
-  if (!effectiveSeriesId && !input.branchFromImageId && typeof input.inspirationFilename === "string" && input.inspirationFilename.trim()) {
-    inspirationImageId = await indexUploadedInspirationImage(
-      input.inspirationFilename.trim(),
-      promptList[0]
-    );
+  if (!effectiveSeriesId && !input.branchFromImageId) {
+    if (typeof input.inspirationFilename === "string" && input.inspirationFilename.trim()) {
+      inspirationImageId = await indexUploadedInspirationImage(
+        input.inspirationFilename.trim(),
+        promptList[0]
+      );
+    } else if (input.inspirationSourceImageId !== null && input.inspirationSourceImageId !== void 0 && Number.isInteger(Number(input.inspirationSourceImageId)) && Number(input.inspirationSourceImageId) > 0) {
+      inspirationImageId = await createUploadedInspirationFromImageId(
+        Number(input.inspirationSourceImageId),
+        promptList[0]
+      );
+    }
   }
   if (!effectiveSeriesId && !input.branchFromImageId && (effectiveTotalCount > 1 || inspirationImageId)) {
     const seriesKind = effectiveTotalCount > 1 ? "multi_shot" : "iterative";
@@ -24957,6 +25018,7 @@ async function executeProgressiveAgentBatch(params) {
     seriesId: totalCount > 1 ? null : params.seriesId ?? null,
     branchFromImageId: totalCount > 1 ? null : params.branchFromImageId ?? null,
     inspirationFilename: params.inspirationFilename ?? null,
+    inspirationSourceImageId: params.inspirationSourceImageId ?? null,
     chatSnapshot: params.chatSnapshot
   });
   const progressiveTask = totalCount > 1 && pendingSlots && pendingSlots.length > 0 ? runProgressiveAgentBatchShots({
@@ -25572,6 +25634,7 @@ var init_generationRoutes = __esm({
           seriesId: body.seriesId ?? null,
           branchFromImageId: body.branchFromImageId ?? null,
           inspirationFilename: body.inspirationFilename ?? null,
+          inspirationSourceImageId: body.inspirationSourceImageId ?? null,
           chatMessages: Array.isArray(body.chatMessages) ? body.chatMessages : void 0,
           chatSnapshot: body.chatSnapshot
         });
@@ -25672,6 +25735,7 @@ var init_generationRoutes = __esm({
           seriesId: body.seriesId,
           branchFromImageId: body.branchFromImageId,
           inspirationFilename: body.inspirationFilename,
+          inspirationSourceImageId: body.inspirationSourceImageId,
           chatSnapshot: body.chatSnapshot
         });
         res.json(result);

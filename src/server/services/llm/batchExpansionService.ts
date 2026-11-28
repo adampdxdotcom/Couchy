@@ -63,6 +63,7 @@ export interface ExecuteProgressiveAgentBatchParams {
   seriesId?: number | null;
   branchFromImageId?: number | null;
   inspirationFilename?: string | null;
+  inspirationSourceImageId?: number | null;
   chatMessages?: Array<{ role: string; content: string }>;
   chatSnapshot?: QuickGenChatMessage[];
 }
@@ -743,6 +744,7 @@ export async function executeProgressiveAgentBatch(
     seriesId: totalCount > 1 ? null : params.seriesId ?? null,
     branchFromImageId: totalCount > 1 ? null : params.branchFromImageId ?? null,
     inspirationFilename: params.inspirationFilename ?? null,
+    inspirationSourceImageId: params.inspirationSourceImageId ?? null,
     chatSnapshot: params.chatSnapshot,
   });
 
