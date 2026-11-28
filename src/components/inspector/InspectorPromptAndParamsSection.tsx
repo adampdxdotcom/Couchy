@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, Layers, Plus, RotateCcw, Search, X } from 'lucide-react';
+import { Check, Copy, Dices, Layers, Plus, RotateCcw, Search, X } from 'lucide-react';
 import {
   DEFAULT_PILL_TYPE_SETTINGS,
   resolveLoraCategoryStyle,
@@ -574,12 +574,28 @@ export const InspectorPromptAndParamsSection: React.FC<
 
           {/* 3. Seed */}
           <div className="bg-zinc-950 border border-zinc-800 focus-within:border-indigo-500 rounded-lg p-2.5 transition-colors">
-            <label
-              htmlFor="inspector-param-seed"
-              className="block text-[10px] font-sans text-zinc-400"
-            >
-              Seed
-            </label>
+            <div className="flex items-center justify-between gap-1">
+              <label
+                htmlFor="inspector-param-seed"
+                className="block text-[10px] font-sans text-zinc-400"
+              >
+                Seed
+              </label>
+              <button
+                type="button"
+                onClick={() =>
+                  onChangeEditableGenParams((prev) => ({
+                    ...prev,
+                    seed: String(Math.floor(Math.random() * 1e15) + 1),
+                  }))
+                }
+                className="text-zinc-400 hover:text-indigo-300 transition-colors cursor-pointer"
+                title="Randomize seed for Run Workflow"
+                aria-label="Randomize seed"
+              >
+                <Dices className="w-3.5 h-3.5" />
+              </button>
+            </div>
             <input
               id="inspector-param-seed"
               type="text"
